@@ -17,6 +17,9 @@ contract MarketStorage {
     // tracked by a bytes 32 key 
     mapping(bytes32 => MarketStructs.Position) public positions;
 
+    // tracks globally allowed stablecoins
+    mapping(address => bool) public isStable;
+
     // maps key of market to open interest
     mapping(bytes32 => uint256) public collatTokenLongOpenInterest; // OI of collat token long
     mapping(bytes32 => uint256) public collatTokenShortOpenInterest;
@@ -36,25 +39,34 @@ contract MarketStorage {
         markets[_key] = _market;
     }
 
-    // should only be callable by permissioned roles STORAGE_ADMIN
-    // adds value in tokens and usd to track Pnl
-    // should never be callable by an EOA
-    function addOpenInterest(bytes32 _key, uint256 _collateralTokenAmount, uint256 _indexTokenAmount, bool _isLong) external {
-        // add to open interest
-        _isLong ? collatTokenLongOpenInterest[_key] += _collateralTokenAmount : collatTokenShortOpenInterest[_key] += _collateralTokenAmount;
-        _isLong ? indexTokenLongOpenInterest[_key] += _indexTokenAmount : indexTokenShortOpenInterest[_key] += _indexTokenAmount;
+    // Set permissions to only allow calling by market config
+    function setIsStable(address _stablecoin) external {
+        isStable[_stablecoin] = true;
     }
 
     // should only be callable by permissioned roles STORAGE_ADMIN
-    // subtracts value in tokens of collateral (USDC) and index token
-    function subtractOpenInterest(bytes32 _key, uint256 _collateralTokenAmount, uint256 _indexTokenAmount, bool _isLong) external {
-        // subtract from open interest
-        _isLong ? collatTokenLongOpenInterest[_key] -= _collateralTokenAmount : collatTokenShortOpenInterest[_key] -= _collateralTokenAmount;
-        _isLong ? indexTokenLongOpenInterest[_key] -= _indexTokenAmount : indexTokenShortOpenInterest[_key] -= _indexTokenAmount;
+    // adds value in tokens and usd to track Pnl
+    // should never be callable by an EOA
+    // long + decrease = subtract, short + decrease = add, long + increase = add, short + increase = subtract
+    function updateOpenInterest(bytes32 _key, uint256 _collateralTokenAmount, uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external {
+        if(_shouldAdd) {
+            // add to open interest
+            _isLong ? collatTokenLongOpenInterest[_key] += _collateralTokenAmount : collatTokenShortOpenInterest[_key] += _collateralTokenAmount;
+            _isLong ? indexTokenLongOpenInterest[_key] += _indexTokenAmount : indexTokenShortOpenInterest[_key] += _indexTokenAmount;
+        } else {
+            // subtract from open interest
+            _isLong ? collatTokenLongOpenInterest[_key] -= _collateralTokenAmount : collatTokenShortOpenInterest[_key] -= _collateralTokenAmount;
+            _isLong ? indexTokenLongOpenInterest[_key] -= _indexTokenAmount : indexTokenShortOpenInterest[_key] -= _indexTokenAmount;
+        }
     }
 
     function getMarket(bytes32 _key) external view returns (MarketStructs.Market memory) {
         // Return the information for the market associated with the key
+        return markets[_key];
+    }
+
+    function getMarketFromIndexToken(address _indexToken, address _stablecoin) external view returns (MarketStructs.Market memory) {
+        bytes32 _key = keccak256(abi.encodePacked(_indexToken, _stablecoin));
         return markets[_key];
     }
 

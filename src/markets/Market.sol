@@ -40,13 +40,14 @@ contract Market {
     // Flag for skipping borrowing fee for the smaller side
     bool public feeForSmallerSide;
 
-    uint256 public constant PRICE_IMPACT_EXPONENT = 1; 
-    uint256 public constant PRICE_IMPACT_FACTOR = 1; // 0.0001%
+    uint256 public priceImpactExponent = 1; 
+    uint256 public priceImpactFactor = 1; // 0.0001%
     
     // tracks deposits separately from margin collateral
     mapping(address => uint256) public poolAmounts;
     mapping(address => uint256) public marginAmounts;
 
+    // might need to update to an initialize function instead of constructor
     constructor(address _indexToken, address _stablecoin, address _marketToken, address _marketStorage) {
         indexToken = _indexToken;
         stablecoin = _stablecoin;
@@ -244,11 +245,11 @@ contract Market {
     /////////
 
 
-    // For an individual position
+    // Position size x value - position size x entry value
     function _calculatePnL(MarketStructs.Position memory _position) internal view returns (int256) {
-        uint256 indexValue = _position.indexAmount * getPrice(indexToken);
-        uint256 positionValue = _position.positionSize * getPrice(stablecoin);
-        return int256(positionValue - indexValue);
+        uint256 positionValue = _position.positionSize * getPrice(indexToken);
+        uint256 entryValue = _position.positionSize * _position.entryPrice;
+        return int256(positionValue) - int256(entryValue);
     }
 
     function getPnL(MarketStructs.Position memory _position) public view returns (int256) {
@@ -281,11 +282,17 @@ contract Market {
         uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
         // Formula: priceImpact = (usd Diff ^ exponent * factor) - (usd Diff After ^ exponent * factor)
-        return ((skewBefore ** PRICE_IMPACT_EXPONENT) * PRICE_IMPACT_FACTOR) - ((skewAfter ** PRICE_IMPACT_EXPONENT) * PRICE_IMPACT_FACTOR);
+        return ((skewBefore ** priceImpactExponent) * priceImpactFactor) - ((skewAfter ** priceImpactExponent) * priceImpactFactor);
     }
 
     function getPriceImpact(MarketStructs.Position memory _position) public view returns (uint256) {
         return _calculatePriceImpact(_position);
+    }
+
+    // only callable by market config contract
+    function setPriceImpactConfig(uint256 _priceImpactFactor, uint256 _priceImpactExponent) external {
+        priceImpactFactor = _priceImpactFactor;
+        priceImpactExponent = _priceImpactExponent;
     }
 
     ///////////////

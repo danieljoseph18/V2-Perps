@@ -12,8 +12,6 @@ import {MarketStructs} from "./MarketStructs.sol";
 
 contract MarketFactory {
 
-    mapping(address => bool) public isStable;
-
     MarketStorage public marketStorage;
 
     event MarketCreated(address indexed indexToken, address indexed stablecoin, address market, address marketToken);
@@ -25,7 +23,7 @@ contract MarketFactory {
     // Only callable by MARKET_MAKER roles
     function createMarket(address _indexToken, address _stablecoin) public {
         // long and short tokens cant be same, short must be stables
-        require(isStable[_stablecoin], "Short token must be a stable token");
+        require(marketStorage.isStable(_stablecoin), "Short token must be a stable token");
         require(_stablecoin != address(0), "Zero address not allowed");
         // pool cant already exist
         bytes32 _key = keccak256(abi.encodePacked(_indexToken, _stablecoin));
@@ -39,11 +37,6 @@ contract MarketFactory {
         marketStorage.storeMarket(_marketInfo);
 
         emit MarketCreated(_indexToken, _stablecoin, address(_market), address(_marketToken));
-    }
-
-    // Set permissions
-    function setIsStable(address _stablecoin) external {
-        isStable[_stablecoin] = true;
     }
 
 }

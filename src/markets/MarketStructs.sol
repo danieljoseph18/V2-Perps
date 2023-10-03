@@ -10,20 +10,53 @@ library MarketStructs {
         address market;
     }
 
+    struct PositionRequest {
+        uint256 requestIndex;
+        bool isMarketOrder;
+        address indexToken;
+        address user;
+        address collateralToken;
+        uint256 collateralDelta;
+        uint256 sizeDelta;
+        uint256 requestBlock;
+        uint256 acceptablePrice;
+        bool isLong;
+    }
+
+    struct DecreasePositionRequest {
+        uint256 requestIndex;
+        address user;
+        address indexToken;
+        address collateralToken;
+        uint256 sizeDelta;
+        uint256 collateralDelta;
+        uint256 requestBlock;
+        uint256 acceptablePrice;
+        bool isLong;
+        bool isMarketOrder;
+    }
+
     struct Position {
         bytes32 market; // can get index token from market ?
         address indexToken;
+        address collateralToken;
         address user;
         uint256 collateralAmount; // vs size = leverage
-        uint256 indexAmount; // collateral is redeemed 1:1 for index tokens at position open, value of index fluctuates, giving PnL
-        uint256 positionSize; // size of position in collat tokens (factors leverage)
+        uint256 positionSize; // position size in index tokens, value fluctuates giving PnL
         bool isLong; // will determine token used
         int256 realisedPnl;
         int256 fundingFees; // negative or positive, pay or earn
         uint256 entryLongCumulativeFunding;
         uint256 entryShortCumulativeFunding;
         uint256 entryTime;
-        uint256 entryBlock;
+        uint256 averageEntryPrice; // signed price of the index token at request
+    }
+
+    struct Swap {
+        address tokenA;
+        address tokenB;
+        uint256 tokenASupplied;
+        uint256 tokenBReceived;
     }
 
 }

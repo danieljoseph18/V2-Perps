@@ -27,4 +27,13 @@ contract GlobalMarketConfig {
         return keccak256(abi.encodePacked(_indexToken, _stablecoin));
     }
 
+    function setStableCoin(address _stablecoin) external {
+        IMarketStorage(marketStorage).setIsStable(_stablecoin);
+    }
+
+    function setMarketPriceImpactConfig(bytes32 _marketKey, uint256 _priceImpactFactor, uint256 _priceImpactExponent) external {
+        address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
+        IMarket(market).setPriceImpactConfig(_priceImpactFactor, _priceImpactExponent);
+    }
+
 }
