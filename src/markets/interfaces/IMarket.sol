@@ -25,4 +25,5 @@ interface IMarket {
     function setPriceImpactConfig(uint256 _priceImpactFactor, uint256 _priceImpactExponent) external;
     function longCumulativeFundingRate() external view returns (uint256);
     function shortCumulativeFundingRate() external view returns (uint256);
+    function cumulativeBorrowFee() external view returns (uint256);
 }

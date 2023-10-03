@@ -109,8 +109,9 @@ contract TradeStorage {
         address marketAddress = IMarketStorage(marketStorage).getMarket(market).market;
         uint256 longFunding = IMarket(marketAddress).longCumulativeFundingRate();
         uint256 shortFunding = IMarket(marketAddress).shortCumulativeFundingRate();
+        uint256 borrowFee = IMarket(marketAddress).cumulativeBorrowFee();
         // make sure all Position and PositionRequest instantiations are in the correct order.
-        MarketStructs.Position memory _position = MarketStructs.Position(market, _positionRequest.indexToken, _positionRequest.collateralToken, _positionRequest.user, _positionRequest.collateralDelta, _positionRequest.sizeDelta, _positionRequest.isLong, 0, 0, longFunding, shortFunding, block.timestamp, _signedBlockPrice);
+        MarketStructs.Position memory _position = MarketStructs.Position(market, _positionRequest.indexToken, _positionRequest.collateralToken, _positionRequest.user, _positionRequest.collateralDelta, _positionRequest.sizeDelta, _positionRequest.isLong, 0, 0, longFunding, shortFunding, borrowFee, block.timestamp, _signedBlockPrice);
         
         // remove the request from the array and the mapping
         bytes32 _requestKey = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));

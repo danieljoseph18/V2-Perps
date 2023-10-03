@@ -23,7 +23,8 @@ contract Market {
     address public marketToken;
     address public marketStorage;
 
-    uint256 public lastUpdateTime; // last time funding rate was updated
+    uint256 public lastFundingUpdateTime; // last time funding was updated
+    uint256 public lastBorrowUpdateTime; // last time borrowing fee was updated
     // positive rate = longs pay shorts, negative rate = shorts pay longs
     int256 public fundingRate; // Stored as a fixed-point number (e.g., 0.01% == 1000)
     uint256 public skewScale = 1e7; // Skew scale in USDC
@@ -39,6 +40,8 @@ contract Market {
     uint256 public borrowingExponent = 1;
     // Flag for skipping borrowing fee for the smaller side
     bool public feeForSmallerSide;
+    uint256 public cumulativeBorrowFee;
+    uint256 public borrowingRate; // borrow fee per second
 
     uint256 public priceImpactExponent = 1; 
     uint256 public priceImpactFactor = 1; // 0.0001%
@@ -53,7 +56,6 @@ contract Market {
         stablecoin = _stablecoin;
         marketToken = _marketToken;
         marketStorage = _marketStorage;
-        (longCumulativeFundingRate, shortCumulativeFundingRate) = (0,0);
     }
 
     /////////////
@@ -77,9 +79,8 @@ contract Market {
         uint256 liquidity = (poolAmounts[stablecoin] * getPrice(stablecoin));
         aum = liquidity;
         int256 pendingPnL = _getNetPnL(true) + _getNetPnL(false); 
-        uint256 borrowingFees;
         pendingPnL > 0 ? aum += uint256(pendingPnL) : aum -= uint256(pendingPnL);
-        return aum - borrowingFees;
+        return aum;
     }
 
     function getPrice(address _token) public view returns (uint256) {
@@ -130,7 +131,7 @@ contract Market {
 
     function upkeepNeeded() public view returns (bool) {
         // check if funding rate needs to be updated
-        return block.timestamp >= lastUpdateTime + fundingInterval;
+        return block.timestamp >= lastFundingUpdateTime + fundingInterval;
     }
 
     function updateFundingRate() public {
@@ -155,7 +156,7 @@ contract Market {
         int256 skew = int256(longOI) - int256(shortOI);
         uint256 fundingRateVelocity = _calculateFundingRateVelocity(skew);
 
-        uint256 timeElapsed = block.timestamp - lastUpdateTime;
+        uint256 timeElapsed = block.timestamp - lastFundingUpdateTime;
         uint256 deltaRate = (fundingRateVelocity * timeElapsed) / (1 days);
 
         if (longOI > shortOI) {
@@ -168,7 +169,7 @@ contract Market {
             shortCumulativeFundingRate += uint256(fundingRate);
         }
 
-        lastUpdateTime = block.timestamp;
+        lastFundingUpdateTime = block.timestamp;
     }
 
     function _calculateFundingRateVelocity(int256 _skew) internal view returns (uint256) {
@@ -196,7 +197,7 @@ contract Market {
         uint256 longAccumulatedFunding = currentLongCumulative - entryLongCumulative; 
         uint256 shortAccumulatedFunding = currentShortCumulative - entryShortCumulative;
 
-        uint256 timeSinceUpdate = (block.timestamp - lastUpdateTime) * 1e5; // scaled by 1e5 to ensure top heavy fraction
+        uint256 timeSinceUpdate = (block.timestamp - lastFundingUpdateTime) * 1e5; // scaled by 1e5 to ensure top heavy fraction
 
         // subtract current funding rate
         // need to account for fact current funding Rate can be positive
@@ -218,8 +219,8 @@ contract Market {
         feeForSmallerSide = _feeForSmallerSide;
     }
 
-    // Function to calculate borrowing fees
-    function calculateBorrowingFees(bool _isLong) public view returns (uint256) {
+    // Function to calculate borrowing fees per second
+    function _updateBorrowingRate(bool _isLong) public {
         uint256 openInterest = getOpenInterest(_isLong);
         uint256 poolBalance = poolAmounts[stablecoin];  // Amount of USDC in pool (not exact USD value)
 
@@ -228,16 +229,13 @@ contract Market {
         int256 feeBase = int256(openInterest) + pendingPnL;
         uint256 fee = borrowingFactor * (uint256(feeBase) ** borrowingExponent) / poolBalance;
 
-        // If no fee for smaller side
-        if(!feeForSmallerSide) {
-            uint256 counterPartyOI = getOpenInterest(!_isLong);
-            // if their side's OI < other sides OI, they're smaller side
-            if(openInterest < counterPartyOI) {
-                return 0;
-            }
-        }
+        // update cumulative fees with current borrowing rate
+        cumulativeBorrowFee += borrowingRate * (block.timestamp - lastBorrowUpdateTime);
+        // update last update time
+        lastBorrowUpdateTime = block.timestamp;
+        // update borrowing rate
         // borrowing factor scaled by 1e5, need to de-scale
-        return fee;
+        borrowingRate = fee;
     }
 
     /////////
@@ -248,7 +246,7 @@ contract Market {
     // Position size x value - position size x entry value
     function _calculatePnL(MarketStructs.Position memory _position) internal view returns (int256) {
         uint256 positionValue = _position.positionSize * getPrice(indexToken);
-        uint256 entryValue = _position.positionSize * _position.entryPrice;
+        uint256 entryValue = _position.positionSize * _position.averageEntryPrice;
         return int256(positionValue) - int256(entryValue);
     }
 
@@ -294,66 +292,5 @@ contract Market {
         priceImpactFactor = _priceImpactFactor;
         priceImpactExponent = _priceImpactExponent;
     }
-
-    ///////////////
-    // LIQUIDITY //
-    ///////////////
-
-    function addLiquidity(uint256 _amount, address _tokenIn) external {
-        _addLiquidity(msg.sender, _amount, _tokenIn);
-    }
-
-    // 2 functions: removeLiq and removeLiqFrom (another acc)
-    // both call internal function
-    function removeLiquidity(uint256 _marketTokenAmount, address _tokenOut) external {
-        _removeLiquidity(msg.sender, _marketTokenAmount, _tokenOut);
-    }
-
-    // allows users to delegate permissions from ledger to hot wallet
-    function addLiquidityForAccount(address _account, uint256 _amount, address _tokenIn) public {
-        // check if msg.sender is approved to add liquidity for _account
-        _addLiquidity(_account, _amount, _tokenIn);
-    }
-
-    // allows users to delegate permissions from ledger to hot wallet
-    function removeLiquidityForAccount(address _account, uint256 _marketTokenAmount, address _tokenOut) public {
-        // check if msg.sender is approved to remove liquidity for _account
-        _removeLiquidity(_account, _marketTokenAmount, _tokenOut);
-    }
-
-    // subtract fees, many additional safety checks needed
-    function _addLiquidity(address _account, uint256 _amount, address _tokenIn) internal {
-        require(_amount > 0, "Invalid amount");
-        require(_tokenIn == stablecoin, "Invalid token");
-
-
-        poolAmounts[_tokenIn] += _amount;
-        // add liquidity to the market
-        IERC20(_tokenIn).safeTransferFrom(_account, address(this), _amount);
-        // mint market tokens for the user
-        uint256 mintAmount = (_amount * getPrice(_tokenIn)) / getMarketTokenPrice();
-        
-        IMarketToken(marketToken).mint(_account, mintAmount);
-    }
-
-    // subtract fees, many additional safety checks needed
-    function _removeLiquidity(address _account, uint256 _marketTokenAmount, address _tokenOut) internal {
-        require(_marketTokenAmount > 0, "Invalid amount");
-        require(_tokenOut == stablecoin, "Invalid token");
-
-
-        // remove liquidity from the market
-        uint256 marketTokenValue = _marketTokenAmount * getMarketTokenPrice();
-
-        uint256 tokenAmount = marketTokenValue / getPrice(_tokenOut);
-
-        poolAmounts[_tokenOut] -= tokenAmount;
-
-        IMarketToken(marketToken).burn(_account, _marketTokenAmount);
-        
-        IERC20(_tokenOut).safeTransfer(_account, tokenAmount);
-    }
-
-
 
 }
