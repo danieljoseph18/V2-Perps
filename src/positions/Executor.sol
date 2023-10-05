@@ -6,8 +6,12 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
+import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract Executor {
+    using SafeERC20 for IERC20;
     // contract for executing trades
     // will be called by the TradeManager
     // will execute trades on the market contract
@@ -17,11 +21,13 @@ contract Executor {
     address public marketStorage;
     address public tradeStorage;
     address public priceOracle;
+    address public liquidityVault;
 
-    constructor(address _marketStorage, address _tradeStorage, address _priceOracle) {
+    constructor(address _marketStorage, address _tradeStorage, address _priceOracle, address _liquidityVault) {
         marketStorage = _marketStorage;
         tradeStorage = _tradeStorage;
         priceOracle = _priceOracle;
+        liquidityVault = _liquidityVault;
     }
 
     ////////////////////
@@ -40,6 +46,10 @@ contract Executor {
     function _updateFundingRate(bytes32 _marketKey) internal {
         address _market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
         IMarket(_market).updateFundingRate();
+    }
+
+    function _updateMarketAllocations() internal {
+        ILiquidityVault(liquidityVault).updateMarketAllocations();
     }
 
     //////////////////////////
@@ -76,6 +86,7 @@ contract Executor {
         _updateOpenInterest(_position.market, _positionRequest.collateralDelta, _positionRequest.sizeDelta, _positionRequest.isLong, _positionRequest.isLong);
         // update funding rate
         _updateFundingRate(_position.market);
+        _updateMarketAllocations();
     }
 
     // no loop execution for limits => 1 by 1, track price on subgraph
@@ -94,6 +105,8 @@ contract Executor {
             _updateOpenInterest(_position.market, _positionRequest.collateralDelta, _positionRequest.sizeDelta, _positionRequest.isLong, _positionRequest.isLong);
             // update funding rate
             _updateFundingRate(_position.market);
+            _updateMarketAllocations();
+            
         } else {
             // revert
         }
@@ -118,11 +131,17 @@ contract Executor {
         address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(_decreaseRequest.indexToken, _decreaseRequest.collateralToken).market;
         uint256 _block = _decreaseRequest.requestBlock;
         uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(_market, _block);
-        // execute the trade
-        MarketStructs.Position memory _position = ITradeStorage(tradeStorage).executeDecreaseRequest(_decreaseRequest, _signedBlockPrice);
-        // always decrease, so should add is opposite of isLong
-        _updateOpenInterest(_position.market, _decreaseRequest.collateralDelta, _decreaseRequest.sizeDelta, _decreaseRequest.isLong, !_decreaseRequest.isLong);
+        bytes32 key = keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
+        MarketStructs.Position memory _position = ITradeStorage(tradeStorage).openPositions(key);
+        // execute the trade => do we pass in size delta too to prevent double calculation?
+        uint256 leverage = _position.positionSize / _position.collateralAmount;
+        uint256 sizeDelta = _decreaseRequest.collateralDelta * leverage;
+        ITradeStorage(tradeStorage).executeDecreaseRequest(_decreaseRequest, sizeDelta, _signedBlockPrice);
+        // always decrease, so shouldAdd is opposite of isLong
+        // are these input values correct to update contract state?
+        _updateOpenInterest(_position.market, _decreaseRequest.collateralDelta, sizeDelta, _decreaseRequest.isLong, !_decreaseRequest.isLong);
         _updateFundingRate(_position.market);
+        _updateMarketAllocations();
     }
 
     // used as a stop loss => how do we get trailing stop losses
@@ -136,10 +155,18 @@ contract Executor {
         // if current price <= acceptable price and isLong, execute
         if((_decreaseRequest.isLong && price <= _decreaseRequest.acceptablePrice) || (!_decreaseRequest.isLong && price >= _decreaseRequest.acceptablePrice)) {
             // execute the trade
-            MarketStructs.Position memory _position = ITradeStorage(tradeStorage).executeDecreaseRequest(_decreaseRequest, price);
+            bytes32 key = keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
+            MarketStructs.Position memory _position = ITradeStorage(tradeStorage).openPositions(key);
+            // execute the trade => do we pass in size delta too to prevent double calculation?
+            uint256 leverage = _position.positionSize / _position.collateralAmount;
+            // size delta must remain proportional to the collateral when decreasing
+            // i.e leverage must remain constant => thus it is calculated here and passed in, instead of by user
+            uint256 sizeDelta = _decreaseRequest.collateralDelta * leverage;
+            ITradeStorage(tradeStorage).executeDecreaseRequest(_decreaseRequest, sizeDelta, price);
             // always decrease, so should add is opposite of isLong
-            _updateOpenInterest(_position.market, _decreaseRequest.collateralDelta, _decreaseRequest.sizeDelta, _decreaseRequest.isLong, !_decreaseRequest.isLong);
+            _updateOpenInterest(_position.market, _decreaseRequest.collateralDelta, sizeDelta, _decreaseRequest.isLong, !_decreaseRequest.isLong);
             _updateFundingRate(_position.market);
+            _updateMarketAllocations();
         } else {
             // revert
         }

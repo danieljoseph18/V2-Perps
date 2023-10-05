@@ -21,20 +21,47 @@ contract LiquidityVault {
     address public stablecoin;
     address public liquidityToken;
 
-    mapping(address => uint256) public poolAmounts;
-    mapping(bytes32 => MarketStructs.Market) public markets;
+    mapping(address _token => uint256 _poolAmount) public poolAmounts;
+    // how do we store this in a way that it never gets too large?
+    mapping(bytes32 _marketKey => MarketStructs.Market) public markets;
     bytes32[] public marketKeys;
+
+    // reps liquidity allocated to each market in USDC
+    // OI is capped to % of allocation
+    // whenever a trade is opened, check it won't put the OI over the allocation
+    // cap = marketAllocation(market) / overCollateralizationRatio
+    mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
 
     // fees handled by fee handler contract
     // claim from here, reset to 0, send to fee handler
     // divide fees and handled distribution in fee handler
     uint256 public accumulatedFees;
+    uint256 public overCollateralizationRatio; // 150 = 150% ratio => 1.5x collateral
 
     // liquidity token = market token
     // another contract should handle minting and burning of LP token 
     constructor(address _stablecoin, address _liquidityToken) {
         stablecoin = _stablecoin;
         liquidityToken = _liquidityToken;
+        overCollateralizationRatio = 150;
+    }
+
+    //////////////
+    // SETTERS //
+    ////////////
+
+    // only privileged roles
+    function updateOverCollateralizationRatio(uint256 _ratio) external {
+        overCollateralizationRatio = _ratio;
+    }
+
+    function addMarket(MarketStructs.Market memory _market) external {
+        // check if market already added
+        bytes32 key = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
+        require(markets[key].market == address(0), "Market already added");
+        // add market to mapping
+        markets[key] = _market;
+        marketKeys.push(key);
     }
 
     ///////////////
@@ -76,6 +103,8 @@ contract LiquidityVault {
         uint256 mintAmount = (_amount * getPrice(_tokenIn)) / getMarketTokenPrice();
         
         IMarketToken(liquidityToken).mint(_account, mintAmount);
+
+        _updateMarketAllocations();
     }
 
     // subtract fees, many additional safety checks needed
@@ -94,6 +123,8 @@ contract LiquidityVault {
         IMarketToken(liquidityToken).burn(_account, _liquidityTokenAmount);
         
         IERC20(_tokenOut).safeTransfer(_account, tokenAmount);
+
+        _updateMarketAllocations();
     }
 
     /////////////
@@ -150,6 +181,20 @@ contract LiquidityVault {
         return netPnL;
     }
 
+    ///////////////////
+    // OPEN INTEREST //
+    ///////////////////
+
+    function getNetOpenInterest() public view returns (uint256) {
+        uint256 total = 0;
+        uint256 len = marketKeys.length;
+        for(uint256 i = 0; i < len; ++i) {
+            address market = markets[marketKeys[i]].market;
+            total += IMarket(market).getTotalOpenInterest();
+        }
+        return total;
+    }
+
     //////////
     // FEES //
     //////////
@@ -174,6 +219,31 @@ contract LiquidityVault {
     function accumulateFundingFees(uint256 _amount) external {
 
     }
+
+    /////////////////
+    // ALLOCATIONS //
+    /////////////////
+
+    // called by the market when a trade is opened, or call periodically from a keeper
+    // or call from provide/remove liquidity functions
+    function _updateMarketAllocations() internal {
+        // loop through all markets and update their allocations
+        uint256 len = marketKeys.length;
+        uint256 totalOpenInterest = getNetOpenInterest();
+        uint256 aum = getAum();
+        for (uint256 i = 0; i < len; ++i) {
+            // get the markets open interest
+            uint256 marketOpenInterest = IMarket(markets[marketKeys[i]].market).getTotalOpenInterest();
+            uint256 allocationPercentage = totalOpenInterest / marketOpenInterest;
+            // allocate a percentage of the treasury to the market
+            marketAllocations[marketKeys[i]] = aum / allocationPercentage; // this will be the amount of stablecoin allocated to the market
+        }
+    }
+
+    //////////////
+    // GETTERS //
+    //////////////
+
 
 
 }

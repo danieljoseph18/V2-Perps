@@ -27,5 +27,8 @@ interface ITradeStorage {
     function createMarketDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external;
     function createLimitDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external;
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external;
-    function executeDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, uint256 _signedBlockPrice) external returns (MarketStructs.Position memory);
+    function executeDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, uint256 _sizeDelta, uint256 _signedBlockPrice) external;
+    function liquidationFeeUsd() external view returns (uint256);
+    function liquidatePosition(bytes32 _positionKey) external;
+    function getPositionFees(MarketStructs.Position memory _position) external view returns (uint256, int256, uint256);
 }

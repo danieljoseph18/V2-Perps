@@ -3,21 +3,27 @@ pragma solidity 0.8.20;
 
 library MarketStructs {
 
+    enum RequestType {
+        COLLATERAL,
+        SIZE,
+        REGULAR
+    }
+
     struct Market {
         address indexToken;
         address stablecoin;
-        address marketToken;
         address market;
     }
 
     struct PositionRequest {
         uint256 requestIndex;
         bool isMarketOrder;
-        address indexToken;
+        address indexToken; // used to derive which market
         address user;
         address collateralToken;
         uint256 collateralDelta;
         uint256 sizeDelta;
+        RequestType requestType;
         uint256 requestBlock;
         uint256 acceptablePrice;
         bool isLong;
@@ -28,8 +34,9 @@ library MarketStructs {
         address user;
         address indexToken;
         address collateralToken;
-        uint256 sizeDelta;
-        uint256 collateralDelta;
+        uint256 collateralDelta; // size delta = collateral delta * position leverage
+        uint256 sizeDelta; // collateral delta = size delta / position leverage
+        RequestType requestType;
         uint256 requestBlock;
         uint256 acceptablePrice;
         bool isLong;
@@ -42,7 +49,7 @@ library MarketStructs {
         address collateralToken;
         address user;
         uint256 collateralAmount; // vs size = leverage
-        uint256 positionSize; // position size in index tokens, value fluctuates giving PnL
+        uint256 positionSize; // position size in index tokens, value fluctuates in USD giving PnL
         bool isLong; // will determine token used
         int256 realisedPnl;
         int256 fundingFees; // negative or positive, pay or earn
@@ -50,7 +57,7 @@ library MarketStructs {
         uint256 entryShortCumulativeFunding;
         uint256 entryCumulativeBorrowFee; // borrow fee at entry
         uint256 entryTime;
-        uint256 averageEntryPrice; // signed price of the index token at request
+        uint256 averagePricePerToken; // average price paid per 1 token in size in USD
     }
 
     struct Swap {

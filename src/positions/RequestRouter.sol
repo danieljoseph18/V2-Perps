@@ -3,9 +3,16 @@ pragma solidity 0.8.20;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
+import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 
 contract RequestRouter {
+    using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.PositionRequest;
+    using MarketStructs for MarketStructs.RequestType;
     // contract for creating requests for trades
     // limit orders, market orders, all will have 2 step process
     // swap orders included
@@ -13,33 +20,36 @@ contract RequestRouter {
     // orders will be executed by the Executor, which will put them on TradeManager
 
     address public tradeStorage;
+    address public liquidityVault;
+    address public marketStorage;
 
-    constructor(address _tradeStorage) {
+    constructor(address _tradeStorage, address _liquidityVault, address _marketStorage) {
         tradeStorage = _tradeStorage;
+        liquidityVault = _liquidityVault;
+        marketStorage = _marketStorage;
     }
-
-    /* 
-    struct PositionRequest {
-        uint256 requestIndex;
-        address indexToken;
-        address user;
-        address stablecoin;
-        uint256 collateralAmount;
-        uint256 indexAmount;
-        uint256 positionSize;
-        uint256 requestBlock;
-        bool isLong;
-    }
-    */
 
     // if _isLimit, it's a limit order, else it's a market order
     // every time a request is created, call to the price oracle and sign the block price
     // update the mapping with the price at the block of the request
     /// @dev front-end can pass default values for block and index
     function createTradeRequest(MarketStructs.PositionRequest memory _positionRequest, bool _isLimit) external {
+
+        // get the key for the market
+        bytes32 marketKey = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken));
+        _validateAllocation(marketKey, _positionRequest.sizeDelta);
+
+        _transferInTokens(_positionRequest.indexToken, _positionRequest.user, _positionRequest.collateralDelta);
+
         ITradeStorage target = ITradeStorage(tradeStorage);
         (uint256 marketLen, uint256 limitLen, , ,) = target.getRequestQueueLengths();
         uint256 index = _isLimit ? limitLen : marketLen;
+        // get the request type, if COLLAT, set size to 0, if SIZE, set collateral to 0, if REGULAR do nothing
+        if(_positionRequest.requestType == MarketStructs.RequestType(0)) {
+            _positionRequest.collateralDelta = 0;
+        } else if (_positionRequest.requestType == MarketStructs.RequestType(1)) {
+            _positionRequest.sizeDelta = 0;
+        }
         _positionRequest.requestIndex = index;
         _positionRequest.requestBlock = block.number;
         // validate the request meets all safety parameters
@@ -55,6 +65,12 @@ contract RequestRouter {
         ITradeStorage target = ITradeStorage(tradeStorage);
         (,, , uint256 marketLen,uint256 limitLen) = target.getRequestQueueLengths();
         uint256 index = _isLimit ? limitLen : marketLen;
+        // get the request type, if COLLAT, set size to 0, if SIZE, set collateral to 0, if REGULAR do nothing
+        if(_decreaseRequest.requestType == MarketStructs.RequestType(0)) {
+            _decreaseRequest.collateralDelta = 0;
+        } else if (_decreaseRequest.requestType == MarketStructs.RequestType(1)) {
+            _decreaseRequest.sizeDelta = 0;
+        }
         _decreaseRequest.requestIndex = index;
         _decreaseRequest.requestBlock = block.number;
         // validate the request meets all safety parameters
@@ -62,15 +78,55 @@ contract RequestRouter {
         _isLimit ? target.createLimitDecreaseRequest(_decreaseRequest) : target.createMarketDecreaseRequest(_decreaseRequest);
     }
 
-    function createCloseRequest(MarketStructs.PositionRequest memory _positionRequest) external {
+    // get position to close
+    // get the current price
+    // create decrease request for full position size
+    function createCloseRequest(bytes32 _key, uint256 _acceptablePrice, bool _isLimit) external {
         // validate the request meets all safety parameters
         // open the request on the trade storage contract
+        ITradeStorage target = ITradeStorage(tradeStorage);
+        (,, , uint256 marketLen,uint256 limitLen) = target.getRequestQueueLengths();
+        uint256 index = _isLimit ? limitLen : marketLen;
+        MarketStructs.Position memory _position = target.openPositions(_key);
+        MarketStructs.DecreasePositionRequest memory _decreaseRequest = MarketStructs.DecreasePositionRequest({
+            requestIndex: index,
+            indexToken: _position.indexToken,
+            user: _position.user,
+            collateralToken: _position.collateralToken,
+            sizeDelta: _position.positionSize,
+            collateralDelta: _position.collateralAmount,
+            requestType: MarketStructs.RequestType(2), // set to regular request
+            requestBlock: block.number,
+            acceptablePrice: _acceptablePrice,
+            isLong: _position.isLong,
+            isMarketOrder: !_isLimit
+        });
+        _isLimit ? target.createLimitDecreaseRequest(_decreaseRequest) : target.createMarketDecreaseRequest(_decreaseRequest);
     }
 
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external {
         // perform safety checks => it exists, it's their position etc.
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
+    }
+
+    function _transferInTokens(address _token, address _user, uint256 _amount) internal {
+        // transfer in the tokens
+        // check tokens are stables
+        // other safety checks
+        IERC20(_token).safeTransferFrom(_user, tradeStorage, _amount);
+    }
+
+    // validate that the additional open interest won't put the market over the max open interest (allocated reserves)
+    // call the mapping to get the allocation and divide by over collateralization then * 100
+    // compare to what the size delta will put the open interest to
+    function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) internal view {
+        uint256 allocation = ILiquidityVault(liquidityVault).getMarketAllocation(_marketKey);
+        uint256 overcollateralization = ILiquidityVault(liquidityVault).overCollateralizationRatio();
+        address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
+        uint256 totalOI = IMarket(market).getTotalOpenInterest();
+        uint256 maxOI = (allocation / overcollateralization) * 100;
+        require(totalOI + _sizeDelta <= maxOI, "Position size too large");
     }
 
 }

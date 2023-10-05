@@ -6,18 +6,20 @@ pragma solidity 0.8.20;
 // Should just be for making Perp markets, spot should work differently
 // Also add the option to delete markets if underperforming
 import {MarketStorage} from "./MarketStorage.sol";
-import {MarketToken} from "./MarketToken.sol";
 import {Market} from "./Market.sol";
 import {MarketStructs} from "./MarketStructs.sol";
+import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 
 contract MarketFactory {
 
     MarketStorage public marketStorage;
+    ILiquidityVault public liquidityVault;
 
-    event MarketCreated(address indexed indexToken, address indexed stablecoin, address market, address marketToken);
+    event MarketCreated(address indexed indexToken, address indexed stablecoin, address market);
 
-    constructor(address _marketStorage) {
+    constructor(address _marketStorage, address _liquidityVault) {
         marketStorage = MarketStorage(_marketStorage);
+        liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
     // Only callable by MARKET_MAKER roles
@@ -28,15 +30,13 @@ contract MarketFactory {
         // pool cant already exist
         bytes32 _key = keccak256(abi.encodePacked(_indexToken, _stablecoin));
         require(marketStorage.getMarket(_key).market == address(0), "Market already exists");
-        // Create new MarketToken (ERC20 token)
-        MarketToken _marketToken = new MarketToken();
         // Create new Market contract
-        Market _market = new Market(_indexToken, _stablecoin, address(_marketToken), address(marketStorage));
+        Market _market = new Market(_indexToken, _stablecoin, address(marketStorage), address(liquidityVault));
         // Store everything in MarketStorage
-        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, _stablecoin, address(_marketToken), address(_market));
+        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, _stablecoin, address(_market));
         marketStorage.storeMarket(_marketInfo);
 
-        emit MarketCreated(_indexToken, _stablecoin, address(_market), address(_marketToken));
+        emit MarketCreated(_indexToken, _stablecoin, address(_market));
     }
 
 }

@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IMarketToken} from "./interfaces/IMarketToken.sol";
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {MarketStructs} from "./MarketStructs.sol";
+import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://blog.synthetix.io/synthetix-perps-dynamic-funding-rates/)
 /// NEED TO EXTRAPOLATE OUT DECIMAL PRECISION INTO 1 VAR
@@ -20,7 +21,7 @@ contract Market {
     // initialized with a market token
     address public indexToken;
     address public stablecoin;
-    address public marketToken;
+    address public liquidityVault;
     address public marketStorage;
 
     uint256 public lastFundingUpdateTime; // last time funding was updated
@@ -51,37 +52,16 @@ contract Market {
     mapping(address => uint256) public marginAmounts;
 
     // might need to update to an initialize function instead of constructor
-    constructor(address _indexToken, address _stablecoin, address _marketToken, address _marketStorage) {
+    constructor(address _indexToken, address _stablecoin, address _marketStorage, address _liquidityVault) {
         indexToken = _indexToken;
         stablecoin = _stablecoin;
-        marketToken = _marketToken;
         marketStorage = _marketStorage;
+        liquidityVault = _liquidityVault;
     }
 
     /////////////
     // PRICING //
     /////////////
-
-
-    // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
-    // price per 1 token (1e18 decimals)
-    function getMarketTokenPrice() public view returns (uint256) {
-        // amount of market tokens function of AUM in USD
-        // market token price = (worth of market pool) / total supply
-        // could overflow, need to use scaling factor, will hover around 0.9 - 1.1
-        return getAum() / IERC20(marketToken).totalSupply();
-    }
-
-    function getAum() public view returns (uint256 aum) {
-        // get the AUM of the market in USD
-        // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
-        // liquidity in USD
-        uint256 liquidity = (poolAmounts[stablecoin] * getPrice(stablecoin));
-        aum = liquidity;
-        int256 pendingPnL = _getNetPnL(true) + _getNetPnL(false); 
-        pendingPnL > 0 ? aum += uint256(pendingPnL) : aum -= uint256(pendingPnL);
-        return aum;
-    }
 
     function getPrice(address _token) public view returns (uint256) {
         // perform safety checks
@@ -204,8 +184,13 @@ contract Market {
         uint256 longFeesOwed = (longAccumulatedFunding - uint256(fundingRate)) + ((timeSinceUpdate / fundingInterval) * uint256(fundingRate));
         uint256 shortFeesOwed = (shortAccumulatedFunding - uint256(fundingRate)) + ((timeSinceUpdate / fundingInterval) * uint256(fundingRate));
 
+        // +ve value = fees owed, -ve value = fees earned
         // IMPORTANT: De-scale the return value by 1e5
         return _position.isLong ? int256(longFeesOwed) - int256(shortFeesOwed) : int256(shortFeesOwed) - int256(longFeesOwed);
+    }
+
+    function getFundingFees(MarketStructs.Position memory _position) public view returns (int256) {
+        return _calculateFundingFees(_position);
     }
 
     ////////////////////
@@ -238,15 +223,21 @@ contract Market {
         borrowingRate = fee;
     }
 
+    // Get the borrowing fees owed for a particular position
+    function getBorrowingFees(MarketStructs.Position memory _position) public view returns (uint256) {
+        return cumulativeBorrowFee - _position.entryCumulativeBorrowFee;
+
+    }
+
     /////////
     // PNL //
     /////////
 
 
-    // Position size x value - position size x entry value
+    // USD worth - cumulative USD paid
     function _calculatePnL(MarketStructs.Position memory _position) internal view returns (int256) {
         uint256 positionValue = _position.positionSize * getPrice(indexToken);
-        uint256 entryValue = _position.positionSize * _position.averageEntryPrice;
+        uint256 entryValue = _position.positionSize * _position.averagePricePerToken;
         return int256(positionValue) - int256(entryValue);
     }
 
@@ -291,6 +282,15 @@ contract Market {
     function setPriceImpactConfig(uint256 _priceImpactFactor, uint256 _priceImpactExponent) external {
         priceImpactFactor = _priceImpactFactor;
         priceImpactExponent = _priceImpactExponent;
+    }
+
+    /////////////////
+    // ALLOCATION //
+    ////////////////
+
+    function getMarketAllocation() external view returns (uint256) {
+        bytes32 key = getMarketKey();
+        return ILiquidityVault(liquidityVault).getMarketAllocation(key);
     }
 
 }
