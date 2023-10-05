@@ -19,11 +19,11 @@ contract RequestRouter {
     // orders will be stored in storage
     // orders will be executed by the Executor, which will put them on TradeManager
 
-    address public tradeStorage;
-    address public liquidityVault;
-    address public marketStorage;
+    ITradeStorage public tradeStorage;
+    ILiquidityVault public liquidityVault;
+    IMarketStorage public marketStorage;
 
-    constructor(address _tradeStorage, address _liquidityVault, address _marketStorage) {
+    constructor(ITradeStorage _tradeStorage, ILiquidityVault _liquidityVault, IMarketStorage _marketStorage) {
         tradeStorage = _tradeStorage;
         liquidityVault = _liquidityVault;
         marketStorage = _marketStorage;
@@ -33,13 +33,20 @@ contract RequestRouter {
     // every time a request is created, call to the price oracle and sign the block price
     // update the mapping with the price at the block of the request
     /// @dev front-end can pass default values for block and index
-    function createTradeRequest(MarketStructs.PositionRequest memory _positionRequest, bool _isLimit) external {
+    function createTradeRequest(MarketStructs.PositionRequest memory _positionRequest, bool _isLimit, uint256 _executionFee) external payable {
+        uint256 minExecutionFee = tradeStorage.minExecutionFee();
+        require(msg.value >= minExecutionFee, "RequestRouter: fee too low");
+        require(msg.value == _executionFee, "RequestRouter: incorrect fee");
+
+        _sendFeeToStorage(_executionFee);
 
         // get the key for the market
         bytes32 marketKey = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken));
         _validateAllocation(marketKey, _positionRequest.sizeDelta);
 
         _transferInTokens(_positionRequest.indexToken, _positionRequest.user, _positionRequest.collateralDelta);
+
+        _deductTradingFee(_positionRequest);
 
         ITradeStorage target = ITradeStorage(tradeStorage);
         (uint256 marketLen, uint256 limitLen, , ,) = target.getRequestQueueLengths();
@@ -59,7 +66,13 @@ contract RequestRouter {
     }
 
 
-    function createDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, bool _isLimit) external {
+    function createDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, bool _isLimit, uint256 _executionFee) external payable {
+        uint256 minExecutionFee = tradeStorage.minExecutionFee();
+        require(msg.value >= minExecutionFee, "RequestRouter: fee too low");
+        require(msg.value == _executionFee, "RequestRouter: incorrect fee");
+
+        _sendFeeToStorage(_executionFee);
+
         // validate the request meets all safety parameters
         // open the request on the trade storage contract
         ITradeStorage target = ITradeStorage(tradeStorage);
@@ -114,7 +127,24 @@ contract RequestRouter {
         // transfer in the tokens
         // check tokens are stables
         // other safety checks
-        IERC20(_token).safeTransferFrom(_user, tradeStorage, _amount);
+        IERC20(_token).safeTransferFrom(_user, address(tradeStorage), _amount);
+    }
+
+    function _deductTradingFee(MarketStructs.PositionRequest memory _positionRequest) internal {
+        // get the fee
+        uint256 fee = tradeStorage.tradingFee();
+        // return 99.9% of the amount etc.
+        uint256 feeAmount = (_positionRequest.collateralDelta * fee) / 1000;
+
+        // transfer fee to trade storage
+        // NEED FUNCTION IN TRADE STORAGE TO PROCESS FEES
+        IERC20(_positionRequest.collateralToken).safeTransfer(address(tradeStorage), feeAmount);
+    }
+
+    function _sendFeeToStorage(uint256 _executionFee) internal returns (bool) {
+        (bool success, ) = address(tradeStorage).call{value: _executionFee}("");
+        require(success, "RequestRouter: fee transfer failed");
+        return true;
     }
 
     // validate that the additional open interest won't put the market over the max open interest (allocated reserves)

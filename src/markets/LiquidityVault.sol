@@ -20,6 +20,7 @@ contract LiquidityVault {
 
     address public stablecoin;
     address public liquidityToken;
+    uint256 public liquidityFee; // 0.2% fee on all liquidity added/removed = 200
 
     mapping(address _token => uint256 _poolAmount) public poolAmounts;
     // how do we store this in a way that it never gets too large?
@@ -44,6 +45,7 @@ contract LiquidityVault {
         stablecoin = _stablecoin;
         liquidityToken = _liquidityToken;
         overCollateralizationRatio = 150;
+        liquidityFee = 200;
     }
 
     //////////////
@@ -62,6 +64,10 @@ contract LiquidityVault {
         // add market to mapping
         markets[key] = _market;
         marketKeys.push(key);
+    }
+
+    function updateLiquidityFee(uint256 _fee) external {
+        liquidityFee = _fee;
     }
 
     ///////////////
@@ -95,12 +101,13 @@ contract LiquidityVault {
         require(_amount > 0, "Invalid amount");
         require(_tokenIn == stablecoin, "Invalid token");
 
+        uint256 afterFeeAmount = _deductLiquidityFees(_amount);
 
-        poolAmounts[_tokenIn] += _amount;
+        poolAmounts[_tokenIn] += afterFeeAmount;
         // add liquidity to the market
         IERC20(_tokenIn).safeTransferFrom(_account, address(this), _amount);
         // mint market tokens for the user
-        uint256 mintAmount = (_amount * getPrice(_tokenIn)) / getMarketTokenPrice();
+        uint256 mintAmount = (afterFeeAmount * getPrice(_tokenIn)) / getMarketTokenPrice();
         
         IMarketToken(liquidityToken).mint(_account, mintAmount);
 
@@ -112,7 +119,6 @@ contract LiquidityVault {
         require(_liquidityTokenAmount > 0, "Invalid amount");
         require(_tokenOut == stablecoin, "Invalid token");
 
-
         // remove liquidity from the market
         uint256 marketTokenValue = _liquidityTokenAmount * getMarketTokenPrice();
 
@@ -121,8 +127,10 @@ contract LiquidityVault {
         poolAmounts[_tokenOut] -= tokenAmount;
 
         IMarketToken(liquidityToken).burn(_account, _liquidityTokenAmount);
+
+        uint256 afterFeeAmount = _deductLiquidityFees(tokenAmount);
         
-        IERC20(_tokenOut).safeTransfer(_account, tokenAmount);
+        IERC20(_tokenOut).safeTransfer(_account, afterFeeAmount);
 
         _updateMarketAllocations();
     }
@@ -199,25 +207,8 @@ contract LiquidityVault {
     // FEES //
     //////////
 
-    // transfers borrowing fees from users position to the contract
-    // called externally when trades closed or decreased
-    // updates accumulated fees state variable
-    function accumulateBorrowingFees(uint256 _amount) external {
-        // only called by the market
-        // market must transfer the fee from the user's position to the vault
-        // market must call this function to add the fee to the vault
-    }
-
-    // transfers trading fees from user's position to contract
-    // called externally when a trade is opened
-    function accumulateTradingFees(uint256 _amount) external {
-
-    }
-
-    // transfers funding fees from user's position to contract
-    // called externally when a trade is closed and funding subbed
-    function accumulateFundingFees(uint256 _amount) external {
-
+    function _deductLiquidityFees(uint256 _amount) internal returns (uint256) {
+       return _amount - ((_amount * liquidityFee) / 1000);
     }
 
     /////////////////

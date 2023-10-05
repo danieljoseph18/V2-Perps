@@ -5,7 +5,7 @@ import {MarketStructs} from "../../markets/MarketStructs.sol";
 
 interface ITradeStorage {
     function createMarketOrderRequest(MarketStructs.PositionRequest calldata _positionRequest) external;
-    function executeTrade(MarketStructs.PositionRequest calldata _positionRequest, uint256 _signedBlockPrice) external returns (MarketStructs.Position memory);
+    function executeTrade(MarketStructs.PositionRequest memory _positionRequest, uint256 _signedBlockPrice, address _executor) external returns (MarketStructs.Position memory);
     function createLimitOrderRequest(MarketStructs.PositionRequest calldata _positionRequest) external;
     function createSwapOrderRequest() external;
     function getMarketOrderKeys() external view returns (bytes32[] memory, bytes32[] memory);
@@ -27,8 +27,10 @@ interface ITradeStorage {
     function createMarketDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external;
     function createLimitDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external;
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external;
-    function executeDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, uint256 _sizeDelta, uint256 _signedBlockPrice) external;
+    function executeDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, uint256 _signedBlockPrice, address _executor) external;
     function liquidationFeeUsd() external view returns (uint256);
     function liquidatePosition(bytes32 _positionKey) external;
     function getPositionFees(MarketStructs.Position memory _position) external view returns (uint256, int256, uint256);
+    function tradingFee() external view returns (uint256);
+    function minExecutionFee() external view returns (uint256);
 }

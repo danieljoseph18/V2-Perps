@@ -18,12 +18,12 @@ contract Executor {
     // will execute trades on the funding contract
     // will execute trades on the liquidator contract
 
-    address public marketStorage;
-    address public tradeStorage;
+    IMarketStorage public marketStorage;
+    ITradeStorage public tradeStorage;
     address public priceOracle;
-    address public liquidityVault;
+    ILiquidityVault public liquidityVault;
 
-    constructor(address _marketStorage, address _tradeStorage, address _priceOracle, address _liquidityVault) {
+    constructor(IMarketStorage _marketStorage, ITradeStorage _tradeStorage, address _priceOracle, ILiquidityVault _liquidityVault) {
         marketStorage = _marketStorage;
         tradeStorage = _tradeStorage;
         priceOracle = _priceOracle;
@@ -61,7 +61,7 @@ contract Executor {
     // if too much backlog builds up, may be too expensive to loop through entire request array
     function executeMarketOrders() external {
         // cache the order queue
-        (bytes32[] memory orders, ) = ITradeStorage(tradeStorage).getMarketOrderKeys();
+        (bytes32[] memory orders, ) = tradeStorage.getMarketOrderKeys();
         uint256 len = orders.length;
         // loop through => get Position => fulfill position at signed block price
         for(uint256 i = 0; i < len; ++i) {
@@ -72,7 +72,7 @@ contract Executor {
 
     function executeMarketOrder(bytes32 _key) public {
         // get the position
-        MarketStructs.PositionRequest memory _positionRequest = ITradeStorage(tradeStorage).marketOrderRequests(_key);
+        MarketStructs.PositionRequest memory _positionRequest = tradeStorage.marketOrderRequests(_key);
 
         // get the market and block to get the signed block price
         address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(_positionRequest.indexToken, _positionRequest.collateralToken).market;
@@ -80,7 +80,7 @@ contract Executor {
         uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(_market, _block);
 
         // execute the trade
-        MarketStructs.Position memory _position = ITradeStorage(tradeStorage).executeTrade(_positionRequest, _signedBlockPrice);
+        MarketStructs.Position memory _position = tradeStorage.executeTrade(_positionRequest, _signedBlockPrice, msg.sender);
         // update open interest
         // always increase => should add is equal to isLong
         _updateOpenInterest(_position.market, _positionRequest.collateralDelta, _positionRequest.sizeDelta, _positionRequest.isLong, _positionRequest.isLong);
@@ -92,14 +92,14 @@ contract Executor {
     // no loop execution for limits => 1 by 1, track price on subgraph
     function executeLimitOrder(bytes32 _key) external {
         // get the position
-        MarketStructs.PositionRequest memory _positionRequest = ITradeStorage(tradeStorage).limitOrderRequests(_key);
+        MarketStructs.PositionRequest memory _positionRequest = tradeStorage.limitOrderRequests(_key);
         // get the current price
         uint256 price = IPriceOracle(priceOracle).getPrice(_positionRequest.indexToken);
         // if current price >= acceptable price and isShort, execute
         // if current price <= acceptable price and isLong, execute
         if((_positionRequest.isLong && price <= _positionRequest.acceptablePrice) || (!_positionRequest.isLong && price >= _positionRequest.acceptablePrice)) {
             // execute the trade
-            MarketStructs.Position memory _position = ITradeStorage(tradeStorage).executeTrade(_positionRequest, price);
+            MarketStructs.Position memory _position = tradeStorage.executeTrade(_positionRequest, price, msg.sender);
             // update open interest
             // always increase => should add is equal to isLong
             _updateOpenInterest(_position.market, _positionRequest.collateralDelta, _positionRequest.sizeDelta, _positionRequest.isLong, _positionRequest.isLong);
@@ -115,7 +115,7 @@ contract Executor {
 
     function executeDecreaseOrders() external {
         // cache the order queue
-        (,bytes32[] memory orders) = ITradeStorage(tradeStorage).getMarketOrderKeys();
+        (,bytes32[] memory orders) = tradeStorage.getMarketOrderKeys();
         uint256 len = orders.length;
         // loop through => get Position => fulfill position at signed block price
         for(uint256 i = 0; i < len; ++i) {
@@ -126,17 +126,18 @@ contract Executor {
 
     function executeMarketDecrease(bytes32 _key) public {
         // get the request
-        MarketStructs.DecreasePositionRequest memory _decreaseRequest = ITradeStorage(tradeStorage).marketDecreaseRequests(_key);
+        MarketStructs.DecreasePositionRequest memory _decreaseRequest = tradeStorage.marketDecreaseRequests(_key);
         // get the market and block to get the signed block price
         address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(_decreaseRequest.indexToken, _decreaseRequest.collateralToken).market;
         uint256 _block = _decreaseRequest.requestBlock;
         uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(_market, _block);
         bytes32 key = keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
-        MarketStructs.Position memory _position = ITradeStorage(tradeStorage).openPositions(key);
+        MarketStructs.Position memory _position = tradeStorage.openPositions(key);
         // execute the trade => do we pass in size delta too to prevent double calculation?
         uint256 leverage = _position.positionSize / _position.collateralAmount;
         uint256 sizeDelta = _decreaseRequest.collateralDelta * leverage;
-        ITradeStorage(tradeStorage).executeDecreaseRequest(_decreaseRequest, sizeDelta, _signedBlockPrice);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        tradeStorage.executeDecreaseRequest(_decreaseRequest, _signedBlockPrice, msg.sender);
         // always decrease, so shouldAdd is opposite of isLong
         // are these input values correct to update contract state?
         _updateOpenInterest(_position.market, _decreaseRequest.collateralDelta, sizeDelta, _decreaseRequest.isLong, !_decreaseRequest.isLong);
@@ -148,7 +149,7 @@ contract Executor {
     // limit decrease should be set as a percentage of the current price ?? how does a trailing stop loss work?
     function executeLimitDecrease(bytes32 _key) external {
         // get the request
-        MarketStructs.DecreasePositionRequest memory _decreaseRequest = ITradeStorage(tradeStorage).limitDecreaseRequests(_key);
+        MarketStructs.DecreasePositionRequest memory _decreaseRequest = tradeStorage.limitDecreaseRequests(_key);
         // get the current price
         uint256 price = IPriceOracle(priceOracle).getPrice(_decreaseRequest.indexToken);
         // if current price >= acceptable price and isShort, execute
@@ -156,13 +157,13 @@ contract Executor {
         if((_decreaseRequest.isLong && price <= _decreaseRequest.acceptablePrice) || (!_decreaseRequest.isLong && price >= _decreaseRequest.acceptablePrice)) {
             // execute the trade
             bytes32 key = keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
-            MarketStructs.Position memory _position = ITradeStorage(tradeStorage).openPositions(key);
+            MarketStructs.Position memory _position = tradeStorage.openPositions(key);
             // execute the trade => do we pass in size delta too to prevent double calculation?
             uint256 leverage = _position.positionSize / _position.collateralAmount;
             // size delta must remain proportional to the collateral when decreasing
             // i.e leverage must remain constant => thus it is calculated here and passed in, instead of by user
             uint256 sizeDelta = _decreaseRequest.collateralDelta * leverage;
-            ITradeStorage(tradeStorage).executeDecreaseRequest(_decreaseRequest, sizeDelta, price);
+            tradeStorage.executeDecreaseRequest(_decreaseRequest, price, msg.sender);
             // always decrease, so should add is opposite of isLong
             _updateOpenInterest(_position.market, _decreaseRequest.collateralDelta, sizeDelta, _decreaseRequest.isLong, !_decreaseRequest.isLong);
             _updateFundingRate(_position.market);

@@ -45,7 +45,9 @@ contract TradeStorage {
     mapping(address _user => uint256 _rewards) public accumulatedRewards;
 
     IMarketStorage public marketStorage;
-    uint256 public liquidationFeeUsd;
+    uint256 public liquidationFeeUsd; // 5 = 5 USD
+    uint256 public tradingFee; // 100 = 0.1%
+    uint256 public minExecutionFee = 0.001 ether;
 
     ILiquidityVault public liquidityVault;
 
@@ -56,6 +58,8 @@ contract TradeStorage {
     constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault) {
         marketStorage = _marketStorage;
         liquidityVault = _liquidityVault;
+        liquidationFeeUsd = 5;
+        tradingFee = 100;
     }
 
     ///////////////////////
@@ -118,7 +122,7 @@ contract TradeStorage {
 
     // only callable from executor contracts
     // DEFINITELY NEED A LOT MORE SECURITY CHECKS
-    function executeTrade(MarketStructs.PositionRequest memory _positionRequest, uint256 _signedBlockPrice) external returns (MarketStructs.Position memory) {
+    function executeTrade(MarketStructs.PositionRequest memory _positionRequest, uint256 _signedBlockPrice, address _executor) external returns (MarketStructs.Position memory) {
         
         uint8 requestType = uint8(_positionRequest.requestType);
         bytes32 key = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
@@ -191,9 +195,11 @@ contract TradeStorage {
                 // make sure all Position and PositionRequest instantiations are in the correct order.
                 MarketStructs.Position memory _position = MarketStructs.Position(market, _positionRequest.indexToken, _positionRequest.collateralToken, _positionRequest.user, _positionRequest.collateralDelta, _positionRequest.sizeDelta, _positionRequest.isLong, 0, 0, longFunding, shortFunding, borrowFee, block.timestamp, _signedBlockPrice);
                 openPositions[key] = _position;
+                _sendExecutionFee(_executor, minExecutionFee);
                 return _position; // return the new position
             }
         }
+        _sendExecutionFee(_executor, minExecutionFee);
 
         // fire event to be picked up by backend and stored in DB
 
@@ -203,7 +209,7 @@ contract TradeStorage {
 
     // SHOULD NEVER BE CALLABLE EXCEPT FROM EXECUTOR CONTRACT
     // DEFINITELY NEED A LOT MORE SECURITY CHECKS
-    function executeDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, uint256 _signedBlockPrice) external {
+    function executeDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, uint256 _signedBlockPrice, address _executor) external {
         
         uint8 requestType = uint8(_decreaseRequest.requestType);
         // Obtain the key for the position mapping based on the decrease request details
@@ -257,6 +263,8 @@ contract TradeStorage {
 
             _position.collateralAmount -= _decreaseRequest.collateralDelta;
             _position.positionSize -= sizeDelta;
+
+            _sendExecutionFee(_executor, minExecutionFee);
 
             // validate the decrease => if removing collat, lev must remain below threshold
             // add the size and collat deltas together
@@ -314,7 +322,7 @@ contract TradeStorage {
     }
 
     /////////////////////
-    // TOKEN TRANSFERS //
+    // TOKEN RELATED //
     ////////////////////
 
     // contract must be validated to transfer funds from TradeStorage
@@ -327,14 +335,23 @@ contract TradeStorage {
         IERC20(_token).safeTransferFrom(address(this), _to, amount);
     }
 
+    function _sendExecutionFee(address _executor, uint256 _executionFee) internal returns (bool) {
+
+    }
+
+    // PROCESS ALL TRADING FEES TRANSFERRED TO THE CONTRACT
+    // SEND THEM TO FEE HANDLER OR SIMILAR
+    function processFees() external {}
+
     //////////////////////
     // SETTER FUNCTIONS //
     //////////////////////
 
-    // only priviliged roles can call
-    function setLiquidationFee(uint256 _newFee) external {
-        liquidationFeeUsd = _newFee;
+    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external {
+        liquidationFeeUsd = _liquidationFee;
+        tradingFee = _tradingFee;
     }
+
 
     //////////////////////
     // GETTER FUNCTIONS //
