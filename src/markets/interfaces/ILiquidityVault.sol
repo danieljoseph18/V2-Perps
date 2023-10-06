@@ -40,5 +40,6 @@ interface ILiquidityVault {
     function getMarketAllocation(bytes32 key) external view returns (uint256);
     function getAccumulatedFees() external view returns (uint256);
     function overCollateralizationRatio() external view returns (uint256);
+    function accumulateFundingFees(uint256 _amount, address _account) external;
 
 }

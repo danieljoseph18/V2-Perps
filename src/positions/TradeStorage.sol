@@ -224,10 +224,14 @@ contract TradeStorage {
             uint256 currentCollateral = openPositions[key].collateralAmount;
             // get the position's current size
             uint256 currentSize = openPositions[key].positionSize;
+
+            //process the fees for the decrease and return after fee amount
+            uint256 afterFeeAmount = processFees(openPositions[key], _decreaseRequest.collateralDelta);
+            
             // check that decreasing the collateral won't put position above max leverage
-            require(currentSize / (currentCollateral - _decreaseRequest.collateralDelta) <= MAX_LEVERAGE, "Collateral exceeds max leverage");
+            require(currentSize / (currentCollateral - afterFeeAmount) <= MAX_LEVERAGE, "Collateral exceeds max leverage");
             // subtract the collateral
-            openPositions[key].collateralAmount -= _decreaseRequest.collateralDelta;
+            openPositions[key].collateralAmount -= afterFeeAmount;
             // transfer the collateral
         } else if (requestType == 1) { // decrease size only
             _deletePositionRequest(key, _decreaseRequest.requestIndex, false, _decreaseRequest.isMarketOrder);
@@ -245,7 +249,11 @@ contract TradeStorage {
             // if partial close, calculate size delta from the collateral delta and decrease the position
             MarketStructs.Position storage _position = openPositions[key];
             uint256 leverage = _position.positionSize / _position.collateralAmount;
-            uint256 sizeDelta = _decreaseRequest.collateralDelta * leverage;
+
+            //process the fees for the decrease and return after fee amount
+            uint256 afterFeeAmount = processFees(openPositions[key], _decreaseRequest.collateralDelta);
+
+            uint256 sizeDelta = afterFeeAmount * leverage;
 
             // only realise a percentage equivalent to the percentage of the position being closed
             int256 valueDelta = int256(sizeDelta * _position.averagePricePerToken) - int256(sizeDelta * _signedBlockPrice);
@@ -261,7 +269,7 @@ contract TradeStorage {
 
             _position.realisedPnl += pnl;
 
-            _position.collateralAmount -= _decreaseRequest.collateralDelta;
+            _position.collateralAmount -= afterFeeAmount;
             _position.positionSize -= sizeDelta;
 
             _sendExecutionFee(_executor, minExecutionFee);
@@ -339,9 +347,31 @@ contract TradeStorage {
 
     }
 
-    // PROCESS ALL TRADING FEES TRANSFERRED TO THE CONTRACT
-    // SEND THEM TO FEE HANDLER OR SIMILAR
-    function processFees() external {}
+    // takes in borrow and funding fees owed
+    // subtracts them
+    // sends them to the liquidity vault
+    // returns the collateral amount
+    function processFees(MarketStructs.Position memory _position, uint256 _collateralDelta) public returns (uint256 _afterFeeAmount) {
+        (uint256 borrowFee, int256 fundingFees, ) = getPositionFees(_position);
+        // subtract the fees from the collateral delta
+        int256 percentageFeesOwed = int256(borrowFee) + fundingFees; // 100 = 0.1% => 100,000 = 100%
+
+        if (percentageFeesOwed > 0) {
+            // subtract the percentage of the position collateral delta
+            uint256 fees = uint256(percentageFeesOwed) * _collateralDelta / 100000; // divide by precision
+            // give fees to liquidity vault
+            accumulatedRewards[address(liquidityVault)] += fees;
+            // return size + fees
+            _afterFeeAmount = _collateralDelta + fees;
+        } else if (percentageFeesOwed < 0) { // user is owed fees
+            // add fee to mapping in liquidity vault
+            uint256 fees = uint256(-percentageFeesOwed) * _collateralDelta / 100000; // divide by precision
+            liquidityVault.accumulateFundingFees(fees, _position.user);
+            _afterFeeAmount = _collateralDelta;
+        } else {
+            _afterFeeAmount = _collateralDelta;
+        }
+    }
 
     //////////////////////
     // SETTER FUNCTIONS //
@@ -357,6 +387,7 @@ contract TradeStorage {
     // GETTER FUNCTIONS //
     //////////////////////
 
+    // returns fees as percentage of the position
     function getPositionFees(MarketStructs.Position memory _position) public view returns (uint256, int256, uint256) {
         address market = marketStorage.getMarket(_position.market).market;
         uint256 borrowFee = IMarket(market).getBorrowingFees(_position);

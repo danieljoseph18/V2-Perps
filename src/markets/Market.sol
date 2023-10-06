@@ -189,6 +189,8 @@ contract Market {
         return _position.isLong ? int256(longFeesOwed) - int256(shortFeesOwed) : int256(shortFeesOwed) - int256(longFeesOwed);
     }
 
+    // RETURNS PERCENTAGE, NEEDS TO BE SCALED BY SIZE
+    // MAKE SURE PERCENTAGE IS THE SAME PRECISION AS FUNDING FEE
     function getFundingFees(MarketStructs.Position memory _position) public view returns (int256) {
         return _calculateFundingFees(_position);
     }
@@ -224,6 +226,7 @@ contract Market {
     }
 
     // Get the borrowing fees owed for a particular position
+    // MAKE SURE PERCENTAGE IS THE SAME PRECISION AS FUNDING FEE
     function getBorrowingFees(MarketStructs.Position memory _position) public view returns (uint256) {
         return cumulativeBorrowFee - _position.entryCumulativeBorrowFee;
 

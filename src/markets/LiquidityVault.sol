@@ -33,6 +33,8 @@ contract LiquidityVault {
     // cap = marketAllocation(market) / overCollateralizationRatio
     mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
 
+    mapping(address => uint256) public fundingFeesEarned;
+
     // fees handled by fee handler contract
     // claim from here, reset to 0, send to fee handler
     // divide fees and handled distribution in fee handler
@@ -207,8 +209,20 @@ contract LiquidityVault {
     // FEES //
     //////////
 
-    function _deductLiquidityFees(uint256 _amount) internal returns (uint256) {
+    function _deductLiquidityFees(uint256 _amount) internal view returns (uint256) {
        return _amount - ((_amount * liquidityFee) / 1000);
+    }
+
+    // called by trading contracts to allocate earned funding fees to a trader
+    function accumulateFundingFees(uint256 _amount, address _account) external {
+        fundingFeesEarned[_account] += _amount;
+    }
+
+    // called by a trader to claim their earned funding fees
+    function claimFundingFees() external {
+        uint256 amount = fundingFeesEarned[msg.sender];
+        fundingFeesEarned[msg.sender] = 0;
+        IERC20(stablecoin).safeTransfer(msg.sender, amount);
     }
 
     /////////////////

@@ -136,7 +136,6 @@ contract Executor {
         // execute the trade => do we pass in size delta too to prevent double calculation?
         uint256 leverage = _position.positionSize / _position.collateralAmount;
         uint256 sizeDelta = _decreaseRequest.collateralDelta * leverage;
-        uint256 executionFee = tradeStorage.minExecutionFee();
         tradeStorage.executeDecreaseRequest(_decreaseRequest, _signedBlockPrice, msg.sender);
         // always decrease, so shouldAdd is opposite of isLong
         // are these input values correct to update contract state?
