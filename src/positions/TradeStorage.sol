@@ -7,8 +7,9 @@ import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
+import {RoleValidation} from "../access/RoleValidation.sol";
 
-contract TradeStorage {
+contract TradeStorage is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Position;
     using MarketStructs for MarketStructs.PositionRequest;
@@ -55,7 +56,7 @@ contract TradeStorage {
     uint256 public constant MAX_LEVERAGE = 50;
     uint256 public constant MAX_LIQUIDATION_FEE = 100; // 100 USD max
 
-    constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault) {
+    constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
         marketStorage = _marketStorage;
         liquidityVault = _liquidityVault;
         liquidationFeeUsd = 5;
@@ -68,7 +69,7 @@ contract TradeStorage {
 
     // request index = array length before pushing
     // never allow calls directly from contract
-    function createMarketOrderRequest(MarketStructs.PositionRequest memory _positionRequest) external {
+    function createMarketOrderRequest(MarketStructs.PositionRequest memory _positionRequest) external onlyRouter {
         bytes32 _key = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
         require(marketOrderRequests[_key].user == address(0), "Position already exists");
         marketOrderRequests[_key] = _positionRequest;
@@ -76,28 +77,28 @@ contract TradeStorage {
     }
 
     // Never allow calls directly from contract
-    function createLimitOrderRequest(MarketStructs.PositionRequest memory _positionRequest) external {
+    function createLimitOrderRequest(MarketStructs.PositionRequest memory _positionRequest) external onlyRouter {
         bytes32 _key = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
         require(limitOrderRequests[_key].user == address(0), "Position already exists");
         limitOrderRequests[_key] = _positionRequest;
         limitOrderKeys.push(_key);
     }
 
-    function createMarketDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external {
+    function createMarketDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external onlyRouter {
         bytes32 _key = keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
         require(marketDecreaseRequests[_key].user == address(0), "Position already exists");
         marketDecreaseRequests[_key] = _decreaseRequest;
         marketDecreaseKeys.push(_key);
     }
 
-    function createLimitDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external {
+    function createLimitDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external onlyRouter {
         bytes32 _key = keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
         require(limitDecreaseRequests[_key].user == address(0), "Position already exists");
         limitDecreaseRequests[_key] = _decreaseRequest;
         limitDecreaseKeys.push(_key);
     }
 
-    function cancelOrderRequest(bytes32 _key, bool _isLimit) external {
+    function cancelOrderRequest(bytes32 _key, bool _isLimit) external onlyRouter {
         if (_isLimit) {
             uint256 index = limitOrderRequests[_key].requestIndex;
             delete limitOrderRequests[_key];
@@ -111,18 +112,13 @@ contract TradeStorage {
         }
     }
 
-    // will work differently to others
-    // user specifies what token he wants to swap
-    // if not swap to USDC, it will route x => USDC => y
-    function createSwapOrderRequest() external {}
-
     //////////////////////////
     // EXECUTION FUNCTIONS //
     ////////////////////////
 
     // only callable from executor contracts
     // DEFINITELY NEED A LOT MORE SECURITY CHECKS
-    function executeTrade(MarketStructs.PositionRequest memory _positionRequest, uint256 _signedBlockPrice, address _executor) external returns (MarketStructs.Position memory) {
+    function executeTrade(MarketStructs.PositionRequest memory _positionRequest, uint256 _signedBlockPrice, address _executor) external onlyExecutor returns (MarketStructs.Position memory) {
         
         uint8 requestType = uint8(_positionRequest.requestType);
         bytes32 key = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
@@ -209,7 +205,7 @@ contract TradeStorage {
 
     // SHOULD NEVER BE CALLABLE EXCEPT FROM EXECUTOR CONTRACT
     // DEFINITELY NEED A LOT MORE SECURITY CHECKS
-    function executeDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, uint256 _signedBlockPrice, address _executor) external {
+    function executeDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, uint256 _signedBlockPrice, address _executor) external onlyExecutor {
         
         uint8 requestType = uint8(_decreaseRequest.requestType);
         // Obtain the key for the position mapping based on the decrease request details
@@ -288,7 +284,7 @@ contract TradeStorage {
     }
     
     // only callable from liquidator contract
-    function liquidatePosition(bytes32 _positionKey, address _liquidator) external {
+    function liquidatePosition(bytes32 _positionKey, address _liquidator) external onlyLiquidator {
         // check that the position exists
         require(openPositions[_positionKey].user != address(0), "Position does not exist");
         // get the position fees
@@ -351,7 +347,7 @@ contract TradeStorage {
     // subtracts them
     // sends them to the liquidity vault
     // returns the collateral amount
-    function processFees(MarketStructs.Position memory _position, uint256 _collateralDelta) public returns (uint256 _afterFeeAmount) {
+    function processFees(MarketStructs.Position memory _position, uint256 _collateralDelta) internal returns (uint256 _afterFeeAmount) {
         (uint256 borrowFee, int256 fundingFees, ) = getPositionFees(_position);
         // subtract the fees from the collateral delta
         int256 percentageFeesOwed = int256(borrowFee) + fundingFees; // 100 = 0.1% => 100,000 = 100%
@@ -377,7 +373,7 @@ contract TradeStorage {
     // SETTER FUNCTIONS //
     //////////////////////
 
-    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external {
+    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
         liquidationFeeUsd = _liquidationFee;
         tradingFee = _tradingFee;
     }

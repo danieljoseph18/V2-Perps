@@ -7,10 +7,11 @@ import {IMarketToken} from "./interfaces/IMarketToken.sol";
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {MarketStructs} from "./MarketStructs.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {RoleValidation} from "../access/RoleValidation.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://blog.synthetix.io/synthetix-perps-dynamic-funding-rates/)
 /// NEED TO EXTRAPOLATE OUT DECIMAL PRECISION INTO 1 VAR
-contract Market {
+contract Market is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
@@ -52,7 +53,7 @@ contract Market {
     mapping(address => uint256) public marginAmounts;
 
     // might need to update to an initialize function instead of constructor
-    constructor(address _indexToken, address _stablecoin, address _marketStorage, address _liquidityVault) {
+    constructor(address _indexToken, address _stablecoin, address _marketStorage, address _liquidityVault) RoleValidation(roleStorage) {
         indexToken = _indexToken;
         stablecoin = _stablecoin;
         marketStorage = _marketStorage;
@@ -121,8 +122,8 @@ contract Market {
         }
     }
 
-    // only privileged roles can call
-    function setFundingConfig(uint256 _fundingInterval, uint256 _maxFundingVelocity, uint256 _skewScale, uint256 _maxFundingRate) public {
+    /// @dev Only GlobalMarketConfig
+    function setFundingConfig(uint256 _fundingInterval, uint256 _maxFundingVelocity, uint256 _skewScale, uint256 _maxFundingRate) public onlyConfigurator {
         // check if msg.sender is owner
         fundingInterval = _fundingInterval;
         maxFundingVelocity = _maxFundingVelocity;
@@ -200,14 +201,15 @@ contract Market {
     ////////////////////
 
     // Function to update borrowing parameters (consider appropriate access control)
-    function setBorrowingConfig(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide) public {
+    /// @dev Only GlobalMarketConfig
+    function setBorrowingConfig(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide) public onlyConfigurator {
         borrowingFactor = _borrowingFactor;
         borrowingExponent = _borrowingExponent;
         feeForSmallerSide = _feeForSmallerSide;
     }
 
     // Function to calculate borrowing fees per second
-    function _updateBorrowingRate(bool _isLong) public {
+    function updateBorrowingRate(bool _isLong) public {
         uint256 openInterest = getOpenInterest(_isLong);
         uint256 poolBalance = poolAmounts[stablecoin];  // Amount of USDC in pool (not exact USD value)
 
@@ -281,8 +283,8 @@ contract Market {
         return _calculatePriceImpact(_position);
     }
 
-    // only callable by market config contract
-    function setPriceImpactConfig(uint256 _priceImpactFactor, uint256 _priceImpactExponent) external {
+    /// @dev Only GlobalMarketConfig
+    function setPriceImpactConfig(uint256 _priceImpactFactor, uint256 _priceImpactExponent) external onlyConfigurator {
         priceImpactFactor = _priceImpactFactor;
         priceImpactExponent = _priceImpactExponent;
     }

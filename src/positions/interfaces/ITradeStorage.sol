@@ -33,4 +33,5 @@ interface ITradeStorage {
     function getPositionFees(MarketStructs.Position memory _position) external view returns (uint256, int256, uint256);
     function tradingFee() external view returns (uint256);
     function minExecutionFee() external view returns (uint256);
+    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external;
 }

@@ -9,8 +9,10 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {RoleValidation} from "../access/RoleValidation.sol";
 
-contract Executor {
+/// @dev Needs Executor Role
+contract Executor is RoleValidation {
     using SafeERC20 for IERC20;
     // contract for executing trades
     // will be called by the TradeManager
@@ -23,7 +25,7 @@ contract Executor {
     address public priceOracle;
     ILiquidityVault public liquidityVault;
 
-    constructor(IMarketStorage _marketStorage, ITradeStorage _tradeStorage, address _priceOracle, ILiquidityVault _liquidityVault) {
+    constructor(IMarketStorage _marketStorage, ITradeStorage _tradeStorage, address _priceOracle, ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
         marketStorage = _marketStorage;
         tradeStorage = _tradeStorage;
         priceOracle = _priceOracle;
@@ -70,7 +72,8 @@ contract Executor {
         }
     }
 
-    function executeMarketOrder(bytes32 _key) public {
+    /// @dev Only Keeper
+    function executeMarketOrder(bytes32 _key) public onlyKeeper {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.marketOrderRequests(_key);
 
@@ -90,7 +93,8 @@ contract Executor {
     }
 
     // no loop execution for limits => 1 by 1, track price on subgraph
-    function executeLimitOrder(bytes32 _key) external {
+    /// @dev Only Keeper
+    function executeLimitOrder(bytes32 _key) external onlyKeeper {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.limitOrderRequests(_key);
         // get the current price
@@ -124,7 +128,8 @@ contract Executor {
         }
     }
 
-    function executeMarketDecrease(bytes32 _key) public {
+    /// @dev Only Keeper
+    function executeMarketDecrease(bytes32 _key) public onlyKeeper {
         // get the request
         MarketStructs.DecreasePositionRequest memory _decreaseRequest = tradeStorage.marketDecreaseRequests(_key);
         // get the market and block to get the signed block price
@@ -146,7 +151,8 @@ contract Executor {
 
     // used as a stop loss => how do we get trailing stop losses
     // limit decrease should be set as a percentage of the current price ?? how does a trailing stop loss work?
-    function executeLimitDecrease(bytes32 _key) external {
+    /// @dev Only Keeper
+    function executeLimitDecrease(bytes32 _key) external onlyKeeper {
         // get the request
         MarketStructs.DecreasePositionRequest memory _decreaseRequest = tradeStorage.limitDecreaseRequests(_key);
         // get the current price

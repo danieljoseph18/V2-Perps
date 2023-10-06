@@ -9,6 +9,7 @@ import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 
+/// @dev Needs Router role
 contract RequestRouter {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.PositionRequest;

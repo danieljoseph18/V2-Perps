@@ -5,8 +5,9 @@ pragma solidity 0.8.20;
 // need to store the markets themselves
 // need to be able to fetch a list of all markets
 import {MarketStructs} from "./MarketStructs.sol";
+import {RoleValidation} from "../access/RoleValidation.sol";
 
-contract MarketStorage {
+contract MarketStorage is RoleValidation {
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
 
@@ -27,11 +28,10 @@ contract MarketStorage {
     mapping(bytes32 => uint256) public indexTokenShortOpenInterest;
 
 
-    constructor() {
-    }
+    constructor() RoleValidation(roleStorage) {}
 
-    // should only be callable by permissioned roles STORAGE_ADMIN
-    function storeMarket(MarketStructs.Market memory _market) external {
+    /// @dev Only MarketFactory
+    function storeMarket(MarketStructs.Market memory _market) external onlyMarketMaker {
         bytes32 _key = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
         require(markets[_key].market == address(0), "Market already exists");
         // Store the market in the contract's storage
@@ -39,8 +39,8 @@ contract MarketStorage {
         markets[_key] = _market;
     }
 
-    // Set permissions to only allow calling by market config
-    function setIsStable(address _stablecoin) external {
+    /// @dev Only GlobalMarketConfig
+    function setIsStable(address _stablecoin) external onlyConfigurator {
         isStable[_stablecoin] = true;
     }
 
@@ -48,7 +48,8 @@ contract MarketStorage {
     // adds value in tokens and usd to track Pnl
     // should never be callable by an EOA
     // long + decrease = subtract, short + decrease = add, long + increase = add, short + increase = subtract
-    function updateOpenInterest(bytes32 _key, uint256 _collateralTokenAmount, uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external {
+    /// @dev Only Executor
+    function updateOpenInterest(bytes32 _key, uint256 _collateralTokenAmount, uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external onlyExecutor {
         if(_shouldAdd) {
             // add to open interest
             _isLong ? collatTokenLongOpenInterest[_key] += _collateralTokenAmount : collatTokenShortOpenInterest[_key] += _collateralTokenAmount;

@@ -6,8 +6,10 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IMarketToken} from "./interfaces/IMarketToken.sol";
 import {MarketStructs} from "./MarketStructs.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
+import {RoleValidation} from "../access/RoleValidation.sol";
 
-contract LiquidityVault {
+/// @dev Needs Vault Role
+contract LiquidityVault is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
 
@@ -19,7 +21,7 @@ contract LiquidityVault {
     // the shares allocated to each market are updated at set intervals to rebalance distribution
 
     address public stablecoin;
-    address public liquidityToken;
+    IMarketToken public liquidityToken;
     uint256 public liquidityFee; // 0.2% fee on all liquidity added/removed = 200
 
     mapping(address _token => uint256 _poolAmount) public poolAmounts;
@@ -43,7 +45,7 @@ contract LiquidityVault {
 
     // liquidity token = market token
     // another contract should handle minting and burning of LP token 
-    constructor(address _stablecoin, address _liquidityToken) {
+    constructor(address _stablecoin, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
         stablecoin = _stablecoin;
         liquidityToken = _liquidityToken;
         overCollateralizationRatio = 150;
@@ -54,12 +56,13 @@ contract LiquidityVault {
     // SETTERS //
     ////////////
 
-    // only privileged roles
-    function updateOverCollateralizationRatio(uint256 _ratio) external {
+    /// @dev only GlobalMarketConfig
+    function updateOverCollateralizationRatio(uint256 _ratio) external onlyConfigurator {
         overCollateralizationRatio = _ratio;
     }
 
-    function addMarket(MarketStructs.Market memory _market) external {
+    /// @dev Only MarketFactory
+    function addMarket(MarketStructs.Market memory _market) external onlyFactory {
         // check if market already added
         bytes32 key = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
         require(markets[key].market == address(0), "Market already added");
@@ -68,7 +71,8 @@ contract LiquidityVault {
         marketKeys.push(key);
     }
 
-    function updateLiquidityFee(uint256 _fee) external {
+    /// @dev only GlobalMarketConfig
+    function updateLiquidityFee(uint256 _fee) external onlyConfigurator {
         liquidityFee = _fee;
     }
 
@@ -80,8 +84,6 @@ contract LiquidityVault {
         _addLiquidity(msg.sender, _amount, _tokenIn);
     }
 
-    // 2 functions: removeLiq and removeLiqFrom (another acc)
-    // both call internal function
     function removeLiquidity(uint256 _marketTokenAmount, address _tokenOut) external {
         _removeLiquidity(msg.sender, _marketTokenAmount, _tokenOut);
     }
@@ -111,7 +113,7 @@ contract LiquidityVault {
         // mint market tokens for the user
         uint256 mintAmount = (afterFeeAmount * getPrice(_tokenIn)) / getMarketTokenPrice();
         
-        IMarketToken(liquidityToken).mint(_account, mintAmount);
+        liquidityToken.mint(_account, mintAmount);
 
         _updateMarketAllocations();
     }
@@ -128,7 +130,7 @@ contract LiquidityVault {
 
         poolAmounts[_tokenOut] -= tokenAmount;
 
-        IMarketToken(liquidityToken).burn(_account, _liquidityTokenAmount);
+        liquidityToken.burn(_account, _liquidityTokenAmount);
 
         uint256 afterFeeAmount = _deductLiquidityFees(tokenAmount);
         
@@ -148,7 +150,7 @@ contract LiquidityVault {
         // amount of market tokens function of AUM in USD
         // market token price = (worth of market pool) / total supply
         // could overflow, need to use scaling factor, will hover around 0.9 - 1.1
-        return getAum() / IERC20(liquidityToken).totalSupply();
+        return getAum() / IERC20(address(liquidityToken)).totalSupply();
     }
 
     function getAum() public view returns (uint256 aum) {
@@ -213,8 +215,8 @@ contract LiquidityVault {
        return _amount - ((_amount * liquidityFee) / 1000);
     }
 
-    // called by trading contracts to allocate earned funding fees to a trader
-    function accumulateFundingFees(uint256 _amount, address _account) external {
+    /// @dev Only to be called by TradeStorage
+    function accumulateFundingFees(uint256 _amount, address _account) external onlyStorage {
         fundingFeesEarned[_account] += _amount;
     }
 
@@ -228,6 +230,11 @@ contract LiquidityVault {
     /////////////////
     // ALLOCATIONS //
     /////////////////
+
+    /// @dev Only Executor
+    function updateMarketAllocations() external onlyExecutor {
+        _updateMarketAllocations();
+    }
 
     // called by the market when a trade is opened, or call periodically from a keeper
     // or call from provide/remove liquidity functions

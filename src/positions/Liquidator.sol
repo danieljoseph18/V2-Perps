@@ -5,8 +5,10 @@ import {MarketStructs} from "../markets/MarketStructs.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {RoleValidation} from "../access/RoleValidation.sol";
 
-contract Liquidator {
+/// @dev Needs Liquidator role
+contract Liquidator is RoleValidation {
     using MarketStructs for MarketStructs.Position;
     // interacts with the TradeManager contract to liquidate positions
     // if collateral falls below threshold, user is liquidated
@@ -18,12 +20,12 @@ contract Liquidator {
     ITradeStorage public tradeStorage;
     IMarketStorage public marketStorage;
 
-    constructor(ITradeStorage _tradeStorage, IMarketStorage _marketStorage) {
+    constructor(ITradeStorage _tradeStorage, IMarketStorage _marketStorage) RoleValidation(roleStorage) {
         tradeStorage = _tradeStorage;
         marketStorage = _marketStorage;
     }
 
-    function flagForLiquidation(bytes32 _positionKey) external {
+    function flagForLiquidation(bytes32 _positionKey) external onlyKeeper {
         // check if position is already flagged for liquidation
         require(!isFlagged[_positionKey], "Position already flagged for liquidation");
         // get the position
@@ -35,7 +37,7 @@ contract Liquidator {
 
     // need to store who flagged and liquidated
     // let the liquidator claim liquidation rewards from the tradestorage contract
-    function liquidatePosition(bytes32 _positionKey) external {
+    function liquidatePosition(bytes32 _positionKey) external onlyKeeper {
         // check if position is flagged for liquidation
         require(isFlagged[_positionKey], "Position not flagged for liquidation");
         tradeStorage.liquidatePosition(_positionKey);

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {MarketStructs} from "../MarketStructs.sol";
+
 interface ILiquidityVault {
     
     // Setters
     function updateOverCollateralizationRatio(uint256 _ratio) external;
-    function addMarket(bytes32 key, address market, address indexToken, address stablecoin) external;
+    function addMarket(MarketStructs.Market memory _market) external;
 
     // Liquidity
     function addLiquidity(uint256 _amount, address _tokenIn) external;
@@ -31,6 +33,8 @@ interface ILiquidityVault {
 
     // Allocations
     function updateMarketAllocations() external;
+
+    function updateLiquidityFee(uint256 _fee) external;
 
     // Getters for state variables (assuming you want these to be accessible)
     function getStablecoin() external view returns (address);
