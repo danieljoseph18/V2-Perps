@@ -6,7 +6,6 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 
 /// @dev Only Liquidity Vault can mint and burn tokens
 contract MarketToken is ERC20("MarketToken", "MKT"), RoleValidation {
-
     constructor() RoleValidation(roleStorage) {}
 
     function mint(address account, uint256 amount) external onlyVault {
@@ -16,5 +15,4 @@ contract MarketToken is ERC20("MarketToken", "MKT"), RoleValidation {
     function burn(address account, uint256 amount) external onlyVault {
         _burn(account, amount);
     }
-
 }

@@ -2,7 +2,6 @@
 pragma solidity 0.8.20;
 
 library MarketStructs {
-
     enum RequestType {
         COLLATERAL,
         SIZE,
@@ -66,5 +65,4 @@ library MarketStructs {
         uint256 tokenASupplied;
         uint256 tokenBReceived;
     }
-
 }

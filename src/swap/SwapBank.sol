@@ -13,6 +13,4 @@ pragma solidity 0.8.20;
 
 // offer discounts for LPing PRINT
 
-contract SwapBank {
-
-}
+contract SwapBank {}

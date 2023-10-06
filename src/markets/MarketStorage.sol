@@ -11,11 +11,10 @@ contract MarketStorage is RoleValidation {
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
 
-
     bytes32[] public keys;
     mapping(bytes32 => MarketStructs.Market) public markets;
 
-    // tracked by a bytes 32 key 
+    // tracked by a bytes 32 key
     mapping(bytes32 => MarketStructs.Position) public positions;
 
     // tracks globally allowed stablecoins
@@ -26,7 +25,6 @@ contract MarketStorage is RoleValidation {
     mapping(bytes32 => uint256) public collatTokenShortOpenInterest;
     mapping(bytes32 => uint256) public indexTokenLongOpenInterest; // OI of index token long
     mapping(bytes32 => uint256) public indexTokenShortOpenInterest;
-
 
     constructor() RoleValidation(roleStorage) {}
 
@@ -49,15 +47,29 @@ contract MarketStorage is RoleValidation {
     // should never be callable by an EOA
     // long + decrease = subtract, short + decrease = add, long + increase = add, short + increase = subtract
     /// @dev Only Executor
-    function updateOpenInterest(bytes32 _key, uint256 _collateralTokenAmount, uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external onlyExecutor {
-        if(_shouldAdd) {
+    function updateOpenInterest(
+        bytes32 _key,
+        uint256 _collateralTokenAmount,
+        uint256 _indexTokenAmount,
+        bool _isLong,
+        bool _shouldAdd
+    ) external onlyExecutor {
+        if (_shouldAdd) {
             // add to open interest
-            _isLong ? collatTokenLongOpenInterest[_key] += _collateralTokenAmount : collatTokenShortOpenInterest[_key] += _collateralTokenAmount;
-            _isLong ? indexTokenLongOpenInterest[_key] += _indexTokenAmount : indexTokenShortOpenInterest[_key] += _indexTokenAmount;
+            _isLong
+                ? collatTokenLongOpenInterest[_key] += _collateralTokenAmount
+                : collatTokenShortOpenInterest[_key] += _collateralTokenAmount;
+            _isLong
+                ? indexTokenLongOpenInterest[_key] += _indexTokenAmount
+                : indexTokenShortOpenInterest[_key] += _indexTokenAmount;
         } else {
             // subtract from open interest
-            _isLong ? collatTokenLongOpenInterest[_key] -= _collateralTokenAmount : collatTokenShortOpenInterest[_key] -= _collateralTokenAmount;
-            _isLong ? indexTokenLongOpenInterest[_key] -= _indexTokenAmount : indexTokenShortOpenInterest[_key] -= _indexTokenAmount;
+            _isLong
+                ? collatTokenLongOpenInterest[_key] -= _collateralTokenAmount
+                : collatTokenShortOpenInterest[_key] -= _collateralTokenAmount;
+            _isLong
+                ? indexTokenLongOpenInterest[_key] -= _indexTokenAmount
+                : indexTokenShortOpenInterest[_key] -= _indexTokenAmount;
         }
     }
 
@@ -66,7 +78,11 @@ contract MarketStorage is RoleValidation {
         return markets[_key];
     }
 
-    function getMarketFromIndexToken(address _indexToken, address _stablecoin) external view returns (MarketStructs.Market memory) {
+    function getMarketFromIndexToken(address _indexToken, address _stablecoin)
+        external
+        view
+        returns (MarketStructs.Market memory)
+    {
         bytes32 _key = keccak256(abi.encodePacked(_indexToken, _stablecoin));
         return markets[_key];
     }
@@ -79,5 +95,4 @@ contract MarketStorage is RoleValidation {
         }
         return _markets;
     }
-
 }

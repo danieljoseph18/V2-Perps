@@ -13,7 +13,6 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 
 /// @dev Needs MarketMaker role
 contract MarketFactory is RoleValidation {
-
     MarketStorage public marketStorage;
     ILiquidityVault public liquidityVault;
 
@@ -41,5 +40,4 @@ contract MarketFactory is RoleValidation {
 
         emit MarketCreated(_indexToken, _stablecoin, address(_market));
     }
-
 }

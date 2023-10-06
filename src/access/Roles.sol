@@ -2,7 +2,6 @@
 pragma solidity 0.8.20;
 
 library Roles {
-
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
     bytes32 public constant MODERATOR = keccak256("MODERATOR");
@@ -24,5 +23,4 @@ library Roles {
     bytes32 public constant KEEPER = keccak256("KEEPER");
 
     bytes32 public constant ROUTER = keccak256("ROUTER");
-
 }

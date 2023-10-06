@@ -49,7 +49,7 @@ contract Liquidator is RoleValidation {
         address market = marketStorage.getMarket(_position.market).market;
         int256 pnl = IMarket(market).getPnL(_position);
         uint256 collateral = _position.collateralAmount;
-        
+
         (uint256 borrowFee, int256 fundingFee, uint256 liquidationFee) = tradeStorage.getPositionFees(_position);
 
         // subtract the fees from the collateral
@@ -59,5 +59,4 @@ contract Liquidator is RoleValidation {
         // check the collateral - pnl > 0
         return pnl < 0 && collateral <= uint256(-pnl) ? true : false;
     }
-
 }

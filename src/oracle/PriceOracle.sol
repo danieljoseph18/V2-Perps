@@ -40,5 +40,4 @@ contract PriceOracle {
         // require token is whitelisted
         // set price of token at block
     }
-
 }

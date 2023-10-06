@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import {MarketStructs} from "../MarketStructs.sol";
 
 interface ILiquidityVault {
-    
     // Setters
     function updateOverCollateralizationRatio(uint256 _ratio) external;
     function addMarket(MarketStructs.Market memory _market) external;
@@ -45,5 +44,4 @@ interface ILiquidityVault {
     function getAccumulatedFees() external view returns (uint256);
     function overCollateralizationRatio() external view returns (uint256);
     function accumulateFundingFees(uint256 _amount, address _account) external;
-
 }

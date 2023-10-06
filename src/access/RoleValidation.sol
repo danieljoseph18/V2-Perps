@@ -6,7 +6,6 @@ import {Roles} from "./Roles.sol";
 
 // inheritance adds gas bloating, reconfigure with all required roles
 contract RoleValidation {
-
     RoleStorage public immutable roleStorage;
 
     modifier onlyAdmin() {
@@ -67,6 +66,4 @@ contract RoleValidation {
     constructor(RoleStorage _roleStorage) {
         roleStorage = _roleStorage;
     }
-
-
 }

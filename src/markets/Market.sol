@@ -45,15 +45,17 @@ contract Market is RoleValidation {
     uint256 public cumulativeBorrowFee;
     uint256 public borrowingRate; // borrow fee per second
 
-    uint256 public priceImpactExponent = 1; 
+    uint256 public priceImpactExponent = 1;
     uint256 public priceImpactFactor = 1; // 0.0001%
-    
+
     // tracks deposits separately from margin collateral
     mapping(address => uint256) public poolAmounts;
     mapping(address => uint256) public marginAmounts;
 
     // might need to update to an initialize function instead of constructor
-    constructor(address _indexToken, address _stablecoin, address _marketStorage, address _liquidityVault) RoleValidation(roleStorage) {
+    constructor(address _indexToken, address _stablecoin, address _marketStorage, address _liquidityVault)
+        RoleValidation(roleStorage)
+    {
         indexToken = _indexToken;
         stablecoin = _stablecoin;
         marketStorage = _marketStorage;
@@ -71,7 +73,6 @@ contract Market is RoleValidation {
 
     function _getPrice(address _token) internal view returns (uint256) {
         // call the oracle contract and return the price of the token
-
     }
 
     function getMarketKey() public view returns (bytes32) {
@@ -81,7 +82,6 @@ contract Market is RoleValidation {
     ///////////////////
     // OPEN INTEREST //
     ///////////////////
-
 
     function getOpenInterest(bool _isLong) public view returns (uint256) {
         return _calculateOpenInterest(_isLong);
@@ -96,14 +96,18 @@ contract Market is RoleValidation {
         // If long, return the long open interest
         // If short, return the short open interest
         bytes32 key = getMarketKey();
-        return _isLong ? IMarketStorage(marketStorage).collatTokenLongOpenInterest(key) : IMarketStorage(marketStorage).collatTokenShortOpenInterest(key);
+        return _isLong
+            ? IMarketStorage(marketStorage).collatTokenLongOpenInterest(key)
+            : IMarketStorage(marketStorage).collatTokenShortOpenInterest(key);
     }
 
     // returns the open interest in tokens of the index token
     // basically how many collateral tokens have been exchanged for index tokens
     function _calculateIndexOpenInterest(bool _isLong) internal view returns (uint256) {
         bytes32 key = getMarketKey();
-        return _isLong ? IMarketStorage(marketStorage).indexTokenLongOpenInterest(key) : IMarketStorage(marketStorage).indexTokenShortOpenInterest(key);
+        return _isLong
+            ? IMarketStorage(marketStorage).indexTokenLongOpenInterest(key)
+            : IMarketStorage(marketStorage).indexTokenShortOpenInterest(key);
     }
 
     /////////////
@@ -123,7 +127,12 @@ contract Market is RoleValidation {
     }
 
     /// @dev Only GlobalMarketConfig
-    function setFundingConfig(uint256 _fundingInterval, uint256 _maxFundingVelocity, uint256 _skewScale, uint256 _maxFundingRate) public onlyConfigurator {
+    function setFundingConfig(
+        uint256 _fundingInterval,
+        uint256 _maxFundingVelocity,
+        uint256 _skewScale,
+        uint256 _maxFundingRate
+    ) public onlyConfigurator {
         // check if msg.sender is owner
         fundingInterval = _fundingInterval;
         maxFundingVelocity = _maxFundingVelocity;
@@ -142,11 +151,15 @@ contract Market is RoleValidation {
 
         if (longOI > shortOI) {
             // if funding rate will be > 5%, set it to 5%
-            fundingRate + int256(deltaRate) > int256(maxFundingRate) ? fundingRate = int256(maxFundingRate) :fundingRate += int256(deltaRate);
+            fundingRate + int256(deltaRate) > int256(maxFundingRate)
+                ? fundingRate = int256(maxFundingRate)
+                : fundingRate += int256(deltaRate);
             longCumulativeFundingRate += uint256(fundingRate);
         } else if (shortOI > longOI) {
             // if funding rate will be < -5%, set it to -5%
-            fundingRate - int256(deltaRate) < -int256(maxFundingRate) ? fundingRate = -int256(maxFundingRate) : fundingRate -= int256(deltaRate);
+            fundingRate - int256(deltaRate) < -int256(maxFundingRate)
+                ? fundingRate = -int256(maxFundingRate)
+                : fundingRate -= int256(deltaRate);
             shortCumulativeFundingRate += uint256(fundingRate);
         }
 
@@ -157,7 +170,7 @@ contract Market is RoleValidation {
         uint256 c = maxFundingVelocity / skewScale; // will underflow (3 mil < 10 mil)
         // have to multiply maxFundingVelocity by a scalar (maybe 10_000)
         // c = 0.3% = 3000
-        if(_skew < 0) {
+        if (_skew < 0) {
             return c * uint256(-_skew);
         }
         return c * uint256(_skew); // 450 == 0.045%
@@ -173,21 +186,25 @@ contract Market is RoleValidation {
         uint256 entryLongCumulative = _position.entryLongCumulativeFunding;
         uint256 entryShortCumulative = _position.entryShortCumulativeFunding;
         uint256 currentLongCumulative = longCumulativeFundingRate;
-        uint256 currentShortCumulative = shortCumulativeFundingRate; 
+        uint256 currentShortCumulative = shortCumulativeFundingRate;
 
-        uint256 longAccumulatedFunding = currentLongCumulative - entryLongCumulative; 
+        uint256 longAccumulatedFunding = currentLongCumulative - entryLongCumulative;
         uint256 shortAccumulatedFunding = currentShortCumulative - entryShortCumulative;
 
         uint256 timeSinceUpdate = (block.timestamp - lastFundingUpdateTime) * 1e5; // scaled by 1e5 to ensure top heavy fraction
 
         // subtract current funding rate
         // need to account for fact current funding Rate can be positive
-        uint256 longFeesOwed = (longAccumulatedFunding - uint256(fundingRate)) + ((timeSinceUpdate / fundingInterval) * uint256(fundingRate));
-        uint256 shortFeesOwed = (shortAccumulatedFunding - uint256(fundingRate)) + ((timeSinceUpdate / fundingInterval) * uint256(fundingRate));
+        uint256 longFeesOwed = (longAccumulatedFunding - uint256(fundingRate))
+            + ((timeSinceUpdate / fundingInterval) * uint256(fundingRate));
+        uint256 shortFeesOwed = (shortAccumulatedFunding - uint256(fundingRate))
+            + ((timeSinceUpdate / fundingInterval) * uint256(fundingRate));
 
         // +ve value = fees owed, -ve value = fees earned
         // IMPORTANT: De-scale the return value by 1e5
-        return _position.isLong ? int256(longFeesOwed) - int256(shortFeesOwed) : int256(shortFeesOwed) - int256(longFeesOwed);
+        return _position.isLong
+            ? int256(longFeesOwed) - int256(shortFeesOwed)
+            : int256(shortFeesOwed) - int256(longFeesOwed);
     }
 
     // RETURNS PERCENTAGE, NEEDS TO BE SCALED BY SIZE
@@ -202,7 +219,10 @@ contract Market is RoleValidation {
 
     // Function to update borrowing parameters (consider appropriate access control)
     /// @dev Only GlobalMarketConfig
-    function setBorrowingConfig(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide) public onlyConfigurator {
+    function setBorrowingConfig(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide)
+        public
+        onlyConfigurator
+    {
         borrowingFactor = _borrowingFactor;
         borrowingExponent = _borrowingExponent;
         feeForSmallerSide = _feeForSmallerSide;
@@ -211,10 +231,10 @@ contract Market is RoleValidation {
     // Function to calculate borrowing fees per second
     function updateBorrowingRate(bool _isLong) public {
         uint256 openInterest = getOpenInterest(_isLong);
-        uint256 poolBalance = poolAmounts[stablecoin];  // Amount of USDC in pool (not exact USD value)
+        uint256 poolBalance = poolAmounts[stablecoin]; // Amount of USDC in pool (not exact USD value)
 
         int256 pendingPnL = getNetPnL(_isLong);
-        
+
         int256 feeBase = int256(openInterest) + pendingPnL;
         uint256 fee = borrowingFactor * (uint256(feeBase) ** borrowingExponent) / poolBalance;
 
@@ -231,13 +251,11 @@ contract Market is RoleValidation {
     // MAKE SURE PERCENTAGE IS THE SAME PRECISION AS FUNDING FEE
     function getBorrowingFees(MarketStructs.Position memory _position) public view returns (uint256) {
         return cumulativeBorrowFee - _position.entryCumulativeBorrowFee;
-
     }
 
     /////////
     // PNL //
     /////////
-
 
     // USD worth - cumulative USD paid
     function _calculatePnL(MarketStructs.Position memory _position) internal view returns (int256) {
@@ -258,7 +276,9 @@ contract Market is RoleValidation {
     function _getNetPnL(bool _isLong) internal view returns (int256) {
         uint256 openInterest = _calculateOpenInterest(_isLong) * getPrice(stablecoin);
         uint256 indexOpenInterest = _calculateIndexOpenInterest(_isLong) * getPrice(indexToken);
-        return _isLong ? int256(indexOpenInterest) - int256(openInterest) : int256(openInterest) - int256(indexOpenInterest);
+        return _isLong
+            ? int256(indexOpenInterest) - int256(openInterest)
+            : int256(openInterest) - int256(indexOpenInterest);
     }
 
     //////////////////
@@ -266,7 +286,6 @@ contract Market is RoleValidation {
     //////////////////
 
     function _calculatePriceImpact(MarketStructs.Position memory _position) internal view returns (uint256) {
-
         uint256 longOI = _calculateOpenInterest(true);
         uint256 shortOI = _calculateOpenInterest(false);
         uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
@@ -276,7 +295,8 @@ contract Market is RoleValidation {
         uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
         // Formula: priceImpact = (usd Diff ^ exponent * factor) - (usd Diff After ^ exponent * factor)
-        return ((skewBefore ** priceImpactExponent) * priceImpactFactor) - ((skewAfter ** priceImpactExponent) * priceImpactFactor);
+        return ((skewBefore ** priceImpactExponent) * priceImpactFactor)
+            - ((skewAfter ** priceImpactExponent) * priceImpactFactor);
     }
 
     function getPriceImpact(MarketStructs.Position memory _position) public view returns (uint256) {
@@ -297,5 +317,4 @@ contract Market is RoleValidation {
         bytes32 key = getMarketKey();
         return ILiquidityVault(liquidityVault).getMarketAllocation(key);
     }
-
 }

@@ -44,7 +44,7 @@ contract LiquidityVault is RoleValidation {
     uint256 public overCollateralizationRatio; // 150 = 150% ratio => 1.5x collateral
 
     // liquidity token = market token
-    // another contract should handle minting and burning of LP token 
+    // another contract should handle minting and burning of LP token
     constructor(address _stablecoin, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
         stablecoin = _stablecoin;
         liquidityToken = _liquidityToken;
@@ -112,7 +112,7 @@ contract LiquidityVault is RoleValidation {
         IERC20(_tokenIn).safeTransferFrom(_account, address(this), _amount);
         // mint market tokens for the user
         uint256 mintAmount = (afterFeeAmount * getPrice(_tokenIn)) / getMarketTokenPrice();
-        
+
         liquidityToken.mint(_account, mintAmount);
 
         _updateMarketAllocations();
@@ -133,7 +133,7 @@ contract LiquidityVault is RoleValidation {
         liquidityToken.burn(_account, _liquidityTokenAmount);
 
         uint256 afterFeeAmount = _deductLiquidityFees(tokenAmount);
-        
+
         IERC20(_tokenOut).safeTransfer(_account, afterFeeAmount);
 
         _updateMarketAllocations();
@@ -142,7 +142,6 @@ contract LiquidityVault is RoleValidation {
     /////////////
     // PRICING //
     /////////////
-
 
     // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
     // price per 1 token (1e18 decimals)
@@ -171,7 +170,6 @@ contract LiquidityVault is RoleValidation {
 
     function _getPrice(address _token) internal view returns (uint256) {
         // call the oracle contract and return the price of the token passed in as an argument
-
     }
 
     /////////
@@ -200,7 +198,7 @@ contract LiquidityVault is RoleValidation {
     function getNetOpenInterest() public view returns (uint256) {
         uint256 total = 0;
         uint256 len = marketKeys.length;
-        for(uint256 i = 0; i < len; ++i) {
+        for (uint256 i = 0; i < len; ++i) {
             address market = markets[marketKeys[i]].market;
             total += IMarket(market).getTotalOpenInterest();
         }
@@ -212,7 +210,7 @@ contract LiquidityVault is RoleValidation {
     //////////
 
     function _deductLiquidityFees(uint256 _amount) internal view returns (uint256) {
-       return _amount - ((_amount * liquidityFee) / 1000);
+        return _amount - ((_amount * liquidityFee) / 1000);
     }
 
     /// @dev Only to be called by TradeStorage
@@ -251,11 +249,4 @@ contract LiquidityVault is RoleValidation {
             marketAllocations[marketKeys[i]] = aum / allocationPercentage; // this will be the amount of stablecoin allocated to the market
         }
     }
-
-    //////////////
-    // GETTERS //
-    //////////////
-
-
-
 }

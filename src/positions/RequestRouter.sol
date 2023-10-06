@@ -34,7 +34,11 @@ contract RequestRouter {
     // every time a request is created, call to the price oracle and sign the block price
     // update the mapping with the price at the block of the request
     /// @dev front-end can pass default values for block and index
-    function createTradeRequest(MarketStructs.PositionRequest memory _positionRequest, bool _isLimit, uint256 _executionFee) external payable {
+    function createTradeRequest(
+        MarketStructs.PositionRequest memory _positionRequest,
+        bool _isLimit,
+        uint256 _executionFee
+    ) external payable {
         uint256 minExecutionFee = tradeStorage.minExecutionFee();
         require(msg.value >= minExecutionFee, "RequestRouter: fee too low");
         require(msg.value == _executionFee, "RequestRouter: incorrect fee");
@@ -50,10 +54,10 @@ contract RequestRouter {
         _deductTradingFee(_positionRequest);
 
         ITradeStorage target = ITradeStorage(tradeStorage);
-        (uint256 marketLen, uint256 limitLen, , ,) = target.getRequestQueueLengths();
+        (uint256 marketLen, uint256 limitLen,,,) = target.getRequestQueueLengths();
         uint256 index = _isLimit ? limitLen : marketLen;
         // get the request type, if COLLAT, set size to 0, if SIZE, set collateral to 0, if REGULAR do nothing
-        if(_positionRequest.requestType == MarketStructs.RequestType(0)) {
+        if (_positionRequest.requestType == MarketStructs.RequestType(0)) {
             _positionRequest.collateralDelta = 0;
         } else if (_positionRequest.requestType == MarketStructs.RequestType(1)) {
             _positionRequest.sizeDelta = 0;
@@ -63,11 +67,13 @@ contract RequestRouter {
         // validate the request meets all safety parameters
         // open the request on the trade storage contract
         _isLimit ? target.createLimitOrderRequest(_positionRequest) : target.createMarketOrderRequest(_positionRequest);
-
     }
 
-
-    function createDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest, bool _isLimit, uint256 _executionFee) external payable {
+    function createDecreaseRequest(
+        MarketStructs.DecreasePositionRequest memory _decreaseRequest,
+        bool _isLimit,
+        uint256 _executionFee
+    ) external payable {
         uint256 minExecutionFee = tradeStorage.minExecutionFee();
         require(msg.value >= minExecutionFee, "RequestRouter: fee too low");
         require(msg.value == _executionFee, "RequestRouter: incorrect fee");
@@ -77,10 +83,10 @@ contract RequestRouter {
         // validate the request meets all safety parameters
         // open the request on the trade storage contract
         ITradeStorage target = ITradeStorage(tradeStorage);
-        (,, , uint256 marketLen,uint256 limitLen) = target.getRequestQueueLengths();
+        (,,, uint256 marketLen, uint256 limitLen) = target.getRequestQueueLengths();
         uint256 index = _isLimit ? limitLen : marketLen;
         // get the request type, if COLLAT, set size to 0, if SIZE, set collateral to 0, if REGULAR do nothing
-        if(_decreaseRequest.requestType == MarketStructs.RequestType(0)) {
+        if (_decreaseRequest.requestType == MarketStructs.RequestType(0)) {
             _decreaseRequest.collateralDelta = 0;
         } else if (_decreaseRequest.requestType == MarketStructs.RequestType(1)) {
             _decreaseRequest.sizeDelta = 0;
@@ -89,7 +95,9 @@ contract RequestRouter {
         _decreaseRequest.requestBlock = block.number;
         // validate the request meets all safety parameters
         // open the request on the trade storage contract
-        _isLimit ? target.createLimitDecreaseRequest(_decreaseRequest) : target.createMarketDecreaseRequest(_decreaseRequest);
+        _isLimit
+            ? target.createLimitDecreaseRequest(_decreaseRequest)
+            : target.createMarketDecreaseRequest(_decreaseRequest);
     }
 
     // get position to close
@@ -99,7 +107,7 @@ contract RequestRouter {
         // validate the request meets all safety parameters
         // open the request on the trade storage contract
         ITradeStorage target = ITradeStorage(tradeStorage);
-        (,, , uint256 marketLen,uint256 limitLen) = target.getRequestQueueLengths();
+        (,,, uint256 marketLen, uint256 limitLen) = target.getRequestQueueLengths();
         uint256 index = _isLimit ? limitLen : marketLen;
         MarketStructs.Position memory _position = target.openPositions(_key);
         MarketStructs.DecreasePositionRequest memory _decreaseRequest = MarketStructs.DecreasePositionRequest({
@@ -115,9 +123,10 @@ contract RequestRouter {
             isLong: _position.isLong,
             isMarketOrder: !_isLimit
         });
-        _isLimit ? target.createLimitDecreaseRequest(_decreaseRequest) : target.createMarketDecreaseRequest(_decreaseRequest);
+        _isLimit
+            ? target.createLimitDecreaseRequest(_decreaseRequest)
+            : target.createMarketDecreaseRequest(_decreaseRequest);
     }
-
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external {
         // perform safety checks => it exists, it's their position etc.
@@ -143,7 +152,7 @@ contract RequestRouter {
     }
 
     function _sendFeeToStorage(uint256 _executionFee) internal returns (bool) {
-        (bool success, ) = address(tradeStorage).call{value: _executionFee}("");
+        (bool success,) = address(tradeStorage).call{value: _executionFee}("");
         require(success, "RequestRouter: fee transfer failed");
         return true;
     }
@@ -159,5 +168,4 @@ contract RequestRouter {
         uint256 maxOI = (allocation / overcollateralization) * 100;
         require(totalOI + _sizeDelta <= maxOI, "Position size too large");
     }
-
 }
