@@ -5,7 +5,7 @@ import {MarketStructs} from "../MarketStructs.sol";
 
 interface ILiquidityVault {
     // Setters
-    function updateOverCollateralizationRatio(uint256 _ratio) external;
+    function updateOverCollateralizationPercentage(uint256 _percentage) external;
     function addMarket(MarketStructs.Market memory _market) external;
 
     // Liquidity
@@ -35,13 +35,13 @@ interface ILiquidityVault {
 
     function updateLiquidityFee(uint256 _fee) external;
 
-    // Getters for state variables (assuming you want these to be accessible)
+    // Getters for state variables
     function getStablecoin() external view returns (address);
     function getLiquidityToken() external view returns (address);
     function getPoolAmounts(address _token) external view returns (uint256);
     function getMarket(bytes32 key) external view returns (address market, address indexToken, address stablecoin);
     function getMarketAllocation(bytes32 key) external view returns (uint256);
     function getAccumulatedFees() external view returns (uint256);
-    function overCollateralizationRatio() external view returns (uint256);
+    function overCollateralizationPercentage() external view returns (uint256);
     function accumulateFundingFees(uint256 _amount, address _account) external;
 }

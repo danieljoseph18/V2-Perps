@@ -447,6 +447,7 @@ contract TradeStorage is RoleValidation {
     //////////////////////
 
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
+        require(_liquidationFee <= MAX_LIQUIDATION_FEE, "Liquidation fee too high");
         liquidationFeeUsd = _liquidationFee;
         tradingFee = _tradingFee;
     }

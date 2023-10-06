@@ -13,6 +13,7 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 
 /// @dev Needs Executor Role
 contract Executor is RoleValidation {
+    error Executor_LimitNotHit();
     using SafeERC20 for IERC20;
     // contract for executing trades
     // will be called by the TradeManager
@@ -61,6 +62,11 @@ contract Executor is RoleValidation {
         IMarket(_market).updateFundingRate();
     }
 
+    function _updateBorrowingRate(bytes32 _marketKey, bool _isLong) internal {
+        address _market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
+        IMarket(_market).updateBorrowingRate(_isLong);
+    }
+
     function _updateMarketAllocations() internal {
         ILiquidityVault(liquidityVault).updateMarketAllocations();
     }
@@ -87,7 +93,7 @@ contract Executor is RoleValidation {
     function executeMarketOrder(bytes32 _key) public onlyKeeper {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.marketOrderRequests(_key);
-
+        require(_positionRequest.user != address(0), "Executor: Invalid Request Key");
         // get the market and block to get the signed block price
         address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(
             _positionRequest.indexToken, _positionRequest.collateralToken
@@ -109,6 +115,7 @@ contract Executor is RoleValidation {
         );
         // update funding rate
         _updateFundingRate(_position.market);
+        _updateBorrowingRate(_position.market, _positionRequest.isLong);
         _updateMarketAllocations();
     }
 
@@ -117,6 +124,7 @@ contract Executor is RoleValidation {
     function executeLimitOrder(bytes32 _key) external onlyKeeper {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.limitOrderRequests(_key);
+        require(_positionRequest.user != address(0), "Executor: Invalid Request Key");
         // get the current price
         uint256 price = IPriceOracle(priceOracle).getPrice(_positionRequest.indexToken);
         // if current price >= acceptable price and isShort, execute
@@ -138,9 +146,10 @@ contract Executor is RoleValidation {
             );
             // update funding rate
             _updateFundingRate(_position.market);
+            _updateBorrowingRate(_position.market, _positionRequest.isLong);
             _updateMarketAllocations();
         } else {
-            // revert
+            revert Executor_LimitNotHit();
         }
     }
 
@@ -159,6 +168,7 @@ contract Executor is RoleValidation {
     function executeMarketDecrease(bytes32 _key) public onlyKeeper {
         // get the request
         MarketStructs.DecreasePositionRequest memory _decreaseRequest = tradeStorage.marketDecreaseRequests(_key);
+        require(_decreaseRequest.user != address(0), "Invalid decrease request");
         // get the market and block to get the signed block price
         address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(
             _decreaseRequest.indexToken, _decreaseRequest.collateralToken
@@ -182,6 +192,7 @@ contract Executor is RoleValidation {
             !_decreaseRequest.isLong
         );
         _updateFundingRate(_position.market);
+        _updateBorrowingRate(_position.market, _decreaseRequest.isLong);
         _updateMarketAllocations();
     }
 
@@ -191,6 +202,7 @@ contract Executor is RoleValidation {
     function executeLimitDecrease(bytes32 _key) external onlyKeeper {
         // get the request
         MarketStructs.DecreasePositionRequest memory _decreaseRequest = tradeStorage.limitDecreaseRequests(_key);
+        require(_decreaseRequest.user != address(0), "Invalid decrease request");
         // get the current price
         uint256 price = IPriceOracle(priceOracle).getPrice(_decreaseRequest.indexToken);
         // if current price >= acceptable price and isShort, execute
@@ -218,9 +230,10 @@ contract Executor is RoleValidation {
                 !_decreaseRequest.isLong
             );
             _updateFundingRate(_position.market);
+            _updateBorrowingRate(_position.market, _decreaseRequest.isLong);
             _updateMarketAllocations();
         } else {
-            // revert
+            revert Executor_LimitNotHit();
         }
     }
 }

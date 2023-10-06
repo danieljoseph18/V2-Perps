@@ -28,6 +28,7 @@ contract MarketFactory is RoleValidation {
         // long and short tokens cant be same, short must be stables
         require(marketStorage.isStable(_stablecoin), "Short token must be a stable token");
         require(_stablecoin != address(0), "Zero address not allowed");
+        require(_indexToken != address(0), "Zero address not allowed");
         // pool cant already exist
         bytes32 _key = keccak256(abi.encodePacked(_indexToken, _stablecoin));
         require(marketStorage.getMarket(_key).market == address(0), "Market already exists");

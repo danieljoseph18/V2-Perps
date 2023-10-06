@@ -16,6 +16,8 @@ contract Market is RoleValidation {
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
 
+    uint256 public constant MAX_FUNDING_INTERVAL = 24 hours;
+
     // represents a market
     // allows users to trade in and out
     // holds funds for users
@@ -114,14 +116,14 @@ contract Market is RoleValidation {
     // Funding //
     /////////////
 
-    function upkeepNeeded() public view returns (bool) {
+    function _upkeepNeeded() internal view returns (bool) {
         // check if funding rate needs to be updated
         return block.timestamp >= lastFundingUpdateTime + fundingInterval;
     }
 
-    function updateFundingRate() public {
-        bool _upkeepNeeded = upkeepNeeded();
-        if (_upkeepNeeded) {
+    function updateFundingRate() external {
+        bool upkeepNeeded = _upkeepNeeded();
+        if (upkeepNeeded) {
             _updateFundingRate();
         }
     }
@@ -133,7 +135,7 @@ contract Market is RoleValidation {
         uint256 _skewScale,
         uint256 _maxFundingRate
     ) public onlyConfigurator {
-        // check if msg.sender is owner
+        require(_fundingInterval <= MAX_FUNDING_INTERVAL, "Invalid funding interval");
         fundingInterval = _fundingInterval;
         maxFundingVelocity = _maxFundingVelocity;
         skewScale = _skewScale;
@@ -209,7 +211,7 @@ contract Market is RoleValidation {
 
     // RETURNS PERCENTAGE, NEEDS TO BE SCALED BY SIZE
     // MAKE SURE PERCENTAGE IS THE SAME PRECISION AS FUNDING FEE
-    function getFundingFees(MarketStructs.Position memory _position) public view returns (int256) {
+    function getFundingFees(MarketStructs.Position memory _position) external view returns (int256) {
         return _calculateFundingFees(_position);
     }
 
@@ -220,7 +222,7 @@ contract Market is RoleValidation {
     // Function to update borrowing parameters (consider appropriate access control)
     /// @dev Only GlobalMarketConfig
     function setBorrowingConfig(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide)
-        public
+        external
         onlyConfigurator
     {
         borrowingFactor = _borrowingFactor;
@@ -229,7 +231,7 @@ contract Market is RoleValidation {
     }
 
     // Function to calculate borrowing fees per second
-    function updateBorrowingRate(bool _isLong) public {
+    function updateBorrowingRate(bool _isLong) external {
         uint256 openInterest = getOpenInterest(_isLong);
         uint256 poolBalance = poolAmounts[stablecoin]; // Amount of USDC in pool (not exact USD value)
 

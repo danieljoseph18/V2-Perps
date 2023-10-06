@@ -43,8 +43,8 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyStorage() {
-        require(roleStorage.hasRole(Roles.STORAGE, msg.sender), "Sender must be storage");
+    modifier onlyTradeStorage() {
+        require(roleStorage.hasRole(Roles.TRADE_STORAGE, msg.sender), "Sender must be storage");
         _;
     }
 

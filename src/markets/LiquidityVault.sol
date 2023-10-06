@@ -7,9 +7,10 @@ import {IMarketToken} from "./interfaces/IMarketToken.sol";
 import {MarketStructs} from "./MarketStructs.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @dev Needs Vault Role
-contract LiquidityVault is RoleValidation {
+contract LiquidityVault is RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
 
@@ -19,6 +20,9 @@ contract LiquidityVault is RoleValidation {
     // markets trade in and out of this pool, losses and fees accumulate in here
     // markets reserve a share of the pool => share reserved = open interest x factor (1.5 - 2x ish)
     // the shares allocated to each market are updated at set intervals to rebalance distribution
+
+    uint256 public constant PERCENTAGE_PRECISION = 1e6; // 1e6 = 100%
+    uint256 public constant PRICE_PRECISION = 1e30;
 
     address public stablecoin;
     IMarketToken public liquidityToken;
@@ -32,7 +36,7 @@ contract LiquidityVault is RoleValidation {
     // reps liquidity allocated to each market in USDC
     // OI is capped to % of allocation
     // whenever a trade is opened, check it won't put the OI over the allocation
-    // cap = marketAllocation(market) / overCollateralizationRatio
+    // cap = marketAllocation(market) * 100% / overCollateralizationPercentage
     mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
 
     mapping(address => uint256) public fundingFeesEarned;
@@ -41,14 +45,14 @@ contract LiquidityVault is RoleValidation {
     // claim from here, reset to 0, send to fee handler
     // divide fees and handled distribution in fee handler
     uint256 public accumulatedFees;
-    uint256 public overCollateralizationRatio; // 150 = 150% ratio => 1.5x collateral
+    uint256 public overCollateralizationPercentage; // 150000 = 150% ratio => 1.5x collateral
 
     // liquidity token = market token
     // another contract should handle minting and burning of LP token
     constructor(address _stablecoin, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
         stablecoin = _stablecoin;
         liquidityToken = _liquidityToken;
-        overCollateralizationRatio = 150;
+        overCollateralizationPercentage = 1500000;
         liquidityFee = 200;
     }
 
@@ -57,12 +61,14 @@ contract LiquidityVault is RoleValidation {
     ////////////
 
     /// @dev only GlobalMarketConfig
-    function updateOverCollateralizationRatio(uint256 _ratio) external onlyConfigurator {
-        overCollateralizationRatio = _ratio;
+    function updateOverCollateralizationPercentage(uint256 _percentage) external onlyConfigurator {
+        overCollateralizationPercentage = _percentage;
     }
 
     /// @dev Only MarketFactory
     function addMarket(MarketStructs.Market memory _market) external onlyFactory {
+        require(_market.indexToken != _market.stablecoin, "Index and collateral tokens must be different");
+        require(_market.indexToken != address(0), "Invalid index token");
         // check if market already added
         bytes32 key = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
         require(markets[key].market == address(0), "Market already added");
@@ -80,22 +86,22 @@ contract LiquidityVault is RoleValidation {
     // LIQUIDITY //
     ///////////////
 
-    function addLiquidity(uint256 _amount, address _tokenIn) external {
+    function addLiquidity(uint256 _amount, address _tokenIn) external nonReentrant {
         _addLiquidity(msg.sender, _amount, _tokenIn);
     }
 
-    function removeLiquidity(uint256 _marketTokenAmount, address _tokenOut) external {
+    function removeLiquidity(uint256 _marketTokenAmount, address _tokenOut) external nonReentrant {
         _removeLiquidity(msg.sender, _marketTokenAmount, _tokenOut);
     }
 
     // allows users to delegate permissions from ledger to hot wallet
-    function addLiquidityForAccount(address _account, uint256 _amount, address _tokenIn) public {
+    function addLiquidityForAccount(address _account, uint256 _amount, address _tokenIn) external nonReentrant {
         // check if msg.sender is approved to add liquidity for _account
         _addLiquidity(_account, _amount, _tokenIn);
     }
 
     // allows users to delegate permissions from ledger to hot wallet
-    function removeLiquidityForAccount(address _account, uint256 _liquidityTokenAmount, address _tokenOut) public {
+    function removeLiquidityForAccount(address _account, uint256 _liquidityTokenAmount, address _tokenOut) external nonReentrant {
         // check if msg.sender is approved to remove liquidity for _account
         _removeLiquidity(_account, _liquidityTokenAmount, _tokenOut);
     }
@@ -106,11 +112,13 @@ contract LiquidityVault is RoleValidation {
         require(_tokenIn == stablecoin, "Invalid token");
 
         uint256 afterFeeAmount = _deductLiquidityFees(_amount);
-
-        poolAmounts[_tokenIn] += afterFeeAmount;
-        // add liquidity to the market
+        
         IERC20(_tokenIn).safeTransferFrom(_account, address(this), _amount);
-        // mint market tokens for the user
+
+        // add full amount to the pool
+        poolAmounts[_tokenIn] += _amount;
+
+        // mint market tokens (afterFeeAmount)
         uint256 mintAmount = (afterFeeAmount * getPrice(_tokenIn)) / getMarketTokenPrice();
 
         liquidityToken.mint(_account, mintAmount);
@@ -145,13 +153,13 @@ contract LiquidityVault is RoleValidation {
 
     // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
     // price per 1 token (1e18 decimals)
+    // returns price of token in USD x 1e30
     function getMarketTokenPrice() public view returns (uint256) {
-        // amount of market tokens function of AUM in USD
         // market token price = (worth of market pool) / total supply
-        // could overflow, need to use scaling factor, will hover around 0.9 - 1.1
-        return getAum() / IERC20(address(liquidityToken)).totalSupply();
+        return (getAum() * PRICE_PRECISION) / IERC20(address(liquidityToken)).totalSupply();
     }
 
+    // Returns AUM in USD value
     function getAum() public view returns (uint256 aum) {
         // get the AUM of the market in USD
         // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
@@ -180,7 +188,7 @@ contract LiquidityVault is RoleValidation {
         return _getNetPnL(_isLong);
     }
 
-    // should loops through all markets and add together their net PNL
+    // should loops through all markets and add together their net PNL in USD
     function _getNetPnL(bool _isLong) internal view returns (int256) {
         int256 netPnL;
         uint256 len = marketKeys.length;
@@ -209,18 +217,21 @@ contract LiquidityVault is RoleValidation {
     // FEES //
     //////////
 
+    // (amount x percentage) / 100%
     function _deductLiquidityFees(uint256 _amount) internal view returns (uint256) {
-        return _amount - ((_amount * liquidityFee) / 1000);
+        return (_amount * (PERCENTAGE_PRECISION - liquidityFee)) / PERCENTAGE_PRECISION;
     }
 
     /// @dev Only to be called by TradeStorage
-    function accumulateFundingFees(uint256 _amount, address _account) external onlyStorage {
+    function accumulateFundingFees(uint256 _amount, address _account) external nonReentrant onlyTradeStorage {
         fundingFeesEarned[_account] += _amount;
     }
 
     // called by a trader to claim their earned funding fees
-    function claimFundingFees() external {
+    // only become claimable once a position is edited
+    function claimFundingFees() external nonReentrant {
         uint256 amount = fundingFeesEarned[msg.sender];
+        require(amount > 0, "No fees to claim");
         fundingFeesEarned[msg.sender] = 0;
         IERC20(stablecoin).safeTransfer(msg.sender, amount);
     }
@@ -234,6 +245,13 @@ contract LiquidityVault is RoleValidation {
         _updateMarketAllocations();
     }
 
+    /*
+        numerator = total OI
+        denominator = OI of market minus overcollateralization
+        e.g if overCollateralization = 150% / 3/2 => (OI of Market x 2/3) = denominator
+        divisor = numerator / denominator (e.g 7 = 1/7 of the AUM)
+     */
+    // gas intensive function for LPs and traders to call every time, keeper style preferable
     // called by the market when a trade is opened, or call periodically from a keeper
     // or call from provide/remove liquidity functions
     function _updateMarketAllocations() internal {
@@ -244,9 +262,10 @@ contract LiquidityVault is RoleValidation {
         for (uint256 i = 0; i < len; ++i) {
             // get the markets open interest
             uint256 marketOpenInterest = IMarket(markets[marketKeys[i]].market).getTotalOpenInterest();
-            uint256 allocationPercentage = totalOpenInterest / marketOpenInterest;
+            uint256 overCollateralizedMarketOI = (marketOpenInterest * PERCENTAGE_PRECISION) / overCollateralizationPercentage;
+            uint256 percentageAllocation = totalOpenInterest / overCollateralizedMarketOI;
             // allocate a percentage of the treasury to the market
-            marketAllocations[marketKeys[i]] = aum / allocationPercentage; // this will be the amount of stablecoin allocated to the market
+            marketAllocations[marketKeys[i]] = aum / percentageAllocation; // this will be the amount of stablecoin allocated to the market
         }
     }
 }

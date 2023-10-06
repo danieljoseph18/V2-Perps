@@ -38,14 +38,15 @@ contract MarketStorage is RoleValidation {
     }
 
     /// @dev Only GlobalMarketConfig
-    function setIsStable(address _stablecoin) external onlyConfigurator {
-        isStable[_stablecoin] = true;
+    function setIsStable(address _stablecoin, bool _isStable) external onlyConfigurator {
+        isStable[_stablecoin] = _isStable;
     }
 
     // should only be callable by permissioned roles STORAGE_ADMIN
     // adds value in tokens and usd to track Pnl
     // should never be callable by an EOA
     // long + decrease = subtract, short + decrease = add, long + increase = add, short + increase = subtract
+    // Tracks total open interest across all markets ??????????????????????????
     /// @dev Only Executor
     function updateOpenInterest(
         bytes32 _key,

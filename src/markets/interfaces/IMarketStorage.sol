@@ -5,7 +5,7 @@ import {MarketStructs} from "../MarketStructs.sol";
 
 interface IMarketStorage {
     function storeMarket(MarketStructs.Market memory _market) external;
-    function setIsStable(address _stablecoin) external;
+    function setIsStable(address _stablecoin, bool _isStable) external;
     function deleteMarket(bytes32 _key) external;
     function getMarket(bytes32 _key) external view returns (MarketStructs.Market memory);
     function getMarketFromIndexToken(address _indexToken, address _stablecoin)

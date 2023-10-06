@@ -29,6 +29,7 @@ contract GlobalMarketConfig is RoleValidation {
         uint256 _maxFundingRate
     ) external onlyModerator {
         address market = marketStorage.getMarket(_marketKey).market;
+        require(market != address(0), "Market does not exist");
         IMarket(market).setFundingConfig(_fundingInterval, _maxFundingVelocity, _skewScale, _maxFundingRate);
     }
 
@@ -39,6 +40,7 @@ contract GlobalMarketConfig is RoleValidation {
         bool _feeForSmallerSide
     ) external onlyModerator {
         address market = marketStorage.getMarket(_marketKey).market;
+        require(market != address(0), "Market does not exist");
         IMarket(market).setBorrowingConfig(_borrowingFactor, _borrowingExponent, _feeForSmallerSide);
     }
 
@@ -46,8 +48,8 @@ contract GlobalMarketConfig is RoleValidation {
         return keccak256(abi.encodePacked(_indexToken, _stablecoin));
     }
 
-    function setStableCoin(address _stablecoin) external onlyModerator {
-        marketStorage.setIsStable(_stablecoin);
+    function setStableCoin(address _stablecoin, bool _isStable) external onlyModerator {
+        marketStorage.setIsStable(_stablecoin, _isStable);
     }
 
     function setMarketPriceImpactConfig(bytes32 _marketKey, uint256 _priceImpactFactor, uint256 _priceImpactExponent)
@@ -55,6 +57,7 @@ contract GlobalMarketConfig is RoleValidation {
         onlyModerator
     {
         address market = marketStorage.getMarket(_marketKey).market;
+        require(market != address(0), "Market does not exist");
         IMarket(market).setPriceImpactConfig(_priceImpactFactor, _priceImpactExponent);
     }
 

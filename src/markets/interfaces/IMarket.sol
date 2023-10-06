@@ -32,6 +32,7 @@ interface IMarket {
     function longCumulativeFundingRate() external view returns (uint256);
     function shortCumulativeFundingRate() external view returns (uint256);
     function cumulativeBorrowFee() external view returns (uint256);
+    function updateBorrowingRate(bool _isLong) external;
     function getBorrowingFees(MarketStructs.Position memory _position) external view returns (uint256);
     function getFundingFees(MarketStructs.Position memory _position) external view returns (int256);
 }
