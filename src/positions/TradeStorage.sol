@@ -40,8 +40,11 @@ contract TradeStorage is RoleValidation {
     mapping(bytes32 => MarketStructs.DecreasePositionRequest) public limitDecreaseRequests;
     bytes32[] public limitDecreaseKeys;
 
-    // Do we need a way to enumerate?
-    mapping(bytes32 => MarketStructs.Position) public openPositions;
+    // Track open positions
+    mapping(bytes32 _positionKey => MarketStructs.Position) public openPositions;
+    mapping(bytes32 _marketKey => bytes32[] _positionKeys) public openLongPositionKeys;
+    mapping(bytes32 _marketKey => bytes32[] _positionKeys) public openShortPositionKeys;
+    mapping(bytes32 _positionKey => uint256 _index) public openPositionIndex;
 
     mapping(address _user => uint256 _rewards) public accumulatedRewards;
 
@@ -128,6 +131,7 @@ contract TradeStorage is RoleValidation {
 
     // only callable from executor contracts
     // DEFINITELY NEED A LOT MORE SECURITY CHECKS
+    // STACK TOO DEEP
     function executeTrade(
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _signedBlockPrice,
@@ -224,7 +228,8 @@ contract TradeStorage is RoleValidation {
                 address marketAddress = IMarketStorage(marketStorage).getMarket(market).market;
                 uint256 longFunding = IMarket(marketAddress).longCumulativeFundingRate();
                 uint256 shortFunding = IMarket(marketAddress).shortCumulativeFundingRate();
-                uint256 borrowFee = IMarket(marketAddress).cumulativeBorrowFee();
+                uint256 longBorrowFee = IMarket(marketAddress).longCumulativeBorrowFee();
+                uint256 shortBorrowFee = IMarket(marketAddress).shortCumulativeBorrowFee();
 
                 // make sure all Position and PositionRequest instantiations are in the correct order.
                 MarketStructs.Position memory _position = MarketStructs.Position(
@@ -239,11 +244,14 @@ contract TradeStorage is RoleValidation {
                     0,
                     longFunding,
                     shortFunding,
-                    borrowFee,
+                    longBorrowFee,
+                    shortBorrowFee,
                     block.timestamp,
                     _signedBlockPrice
                 );
                 openPositions[key] = _position;
+                _positionRequest.isLong ? openLongPositionKeys[market].push(key) : openShortPositionKeys[market].push(key);
+                openPositionIndex[key] = _positionRequest.isLong ? openLongPositionKeys[market].length - 1 : openShortPositionKeys[market].length - 1;
                 _sendExecutionFee(_executor, minExecutionFee);
                 return _position; // return the new position
             }
@@ -346,6 +354,13 @@ contract TradeStorage is RoleValidation {
 
             if (_position.positionSize == 0) {
                 delete openPositions[key];
+                uint256 index = openPositionIndex[key];
+                delete openPositionIndex[key];
+                if (_position.isLong) {
+                    delete openLongPositionKeys[_position.market][index];
+                } else {
+                    delete openShortPositionKeys[_position.market][index];
+                }
             }
         }
     }

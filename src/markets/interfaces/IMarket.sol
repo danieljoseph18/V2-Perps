@@ -31,8 +31,10 @@ interface IMarket {
     function setPriceImpactConfig(uint256 _priceImpactFactor, uint256 _priceImpactExponent) external;
     function longCumulativeFundingRate() external view returns (uint256);
     function shortCumulativeFundingRate() external view returns (uint256);
-    function cumulativeBorrowFee() external view returns (uint256);
+    function longCumulativeBorrowFee() external view returns (uint256);
+    function shortCumulativeBorrowFee() external view returns (uint256);
     function updateBorrowingRate(bool _isLong) external;
     function getBorrowingFees(MarketStructs.Position memory _position) external view returns (uint256);
     function getFundingFees(MarketStructs.Position memory _position) external view returns (int256);
+    function updateCumulativePricePerToken(uint256 _price, bool _isIncrease, bool _isLong) external;
 }

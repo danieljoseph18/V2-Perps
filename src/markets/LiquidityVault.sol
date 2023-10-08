@@ -21,12 +21,12 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // markets reserve a share of the pool => share reserved = open interest x factor (1.5 - 2x ish)
     // the shares allocated to each market are updated at set intervals to rebalance distribution
 
-    uint256 public constant PERCENTAGE_PRECISION = 1e6; // 1e6 = 100%
+    uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 = 100%
     uint256 public constant PRICE_PRECISION = 1e30;
 
     address public stablecoin;
     IMarketToken public liquidityToken;
-    uint256 public liquidityFee; // 0.2% fee on all liquidity added/removed = 200
+    uint256 public liquidityFee; // 0.2% fee on all liquidity added/removed = 2e9
 
     mapping(address _token => uint256 _poolAmount) public poolAmounts;
     // how do we store this in a way that it never gets too large?
@@ -52,8 +52,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     constructor(address _stablecoin, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
         stablecoin = _stablecoin;
         liquidityToken = _liquidityToken;
-        overCollateralizationPercentage = 1500000;
-        liquidityFee = 200;
+        overCollateralizationPercentage = 15e11;
+        liquidityFee = 2e9;
     }
 
     //////////////

@@ -162,7 +162,7 @@ contract RequestRouter {
     // compare to what the size delta will put the open interest to
     function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) internal view {
         uint256 allocation = ILiquidityVault(liquidityVault).getMarketAllocation(_marketKey);
-        uint256 overcollateralization = ILiquidityVault(liquidityVault).overCollateralizationRatio();
+        uint256 overcollateralization = ILiquidityVault(liquidityVault).overCollateralizationPercentage();
         address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
         uint256 totalOI = IMarket(market).getTotalOpenInterest();
         uint256 maxOI = (allocation / overcollateralization) * 100;

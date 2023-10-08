@@ -30,6 +30,9 @@ interface ITradeStorage {
     function limitDecreaseRequests(bytes32 _key) external view returns (MarketStructs.DecreasePositionRequest memory);
     function limitDecreaseKeys(uint256 _index) external view returns (bytes32);
     function openPositions(bytes32 _key) external view returns (MarketStructs.Position memory);
+    function openLongPositionKeys(bytes32 _key) external view returns (bytes32[] memory);
+    function openShortPositionKeys(bytes32 _key) external view returns (bytes32[] memory);
+    function openPositionIndex(bytes32 _key) external view returns (uint256);
     function marketStorage() external view returns (address);
     function createMarketDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external;
     function createLimitDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest) external;

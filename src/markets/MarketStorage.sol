@@ -12,19 +12,18 @@ contract MarketStorage is RoleValidation {
     using MarketStructs for MarketStructs.Position;
 
     bytes32[] public keys;
-    mapping(bytes32 => MarketStructs.Market) public markets;
+    mapping(bytes32 _marketKey => MarketStructs.Market) public markets;
 
     // tracked by a bytes 32 key
-    mapping(bytes32 => MarketStructs.Position) public positions;
+    mapping(bytes32 _positionKey => MarketStructs.Position) public positions;
 
     // tracks globally allowed stablecoins
-    mapping(address => bool) public isStable;
+    mapping(address _stablecoin => bool _isWhitelisted) public isStable;
 
-    // maps key of market to open interest
-    mapping(bytes32 => uint256) public collatTokenLongOpenInterest; // OI of collat token long
-    mapping(bytes32 => uint256) public collatTokenShortOpenInterest;
-    mapping(bytes32 => uint256) public indexTokenLongOpenInterest; // OI of index token long
-    mapping(bytes32 => uint256) public indexTokenShortOpenInterest;
+    mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenLongOpenInterest; // OI of collat token long
+    mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenShortOpenInterest;
+    mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenLongOpenInterest; // OI of index token long
+    mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenShortOpenInterest;
 
     constructor() RoleValidation(roleStorage) {}
 
@@ -49,7 +48,7 @@ contract MarketStorage is RoleValidation {
     // Tracks total open interest across all markets ??????????????????????????
     /// @dev Only Executor
     function updateOpenInterest(
-        bytes32 _key,
+        bytes32 _marketKey,
         uint256 _collateralTokenAmount,
         uint256 _indexTokenAmount,
         bool _isLong,
@@ -58,19 +57,19 @@ contract MarketStorage is RoleValidation {
         if (_shouldAdd) {
             // add to open interest
             _isLong
-                ? collatTokenLongOpenInterest[_key] += _collateralTokenAmount
-                : collatTokenShortOpenInterest[_key] += _collateralTokenAmount;
+                ? collatTokenLongOpenInterest[_marketKey] += _collateralTokenAmount
+                : collatTokenShortOpenInterest[_marketKey] += _collateralTokenAmount;
             _isLong
-                ? indexTokenLongOpenInterest[_key] += _indexTokenAmount
-                : indexTokenShortOpenInterest[_key] += _indexTokenAmount;
+                ? indexTokenLongOpenInterest[_marketKey] += _indexTokenAmount
+                : indexTokenShortOpenInterest[_marketKey] += _indexTokenAmount;
         } else {
             // subtract from open interest
             _isLong
-                ? collatTokenLongOpenInterest[_key] -= _collateralTokenAmount
-                : collatTokenShortOpenInterest[_key] -= _collateralTokenAmount;
+                ? collatTokenLongOpenInterest[_marketKey] -= _collateralTokenAmount
+                : collatTokenShortOpenInterest[_marketKey] -= _collateralTokenAmount;
             _isLong
-                ? indexTokenLongOpenInterest[_key] -= _indexTokenAmount
-                : indexTokenShortOpenInterest[_key] -= _indexTokenAmount;
+                ? indexTokenLongOpenInterest[_marketKey] -= _indexTokenAmount
+                : indexTokenShortOpenInterest[_marketKey] -= _indexTokenAmount;
         }
     }
 

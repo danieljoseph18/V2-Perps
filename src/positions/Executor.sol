@@ -58,17 +58,22 @@ contract Executor is RoleValidation {
 
     // in every action that interacts with Market, call _updateFundingRate();
     function _updateFundingRate(bytes32 _marketKey) internal {
-        address _market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
-        IMarket(_market).updateFundingRate();
+        address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
+        IMarket(market).updateFundingRate();
     }
 
     function _updateBorrowingRate(bytes32 _marketKey, bool _isLong) internal {
-        address _market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
-        IMarket(_market).updateBorrowingRate(_isLong);
+        address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
+        IMarket(market).updateBorrowingRate(_isLong);
     }
 
     function _updateMarketAllocations() internal {
         ILiquidityVault(liquidityVault).updateMarketAllocations();
+    }
+
+    function _updateCumulativePricePerToken(bytes32 _marketKey, uint256 _pricePaid, bool _isIncrease, bool _isLong) internal {
+        address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
+        IMarket(market).updateCumulativePricePerToken(_pricePaid, _isIncrease, _isLong);
     }
 
     //////////////////////////
@@ -116,6 +121,7 @@ contract Executor is RoleValidation {
         // update funding rate
         _updateFundingRate(_position.market);
         _updateBorrowingRate(_position.market, _positionRequest.isLong);
+        _updateCumulativePricePerToken(_position.market, _signedBlockPrice, true, _positionRequest.isLong);
         _updateMarketAllocations();
     }
 
@@ -147,6 +153,7 @@ contract Executor is RoleValidation {
             // update funding rate
             _updateFundingRate(_position.market);
             _updateBorrowingRate(_position.market, _positionRequest.isLong);
+            _updateCumulativePricePerToken(_position.market, price, true, _positionRequest.isLong);
             _updateMarketAllocations();
         } else {
             revert Executor_LimitNotHit();
@@ -193,6 +200,7 @@ contract Executor is RoleValidation {
         );
         _updateFundingRate(_position.market);
         _updateBorrowingRate(_position.market, _decreaseRequest.isLong);
+        _updateCumulativePricePerToken(_position.market, _signedBlockPrice, false, _position.isLong);
         _updateMarketAllocations();
     }
 
@@ -231,6 +239,7 @@ contract Executor is RoleValidation {
             );
             _updateFundingRate(_position.market);
             _updateBorrowingRate(_position.market, _decreaseRequest.isLong);
+            _updateCumulativePricePerToken(_position.market, price, false, _decreaseRequest.isLong);
             _updateMarketAllocations();
         } else {
             revert Executor_LimitNotHit();

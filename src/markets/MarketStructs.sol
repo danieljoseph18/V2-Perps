@@ -54,7 +54,8 @@ library MarketStructs {
         int256 fundingFees; // negative or positive, pay or earn
         uint256 entryLongCumulativeFunding;
         uint256 entryShortCumulativeFunding;
-        uint256 entryCumulativeBorrowFee; // borrow fee at entry
+        uint256 entryLongCumulativeBorrowFee; // borrow fee at entry for longs
+        uint256 entryShortCumulativeBorrowFee; // borrow fee at entry for shorts
         uint256 entryTime;
         uint256 averagePricePerToken; // average price paid per 1 token in size in USD
     }
