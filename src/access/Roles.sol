@@ -23,4 +23,10 @@ library Roles {
     bytes32 public constant KEEPER = keccak256("KEEPER");
 
     bytes32 public constant ROUTER = keccak256("ROUTER");
+
+    bytes32 public constant STATE_UPDATER = keccak256("STATE_UPDATER");
+
+    bytes32 public constant STATE_KEEPER = keccak256("STATE_KEEPER");
+
+    bytes32 public constant MARKET_STORAGE = keccak256("MARKET_STORAGE");
 }

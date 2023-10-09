@@ -39,9 +39,10 @@ interface ILiquidityVault {
     function getStablecoin() external view returns (address);
     function getLiquidityToken() external view returns (address);
     function getPoolAmounts(address _token) external view returns (uint256);
-    function getMarket(bytes32 key) external view returns (address market, address indexToken, address stablecoin);
+    function getMarket(bytes32 _marketKey) external view returns (MarketStructs.Market memory);
     function getMarketAllocation(bytes32 key) external view returns (uint256);
     function getAccumulatedFees() external view returns (uint256);
     function overCollateralizationPercentage() external view returns (uint256);
     function accumulateFundingFees(uint256 _amount, address _account) external;
+    function updateState(int256 _netPnL, uint256 _netOpenInterest) external;
 }

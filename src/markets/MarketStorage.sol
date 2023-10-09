@@ -6,13 +6,25 @@ pragma solidity 0.8.20;
 // need to be able to fetch a list of all markets
 import {MarketStructs} from "./MarketStructs.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
+import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {IMarket} from "./interfaces/IMarket.sol";
 
 contract MarketStorage is RoleValidation {
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
 
+    ILiquidityVault public liquidityVault;
+
     bytes32[] public keys;
     mapping(bytes32 _marketKey => MarketStructs.Market) public markets;
+
+    // reps liquidity allocated to each market in USDC
+    // OI is capped to % of allocation
+    // whenever a trade is opened, check it won't put the OI over the allocation
+    // cap = marketAllocation(market) * 100% / overCollateralizationPercentage
+    // Need a minimum allocation or users won't be able to trade new markets
+    // Or we set allocation based on expected demand before trading commences
+    mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
 
     // tracked by a bytes 32 key
     mapping(bytes32 _positionKey => MarketStructs.Position) public positions;
@@ -25,7 +37,14 @@ contract MarketStorage is RoleValidation {
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenLongOpenInterest; // OI of index token long
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenShortOpenInterest;
 
-    constructor() RoleValidation(roleStorage) {}
+
+    uint256 public overCollateralizationPercentage; // 150000 = 150% ratio => 1.5x collateral
+    uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 = 100%
+
+    constructor(ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
+        liquidityVault = _liquidityVault;
+        overCollateralizationPercentage = 15e11; // 150%
+    }
 
     /// @dev Only MarketFactory
     function storeMarket(MarketStructs.Market memory _market) external onlyMarketMaker {
@@ -73,6 +92,11 @@ contract MarketStorage is RoleValidation {
         }
     }
 
+    /// @dev only GlobalMarketConfig
+    function updateOverCollateralizationPercentage(uint256 _percentage) external onlyConfigurator {
+        overCollateralizationPercentage = _percentage;
+    }
+
     function getMarket(bytes32 _key) external view returns (MarketStructs.Market memory) {
         // Return the information for the market associated with the key
         return markets[_key];
@@ -87,12 +111,40 @@ contract MarketStorage is RoleValidation {
         return markets[_key];
     }
 
-    function getAllMarkets() external view returns (MarketStructs.Market[] memory) {
-        // Return all markets
-        MarketStructs.Market[] memory _markets = new MarketStructs.Market[](keys.length);
-        for (uint256 i = 0; i < keys.length; i++) {
-            _markets[i] = markets[keys[i]];
+     /////////////////
+    // ALLOCATIONS //
+    /////////////////
+
+    /*
+        numerator = total OI
+        denominator = OI of market minus overcollateralization
+        e.g if overCollateralization = 150% / 3/2 => (OI of Market x 2/3) = denominator
+        divisor = numerator / denominator (e.g 7 = 1/7 of the AUM)
+     */
+
+    /// @dev Update the allocation for a single market
+    /// @param _marketKey The key of the market to update
+    /// Note Create Vault Updater contract to update the state of the Vault for this function
+    function updateMarketAllocation(bytes32 _marketKey) external onlyStateUpdater {
+        require(markets[_marketKey].market != address(0), "Market does not exist");
+
+        uint256 totalOpenInterest = liquidityVault.getNetOpenInterest(); // Total OI across all markets
+        uint256 marketOpenInterest = IMarket(markets[_marketKey].market).getTotalOpenInterest(); // OI for this market
+
+        if (totalOpenInterest == 0 || marketOpenInterest == 0) {
+            marketAllocations[_marketKey] = 0;
+            return;
         }
-        return _markets;
+
+        uint256 adjustedMarketOI = (marketOpenInterest * PERCENTAGE_PRECISION) / (overCollateralizationPercentage); // Adjust OI based on collateralization
+        
+        uint256 percentageAllocation = totalOpenInterest / adjustedMarketOI;
+
+        
+        uint256 newAllocation = liquidityVault.getAum() / percentageAllocation; // Calculate new allocation
+
+
+        marketAllocations[_marketKey] = newAllocation; // Update mapping
     }
+
 }

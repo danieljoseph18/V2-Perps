@@ -59,10 +59,16 @@ contract Market is RoleValidation {
     uint256 public longCumulativePricePerToken; // long cumulative price paid for all index tokens in OI
     uint256 public shortCumulativePricePerToken; // short cumulative price paid for all index tokens in OI
 
+    uint256 public lastAllocation; // last time allocation was updated
+
     // might need to update to an initialize function instead of constructor
-    constructor(address _indexToken, address _stablecoin, IMarketStorage _marketStorage, address _liquidityVault, ITradeStorage _tradeStorage)
-        RoleValidation(roleStorage)
-    {
+    constructor(
+        address _indexToken,
+        address _stablecoin,
+        IMarketStorage _marketStorage,
+        address _liquidityVault,
+        ITradeStorage _tradeStorage
+    ) RoleValidation(roleStorage) {
         indexToken = _indexToken;
         stablecoin = _stablecoin;
         marketStorage = _marketStorage;
@@ -131,18 +137,15 @@ contract Market is RoleValidation {
         // If long, return the long open interest
         // If short, return the short open interest
         bytes32 key = getMarketKey();
-        return _isLong
-            ? marketStorage.collatTokenLongOpenInterest(key)
-            : marketStorage.collatTokenShortOpenInterest(key);
+        return
+            _isLong ? marketStorage.collatTokenLongOpenInterest(key) : marketStorage.collatTokenShortOpenInterest(key);
     }
 
     // returns the open interest in tokens of the index token
     // basically how many collateral tokens have been exchanged for index tokens
     function _calculateIndexOpenInterest(bool _isLong) internal view returns (uint256) {
         bytes32 key = getMarketKey();
-        return _isLong
-            ? marketStorage.indexTokenLongOpenInterest(key)
-            : marketStorage.indexTokenShortOpenInterest(key);
+        return _isLong ? marketStorage.indexTokenLongOpenInterest(key) : marketStorage.indexTokenShortOpenInterest(key);
     }
 
     /////////////
@@ -242,7 +245,6 @@ contract Market is RoleValidation {
             : (int256(shortFeesOwed) - int256(longFeesOwed)) / int256(PERCENTAGE_PRECISION);
     }
 
-
     function getFundingFees(MarketStructs.Position memory _position) external view returns (int256) {
         return _calculateFundingFees(_position);
     }
@@ -290,7 +292,9 @@ contract Market is RoleValidation {
     // Get the borrowing fees owed for a particular position
     // MAKE SURE PERCENTAGE IS THE SAME PRECISION AS FUNDING FEE
     function getBorrowingFees(MarketStructs.Position memory _position) public view returns (uint256) {
-        return _position.isLong ? longCumulativeBorrowFee - _position.entryLongCumulativeBorrowFee : shortCumulativeBorrowFee - _position.entryShortCumulativeBorrowFee;
+        return _position.isLong
+            ? longCumulativeBorrowFee - _position.entryLongCumulativeBorrowFee
+            : shortCumulativeBorrowFee - _position.entryShortCumulativeBorrowFee;
     }
 
     /////////
@@ -303,7 +307,8 @@ contract Market is RoleValidation {
     function _calculatePnL(MarketStructs.Position memory _position) internal view returns (int256) {
         uint256 positionValue = _position.positionSize * getPrice(indexToken);
         uint256 entryValue = _position.positionSize * _position.averagePricePerToken;
-        return _position.isLong ? int256(entryValue) - int256(positionValue) : int256(positionValue) - int256(entryValue);
+        return
+            _position.isLong ? int256(entryValue) - int256(positionValue) : int256(positionValue) - int256(entryValue);
     }
 
     function getPnL(MarketStructs.Position memory _position) public view returns (int256) {
@@ -319,9 +324,7 @@ contract Market is RoleValidation {
         uint256 indexValue = getIndexOpenInterestUSD(_isLong);
         uint256 entryValue = _getTotalEntryValue(_isLong);
 
-        return _isLong
-            ? int256(indexValue) - int256(entryValue)
-            : int256(entryValue) - int256(indexValue);
+        return _isLong ? int256(indexValue) - int256(entryValue) : int256(entryValue) - int256(indexValue);
     }
 
     // check this is updated correctly in the executor
@@ -336,7 +339,9 @@ contract Market is RoleValidation {
     function _getTotalEntryValue(bool _isLong) internal view returns (uint256) {
         // get the number of active positions => to do this need to add way to enumerate the open positions in TradeStorage
         bytes32 marketKey = getMarketKey();
-        uint256 positionCount = _isLong ? tradeStorage.openLongPositionKeys(marketKey).length : tradeStorage.openShortPositionKeys(marketKey).length;
+        uint256 positionCount = _isLong
+            ? tradeStorage.openLongPositionKeys(marketKey).length
+            : tradeStorage.openShortPositionKeys(marketKey).length;
         // averageEntryPrice = cumulativePricePaid / no positions
         uint256 cumulativePricePerToken = _isLong ? longCumulativePricePerToken : shortCumulativePricePerToken;
         uint256 averageEntryPrice = cumulativePricePerToken / positionCount;
@@ -349,12 +354,14 @@ contract Market is RoleValidation {
     // PRICE IMPACT //
     //////////////////
 
- 
-
     // Returns Price impact as a percentage of the position size
-    function _calculatePriceImpact(MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease) internal view returns (int256) {
-        uint256 longOI = getIndexOpenInterestUSD(true);  // existing function to get long OI in USD
-        uint256 shortOI = getIndexOpenInterestUSD(false);  // existing function to get short OI in USD
+    function _calculatePriceImpact(MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease)
+        internal
+        view
+        returns (int256)
+    {
+        uint256 longOI = getIndexOpenInterestUSD(true); // existing function to get long OI in USD
+        uint256 shortOI = getIndexOpenInterestUSD(false); // existing function to get short OI in USD
 
         uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
@@ -370,7 +377,8 @@ contract Market is RoleValidation {
         uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
         // Calculate the price impact
-        int256 priceImpact = int256((skewBefore ** priceImpactExponent) * priceImpactFactor) - int256((skewAfter ** priceImpactExponent) * priceImpactFactor);
+        int256 priceImpact = int256((skewBefore ** priceImpactExponent) * priceImpactFactor)
+            - int256((skewAfter ** priceImpactExponent) * priceImpactFactor);
 
         if (priceImpact > MAX_PRICE_IMPACT) priceImpact = MAX_PRICE_IMPACT;
 
@@ -380,8 +388,11 @@ contract Market is RoleValidation {
         return priceImpactPercentage; // scaled by percentage precision
     }
 
-
-    function getPriceImpact(MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease) public view returns (int256) {
+    function getPriceImpact(MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease)
+        public
+        view
+        returns (int256)
+    {
         return _calculatePriceImpact(_positionRequest, _isIncrease);
     }
 

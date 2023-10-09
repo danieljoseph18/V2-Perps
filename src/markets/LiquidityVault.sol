@@ -23,6 +23,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 = 100%
     uint256 public constant PRICE_PRECISION = 1e30;
+    uint256 public constant STATE_UPDATE_INTERVAL = 5;
 
     address public stablecoin;
     IMarketToken public liquidityToken;
@@ -30,14 +31,6 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     mapping(address _token => uint256 _poolAmount) public poolAmounts;
     // how do we store this in a way that it never gets too large?
-    mapping(bytes32 _marketKey => MarketStructs.Market) public markets;
-    bytes32[] public marketKeys;
-
-    // reps liquidity allocated to each market in USDC
-    // OI is capped to % of allocation
-    // whenever a trade is opened, check it won't put the OI over the allocation
-    // cap = marketAllocation(market) * 100% / overCollateralizationPercentage
-    mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
 
     mapping(address => uint256) public fundingFeesEarned;
 
@@ -45,37 +38,25 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // claim from here, reset to 0, send to fee handler
     // divide fees and handled distribution in fee handler
     uint256 public accumulatedFees;
-    uint256 public overCollateralizationPercentage; // 150000 = 150% ratio => 1.5x collateral
+
+    uint256 public lastStateUpdate; // last time state was updated by keepers
+    bool public upkeepNeeded; // is a new state update required?
+
+    uint256 private cachedNetOI;
+    int256 private cachedNetPnL;
+
 
     // liquidity token = market token
     // another contract should handle minting and burning of LP token
     constructor(address _stablecoin, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
         stablecoin = _stablecoin;
         liquidityToken = _liquidityToken;
-        overCollateralizationPercentage = 15e11;
         liquidityFee = 2e9;
     }
 
     //////////////
     // SETTERS //
     ////////////
-
-    /// @dev only GlobalMarketConfig
-    function updateOverCollateralizationPercentage(uint256 _percentage) external onlyConfigurator {
-        overCollateralizationPercentage = _percentage;
-    }
-
-    /// @dev Only MarketFactory
-    function addMarket(MarketStructs.Market memory _market) external onlyFactory {
-        require(_market.indexToken != _market.stablecoin, "Index and collateral tokens must be different");
-        require(_market.indexToken != address(0), "Invalid index token");
-        // check if market already added
-        bytes32 key = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
-        require(markets[key].market == address(0), "Market already added");
-        // add market to mapping
-        markets[key] = _market;
-        marketKeys.push(key);
-    }
 
     /// @dev only GlobalMarketConfig
     function updateLiquidityFee(uint256 _fee) external onlyConfigurator {
@@ -101,7 +82,10 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     // allows users to delegate permissions from ledger to hot wallet
-    function removeLiquidityForAccount(address _account, uint256 _liquidityTokenAmount, address _tokenOut) external nonReentrant {
+    function removeLiquidityForAccount(address _account, uint256 _liquidityTokenAmount, address _tokenOut)
+        external
+        nonReentrant
+    {
         // check if msg.sender is approved to remove liquidity for _account
         _removeLiquidity(_account, _liquidityTokenAmount, _tokenOut);
     }
@@ -112,7 +96,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         require(_tokenIn == stablecoin, "Invalid token");
 
         uint256 afterFeeAmount = _deductLiquidityFees(_amount);
-        
+
         IERC20(_tokenIn).safeTransferFrom(_account, address(this), _amount);
 
         // add full amount to the pool
@@ -122,8 +106,6 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         uint256 mintAmount = (afterFeeAmount * getPrice(_tokenIn)) / getMarketTokenPrice();
 
         liquidityToken.mint(_account, mintAmount);
-
-        _updateMarketAllocations();
     }
 
     // subtract fees, many additional safety checks needed
@@ -143,8 +125,6 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         uint256 afterFeeAmount = _deductLiquidityFees(tokenAmount);
 
         IERC20(_tokenOut).safeTransfer(_account, afterFeeAmount);
-
-        _updateMarketAllocations();
     }
 
     /////////////
@@ -160,13 +140,14 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     // Returns AUM in USD value
+    /// do we need to include borrow fees?
     function getAum() public view returns (uint256 aum) {
         // get the AUM of the market in USD
         // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
         // liquidity in USD
         uint256 liquidity = (poolAmounts[stablecoin] * getPrice(stablecoin));
         aum = liquidity;
-        int256 pendingPnL = _getNetPnL(true) + _getNetPnL(false);
+        int256 pendingPnL = getNetPnL();
         pendingPnL > 0 ? aum -= uint256(pendingPnL) : aum += uint256(pendingPnL); // if in profit, subtract, if at loss, add
         return aum;
     }
@@ -184,19 +165,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // PNL //
     /////////
 
-    function getNetPnL(bool _isLong) public view returns (int256) {
-        return _getNetPnL(_isLong);
-    }
-
-    // should loops through all markets and add together their net PNL in USD
-    function _getNetPnL(bool _isLong) internal view returns (int256) {
-        int256 netPnL;
-        uint256 len = marketKeys.length;
-        for (uint256 i = 0; i < len; ++i) {
-            address market = markets[marketKeys[i]].market;
-            netPnL += IMarket(market).getNetPnL(_isLong);
-        }
-        return netPnL;
+    function getNetPnL() public view returns (int256) {
+        return cachedNetPnL;
     }
 
     ///////////////////
@@ -204,13 +174,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     ///////////////////
 
     function getNetOpenInterest() public view returns (uint256) {
-        uint256 total = 0;
-        uint256 len = marketKeys.length;
-        for (uint256 i = 0; i < len; ++i) {
-            address market = markets[marketKeys[i]].market;
-            total += IMarket(market).getTotalOpenInterest();
-        }
-        return total;
+        return cachedNetOI;
     }
 
     //////////
@@ -236,36 +200,14 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         IERC20(stablecoin).safeTransfer(msg.sender, amount);
     }
 
-    /////////////////
-    // ALLOCATIONS //
-    /////////////////
+    ///////////
+    // STATE //
+    ///////////
 
-    /// @dev Only Executor
-    function updateMarketAllocations() external onlyExecutor {
-        _updateMarketAllocations();
+    function updateState(int256 _netPnL, uint256 _netOpenInterest) external onlyStateUpdater {
+        require(block.timestamp >= lastStateUpdate + STATE_UPDATE_INTERVAL, "Upkeep not needed");
+        cachedNetPnL = _netPnL;
+        cachedNetOI = _netOpenInterest;
     }
 
-    /*
-        numerator = total OI
-        denominator = OI of market minus overcollateralization
-        e.g if overCollateralization = 150% / 3/2 => (OI of Market x 2/3) = denominator
-        divisor = numerator / denominator (e.g 7 = 1/7 of the AUM)
-     */
-    // gas intensive function for LPs and traders to call every time, keeper style preferable
-    // called by the market when a trade is opened, or call periodically from a keeper
-    // or call from provide/remove liquidity functions
-    function _updateMarketAllocations() internal {
-        // loop through all markets and update their allocations
-        uint256 len = marketKeys.length;
-        uint256 totalOpenInterest = getNetOpenInterest();
-        uint256 aum = getAum();
-        for (uint256 i = 0; i < len; ++i) {
-            // get the markets open interest
-            uint256 marketOpenInterest = IMarket(markets[marketKeys[i]].market).getTotalOpenInterest();
-            uint256 overCollateralizedMarketOI = (marketOpenInterest * PERCENTAGE_PRECISION) / overCollateralizationPercentage;
-            uint256 percentageAllocation = totalOpenInterest / overCollateralizedMarketOI;
-            // allocate a percentage of the treasury to the market
-            marketAllocations[marketKeys[i]] = aum / percentageAllocation; // this will be the amount of stablecoin allocated to the market
-        }
-    }
 }

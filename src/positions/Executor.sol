@@ -14,6 +14,7 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 /// @dev Needs Executor Role
 contract Executor is RoleValidation {
     error Executor_LimitNotHit();
+
     using SafeERC20 for IERC20;
     // contract for executing trades
     // will be called by the TradeManager
@@ -67,11 +68,9 @@ contract Executor is RoleValidation {
         IMarket(market).updateBorrowingRate(_isLong);
     }
 
-    function _updateMarketAllocations() internal {
-        ILiquidityVault(liquidityVault).updateMarketAllocations();
-    }
-
-    function _updateCumulativePricePerToken(bytes32 _marketKey, uint256 _pricePaid, bool _isIncrease, bool _isLong) internal {
+    function _updateCumulativePricePerToken(bytes32 _marketKey, uint256 _pricePaid, bool _isIncrease, bool _isLong)
+        internal
+    {
         address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
         IMarket(market).updateCumulativePricePerToken(_pricePaid, _isIncrease, _isLong);
     }
@@ -83,19 +82,23 @@ contract Executor is RoleValidation {
     // only permissioned roles can call
     // called on set intervals, e.g every 5 - 10 seconds => crucial to prevent a backlog from building up
     // if too much backlog builds up, may be too expensive to loop through entire request array
-    function executeMarketOrders() external {
+    function executeMarketOrders() external onlyKeeper {
         // cache the order queue
         (bytes32[] memory orders,) = tradeStorage.getMarketOrderKeys();
         uint256 len = orders.length;
         // loop through => get Position => fulfill position at signed block price
         for (uint256 i = 0; i < len; ++i) {
             bytes32 _key = orders[i];
-            executeMarketOrder(_key);
+            _executeMarketOrder(_key);
         }
     }
 
     /// @dev Only Keeper
     function executeMarketOrder(bytes32 _key) public onlyKeeper {
+        _executeMarketOrder(_key);
+    }
+
+    function _executeMarketOrder(bytes32 _key) internal {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.marketOrderRequests(_key);
         require(_positionRequest.user != address(0), "Executor: Invalid Request Key");
@@ -122,7 +125,7 @@ contract Executor is RoleValidation {
         _updateFundingRate(_position.market);
         _updateBorrowingRate(_position.market, _positionRequest.isLong);
         _updateCumulativePricePerToken(_position.market, _signedBlockPrice, true, _positionRequest.isLong);
-        _updateMarketAllocations();
+
     }
 
     // no loop execution for limits => 1 by 1, track price on subgraph
@@ -154,25 +157,29 @@ contract Executor is RoleValidation {
             _updateFundingRate(_position.market);
             _updateBorrowingRate(_position.market, _positionRequest.isLong);
             _updateCumulativePricePerToken(_position.market, price, true, _positionRequest.isLong);
-            _updateMarketAllocations();
+
         } else {
             revert Executor_LimitNotHit();
         }
     }
 
-    function executeDecreaseOrders() external {
+    function executeDecreaseOrders() external onlyKeeper {
         // cache the order queue
         (, bytes32[] memory orders) = tradeStorage.getMarketOrderKeys();
         uint256 len = orders.length;
         // loop through => get Position => fulfill position at signed block price
         for (uint256 i = 0; i < len; ++i) {
             bytes32 _key = orders[i];
-            executeMarketDecrease(_key);
+            _executeMarketDecrease(_key);
         }
     }
 
     /// @dev Only Keeper
     function executeMarketDecrease(bytes32 _key) public onlyKeeper {
+        _executeMarketDecrease(_key);
+    }
+
+    function _executeMarketDecrease(bytes32 _key) internal {
         // get the request
         MarketStructs.PositionRequest memory _decreaseRequest = tradeStorage.marketDecreaseRequests(_key);
         require(_decreaseRequest.user != address(0), "Invalid decrease request");
@@ -201,7 +208,7 @@ contract Executor is RoleValidation {
         _updateFundingRate(_position.market);
         _updateBorrowingRate(_position.market, _decreaseRequest.isLong);
         _updateCumulativePricePerToken(_position.market, _signedBlockPrice, false, _position.isLong);
-        _updateMarketAllocations();
+
     }
 
     // used as a stop loss => how do we get trailing stop losses
@@ -240,7 +247,7 @@ contract Executor is RoleValidation {
             _updateFundingRate(_position.market);
             _updateBorrowingRate(_position.market, _decreaseRequest.isLong);
             _updateCumulativePricePerToken(_position.market, price, false, _decreaseRequest.isLong);
-            _updateMarketAllocations();
+
         } else {
             revert Executor_LimitNotHit();
         }

@@ -63,6 +63,21 @@ contract RoleValidation {
         _;
     }
 
+    modifier onlyStateUpdater() {
+        require(roleStorage.hasRole(Roles.STATE_UPDATER, msg.sender), "Sender must be state updater");
+        _;
+    }
+
+    modifier onlyStateKeeper() {
+        require(roleStorage.hasRole(Roles.STATE_KEEPER, msg.sender), "Sender must be state keeper");
+        _;
+    }
+
+    modifier onlyMarketStorage() {
+        require(roleStorage.hasRole(Roles.MARKET_STORAGE, msg.sender), "Sender must be market storage");
+        _;
+    }
+
     constructor(RoleStorage _roleStorage) {
         roleStorage = _roleStorage;
     }

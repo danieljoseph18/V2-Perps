@@ -28,4 +28,5 @@ interface IMarketStorage {
     function collatTokenShortOpenInterest(bytes32 _key) external view returns (uint256);
     function indexTokenLongOpenInterest(bytes32 _key) external view returns (uint256);
     function indexTokenShortOpenInterest(bytes32 _key) external view returns (uint256);
+    function updateMarketAllocation(bytes32 _marketKey) external;
 }

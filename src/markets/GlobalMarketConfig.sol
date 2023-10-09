@@ -68,4 +68,6 @@ contract GlobalMarketConfig is RoleValidation {
     function setTradingFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyModerator {
         tradeStorage.setFees(_liquidationFee, _tradingFee);
     }
+
+    // add function for setting row length
 }

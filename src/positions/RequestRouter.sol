@@ -173,7 +173,11 @@ contract RequestRouter {
         require(totalOI + _sizeDelta <= maxOI, "Position size too large");
     }
 
-    function _calculatePriceImpact(bytes32 _marketKey, MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease) internal view returns (int256) {
+    function _calculatePriceImpact(
+        bytes32 _marketKey,
+        MarketStructs.PositionRequest memory _positionRequest,
+        bool _isIncrease
+    ) internal view returns (int256) {
         address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
         return IMarket(market).getPriceImpact(_positionRequest, _isIncrease);
     }
