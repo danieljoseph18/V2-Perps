@@ -13,7 +13,6 @@ contract TradeStorage is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Position;
     using MarketStructs for MarketStructs.PositionRequest;
-    using MarketStructs for MarketStructs.DecreasePositionRequest;
     // positions need info like market address, entry price, entry time etc.
     // funding should be snapshotted on position open to calc funding fee
     // blocks should be used to settle trades at the price at that block
@@ -32,13 +31,6 @@ contract TradeStorage is RoleValidation {
     bytes32[] public marketOrderKeys;
     mapping(bytes32 => MarketStructs.PositionRequest) public limitOrderRequests;
     bytes32[] public limitOrderKeys;
-    mapping(bytes32 => MarketStructs.PositionRequest) public swapOrderRequests;
-    bytes32[] public swapOrderKeys;
-
-    mapping(bytes32 => MarketStructs.DecreasePositionRequest) public marketDecreaseRequests;
-    bytes32[] public marketDecreaseKeys;
-    mapping(bytes32 => MarketStructs.DecreasePositionRequest) public limitDecreaseRequests;
-    bytes32[] public limitDecreaseKeys;
 
     // Track open positions
     mapping(bytes32 _positionKey => MarketStructs.Position) public openPositions;
@@ -49,21 +41,21 @@ contract TradeStorage is RoleValidation {
     mapping(address _user => uint256 _rewards) public accumulatedRewards;
 
     IMarketStorage public marketStorage;
-    uint256 public liquidationFeeUsd; // 5 = 5 USD
-    uint256 public tradingFee; // 100 = 0.1%
+    uint256 public liquidationFeeUsd; // 5 = 5 USD UPDATE PRECISION
+    uint256 public tradingFee; // 100 = 0.1% UPDATE PRECISION
     uint256 public minExecutionFee = 0.001 ether;
 
     ILiquidityVault public liquidityVault;
 
-    uint256 public constant MIN_LEVERAGE = 1;
-    uint256 public constant MAX_LEVERAGE = 50;
+    uint256 public constant MIN_LEVERAGE = 1; // update precision
+    uint256 public constant MAX_LEVERAGE = 50; // update precision
     uint256 public constant MAX_LIQUIDATION_FEE = 100; // 100 USD max
 
     constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
         marketStorage = _marketStorage;
         liquidityVault = _liquidityVault;
-        liquidationFeeUsd = 5;
-        tradingFee = 100;
+        liquidationFeeUsd = 5; // update precision
+        tradingFee = 100; // update precision
     }
 
     ///////////////////////
@@ -74,7 +66,7 @@ contract TradeStorage is RoleValidation {
     // never allow calls directly from contract
     function createMarketOrderRequest(MarketStructs.PositionRequest memory _positionRequest) external onlyRouter {
         bytes32 _key =
-            keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
+            keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong, _positionRequest.isIncrease));
         require(marketOrderRequests[_key].user == address(0), "Position already exists");
         marketOrderRequests[_key] = _positionRequest;
         marketOrderKeys.push(_key);
@@ -83,32 +75,32 @@ contract TradeStorage is RoleValidation {
     // Never allow calls directly from contract
     function createLimitOrderRequest(MarketStructs.PositionRequest memory _positionRequest) external onlyRouter {
         bytes32 _key =
-            keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
+            keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong, _positionRequest.isIncrease));
         require(limitOrderRequests[_key].user == address(0), "Position already exists");
         limitOrderRequests[_key] = _positionRequest;
         limitOrderKeys.push(_key);
     }
 
-    function createMarketDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest)
+    function createMarketDecreaseRequest(MarketStructs.PositionRequest memory _decreaseRequest)
         external
         onlyRouter
     {
         bytes32 _key =
-            keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
-        require(marketDecreaseRequests[_key].user == address(0), "Position already exists");
-        marketDecreaseRequests[_key] = _decreaseRequest;
-        marketDecreaseKeys.push(_key);
+            keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong, _decreaseRequest.isIncrease));
+        require(marketOrderRequests[_key].user == address(0), "Position already exists");
+        marketOrderRequests[_key] = _decreaseRequest;
+        marketOrderKeys.push(_key);
     }
 
-    function createLimitDecreaseRequest(MarketStructs.DecreasePositionRequest memory _decreaseRequest)
+    function createLimitDecreaseRequest(MarketStructs.PositionRequest memory _decreaseRequest)
         external
         onlyRouter
     {
         bytes32 _key =
-            keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
-        require(limitDecreaseRequests[_key].user == address(0), "Position already exists");
-        limitDecreaseRequests[_key] = _decreaseRequest;
-        limitDecreaseKeys.push(_key);
+            keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong, _decreaseRequest.isIncrease));
+        require(limitOrderRequests[_key].user == address(0), "Position already exists");
+        limitOrderRequests[_key] = _decreaseRequest;
+        limitOrderKeys.push(_key);
     }
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external onlyRouter {
@@ -135,11 +127,14 @@ contract TradeStorage is RoleValidation {
     function executeTrade(
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _signedBlockPrice,
-        address _executor
+        address _executor,
+        int256 _priceImpact
     ) external onlyExecutor returns (MarketStructs.Position memory) {
         uint8 requestType = uint8(_positionRequest.requestType);
         bytes32 key =
-            keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
+            keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong, _positionRequest.isIncrease));
+
+        uint256 price = _applyPriceImpact(_signedBlockPrice, _priceImpact, _positionRequest.isLong);
 
         // if type = 0 => collateral edit => only for collateral increase
         if (requestType == 0) {
@@ -152,8 +147,8 @@ contract TradeStorage is RoleValidation {
                 // require current price >= limit price for shorts, <= limit price for longs
                 require(
                     _positionRequest.isLong
-                        ? _signedBlockPrice <= _positionRequest.acceptablePrice
-                        : _signedBlockPrice >= _positionRequest.acceptablePrice,
+                        ? price <= _positionRequest.acceptablePrice
+                        : price >= _positionRequest.acceptablePrice,
                     "Limit price not met"
                 );
             }
@@ -167,7 +162,7 @@ contract TradeStorage is RoleValidation {
             );
             // edit the positions collateral and average entry price
             openPositions[key].collateralAmount += _positionRequest.collateralDelta;
-            openPositions[key].averagePricePerToken += (openPositions[key].averagePricePerToken + _signedBlockPrice) / 2;
+            openPositions[key].averagePricePerToken += (openPositions[key].averagePricePerToken + price) / 2;
         } else if (requestType == 1) {
             // check the position exists
             require(openPositions[key].user != address(0), "Position does not exist");
@@ -178,8 +173,8 @@ contract TradeStorage is RoleValidation {
                 // require current price >= limit price for shorts, <= limit price for longs
                 require(
                     _positionRequest.isLong
-                        ? _signedBlockPrice <= _positionRequest.acceptablePrice
-                        : _signedBlockPrice >= _positionRequest.acceptablePrice,
+                        ? price <= _positionRequest.acceptablePrice
+                        : price >= _positionRequest.acceptablePrice,
                     "Limit price not met"
                 );
             }
@@ -193,7 +188,7 @@ contract TradeStorage is RoleValidation {
             );
             // edit the positions size and average entry price
             openPositions[key].positionSize += _positionRequest.sizeDelta;
-            openPositions[key].averagePricePerToken = (openPositions[key].averagePricePerToken + _signedBlockPrice) / 2;
+            openPositions[key].averagePricePerToken = (openPositions[key].averagePricePerToken + price) / 2;
         } else {
             // regular increase, or new position request
             // check the request is valid
@@ -201,8 +196,8 @@ contract TradeStorage is RoleValidation {
                 // require current price >= limit price for shorts, <= limit price for longs
                 require(
                     _positionRequest.isLong
-                        ? _signedBlockPrice <= _positionRequest.acceptablePrice
-                        : _signedBlockPrice >= _positionRequest.acceptablePrice,
+                        ? price <= _positionRequest.acceptablePrice
+                        : price >= _positionRequest.acceptablePrice,
                     "Limit price not met"
                 );
             }
@@ -219,7 +214,7 @@ contract TradeStorage is RoleValidation {
                 openPositions[key].collateralAmount += _positionRequest.collateralDelta;
                 openPositions[key].positionSize += sizeDelta;
                 openPositions[key].averagePricePerToken =
-                    (openPositions[key].averagePricePerToken + _signedBlockPrice) / 2;
+                    (openPositions[key].averagePricePerToken + price) / 2;
             } else {
                 // create a new position
                 // calculate all input variables
@@ -247,7 +242,7 @@ contract TradeStorage is RoleValidation {
                     longBorrowFee,
                     shortBorrowFee,
                     block.timestamp,
-                    _signedBlockPrice
+                    price
                 );
                 openPositions[key] = _position;
                 _positionRequest.isLong ? openLongPositionKeys[market].push(key) : openShortPositionKeys[market].push(key);
@@ -267,14 +262,17 @@ contract TradeStorage is RoleValidation {
     // SHOULD NEVER BE CALLABLE EXCEPT FROM EXECUTOR CONTRACT
     // DEFINITELY NEED A LOT MORE SECURITY CHECKS
     function executeDecreaseRequest(
-        MarketStructs.DecreasePositionRequest memory _decreaseRequest,
+        MarketStructs.PositionRequest memory _decreaseRequest,
         uint256 _signedBlockPrice,
-        address _executor
+        address _executor,
+        int256 _priceImpact
     ) external onlyExecutor {
         uint8 requestType = uint8(_decreaseRequest.requestType);
         // Obtain the key for the position mapping based on the decrease request details
         bytes32 key =
-            keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
+            keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong, _decreaseRequest.isIncrease));
+
+        uint256 price = _applyPriceImpact(_signedBlockPrice, _priceImpact, _decreaseRequest.isLong);
 
         // position must exist for all types
         require(openPositions[key].user != address(0), "Position does not exist");
@@ -326,7 +324,7 @@ contract TradeStorage is RoleValidation {
 
             // only realise a percentage equivalent to the percentage of the position being closed
             int256 valueDelta =
-                int256(sizeDelta * _position.averagePricePerToken) - int256(sizeDelta * _signedBlockPrice);
+                int256(sizeDelta * _position.averagePricePerToken) - int256(sizeDelta * price);
             // if long, > 0 is profit, < 0 is loss
             // if short, > 0 is loss, < 0 is profit
             int256 pnl;
@@ -399,14 +397,14 @@ contract TradeStorage is RoleValidation {
         } else {
             if (!_isLimit) {
                 // if market decrease
-                delete marketDecreaseRequests[_key];
-                marketDecreaseKeys[_requestIndex] = marketDecreaseKeys[marketDecreaseKeys.length - 1];
-                marketDecreaseKeys.pop();
+                delete marketOrderRequests[_key];
+                marketOrderKeys[_requestIndex] = marketOrderKeys[marketOrderKeys.length - 1];
+                marketOrderKeys.pop();
             } else {
                 // if limit decrease
-                delete limitDecreaseRequests[_key];
-                limitDecreaseKeys[_requestIndex] = limitDecreaseKeys[limitDecreaseKeys.length - 1];
-                limitDecreaseKeys.pop();
+                delete limitOrderRequests[_key];
+                limitOrderKeys[_requestIndex] = limitOrderKeys[limitOrderKeys.length - 1];
+                limitOrderKeys.pop();
             }
         }
     }
@@ -480,16 +478,39 @@ contract TradeStorage is RoleValidation {
     }
 
     function getMarketOrderKeys() external view returns (bytes32[] memory, bytes32[] memory) {
-        return (marketOrderKeys, marketDecreaseKeys);
+        return (marketOrderKeys, marketOrderKeys);
     }
 
-    function getRequestQueueLengths() public view returns (uint256, uint256, uint256, uint256, uint256) {
+    function getRequestQueueLengths() public view returns (uint256, uint256, uint256, uint256) {
         return (
             marketOrderKeys.length,
             limitOrderKeys.length,
-            swapOrderKeys.length,
-            marketDecreaseKeys.length,
-            limitDecreaseKeys.length
+            marketOrderKeys.length,
+            limitOrderKeys.length
         );
     }
+
+    //////////////////
+    // PRICE IMPACT //
+    //////////////////
+
+    function _applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpact, bool _isLong) internal pure returns (uint256) {
+        // Scaling factor; for example, 10^4 to handle four decimal places
+        uint256 scaleFactor = 10**4;
+
+        // Convert priceImpact to scaled integer (e.g., 0.1% becomes 10 when scaleFactor is 10^4)
+        uint256 scaledImpact = uint256(_priceImpact >= 0 ? _priceImpact : -_priceImpact) * scaleFactor / 100;
+
+        // Calculate the price change due to impact, then scale down
+        uint256 priceDelta = (_signedBlockPrice * scaledImpact) / scaleFactor;
+
+        // Apply the price impact
+        if ((_priceImpact >= 0 && !_isLong) || (_priceImpact < 0 && _isLong)) {
+            return _signedBlockPrice + priceDelta;
+        } else {
+            return _signedBlockPrice - priceDelta;  // Ensure non-negative
+        }
+    }
+
+
 }

@@ -174,7 +174,7 @@ contract Executor is RoleValidation {
     /// @dev Only Keeper
     function executeMarketDecrease(bytes32 _key) public onlyKeeper {
         // get the request
-        MarketStructs.DecreasePositionRequest memory _decreaseRequest = tradeStorage.marketDecreaseRequests(_key);
+        MarketStructs.PositionRequest memory _decreaseRequest = tradeStorage.marketDecreaseRequests(_key);
         require(_decreaseRequest.user != address(0), "Invalid decrease request");
         // get the market and block to get the signed block price
         address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(
@@ -209,7 +209,7 @@ contract Executor is RoleValidation {
     /// @dev Only Keeper
     function executeLimitDecrease(bytes32 _key) external onlyKeeper {
         // get the request
-        MarketStructs.DecreasePositionRequest memory _decreaseRequest = tradeStorage.limitDecreaseRequests(_key);
+        MarketStructs.PositionRequest memory _decreaseRequest = tradeStorage.limitDecreaseRequests(_key);
         require(_decreaseRequest.user != address(0), "Invalid decrease request");
         // get the current price
         uint256 price = IPriceOracle(priceOracle).getPrice(_decreaseRequest.indexToken);

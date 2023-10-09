@@ -20,6 +20,7 @@ contract Market is RoleValidation {
     uint256 public constant MAX_FUNDING_INTERVAL = 24 hours;
     uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 == 100%
     uint256 public constant FLOAT_PRECISION = 1e30;
+    uint256 public constant MAX_PRICE_IMPACT = 33e10; // 33%
 
     // represents a market
     // allows users to trade in and out
@@ -370,6 +371,8 @@ contract Market is RoleValidation {
 
         // Calculate the price impact
         int256 priceImpact = int256((skewBefore ** priceImpactExponent) * priceImpactFactor) - int256((skewAfter ** priceImpactExponent) * priceImpactFactor);
+
+        if (priceImpact > MAX_PRICE_IMPACT) priceImpact = MAX_PRICE_IMPACT;
 
         // Calculate the price impact as a percentage of the position size
         int256 priceImpactPercentage = (priceImpact * 100 * int256(PERCENTAGE_PRECISION)) / int256(sizeDeltaUSD);

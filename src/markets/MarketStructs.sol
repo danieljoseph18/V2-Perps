@@ -25,21 +25,9 @@ library MarketStructs {
         RequestType requestType;
         uint256 requestBlock;
         uint256 acceptablePrice;
+        int256 priceImpact;
         bool isLong;
-    }
-
-    struct DecreasePositionRequest {
-        uint256 requestIndex;
-        address user;
-        address indexToken;
-        address collateralToken;
-        uint256 collateralDelta; // size delta = collateral delta * position leverage
-        uint256 sizeDelta; // collateral delta = size delta / position leverage
-        RequestType requestType;
-        uint256 requestBlock;
-        uint256 acceptablePrice;
-        bool isLong;
-        bool isMarketOrder;
+        bool isIncrease; // increase or decrease position
     }
 
     struct Position {

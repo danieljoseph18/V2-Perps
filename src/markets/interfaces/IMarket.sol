@@ -23,7 +23,7 @@ interface IMarket {
     function calculateBorrowingFees(bool _isLong) external view returns (uint256);
     function getPnL(MarketStructs.Position memory _position) external view returns (int256);
     function getNetPnL(bool _isLong) external view returns (int256);
-    function getPriceImpact(MarketStructs.Position memory _position) external view returns (uint256);
+    function getPriceImpact(MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease) external view returns (int256);
     function addLiquidity(uint256 _amount, address _tokenIn) external;
     function removeLiquidity(uint256 _marketTokenAmount, address _tokenOut) external;
     function addLiquidityForAccount(address _account, uint256 _amount, address _tokenIn) external;
