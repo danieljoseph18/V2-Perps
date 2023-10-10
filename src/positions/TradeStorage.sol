@@ -87,9 +87,7 @@ contract TradeStorage is RoleValidation {
         bytes32 key = _generateKey(_executionParams.positionRequest);
 
         uint256 price = _applyPriceImpact(
-            _executionParams.signedBlockPrice,
-            _executionParams.positionRequest.priceImpact,
-            _executionParams.positionRequest.isLong
+            _executionParams.signedBlockPrice, _executionParams.positionRequest.priceImpact, _executionParams.positionRequest.isLong
         );
         bool isIncrease = _executionParams.positionRequest.isIncrease;
         // if type = 0 => collateral edit => only for collateral increase
@@ -203,61 +201,57 @@ contract TradeStorage is RoleValidation {
         uint256 _price,
         bytes32 _key
     ) internal {
-        // // regular increase, or new position request
-        // // check the request is valid
-        // if (_positionRequest.isLimit) {
-        //     // require current price >= limit price for shorts, <= limit price for longs
-        //     require(
-        //         _positionRequest.isLong
-        //             ? _price <= _positionRequest.acceptablePrice
-        //             : _price >= _positionRequest.acceptablePrice,
-        //         "Limit price not met"
-        //     );
-        // }
-        // // if position exists, edit existing position
-        // _deletePositionRequest(_key, _positionRequest.requestIndex, _positionRequest.isLimit);
-        // if (openPositions[_key].user != address(0)) {
-        //     // if exists, leverage must remain constant
-        //     // calculate the size delta from the collateral delta
-        //     // size / current collateral = leverage, +1 collateral = (+1 x leverage) size
-        //     uint256 leverage = openPositions[_key].positionSize / openPositions[_key].collateralAmount;
-        //     uint256 sizeDelta = _positionRequest.collateralDelta * leverage;
+        // regular increase, or new position request
+        // check the request is valid
+        if (_positionRequest.isLimit) {
+            // require current price >= limit price for shorts, <= limit price for longs
+            require(
+                _positionRequest.isLong
+                    ? _price <= _positionRequest.acceptablePrice
+                    : _price >= _positionRequest.acceptablePrice,
+                "Limit price not met"
+            );
+        }
+        // if position exists, edit existing position
+        _deletePositionRequest(_key, _positionRequest.requestIndex, _positionRequest.isLimit);
+        if (openPositions[_key].user != address(0)) {
+            // if exists, leverage must remain constant
+            // calculate the size delta from the collateral delta
+            // size / current collateral = leverage, +1 collateral = (+1 x leverage) size
+            uint256 leverage = openPositions[_key].positionSize / openPositions[_key].collateralAmount;
+            uint256 sizeDelta = _positionRequest.collateralDelta * leverage;
 
-        //     // add on to the position
-        //     openPositions[_key].collateralAmount += _positionRequest.collateralDelta;
-        //     openPositions[_key].positionSize += sizeDelta;
-        //     openPositions[_key].averagePricePerToken = (openPositions[_key].averagePricePerToken + _price) / 2;
-        // } else {
-        //     // create a new position
-        //     // calculate all input variables
-        //     bytes32 market = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken));
-        //     address marketAddress = IMarketStorage(marketStorage).getMarket(market).market;
-        //     (uint256 longFunding, uint256 shortFunding, uint256 longBorrowFee, uint256 shortBorrowFee) =
-        //         IMarket(marketAddress).getMarketParameters();
-        //     uint256 positionIndex = openPositionKeys[market][_positionRequest.isLong].length - 1;
-        //     // make sure all Position and PositionRequest instantiations are in the correct order.
-        //     openPositions[_key] = MarketStructs.Position({
-        //         index: positionIndex,
-        //         market: market,
-        //         indexToken: _positionRequest.indexToken,
-        //         collateralToken: _positionRequest.collateralToken,
-        //         user: _positionRequest.user,
-        //         collateralAmount: _positionRequest.collateralDelta,
-        //         positionSize: _positionRequest.sizeDelta,
-        //         isLong: _positionRequest.isLong,
-        //         realisedPnl: 0,
-        //         fundingFees: 0,
-        //         entryLongCumulativeFunding: longFunding,
-        //         entryShortCumulativeFunding: shortFunding,
-        //         entryLongCumulativeBorrowFee: longBorrowFee,
-        //         entryShortCumulativeBorrowFee: shortBorrowFee,
-        //         entryTime: block.timestamp,
-        //         averagePricePerToken: _price
-        //     });
-        //     _positionRequest.isLong
-        //         ? openPositionKeys[market][true].push(_key)
-        //         : openPositionKeys[market][false].push(_key);
-        // }
+            // add on to the position
+            openPositions[_key].collateralAmount += _positionRequest.collateralDelta;
+            openPositions[_key].positionSize += sizeDelta;
+            openPositions[_key].averagePricePerToken = (openPositions[_key].averagePricePerToken + _price) / 2;
+        } else {
+            // create a new position
+            // calculate all input variables
+            bytes32 market = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken));
+            address marketAddress = IMarketStorage(marketStorage).getMarket(market).market;
+            (uint256 longFunding, uint256 shortFunding, uint256 longBorrowFee, uint256 shortBorrowFee) =
+                IMarket(marketAddress).getMarketParameters();
+            uint256 positionIndex = openPositionKeys[market][_positionRequest.isLong].length - 1;
+            // make sure all Position and PositionRequest instantiations are in the correct order.
+            openPositions[_key] = MarketStructs.Position({
+                index: positionIndex,
+                market: market,
+                indexToken: _positionRequest.indexToken,
+                collateralToken: _positionRequest.collateralToken,
+                user: _positionRequest.user,
+                collateralAmount: _positionRequest.collateralDelta,
+                positionSize: _positionRequest.sizeDelta,
+                isLong: _positionRequest.isLong,
+                realisedPnl: 0,
+                fundingFees: 0,
+                entryParams: MarketStructs.EntryParams(longFunding, shortFunding, longBorrowFee, shortBorrowFee, block.timestamp),
+                averagePricePerToken: _price
+            });
+            _positionRequest.isLong
+                ? openPositionKeys[market][true].push(_key)
+                : openPositionKeys[market][false].push(_key);
+        }
     }
 
     // SHOULD NEVER BE CALLABLE EXCEPT FROM EXECUTOR
@@ -266,62 +260,62 @@ contract TradeStorage is RoleValidation {
         uint256 _price,
         bytes32 _key
     ) internal {
-        // if (_positionRequest.isLimit) {
-        //     // require current price >= limit price for shorts, <= limit price for longs
-        //     require(
-        //         _positionRequest.isLong
-        //             ? _price <= _positionRequest.acceptablePrice
-        //             : _price >= _positionRequest.acceptablePrice,
-        //         "Limit price not met"
-        //     );
-        // }
-        // // decrease or close position
-        // _deletePositionRequest(_key, _positionRequest.requestIndex, _positionRequest.isLimit);
-        // // is it a full close or partial?
-        // // if full close, delete the position, transfer all of the collateral +- PNL
-        // // if partial close, calculate size delta from the collateral delta and decrease the position
-        // MarketStructs.Position storage _position = openPositions[_key];
-        // uint256 leverage = _position.positionSize / _position.collateralAmount;
+        if (_positionRequest.isLimit) {
+            // require current price >= limit price for shorts, <= limit price for longs
+            require(
+                _positionRequest.isLong
+                    ? _price <= _positionRequest.acceptablePrice
+                    : _price >= _positionRequest.acceptablePrice,
+                "Limit price not met"
+            );
+        }
+        // decrease or close position
+        _deletePositionRequest(_key, _positionRequest.requestIndex, _positionRequest.isLimit);
+        // is it a full close or partial?
+        // if full close, delete the position, transfer all of the collateral +- PNL
+        // if partial close, calculate size delta from the collateral delta and decrease the position
+        MarketStructs.Position storage _position = openPositions[_key];
+        uint256 leverage = _position.positionSize / _position.collateralAmount;
 
-        // //process the fees for the decrease and return after fee amount
-        // uint256 afterFeeAmount = processFees(openPositions[_key], _positionRequest.collateralDelta);
+        //process the fees for the decrease and return after fee amount
+        uint256 afterFeeAmount = processFees(openPositions[_key], _positionRequest.collateralDelta);
 
-        // uint256 sizeDelta = afterFeeAmount * leverage;
+        uint256 sizeDelta = afterFeeAmount * leverage;
 
-        // // only realise a percentage equivalent to the percentage of the position being closed
-        // int256 valueDelta = int256(sizeDelta * _position.averagePricePerToken) - int256(sizeDelta * _price);
-        // // if long, > 0 is profit, < 0 is loss
-        // // if short, > 0 is loss, < 0 is profit
-        // int256 pnl;
-        // // if profit, add to realised pnl
-        // if (valueDelta >= 0) {
-        //     _position.isLong ? pnl += valueDelta : pnl -= valueDelta;
-        // } else {
-        //     // subtract from realised pnl
-        //     _position.isLong ? pnl -= valueDelta : pnl += valueDelta;
-        // }
+        // only realise a percentage equivalent to the percentage of the position being closed
+        int256 valueDelta = int256(sizeDelta * _position.averagePricePerToken) - int256(sizeDelta * _price);
+        // if long, > 0 is profit, < 0 is loss
+        // if short, > 0 is loss, < 0 is profit
+        int256 pnl;
+        // if profit, add to realised pnl
+        if (valueDelta >= 0) {
+            _position.isLong ? pnl += valueDelta : pnl -= valueDelta;
+        } else {
+            // subtract from realised pnl
+            _position.isLong ? pnl -= valueDelta : pnl += valueDelta;
+        }
 
-        // _position.realisedPnl += pnl;
+        _position.realisedPnl += pnl;
 
-        // _position.collateralAmount -= afterFeeAmount;
-        // _position.positionSize -= sizeDelta;
+        _position.collateralAmount -= afterFeeAmount;
+        _position.positionSize -= sizeDelta;
 
-        // // validate the decrease => if removing collat, lev must remain below threshold
-        // // add the size and collat deltas together
-        // // transfer that amount
-        // _transferOutTokens(
-        //     _positionRequest.collateralToken, _positionRequest.user, _positionRequest.collateralDelta, pnl
-        // );
+        // validate the decrease => if removing collat, lev must remain below threshold
+        // add the size and collat deltas together
+        // transfer that amount
+        _transferOutTokens(
+            _positionRequest.collateralToken, _positionRequest.user, _positionRequest.collateralDelta, pnl
+        );
 
-        // if (_position.positionSize == 0) {
-        //     delete openPositions[_key];
-        //     uint256 index = openPositions[_key].index;
-        //     if (_position.isLong) {
-        //         delete openPositionKeys[_position.market][true][index];
-        //     } else {
-        //         delete openPositionKeys[_position.market][false][index];
-        //     }
-        // }
+        if (_position.positionSize == 0) {
+            delete openPositions[_key];
+            uint256 index = openPositions[_key].index;
+            if (_position.isLong) {
+                delete openPositionKeys[_position.market][true][index];
+            } else {
+                delete openPositionKeys[_position.market][false][index];
+            }
+        }
     }
 
     // only callable from liquidator contract
