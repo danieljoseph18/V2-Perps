@@ -8,11 +8,14 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 contract TradeStorage is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Position;
     using MarketStructs for MarketStructs.PositionRequest;
+    using SafeCast for uint256;
+    using SafeCast for int256;
 
     mapping(bool _isLimit => mapping(bytes32 _orderKey => MarketStructs.PositionRequest)) public orders;
     mapping(bool _isLimit => bytes32[] _orderKeys) public orderKeys;
@@ -254,7 +257,6 @@ contract TradeStorage is RoleValidation {
         }
     }
 
-    // SHOULD NEVER BE CALLABLE EXCEPT FROM EXECUTOR
     function _executeDecreasePosition(
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _price,
@@ -283,7 +285,7 @@ contract TradeStorage is RoleValidation {
         uint256 sizeDelta = afterFeeAmount * leverage;
 
         // only realise a percentage equivalent to the percentage of the position being closed
-        int256 valueDelta = int256(sizeDelta * _position.averagePricePerToken) - int256(sizeDelta * _price);
+        int256 valueDelta = (sizeDelta * _position.averagePricePerToken).toInt256() - (sizeDelta * _price).toInt256();
         // if long, > 0 is profit, < 0 is loss
         // if short, > 0 is loss, < 0 is profit
         int256 pnl;
@@ -325,7 +327,7 @@ contract TradeStorage is RoleValidation {
         // get the position fees
         (uint256 borrowFee, int256 fundingFees,) = getPositionFees(openPositions[_positionKey]);
         uint256 feesOwed = borrowFee;
-        fundingFees >= 0 ? feesOwed += uint256(fundingFees) : feesOwed -= uint256(-fundingFees);
+        fundingFees >= 0 ? feesOwed += fundingFees.toUint256() : feesOwed -= (-fundingFees).toUint256();
         // delete the position from storage
         delete openPositions[_positionKey];
         // transfer the liquidation fee to the liquidator
@@ -379,7 +381,7 @@ contract TradeStorage is RoleValidation {
     function _transferOutTokens(address _token, address _to, uint256 _collateralDelta, int256 _pnl) internal {
         // profit = size now - initial size => initial size is not their
         uint256 amount = _collateralDelta;
-        _pnl >= 0 ? amount += uint256(_pnl) : amount -= uint256(-_pnl);
+        _pnl >= 0 ? amount += _pnl.toUint256() : amount -= (-_pnl).toUint256();
         // NEED TO ALSO GET PNL FROM LIQUIDITY VAULT TO COVER THIS
         IERC20(_token).safeTransferFrom(address(this), _to, amount);
     }
@@ -396,11 +398,11 @@ contract TradeStorage is RoleValidation {
     {
         (uint256 borrowFee, int256 fundingFees,) = getPositionFees(_position);
         // subtract the fees from the collateral delta
-        int256 percentageFeesOwed = int256(borrowFee) + fundingFees; // 100 = 0.1% => 100,000 = 100%
+        int256 percentageFeesOwed = borrowFee.toInt256() + fundingFees; // 100 = 0.1% => 100,000 = 100%
 
         if (percentageFeesOwed > 0) {
             // subtract the percentage of the position collateral delta
-            uint256 fees = uint256(percentageFeesOwed) * _collateralDelta / 100000; // divide by precision
+            uint256 fees = percentageFeesOwed.toUint256() * _collateralDelta / 100000; // divide by precision
             // give fees to liquidity vault
             accumulatedRewards[address(liquidityVault)] += fees;
             // return size + fees
@@ -408,7 +410,7 @@ contract TradeStorage is RoleValidation {
         } else if (percentageFeesOwed < 0) {
             // user is owed fees
             // add fee to mapping in liquidity vault
-            uint256 fees = uint256(-percentageFeesOwed) * _collateralDelta / 100000; // divide by precision
+            uint256 fees = (-percentageFeesOwed).toUint256() * _collateralDelta / 100000; // divide by precision
             liquidityVault.accumulateFundingFees(fees, _position.user);
             _afterFeeAmount = _collateralDelta;
         } else {
@@ -459,7 +461,7 @@ contract TradeStorage is RoleValidation {
         uint256 scaleFactor = 10 ** 4;
 
         // Convert priceImpact to scaled integer (e.g., 0.1% becomes 10 when scaleFactor is 10^4)
-        uint256 scaledImpact = uint256(_priceImpact >= 0 ? _priceImpact : -_priceImpact) * scaleFactor / 100;
+        uint256 scaledImpact = (_priceImpact >= 0 ? _priceImpact : -_priceImpact).toUint256() * scaleFactor / 100;
 
         // Calculate the price change due to impact, then scale down
         uint256 priceDelta = (_signedBlockPrice * scaledImpact) / scaleFactor;

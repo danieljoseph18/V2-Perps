@@ -9,6 +9,7 @@ import {MarketStructs} from "./MarketStructs.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://blog.synthetix.io/synthetix-perps-dynamic-funding-rates/)
 /// NEED TO EXTRAPOLATE OUT DECIMAL PRECISION INTO 1 VAR
@@ -16,6 +17,8 @@ contract Market is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
+    using SafeCast for uint256;
+    using SafeCast for int256;
 
     uint256 public constant MAX_FUNDING_INTERVAL = 24 hours;
     uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 == 100%
@@ -189,16 +192,16 @@ contract Market is RoleValidation {
 
         if (longOI > shortOI) {
             // if funding rate will be > 5%, set it to 5%
-            fundingRate + int256(deltaRate) > int256(maxFundingRate)
-                ? fundingRate = int256(maxFundingRate)
-                : fundingRate += int256(deltaRate);
-            longCumulativeFundingRate += uint256(fundingRate);
+            fundingRate + deltaRate.toInt256() > maxFundingRate.toInt256()
+                ? fundingRate = maxFundingRate.toInt256()
+                : fundingRate += deltaRate.toInt256();
+            longCumulativeFundingRate += fundingRate.toUint256();
         } else if (shortOI > longOI) {
             // if funding rate will be < -5%, set it to -5%
-            fundingRate - int256(deltaRate) < -int256(maxFundingRate)
-                ? fundingRate = -int256(maxFundingRate)
-                : fundingRate -= int256(deltaRate);
-            shortCumulativeFundingRate += uint256(fundingRate);
+            fundingRate - deltaRate.toInt256() < (maxFundingRate.toInt256() * -1)
+                ? fundingRate = (maxFundingRate.toInt256() * -1)
+                : fundingRate -= (deltaRate.toInt256() * -1);
+            shortCumulativeFundingRate += fundingRate.toUint256();
         }
 
         lastFundingUpdateTime = block.timestamp;
@@ -209,9 +212,9 @@ contract Market is RoleValidation {
         // scaled by 1e10
         // c = 0.3% = 3e9
         if (_skew < 0) {
-            return c * uint256(-_skew);
+            return c * (-_skew).toUint256();
         }
-        return c * uint256(_skew); // 4.5e7 == 0.045%
+        return c * _skew.toUint256(); // 4.5e7 == 0.045%
     }
 
     // returns percentage of position size that is paid as funding fees
@@ -233,16 +236,16 @@ contract Market is RoleValidation {
 
         // subtract current funding rate
         // need to account for fact current funding Rate can be positive
-        uint256 longFeesOwed = (longAccumulatedFunding - uint256(fundingRate))
-            + ((timeSinceUpdate / fundingInterval) * uint256(fundingRate));
-        uint256 shortFeesOwed = (shortAccumulatedFunding - uint256(fundingRate))
-            + ((timeSinceUpdate / fundingInterval) * uint256(fundingRate));
+        uint256 longFeesOwed = (longAccumulatedFunding - fundingRate.toUint256())
+            + ((timeSinceUpdate / fundingInterval) * fundingRate.toUint256());
+        uint256 shortFeesOwed = (shortAccumulatedFunding - fundingRate.toUint256())
+            + ((timeSinceUpdate / fundingInterval) * fundingRate.toUint256());
 
         // +ve value = fees owed, -ve value = fees earned
         // IMPORTANT: De-scale the return value by PRICE PRECISION
         return _position.isLong
-            ? (int256(longFeesOwed) - int256(shortFeesOwed)) / int256(PERCENTAGE_PRECISION) // Will descale underflow?
-            : (int256(shortFeesOwed) - int256(longFeesOwed)) / int256(PERCENTAGE_PRECISION);
+            ? (longFeesOwed.toInt256()) - (shortFeesOwed.toInt256()) / PERCENTAGE_PRECISION.toInt256() // Will descale underflow?
+            : (shortFeesOwed.toInt256()) - (longFeesOwed.toInt256()) / PERCENTAGE_PRECISION.toInt256();
     }
 
     function getFundingFees(MarketStructs.Position memory _position) external view returns (int256) {
@@ -274,8 +277,8 @@ contract Market is RoleValidation {
 
         uint256 borrowingRate = _isLong ? longBorrowingRate : shortBorrowingRate;
 
-        int256 feeBase = _isLong ? int256(openInterest) + pendingPnL : int256(openInterest);
-        uint256 fee = borrowingFactor * (uint256(feeBase) ** borrowingExponent) / poolBalance; // underflow?
+        int256 feeBase = _isLong ? openInterest.toInt256() + pendingPnL : openInterest.toInt256();
+        uint256 fee = borrowingFactor * (feeBase.toUint256() ** borrowingExponent) / poolBalance; // underflow?
 
         // update cumulative fees with current borrowing rate
         if (_isLong) {
@@ -308,7 +311,7 @@ contract Market is RoleValidation {
         uint256 positionValue = _position.positionSize * getPrice(indexToken);
         uint256 entryValue = _position.positionSize * _position.averagePricePerToken;
         return
-            _position.isLong ? int256(entryValue) - int256(positionValue) : int256(positionValue) - int256(entryValue);
+            _position.isLong ? entryValue.toInt256() - positionValue.toInt256() : positionValue.toInt256() - entryValue.toInt256();
     }
 
     function getPnL(MarketStructs.Position memory _position) public view returns (int256) {
@@ -324,7 +327,7 @@ contract Market is RoleValidation {
         uint256 indexValue = getIndexOpenInterestUSD(_isLong);
         uint256 entryValue = _getTotalEntryValue(_isLong);
 
-        return _isLong ? int256(indexValue) - int256(entryValue) : int256(entryValue) - int256(indexValue);
+        return _isLong ? indexValue.toInt256() - entryValue.toInt256() : entryValue.toInt256() - indexValue.toInt256();
     }
 
     // check this is updated correctly in the executor
@@ -375,13 +378,13 @@ contract Market is RoleValidation {
         uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
         // Calculate the price impact
-        int256 priceImpact = int256((skewBefore ** priceImpactExponent) * priceImpactFactor)
-            - int256((skewAfter ** priceImpactExponent) * priceImpactFactor);
+        int256 priceImpact = ((skewBefore ** priceImpactExponent) * priceImpactFactor).toInt256()
+            - ((skewAfter ** priceImpactExponent) * priceImpactFactor).toInt256();
 
         if (priceImpact > MAX_PRICE_IMPACT) priceImpact = MAX_PRICE_IMPACT;
 
         // Return the price impact as a percentage of the position size
-        return (priceImpact * 100 * int256(PERCENTAGE_PRECISION)) / int256(sizeDeltaUSD); // scaled by percentage precision
+        return (priceImpact * 100 * PERCENTAGE_PRECISION.toInt256()) / sizeDeltaUSD.toInt256(); // scaled by percentage precision
     }
 
     function getPriceImpact(MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease)

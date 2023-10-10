@@ -8,20 +8,15 @@ import {MarketStructs} from "./MarketStructs.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Needs Vault Role
 contract LiquidityVault is RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
+    using SafeCast for int256;
 
-    // stores all liquidity for the protocol
-    // liquidity only stored in stablecoins
-    // user receives LP token in return, denominating a stake in the pool
-    // markets trade in and out of this pool, losses and fees accumulate in here
-    // markets reserve a share of the pool => share reserved = open interest x factor (1.5 - 2x ish)
-    // the shares allocated to each market are updated at set intervals to rebalance distribution
-
-    uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 = 100%
+    uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 = 100%, 1e10 = 1%
     uint256 public constant PRICE_PRECISION = 1e30;
     uint256 public constant STATE_UPDATE_INTERVAL = 5;
 
@@ -115,7 +110,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
         // remove liquidity from the market
         uint256 marketTokenValue = _liquidityTokenAmount * getMarketTokenPrice();
-
+        /// Note PRECISION
         uint256 tokenAmount = marketTokenValue / getPrice(_tokenOut);
 
         poolAmounts[_tokenOut] -= tokenAmount;
@@ -136,6 +131,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // returns price of token in USD x 1e30
     function getMarketTokenPrice() public view returns (uint256) {
         // market token price = (worth of market pool) / total supply
+        /// Note PRECISION
         return (getAum() * PRICE_PRECISION) / IERC20(address(liquidityToken)).totalSupply();
     }
 
@@ -148,7 +144,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         uint256 liquidity = (poolAmounts[stablecoin] * getPrice(stablecoin));
         aum = liquidity;
         int256 pendingPnL = getNetPnL();
-        pendingPnL > 0 ? aum -= uint256(pendingPnL) : aum += uint256(pendingPnL); // if in profit, subtract, if at loss, add
+        pendingPnL > 0 ? aum -= pendingPnL.toUint256() : aum += pendingPnL.toUint256(); // if in profit, subtract, if at loss, add
         return aum;
     }
 
@@ -183,6 +179,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     // (amount x percentage) / 100%
     function _deductLiquidityFees(uint256 _amount) internal view returns (uint256) {
+        /// Note PRECISION
         return (_amount * (PERCENTAGE_PRECISION - liquidityFee)) / PERCENTAGE_PRECISION;
     }
 

@@ -6,10 +6,12 @@ import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Needs Liquidator role
 contract Liquidator is RoleValidation {
     using MarketStructs for MarketStructs.Position;
+    using SafeCast for int256;
     // interacts with the TradeManager contract to liquidate positions
     // if collateral falls below threshold, user is liquidated
     // liquidator can be anyone, but must pay gas to liquidate
@@ -54,9 +56,9 @@ contract Liquidator is RoleValidation {
 
         // subtract the fees from the collateral
         collateral -= borrowFee;
-        fundingFee > 0 ? collateral -= uint256(fundingFee) : collateral += uint256(-fundingFee);
+        fundingFee >= 0 ? collateral -= fundingFee.toUint256() : collateral += (-fundingFee).toUint256();
         collateral -= liquidationFee;
         // check the collateral - pnl > 0
-        return pnl < 0 && collateral <= uint256(-pnl) ? true : false;
+        return pnl < 0 && collateral <= (-pnl).toUint256() ? true : false;
     }
 }
