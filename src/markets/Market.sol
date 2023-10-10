@@ -20,7 +20,7 @@ contract Market is RoleValidation {
     uint256 public constant MAX_FUNDING_INTERVAL = 24 hours;
     uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 == 100%
     uint256 public constant FLOAT_PRECISION = 1e30;
-    uint256 public constant MAX_PRICE_IMPACT = 33e10; // 33%
+    int256 public constant MAX_PRICE_IMPACT = 33e10; // 33%
 
     // represents a market
     // allows users to trade in and out
@@ -28,7 +28,7 @@ contract Market is RoleValidation {
     // initialized with a market token
     address public indexToken;
     address public stablecoin;
-    address public liquidityVault;
+    ILiquidityVault public liquidityVault;
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
 
@@ -66,7 +66,7 @@ contract Market is RoleValidation {
         address _indexToken,
         address _stablecoin,
         IMarketStorage _marketStorage,
-        address _liquidityVault,
+        ILiquidityVault _liquidityVault,
         ITradeStorage _tradeStorage
     ) RoleValidation(roleStorage) {
         indexToken = _indexToken;
@@ -221,8 +221,8 @@ contract Market is RoleValidation {
     // return their fees minus the opposite side
     // returned value is scaled by 1e5, this needs to be descaled after fees accounted for
     function _calculateFundingFees(MarketStructs.Position memory _position) internal view returns (int256) {
-        uint256 entryLongCumulative = _position.entryLongCumulativeFunding;
-        uint256 entryShortCumulative = _position.entryShortCumulativeFunding;
+        uint256 entryLongCumulative = _position.entryParams.entryLongCumulativeFunding;
+        uint256 entryShortCumulative = _position.entryParams.entryShortCumulativeFunding;
         uint256 currentLongCumulative = longCumulativeFundingRate;
         uint256 currentShortCumulative = shortCumulativeFundingRate;
 
@@ -293,8 +293,8 @@ contract Market is RoleValidation {
     // MAKE SURE PERCENTAGE IS THE SAME PRECISION AS FUNDING FEE
     function getBorrowingFees(MarketStructs.Position memory _position) public view returns (uint256) {
         return _position.isLong
-            ? longCumulativeBorrowFee - _position.entryLongCumulativeBorrowFee
-            : shortCumulativeBorrowFee - _position.entryShortCumulativeBorrowFee;
+            ? longCumulativeBorrowFee - _position.entryParams.entryLongCumulativeBorrowFee
+            : shortCumulativeBorrowFee - _position.entryParams.entryShortCumulativeBorrowFee;
     }
 
     /////////
@@ -339,9 +339,7 @@ contract Market is RoleValidation {
     function _getTotalEntryValue(bool _isLong) internal view returns (uint256) {
         // get the number of active positions => to do this need to add way to enumerate the open positions in TradeStorage
         bytes32 marketKey = getMarketKey();
-        uint256 positionCount = _isLong
-            ? tradeStorage.openLongPositionKeys(marketKey).length
-            : tradeStorage.openShortPositionKeys(marketKey).length;
+        uint256 positionCount = tradeStorage.openPositionKeys(marketKey, _isLong).length;
         // averageEntryPrice = cumulativePricePaid / no positions
         uint256 cumulativePricePerToken = _isLong ? longCumulativePricePerToken : shortCumulativePricePerToken;
         uint256 averageEntryPrice = cumulativePricePerToken / positionCount;
@@ -382,10 +380,8 @@ contract Market is RoleValidation {
 
         if (priceImpact > MAX_PRICE_IMPACT) priceImpact = MAX_PRICE_IMPACT;
 
-        // Calculate the price impact as a percentage of the position size
-        int256 priceImpactPercentage = (priceImpact * 100 * int256(PERCENTAGE_PRECISION)) / int256(sizeDeltaUSD);
-
-        return priceImpactPercentage; // scaled by percentage precision
+        // Return the price impact as a percentage of the position size
+        return (priceImpact * 100 * int256(PERCENTAGE_PRECISION)) / int256(sizeDeltaUSD); // scaled by percentage precision
     }
 
     function getPriceImpact(MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease)
@@ -408,10 +404,19 @@ contract Market is RoleValidation {
 
     function getPoolBalance() public view returns (uint256) {
         bytes32 key = getMarketKey();
-        return ILiquidityVault(liquidityVault).getMarketAllocation(key);
+        return liquidityVault.getMarketAllocation(key);
     }
 
     function getPoolBalanceUSD() public view returns (uint256) {
         return getPoolBalance() * getPrice(stablecoin);
+    }
+
+    /////////////
+    // GETTERS //
+    /////////////
+
+    function getMarketParameters() external view returns (uint256, uint256, uint256, uint256) {
+        return
+            (longCumulativeFundingRate, shortCumulativeFundingRate, longCumulativeBorrowFee, shortCumulativeBorrowFee);
     }
 }

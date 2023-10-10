@@ -16,7 +16,7 @@ library MarketStructs {
 
     struct PositionRequest {
         uint256 requestIndex;
-        bool isMarketOrder;
+        bool isLimit;
         address indexToken; // used to derive which market
         address user;
         address collateralToken;
@@ -30,7 +30,16 @@ library MarketStructs {
         bool isIncrease; // increase or decrease position
     }
 
+    struct EntryParams {
+        uint256 entryLongCumulativeFunding;
+        uint256 entryShortCumulativeFunding;
+        uint256 entryLongCumulativeBorrowFee; // borrow fee at entry for longs
+        uint256 entryShortCumulativeBorrowFee; // borrow fee at entry for shorts
+        uint256 entryTime;
+    }
+
     struct Position {
+        uint256 index; // position in array
         bytes32 market; // can get index token from market ?
         address indexToken;
         address collateralToken;
@@ -40,18 +49,13 @@ library MarketStructs {
         bool isLong; // will determine token used
         int256 realisedPnl;
         int256 fundingFees; // negative or positive, pay or earn
-        uint256 entryLongCumulativeFunding;
-        uint256 entryShortCumulativeFunding;
-        uint256 entryLongCumulativeBorrowFee; // borrow fee at entry for longs
-        uint256 entryShortCumulativeBorrowFee; // borrow fee at entry for shorts
-        uint256 entryTime;
+        EntryParams entryParams;
         uint256 averagePricePerToken; // average price paid per 1 token in size in USD
     }
 
-    struct Swap {
-        address tokenA;
-        address tokenB;
-        uint256 tokenASupplied;
-        uint256 tokenBReceived;
+    struct ExecutionParams {
+        PositionRequest positionRequest;
+        uint256 signedBlockPrice;
+        address executor;
     }
 }

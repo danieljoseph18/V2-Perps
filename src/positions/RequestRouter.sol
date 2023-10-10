@@ -30,31 +30,35 @@ contract RequestRouter {
         marketStorage = _marketStorage;
     }
 
-    // if _isLimit, it's a limit order, else it's a market order
-    // every time a request is created, call to the price oracle and sign the block price
-    // update the mapping with the price at the block of the request
-    /// @dev front-end can pass default values for block and index
-    function createTradeRequest(
-        MarketStructs.PositionRequest memory _positionRequest,
-        bool _isLimit,
-        uint256 _executionFee
-    ) external payable {
+    modifier validExecutionFee(uint256 _executionFee) {
         uint256 minExecutionFee = tradeStorage.minExecutionFee();
         require(msg.value >= minExecutionFee, "RequestRouter: fee too low");
         require(msg.value == _executionFee, "RequestRouter: incorrect fee");
+        _;
+    }
 
+    // UPDATE TO CALL CREATE ORDER REQUEST
+    function createTradeRequest(
+        MarketStructs.PositionRequest memory _positionRequest,
+        bool _isLimit,
+        uint256 _executionFee,
+        bool _isIncrease
+    ) external payable validExecutionFee(_executionFee) {
         _sendFeeToStorage(_executionFee);
 
         // get the key for the market
         bytes32 marketKey = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken));
-        _validateAllocation(marketKey, _positionRequest.sizeDelta);
 
-        _transferInTokens(_positionRequest.indexToken, _positionRequest.user, _positionRequest.collateralDelta);
+        if (_isIncrease) {
+            _validateAllocation(marketKey, _positionRequest.sizeDelta);
 
-        _deductTradingFee(_positionRequest);
+            _transferInTokens(_positionRequest.indexToken, _positionRequest.user, _positionRequest.collateralDelta);
+
+            _deductTradingFee(_positionRequest);
+        }
 
         ITradeStorage target = ITradeStorage(tradeStorage);
-        (uint256 marketLen, uint256 limitLen,,,) = target.getRequestQueueLengths();
+        (uint256 marketLen, uint256 limitLen) = target.getRequestQueueLengths();
         uint256 index = _isLimit ? limitLen : marketLen;
         // get the request type, if COLLAT, set size to 0, if SIZE, set collateral to 0, if REGULAR do nothing
         if (_positionRequest.requestType == MarketStructs.RequestType(0)) {
@@ -62,74 +66,46 @@ contract RequestRouter {
         } else if (_positionRequest.requestType == MarketStructs.RequestType(1)) {
             _positionRequest.sizeDelta = 0;
         }
+
         _positionRequest.requestIndex = index;
         _positionRequest.requestBlock = block.number;
         _positionRequest.priceImpact = _calculatePriceImpact(marketKey, _positionRequest, _positionRequest.isIncrease);
-        // validate the request meets all safety parameters
-        // open the request on the trade storage contract
-        _isLimit ? target.createLimitOrderRequest(_positionRequest) : target.createMarketOrderRequest(_positionRequest);
-    }
 
-    function createDecreaseRequest(
-        MarketStructs.PositionRequest memory _decreaseRequest,
-        bool _isLimit,
-        uint256 _executionFee
-    ) external payable {
-        uint256 minExecutionFee = tradeStorage.minExecutionFee();
-        require(msg.value >= minExecutionFee, "RequestRouter: fee too low");
-        require(msg.value == _executionFee, "RequestRouter: incorrect fee");
-
-        _sendFeeToStorage(_executionFee);
-
-        // validate the request meets all safety parameters
-        // open the request on the trade storage contract
-        ITradeStorage target = ITradeStorage(tradeStorage);
-        (,,, uint256 marketLen, uint256 limitLen) = target.getRequestQueueLengths();
-        uint256 index = _isLimit ? limitLen : marketLen;
-        bytes32 marketKey = keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.collateralToken));
-        // get the request type, if COLLAT, set size to 0, if SIZE, set collateral to 0, if REGULAR do nothing
-        if (_decreaseRequest.requestType == MarketStructs.RequestType(0)) {
-            _decreaseRequest.collateralDelta = 0;
-        } else if (_decreaseRequest.requestType == MarketStructs.RequestType(1)) {
-            _decreaseRequest.sizeDelta = 0;
-        }
-        _decreaseRequest.requestIndex = index;
-        _decreaseRequest.requestBlock = block.number;
-        _decreaseRequest.priceImpact = _calculatePriceImpact(marketKey, _decreaseRequest, _decreaseRequest.isIncrease);
-        // validate the request meets all safety parameters
-        // open the request on the trade storage contract
-        _isLimit
-            ? target.createLimitDecreaseRequest(_decreaseRequest)
-            : target.createMarketDecreaseRequest(_decreaseRequest);
+        target.createOrderRequest(_positionRequest);
     }
 
     // get position to close
     // get the current price
     // create decrease request for full position size
-    function createCloseRequest(bytes32 _key, uint256 _acceptablePrice, bool _isLimit) external {
+    function createCloseRequest(bytes32 _key, uint256 _acceptablePrice, bool _isLimit, uint256 _executionFee)
+        external
+        payable
+        validExecutionFee(_executionFee)
+    {
         // validate the request meets all safety parameters
         // open the request on the trade storage contract
         ITradeStorage target = ITradeStorage(tradeStorage);
-        (,,, uint256 marketLen, uint256 limitLen) = target.getRequestQueueLengths();
+        (uint256 marketLen, uint256 limitLen) = target.getRequestQueueLengths();
+
         uint256 index = _isLimit ? limitLen : marketLen;
         MarketStructs.Position memory _position = target.openPositions(_key);
         MarketStructs.PositionRequest memory _decreaseRequest = MarketStructs.PositionRequest({
             requestIndex: index,
+            isLimit: _isLimit,
             indexToken: _position.indexToken,
             user: _position.user,
             collateralToken: _position.collateralToken,
-            sizeDelta: _position.positionSize,
             collateralDelta: _position.collateralAmount,
+            sizeDelta: _position.positionSize,
             requestType: MarketStructs.RequestType(2), // set to regular request
             requestBlock: block.number,
             acceptablePrice: _acceptablePrice,
+            priceImpact: 0,
             isLong: _position.isLong,
-            isMarketOrder: !_isLimit,
             isIncrease: false
         });
-        _isLimit
-            ? target.createLimitDecreaseRequest(_decreaseRequest)
-            : target.createMarketDecreaseRequest(_decreaseRequest);
+        _decreaseRequest.priceImpact = _calculatePriceImpact(_key, _decreaseRequest, _decreaseRequest.isIncrease);
+        target.createOrderRequest(_decreaseRequest);
     }
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external {

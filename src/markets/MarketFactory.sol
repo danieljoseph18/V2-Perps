@@ -5,22 +5,27 @@ pragma solidity 0.8.20;
 // Store them in MarketStorage.sol with associated information
 // Should just be for making Perp markets, spot should work differently
 // Also add the option to delete markets if underperforming
-import {MarketStorage} from "./MarketStorage.sol";
+import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {Market} from "./Market.sol";
 import {MarketStructs} from "./MarketStructs.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 
 /// @dev Needs MarketMaker role
 contract MarketFactory is RoleValidation {
-    MarketStorage public marketStorage;
+    IMarketStorage public marketStorage;
     ILiquidityVault public liquidityVault;
+    ITradeStorage public tradeStorage;
 
     event MarketCreated(address indexed indexToken, address indexed stablecoin, address market);
 
-    constructor(address _marketStorage, address _liquidityVault) RoleValidation(roleStorage) {
-        marketStorage = MarketStorage(_marketStorage);
-        liquidityVault = ILiquidityVault(_liquidityVault);
+    constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault, ITradeStorage _tradeStorage)
+        RoleValidation(roleStorage)
+    {
+        marketStorage = _marketStorage;
+        liquidityVault = _liquidityVault;
+        tradeStorage = _tradeStorage;
     }
 
     // Only callable by MARKET_MAKER roles
@@ -33,7 +38,7 @@ contract MarketFactory is RoleValidation {
         bytes32 _key = keccak256(abi.encodePacked(_indexToken, _stablecoin));
         require(marketStorage.getMarket(_key).market == address(0), "Market already exists");
         // Create new Market contract
-        Market _market = new Market(_indexToken, _stablecoin, address(marketStorage), address(liquidityVault));
+        Market _market = new Market(_indexToken, _stablecoin, marketStorage, liquidityVault, tradeStorage);
         // Store everything in MarketStorage
         MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, _stablecoin, address(_market));
         marketStorage.storeMarket(_marketInfo);

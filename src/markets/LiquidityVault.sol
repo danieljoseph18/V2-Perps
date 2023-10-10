@@ -45,9 +45,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     uint256 private cachedNetOI;
     int256 private cachedNetPnL;
 
-
     // liquidity token = market token
     // another contract should handle minting and burning of LP token
+    // change to intialize function
     constructor(address _stablecoin, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
         stablecoin = _stablecoin;
         liquidityToken = _liquidityToken;
@@ -209,5 +209,4 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         cachedNetPnL = _netPnL;
         cachedNetOI = _netOpenInterest;
     }
-
 }

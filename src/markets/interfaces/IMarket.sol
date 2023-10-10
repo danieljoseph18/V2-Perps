@@ -40,4 +40,5 @@ interface IMarket {
     function getBorrowingFees(MarketStructs.Position memory _position) external view returns (uint256);
     function getFundingFees(MarketStructs.Position memory _position) external view returns (int256);
     function updateCumulativePricePerToken(uint256 _price, bool _isIncrease, bool _isLong) external;
+    function getMarketParameters() external view returns (uint256, uint256, uint256, uint256);
 }

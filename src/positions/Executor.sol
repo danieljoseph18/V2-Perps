@@ -82,25 +82,28 @@ contract Executor is RoleValidation {
     // only permissioned roles can call
     // called on set intervals, e.g every 5 - 10 seconds => crucial to prevent a backlog from building up
     // if too much backlog builds up, may be too expensive to loop through entire request array
-    function executeMarketOrders() external onlyKeeper {
+    // can execute all limit orders, or all market orders
+    function executeTradeOrders(bool _limits) external onlyKeeper {
         // cache the order queue
-        (bytes32[] memory orders,) = tradeStorage.getMarketOrderKeys();
+        (bytes32[] memory limitOrders, bytes32[] memory marketOrders) = tradeStorage.getOrderKeys();
+        bytes32[] memory orders = _limits ? limitOrders : marketOrders;
         uint256 len = orders.length;
         // loop through => get Position => fulfill position at signed block price
         for (uint256 i = 0; i < len; ++i) {
             bytes32 _key = orders[i];
-            _executeMarketOrder(_key);
+            _executeTradeOrder(_key, msg.sender, _limits);
         }
     }
 
     /// @dev Only Keeper
-    function executeMarketOrder(bytes32 _key) public onlyKeeper {
-        _executeMarketOrder(_key);
+    function executeTradeOrder(bytes32 _key, bool _isLimit) public onlyKeeper {
+        _executeTradeOrder(_key, msg.sender, _isLimit);
     }
 
-    function _executeMarketOrder(bytes32 _key) internal {
+    // make facilitate increase and decrease
+    function _executeTradeOrder(bytes32 _key, address _executor, bool _isLimit) internal {
         // get the position
-        MarketStructs.PositionRequest memory _positionRequest = tradeStorage.marketOrderRequests(_key);
+        MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);
         require(_positionRequest.user != address(0), "Executor: Invalid Request Key");
         // get the market and block to get the signed block price
         address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(
@@ -109,9 +112,16 @@ contract Executor is RoleValidation {
         uint256 _block = _positionRequest.requestBlock;
         uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(_market, _block);
 
+        if (_isLimit) {
+            require(
+                (_positionRequest.isLong && _signedBlockPrice <= _positionRequest.acceptablePrice)
+                    || (!_positionRequest.isLong && _signedBlockPrice >= _positionRequest.acceptablePrice),
+                "Executor: Price Target Not Hit"
+            );
+        }
         // execute the trade
         MarketStructs.Position memory _position =
-            tradeStorage.executeTrade(_positionRequest, _signedBlockPrice, msg.sender);
+            tradeStorage.executeTrade(MarketStructs.ExecutionParams(_positionRequest, _signedBlockPrice, _executor));
         // update open interest
         // always increase => should add is equal to isLong
         _updateOpenInterest(
@@ -125,131 +135,8 @@ contract Executor is RoleValidation {
         _updateFundingRate(_position.market);
         _updateBorrowingRate(_position.market, _positionRequest.isLong);
         _updateCumulativePricePerToken(_position.market, _signedBlockPrice, true, _positionRequest.isLong);
-
-    }
-
-    // no loop execution for limits => 1 by 1, track price on subgraph
-    /// @dev Only Keeper
-    function executeLimitOrder(bytes32 _key) external onlyKeeper {
-        // get the position
-        MarketStructs.PositionRequest memory _positionRequest = tradeStorage.limitOrderRequests(_key);
-        require(_positionRequest.user != address(0), "Executor: Invalid Request Key");
-        // get the current price
-        uint256 price = IPriceOracle(priceOracle).getPrice(_positionRequest.indexToken);
-        // if current price >= acceptable price and isShort, execute
-        // if current price <= acceptable price and isLong, execute
-        if (
-            (_positionRequest.isLong && price <= _positionRequest.acceptablePrice)
-                || (!_positionRequest.isLong && price >= _positionRequest.acceptablePrice)
-        ) {
-            // execute the trade
-            MarketStructs.Position memory _position = tradeStorage.executeTrade(_positionRequest, price, msg.sender);
-            // update open interest
-            // always increase => should add is equal to isLong
-            _updateOpenInterest(
-                _position.market,
-                _positionRequest.collateralDelta,
-                _positionRequest.sizeDelta,
-                _positionRequest.isLong,
-                _positionRequest.isLong
-            );
-            // update funding rate
-            _updateFundingRate(_position.market);
-            _updateBorrowingRate(_position.market, _positionRequest.isLong);
-            _updateCumulativePricePerToken(_position.market, price, true, _positionRequest.isLong);
-
-        } else {
-            revert Executor_LimitNotHit();
-        }
-    }
-
-    function executeDecreaseOrders() external onlyKeeper {
-        // cache the order queue
-        (, bytes32[] memory orders) = tradeStorage.getMarketOrderKeys();
-        uint256 len = orders.length;
-        // loop through => get Position => fulfill position at signed block price
-        for (uint256 i = 0; i < len; ++i) {
-            bytes32 _key = orders[i];
-            _executeMarketDecrease(_key);
-        }
-    }
-
-    /// @dev Only Keeper
-    function executeMarketDecrease(bytes32 _key) public onlyKeeper {
-        _executeMarketDecrease(_key);
-    }
-
-    function _executeMarketDecrease(bytes32 _key) internal {
-        // get the request
-        MarketStructs.PositionRequest memory _decreaseRequest = tradeStorage.marketDecreaseRequests(_key);
-        require(_decreaseRequest.user != address(0), "Invalid decrease request");
-        // get the market and block to get the signed block price
-        address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(
-            _decreaseRequest.indexToken, _decreaseRequest.collateralToken
-        ).market;
-        uint256 _block = _decreaseRequest.requestBlock;
-        uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(_market, _block);
-        bytes32 key =
-            keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
-        MarketStructs.Position memory _position = tradeStorage.openPositions(key);
-        // execute the trade => do we pass in size delta too to prevent double calculation?
-        uint256 leverage = _position.positionSize / _position.collateralAmount;
-        uint256 sizeDelta = _decreaseRequest.collateralDelta * leverage;
-        tradeStorage.executeDecreaseRequest(_decreaseRequest, _signedBlockPrice, msg.sender);
-        // always decrease, so shouldAdd is opposite of isLong
-        // are these input values correct to update contract state?
-        _updateOpenInterest(
-            _position.market,
-            _decreaseRequest.collateralDelta,
-            sizeDelta,
-            _decreaseRequest.isLong,
-            !_decreaseRequest.isLong
-        );
-        _updateFundingRate(_position.market);
-        _updateBorrowingRate(_position.market, _decreaseRequest.isLong);
-        _updateCumulativePricePerToken(_position.market, _signedBlockPrice, false, _position.isLong);
-
     }
 
     // used as a stop loss => how do we get trailing stop losses
     // limit decrease should be set as a percentage of the current price ?? how does a trailing stop loss work?
-    /// @dev Only Keeper
-    function executeLimitDecrease(bytes32 _key) external onlyKeeper {
-        // get the request
-        MarketStructs.PositionRequest memory _decreaseRequest = tradeStorage.limitDecreaseRequests(_key);
-        require(_decreaseRequest.user != address(0), "Invalid decrease request");
-        // get the current price
-        uint256 price = IPriceOracle(priceOracle).getPrice(_decreaseRequest.indexToken);
-        // if current price >= acceptable price and isShort, execute
-        // if current price <= acceptable price and isLong, execute
-        if (
-            (_decreaseRequest.isLong && price <= _decreaseRequest.acceptablePrice)
-                || (!_decreaseRequest.isLong && price >= _decreaseRequest.acceptablePrice)
-        ) {
-            // execute the trade
-            bytes32 key =
-                keccak256(abi.encodePacked(_decreaseRequest.indexToken, _decreaseRequest.user, _decreaseRequest.isLong));
-            MarketStructs.Position memory _position = tradeStorage.openPositions(key);
-            // execute the trade => do we pass in size delta too to prevent double calculation?
-            uint256 leverage = _position.positionSize / _position.collateralAmount;
-            // size delta must remain proportional to the collateral when decreasing
-            // i.e leverage must remain constant => thus it is calculated here and passed in, instead of by user
-            uint256 sizeDelta = _decreaseRequest.collateralDelta * leverage;
-            tradeStorage.executeDecreaseRequest(_decreaseRequest, price, msg.sender);
-            // always decrease, so should add is opposite of isLong
-            _updateOpenInterest(
-                _position.market,
-                _decreaseRequest.collateralDelta,
-                sizeDelta,
-                _decreaseRequest.isLong,
-                !_decreaseRequest.isLong
-            );
-            _updateFundingRate(_position.market);
-            _updateBorrowingRate(_position.market, _decreaseRequest.isLong);
-            _updateCumulativePricePerToken(_position.market, price, false, _decreaseRequest.isLong);
-
-        } else {
-            revert Executor_LimitNotHit();
-        }
-    }
 }

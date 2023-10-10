@@ -40,7 +40,7 @@ contract Liquidator is RoleValidation {
     function liquidatePosition(bytes32 _positionKey) external onlyKeeper {
         // check if position is flagged for liquidation
         require(isFlagged[_positionKey], "Position not flagged for liquidation");
-        tradeStorage.liquidatePosition(_positionKey);
+        tradeStorage.liquidatePosition(_positionKey, msg.sender);
     }
 
     // need to also factor in associated fees

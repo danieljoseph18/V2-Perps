@@ -16,11 +16,10 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 /// Note When arrays are too large, the contract could break as loops would exceed block gas limit
 /// When this happens, state is to be updated with use of Off-chain computation or similar
 contract StateUpdater is RoleValidation, ReentrancyGuard {
-
     ILiquidityVault public liquidityVault;
     IMarketStorage public marketStorage;
 
-    constructor (ILiquidityVault _liquidityVault, IMarketStorage _marketStorage) RoleValidation(roleStorage) {
+    constructor(ILiquidityVault _liquidityVault, IMarketStorage _marketStorage) RoleValidation(roleStorage) {
         liquidityVault = _liquidityVault;
         marketStorage = _marketStorage;
     }
@@ -37,10 +36,8 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
     /// Can be called multiple times if becomes to expensive to update all markets at once
     function updateAllocations(bytes32[] memory _marketKeys) external nonReentrant onlyStateKeeper {
         uint256 length = _marketKeys.length;
-        for(uint256 i=0; i < length; ++i) {
+        for (uint256 i = 0; i < length; ++i) {
             marketStorage.updateMarketAllocation(_marketKeys[i]);
         }
     }
-
-
 }

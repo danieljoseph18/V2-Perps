@@ -37,7 +37,6 @@ contract MarketStorage is RoleValidation {
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenLongOpenInterest; // OI of index token long
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenShortOpenInterest;
 
-
     uint256 public overCollateralizationPercentage; // 150000 = 150% ratio => 1.5x collateral
     uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 = 100%
 
@@ -111,7 +110,7 @@ contract MarketStorage is RoleValidation {
         return markets[_key];
     }
 
-     /////////////////
+    /////////////////
     // ALLOCATIONS //
     /////////////////
 
@@ -137,14 +136,11 @@ contract MarketStorage is RoleValidation {
         }
 
         uint256 adjustedMarketOI = (marketOpenInterest * PERCENTAGE_PRECISION) / (overCollateralizationPercentage); // Adjust OI based on collateralization
-        
+
         uint256 percentageAllocation = totalOpenInterest / adjustedMarketOI;
 
-        
         uint256 newAllocation = liquidityVault.getAum() / percentageAllocation; // Calculate new allocation
-
 
         marketAllocations[_marketKey] = newAllocation; // Update mapping
     }
-
 }

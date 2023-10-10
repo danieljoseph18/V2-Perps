@@ -29,4 +29,5 @@ interface IMarketStorage {
     function indexTokenLongOpenInterest(bytes32 _key) external view returns (uint256);
     function indexTokenShortOpenInterest(bytes32 _key) external view returns (uint256);
     function updateMarketAllocation(bytes32 _marketKey) external;
+    function isStable(address _stablecoin) external view returns (bool);
 }
