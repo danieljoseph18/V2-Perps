@@ -2,6 +2,7 @@
 pragma solidity 0.8.20;
 
 // Do we need to allow DEX pricing to price PRINT?
+//https://sips.synthetix.io/sips/sip-285/
 contract PriceOracle {
     // source of pricing for all tokens
     // need list of whitelisted tokens (long, short and index for all markets)
@@ -25,6 +26,7 @@ contract PriceOracle {
     }
 
     // Stable price should cap at 1 USD
+    // price should have 18 decimals
     function getPrice(address _token) external view returns (uint256) {
         // require token is whitelisted
         // return price of token

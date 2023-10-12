@@ -9,6 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import { UD60x18, ud, unwrap } from "@prb/math/UD60x18.sol";
 
 contract TradeStorage is RoleValidation {
     using SafeERC20 for IERC20;
@@ -27,21 +28,21 @@ contract TradeStorage is RoleValidation {
     mapping(address _user => uint256 _rewards) public accumulatedRewards;
 
     IMarketStorage public marketStorage;
-    uint256 public liquidationFeeUsd; // 5 = 5 USD UPDATE PRECISION
-    uint256 public tradingFee; // 100 = 0.1% UPDATE PRECISION
+    uint256 public liquidationFeeUsd; 
+    uint256 public tradingFee; 
     uint256 public minExecutionFee = 0.001 ether;
 
     ILiquidityVault public liquidityVault;
 
-    uint256 public constant MIN_LEVERAGE = 1; // update precision
-    uint256 public constant MAX_LEVERAGE = 50; // update precision
-    uint256 public constant MAX_LIQUIDATION_FEE = 100; // 100 USD max
+    uint256 public constant MIN_LEVERAGE = 1e18; // 1x
+    uint256 public constant MAX_LEVERAGE = 50e18; // 50x
+    uint256 public constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
 
     constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
         marketStorage = _marketStorage;
         liquidityVault = _liquidityVault;
-        liquidationFeeUsd = 5; // update precision
-        tradingFee = 100; // update precision
+        liquidationFeeUsd = 5e18; // 5 USD
+        tradingFee = 0.001e18; // 0.1%
     }
 
     ///////////////////////
@@ -137,7 +138,7 @@ contract TradeStorage is RoleValidation {
         // validate the added collateral won't push position below min leverage
         if (_isIncrease) {
             require(
-                currentSize / (currentCollateral + _positionRequest.collateralDelta) >= MIN_LEVERAGE,
+                ud(currentSize).div(ud(currentCollateral + _positionRequest.collateralDelta)) >= ud(MIN_LEVERAGE),
                 "Collateral can't exceed size"
             );
             // edit the positions collateral and average entry price
@@ -146,12 +147,13 @@ contract TradeStorage is RoleValidation {
         } else {
             uint256 afterFeeAmount = processFees(openPositions[_key], _positionRequest.collateralDelta);
             require(
-                currentSize / (currentCollateral - afterFeeAmount) <= MAX_LEVERAGE, "Collateral exceeds max leverage"
+                ud(currentSize).div(ud(currentCollateral - afterFeeAmount)) <= ud(MAX_LEVERAGE), "Collateral exceeds max leverage"
             );
             // subtract the collateral
             openPositions[_key].collateralAmount -= afterFeeAmount;
             // ADD transfer the collateral reduced
-            // _transferOutTokens
+            // Note Remove the PNL Parameter, add PNL into processFees function
+            _transferOutTokens(_positionRequest.collateralToken, _positionRequest.user, afterFeeAmount, 0);
         }
     }
 
@@ -181,7 +183,7 @@ contract TradeStorage is RoleValidation {
         if (_isIncrease) {
             // validate added size won't push position above max leverage
             require(
-                (currentSize + _positionRequest.sizeDelta) / currentCollateral <= MAX_LEVERAGE,
+                ud((currentSize + _positionRequest.sizeDelta)).div(ud(currentCollateral)) <= ud(MAX_LEVERAGE),
                 "Size exceeds max leverage"
             );
             // edit the positions size and average entry price
@@ -190,7 +192,7 @@ contract TradeStorage is RoleValidation {
         } else {
             // check that decreasing the size won't put position below the min leverage
             require(
-                currentSize - _positionRequest.sizeDelta / openPositions[_key].collateralAmount >= MIN_LEVERAGE,
+                ud(currentSize - _positionRequest.sizeDelta).div(ud(openPositions[_key].collateralAmount)) >= ud(MIN_LEVERAGE),
                 "Size below min leverage"
             );
             // subtract the size
@@ -277,7 +279,7 @@ contract TradeStorage is RoleValidation {
         // if full close, delete the position, transfer all of the collateral +- PNL
         // if partial close, calculate size delta from the collateral delta and decrease the position
         MarketStructs.Position storage _position = openPositions[_key];
-        uint256 leverage = _position.positionSize / _position.collateralAmount;
+        uint256 leverage = unwrap(ud(_position.positionSize).div(ud(_position.collateralAmount)));
 
         //process the fees for the decrease and return after fee amount
         uint256 afterFeeAmount = processFees(openPositions[_key], _positionRequest.collateralDelta);
@@ -333,7 +335,7 @@ contract TradeStorage is RoleValidation {
         // transfer the liquidation fee to the liquidator
         accumulatedRewards[_liquidator] += liquidationFeeUsd;
         // transfer the remaining collateral to the liquidity vault
-        // LIQUDITY VAULT NEEDS FUNCTION TO CALL CLAIM REWARDS
+        // Note LIQUDITY VAULT NEEDS FUNCTION TO CALL CLAIM REWARDS
         accumulatedRewards[address(liquidityVault)] += feesOwed;
     }
 
@@ -397,26 +399,30 @@ contract TradeStorage is RoleValidation {
         returns (uint256 _afterFeeAmount)
     {
         (uint256 borrowFee, int256 fundingFees,) = getPositionFees(_position);
-        // subtract the fees from the collateral delta
-        int256 percentageFeesOwed = borrowFee.toInt256() + fundingFees; // 100 = 0.1% => 100,000 = 100%
 
-        if (percentageFeesOwed > 0) {
-            // subtract the percentage of the position collateral delta
-            uint256 fees = percentageFeesOwed.toUint256() * _collateralDelta / 100000; // divide by precision
+        int256 totalFees = borrowFee.toInt256() + fundingFees; // 0.0001e18 = 0.01%
+
+        if (totalFees > 0) {
+            // subtract the fee from the position collateral delta
+            uint256 fees = unwrap(ud(totalFees.toUint256()) * ud(_collateralDelta));
             // give fees to liquidity vault
+            // Note need to store funding fees separately from borrow fees
+            // Funding fees need to be claimable by the counterparty
             accumulatedRewards[address(liquidityVault)] += fees;
             // return size + fees
             _afterFeeAmount = _collateralDelta + fees;
-        } else if (percentageFeesOwed < 0) {
+        } else if (totalFees < 0) {
             // user is owed fees
             // add fee to mapping in liquidity vault
-            uint256 fees = (-percentageFeesOwed).toUint256() * _collateralDelta / 100000; // divide by precision
+            uint256 fees = (-totalFees).toUint256() * _collateralDelta; // precision
             liquidityVault.accumulateFundingFees(fees, _position.user);
             _afterFeeAmount = _collateralDelta;
         } else {
             _afterFeeAmount = _collateralDelta;
         }
     }
+
+    /// Note Need function to process PNL => Check positions PNL and subtract a % of it whenever edited
 
     //////////////////////
     // SETTER FUNCTIONS //
@@ -432,7 +438,6 @@ contract TradeStorage is RoleValidation {
     // GETTER FUNCTIONS //
     //////////////////////
 
-    // returns fees as percentage of the position
     function getPositionFees(MarketStructs.Position memory _position) public view returns (uint256, int256, uint256) {
         address market = marketStorage.getMarket(_position.market).market;
         uint256 borrowFee = IMarket(market).getBorrowingFees(_position);

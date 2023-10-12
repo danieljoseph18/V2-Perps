@@ -47,6 +47,7 @@ contract Liquidator is RoleValidation {
 
     // need to also factor in associated fees
     // position needs a base liquidation fee measured in usd
+    //Review
     function _checkIsLiquidatable(MarketStructs.Position memory _position) internal view returns (bool) {
         address market = marketStorage.getMarket(_position.market).market;
         int256 pnl = IMarket(market).getPnL(_position);

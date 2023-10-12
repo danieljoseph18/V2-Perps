@@ -51,6 +51,7 @@ library MarketStructs {
         int256 fundingFees; // negative or positive, pay or earn
         EntryParams entryParams;
         uint256 averagePricePerToken; // average price paid per 1 token in size in USD
+        // use PRB Geometric Mean or avg ^^
     }
 
     struct ExecutionParams {

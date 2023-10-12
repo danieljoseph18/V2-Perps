@@ -9,21 +9,22 @@ import {IMarket} from "./interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import { UD60x18, ud, unwrap } from "@prb/math/UD60x18.sol";
 
 /// @dev Needs Vault Role
+/// REPLACE WITH SOLMATE REENTRANCY GUARD
 contract LiquidityVault is RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
     using SafeCast for int256;
 
-    uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 = 100%, 1e10 = 1%
-    uint256 public constant PRICE_PRECISION = 1e30;
-    uint256 public constant STATE_UPDATE_INTERVAL = 5;
+    uint256 public constant STATE_UPDATE_INTERVAL = 5 seconds;
 
     address public stablecoin;
     IMarketToken public liquidityToken;
-    uint256 public liquidityFee; // 0.2% fee on all liquidity added/removed = 2e9
+    uint256 public liquidityFee; // 0.2% fee on all liquidity added/removed => 1e18 = 100%
 
+    /// Note Could run into trouble because USDC is 6 decimals
     mapping(address _token => uint256 _poolAmount) public poolAmounts;
     // how do we store this in a way that it never gets too large?
 
@@ -33,6 +34,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // claim from here, reset to 0, send to fee handler
     // divide fees and handled distribution in fee handler
     uint256 public accumulatedFees;
+    uint256 public accumulatedFundingFees;
 
     uint256 public lastStateUpdate; // last time state was updated by keepers
     bool public upkeepNeeded; // is a new state update required?
@@ -46,7 +48,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     constructor(address _stablecoin, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
         stablecoin = _stablecoin;
         liquidityToken = _liquidityToken;
-        liquidityFee = 2e9;
+        liquidityFee = 0.02e18;
     }
 
     //////////////
@@ -109,9 +111,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         require(_tokenOut == stablecoin, "Invalid token");
 
         // remove liquidity from the market
-        uint256 marketTokenValue = _liquidityTokenAmount * getMarketTokenPrice();
-        /// Note PRECISION
-        uint256 tokenAmount = marketTokenValue / getPrice(_tokenOut);
+        UD60x18 marketTokenValue = ud(_liquidityTokenAmount * getMarketTokenPrice());
+        UD60x18 price = ud(getPrice(_tokenOut));
+        uint256 tokenAmount = unwrap(marketTokenValue.div(price));
 
         poolAmounts[_tokenOut] -= tokenAmount;
 
@@ -128,11 +130,12 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
     // price per 1 token (1e18 decimals)
-    // returns price of token in USD x 1e30
+    // returns price of token in USD => $1 = 1e18
     function getMarketTokenPrice() public view returns (uint256) {
         // market token price = (worth of market pool) / total supply
-        /// Note PRECISION
-        return (getAum() * PRICE_PRECISION) / IERC20(address(liquidityToken)).totalSupply();
+        UD60x18 aum = ud(getAum());
+        UD60x18 supply = ud(IERC20(address(liquidityToken)).totalSupply());
+        return unwrap(aum.div(supply));
     }
 
     // Returns AUM in USD value
@@ -177,24 +180,25 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // FEES //
     //////////
 
-    // (amount x percentage) / 100%
+    // Returns % amount after fee deduction
     function _deductLiquidityFees(uint256 _amount) internal view returns (uint256) {
-        /// Note PRECISION
-        return (_amount * (PERCENTAGE_PRECISION - liquidityFee)) / PERCENTAGE_PRECISION;
+        UD60x18 amount = ud(_amount);
+        UD60x18 liqFee = ud(liquidityFee);
+        return _amount - unwrap(amount.mul(liqFee));
     }
 
     /// @dev Only to be called by TradeStorage
     function accumulateFundingFees(uint256 _amount, address _account) external nonReentrant onlyTradeStorage {
-        fundingFeesEarned[_account] += _amount;
+        // transfer funding fees in from trade storage
+        // validate the _amountIn == the amount that was transferred in
+        // add to the accumulatedFundingFeesMapping
     }
 
     // called by a trader to claim their earned funding fees
     // only become claimable once a position is edited
     function claimFundingFees() external nonReentrant {
-        uint256 amount = fundingFeesEarned[msg.sender];
-        require(amount > 0, "No fees to claim");
-        fundingFeesEarned[msg.sender] = 0;
-        IERC20(stablecoin).safeTransfer(msg.sender, amount);
+        // check the amount of funding fees a user is eligible to claim
+        // transfer the fees to the user
     }
 
     ///////////

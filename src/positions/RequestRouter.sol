@@ -120,6 +120,7 @@ contract RequestRouter {
         IERC20(_token).safeTransferFrom(_user, address(tradeStorage), _amount);
     }
 
+    // Review
     function _deductTradingFee(MarketStructs.PositionRequest memory _positionRequest) internal {
         // get the fee
         uint256 fee = tradeStorage.tradingFee();
@@ -140,6 +141,7 @@ contract RequestRouter {
     // validate that the additional open interest won't put the market over the max open interest (allocated reserves)
     // call the mapping to get the allocation and divide by over collateralization then * 100
     // compare to what the size delta will put the open interest to
+    // Review
     function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) internal view {
         uint256 allocation = ILiquidityVault(liquidityVault).getMarketAllocation(_marketKey);
         uint256 overcollateralization = ILiquidityVault(liquidityVault).overCollateralizationPercentage();

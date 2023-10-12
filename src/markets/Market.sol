@@ -10,9 +10,11 @@ import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import { SD59x18, sd, unwrap, pow } from "@prb/math/SD59x18.sol";
+import { UD60x18, ud, unwrap } from "@prb/math/UD60x18.sol";
 
-/// funding rate calculation = dr/dt = c * skew (credit to https://blog.synthetix.io/synthetix-perps-dynamic-funding-rates/)
-/// NEED TO EXTRAPOLATE OUT DECIMAL PRECISION INTO 1 VAR
+/// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
+/// Note Need to Add Allocation Flagging on interaction
 contract Market is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
@@ -20,10 +22,7 @@ contract Market is RoleValidation {
     using SafeCast for uint256;
     using SafeCast for int256;
 
-    uint256 public constant MAX_FUNDING_INTERVAL = 24 hours;
-    uint256 public constant PERCENTAGE_PRECISION = 1e10; // 1e12 == 100%
-    uint256 public constant FLOAT_PRECISION = 1e30;
-    int256 public constant MAX_PRICE_IMPACT = 33e10; // 33%
+    int256 public constant MAX_PRICE_IMPACT = 33e18; // 33%
 
     // represents a market
     // allows users to trade in and out
@@ -38,26 +37,27 @@ contract Market is RoleValidation {
     uint256 public lastFundingUpdateTime; // last time funding was updated
     uint256 public lastBorrowUpdateTime; // last time borrowing fee was updated
     // positive rate = longs pay shorts, negative rate = shorts pay longs
-    int256 public fundingRate; // Stored as a fixed-point number (e.g., 0.01% == 1e8)  scaled by 1e10
-    uint256 public skewScale = 1e7; // Skew scale in USDC (10_000_000)
-    uint256 public maxFundingVelocity = 3e12; // 300% represented as fixed-point
-    uint256 public fundingInterval = 8 hours; // Update interval in seconds
-    uint256 public maxFundingRate = 5e10; // 5% represented as fixed-point (5% == 5e10)
+    int256 public fundingRate; // RATE PER SECOND Stored as a fixed-point number 1 = 1e18
+    int256 public fundingRateVelocity; // VELOCITY PER SECOND
+    uint256 public skewScale = 1_000_000e18; // Skew scale in USDC (1_000_000)
+    uint256 public maxFundingVelocity = 0.03e18; // 0.03% represented as fixed-point
+    int256 public maxFundingRate = 5e18; // 5% represented as fixed-point
+    int256 public minFundingRate = -5e18; // -5% fixed point
 
-    uint256 public longCumulativeFundingRate; // how much longs have owed shorts, scaled by 1e10
-    uint256 public shortCumulativeFundingRate; // how much shorts have owed longs, scaled by 1e10
+    uint256 public longCumulativeFundingFees; // how much longs have owed shorts per token, 18 decimals
+    uint256 public shortCumulativeFundingFees; // how much shorts have owed longs per token, 18 decimals
 
-    uint256 public borrowingFactor = 34722; // = 0.0000034722% per second = 0.3% per day mean
-    uint256 public borrowingExponent = 1;
+    uint256 public borrowingFactor = 0.0000035e18; // = 0.0000035% per second
+    uint256 public borrowingExponent = 1e18; // 1.00...
     // Flag for skipping borrowing fee for the smaller side
     bool public feeForSmallerSide;
     uint256 public longCumulativeBorrowFee;
     uint256 public shortCumulativeBorrowFee;
-    uint256 public longBorrowingRate; // borrow fee per second for longs
-    uint256 public shortBorrowingRate; // borrow fee per second for shorts
+    uint256 public longBorrowingRate; // borrow fee per second for longs per second (0.0001e18 = 0.01%)
+    uint256 public shortBorrowingRate; // borrow fee per second for shorts per second
 
-    uint256 public priceImpactExponent = 1;
-    uint256 public priceImpactFactor = 1e6; // 0.0001%
+    uint256 public priceImpactExponent = 1e18;
+    uint256 public priceImpactFactor = 0.0001e18; // 0.0001%
 
     uint256 public longCumulativePricePerToken; // long cumulative price paid for all index tokens in OI
     uint256 public shortCumulativePricePerToken; // short cumulative price paid for all index tokens in OI
@@ -155,97 +155,74 @@ contract Market is RoleValidation {
     // Funding //
     /////////////
 
-    function _upkeepNeeded() internal view returns (bool) {
-        // check if funding rate needs to be updated
-        return block.timestamp >= lastFundingUpdateTime + fundingInterval;
-    }
-
-    function updateFundingRate() external {
-        bool upkeepNeeded = _upkeepNeeded();
-        if (upkeepNeeded) {
-            _updateFundingRate();
-        }
-    }
-
     /// @dev Only GlobalMarketConfig
     function setFundingConfig(
-        uint256 _fundingInterval,
         uint256 _maxFundingVelocity,
         uint256 _skewScale,
-        uint256 _maxFundingRate
+        int256 _maxFundingRate,
+        int256 _minFundingRate
     ) public onlyConfigurator {
-        require(_fundingInterval <= MAX_FUNDING_INTERVAL, "Invalid funding interval");
-        fundingInterval = _fundingInterval;
         maxFundingVelocity = _maxFundingVelocity;
         skewScale = _skewScale;
         maxFundingRate = _maxFundingRate;
+        minFundingRate = _minFundingRate;
     }
 
-    function _updateFundingRate() internal {
+    function _updateFundingRate(uint256 _positionSize, bool _isLong) internal {
         uint256 longOI = getIndexOpenInterestUSD(true);
         uint256 shortOI = getIndexOpenInterestUSD(false);
-        int256 skew = int256(longOI) - int256(shortOI);
-        uint256 fundingRateVelocity = _calculateFundingRateVelocity(skew);
+        _isLong ? longOI += _positionSize : shortOI += _positionSize;
+        int256 skew = unwrap(sd(longOI.toInt256()) - sd(shortOI.toInt256())); // 500 USD skew = 500e18
+        int256 velocity = _calculateFundingRateVelocity(skew); // int scaled by 1e18
 
-        uint256 timeElapsed = block.timestamp - lastFundingUpdateTime;
-        uint256 deltaRate = (fundingRateVelocity * timeElapsed) / (1 days);
+        // Calculate time since last funding update
+        uint256 timeElapsed = unwrap(ud(block.timestamp) - ud(lastFundingUpdateTime));
+        // Add the previous velocity to the funding rate
+        int256 deltaRate = unwrap((sd(fundingRateVelocity)).mul(sd(timeElapsed.toInt256())).div(sd(1 days)));
 
-        if (longOI > shortOI) {
-            // if funding rate will be > 5%, set it to 5%
-            fundingRate + deltaRate.toInt256() > maxFundingRate.toInt256()
-                ? fundingRate = maxFundingRate.toInt256()
-                : fundingRate += deltaRate.toInt256();
-            longCumulativeFundingRate += fundingRate.toUint256();
-        } else if (shortOI > longOI) {
-            // if funding rate will be < -5%, set it to -5%
-            fundingRate - deltaRate.toInt256() < (maxFundingRate.toInt256() * -1)
-                ? fundingRate = (maxFundingRate.toInt256() * -1)
-                : fundingRate -= (deltaRate.toInt256() * -1);
-            shortCumulativeFundingRate += fundingRate.toUint256();
+
+        // Update Cumulative Fees
+        if (fundingRate > 0) {
+            longCumulativeFundingFees += (fundingRate.toUint256() * timeElapsed); // if funding rate has 18 decimals, rate per token = rate
+        } else if (fundingRate < 0) {
+            shortCumulativeFundingFees += ((-fundingRate).toUint256() * timeElapsed);
         }
 
+        // if funding rate addition puts it above / below limit, set to limit
+        if (fundingRate + deltaRate > maxFundingRate) {
+            fundingRate = maxFundingRate;
+        } else if (fundingRate - deltaRate < minFundingRate){
+            fundingRate = -maxFundingRate;
+        } else {
+            fundingRate += deltaRate;
+        }
+        fundingRateVelocity = velocity;
         lastFundingUpdateTime = block.timestamp;
     }
 
-    function _calculateFundingRateVelocity(int256 _skew) internal view returns (uint256) {
-        uint256 c = maxFundingVelocity / skewScale; // will underflow (3 mil < 10 mil)
-        // scaled by 1e10
-        // c = 0.3% = 3e9
-        if (_skew < 0) {
-            return c * (-_skew).toUint256();
-        }
-        return c * _skew.toUint256(); // 4.5e7 == 0.045%
+    // c == percentage e.g 3e18 (300%)/ liquidity e.g 10_000_000e18
+
+    function _calculateFundingRateVelocity(int256 _skew) internal view returns (int256) {
+        uint256 c = unwrap(ud(maxFundingVelocity).div(ud(skewScale))); // will underflow (3 mil < 10 mil)
+        SD59x18 skew = sd(_skew); // skew of 1 = 1e18
+        // scaled by 1e18
+        // c = 3/10000 = 0.0003 * 100 =  0.3% = 3e14
+        return c.toInt256() * unwrap(skew);
     }
 
     // returns percentage of position size that is paid as funding fees
-    // formula: feesOwed = ((cumulative - entry) - current) + ((delta t / funding interval) * current)
-    // position short = negative, position long = positive
-    // since open, track funding owed by longs and shorts
-    // return their fees minus the opposite side
-    // returned value is scaled by 1e5, this needs to be descaled after fees accounted for
     function _calculateFundingFees(MarketStructs.Position memory _position) internal view returns (int256) {
-        uint256 entryLongCumulative = _position.entryParams.entryLongCumulativeFunding;
-        uint256 entryShortCumulative = _position.entryParams.entryShortCumulativeFunding;
-        uint256 currentLongCumulative = longCumulativeFundingRate;
-        uint256 currentShortCumulative = shortCumulativeFundingRate;
+        uint256 entryFunding = _position.isLong ? _position.entryParams.entryLongCumulativeFunding : _position.entryParams.entryShortCumulativeFunding;
+        uint256 currentFunding = _position.isLong ? longCumulativeFundingFees : shortCumulativeFundingFees;
 
-        uint256 longAccumulatedFunding = currentLongCumulative - entryLongCumulative;
-        uint256 shortAccumulatedFunding = currentShortCumulative - entryShortCumulative;
+        uint256 accumulatedFunding = currentFunding - entryFunding;
+        uint256 timeSinceUpdate = block.timestamp - lastFundingUpdateTime; // might need to scale by 1e18
 
-        uint256 timeSinceUpdate = (block.timestamp - lastFundingUpdateTime) * PERCENTAGE_PRECISION; // scaled by 1e10 => 1 sec = 1e10
-
-        // subtract current funding rate
-        // need to account for fact current funding Rate can be positive
-        uint256 longFeesOwed = (longAccumulatedFunding - fundingRate.toUint256())
-            + ((timeSinceUpdate / fundingInterval) * fundingRate.toUint256());
-        uint256 shortFeesOwed = (shortAccumulatedFunding - fundingRate.toUint256())
-            + ((timeSinceUpdate / fundingInterval) * fundingRate.toUint256());
-
-        // +ve value = fees owed, -ve value = fees earned
-        // IMPORTANT: De-scale the return value by PRICE PRECISION
-        return _position.isLong
-            ? (longFeesOwed.toInt256()) - (shortFeesOwed.toInt256()) / PERCENTAGE_PRECISION.toInt256() // Will descale underflow?
-            : (shortFeesOwed.toInt256()) - (longFeesOwed.toInt256()) / PERCENTAGE_PRECISION.toInt256();
+        if (_position.isLong) {
+            return accumulatedFunding.toInt256() + (timeSinceUpdate.toInt256() * fundingRate);
+        } else {
+            return accumulatedFunding.toInt256() - (timeSinceUpdate.toInt256() * fundingRate);
+        }
     }
 
     function getFundingFees(MarketStructs.Position memory _position) external view returns (int256) {
@@ -277,8 +254,8 @@ contract Market is RoleValidation {
 
         uint256 borrowingRate = _isLong ? longBorrowingRate : shortBorrowingRate;
 
-        int256 feeBase = _isLong ? openInterest.toInt256() + pendingPnL : openInterest.toInt256();
-        uint256 fee = borrowingFactor * (feeBase.toUint256() ** borrowingExponent) / poolBalance; // underflow?
+        SD59x18 feeBase = _isLong ? sd(openInterest.toInt256()) + sd(pendingPnL) : sd(openInterest.toInt256());
+        UD60x18 fee = ud(borrowingFactor) * (ud(unwrap(feeBase).toUint256()).pow(ud(borrowingExponent))) / ud(poolBalance);
 
         // update cumulative fees with current borrowing rate
         if (_isLong) {
@@ -289,11 +266,10 @@ contract Market is RoleValidation {
         // update last update time
         lastBorrowUpdateTime = block.timestamp;
         // update borrowing rate
-        _isLong ? longBorrowingRate = fee : shortBorrowingRate = fee;
+        _isLong ? longBorrowingRate = unwrap(fee) : shortBorrowingRate = unwrap(fee);
     }
 
     // Get the borrowing fees owed for a particular position
-    // MAKE SURE PERCENTAGE IS THE SAME PRECISION AS FUNDING FEE
     function getBorrowingFees(MarketStructs.Position memory _position) public view returns (uint256) {
         return _position.isLong
             ? longCumulativeBorrowFee - _position.entryParams.entryLongCumulativeBorrowFee
@@ -323,6 +299,7 @@ contract Market is RoleValidation {
     }
 
     // returns the difference between the worth of index token open interest and collateral token
+    // NEED TO SCALE TO 1e18 DECIMALS
     function _getNetPnL(bool _isLong) internal view returns (int256) {
         uint256 indexValue = getIndexOpenInterestUSD(_isLong);
         uint256 entryValue = _getTotalEntryValue(_isLong);
@@ -345,10 +322,10 @@ contract Market is RoleValidation {
         uint256 positionCount = tradeStorage.openPositionKeys(marketKey, _isLong).length;
         // averageEntryPrice = cumulativePricePaid / no positions
         uint256 cumulativePricePerToken = _isLong ? longCumulativePricePerToken : shortCumulativePricePerToken;
-        uint256 averageEntryPrice = cumulativePricePerToken / positionCount;
+        UD60x18 averageEntryPrice = ud(cumulativePricePerToken).div(ud(positionCount));
         // uint256 averageEntryPrice = cumulativePricePerToken / positionCount;
         // entryValue = averageEntryPrice * total OI
-        return averageEntryPrice * _calculateIndexOpenInterest(_isLong);
+        return unwrap(averageEntryPrice) * _calculateIndexOpenInterest(_isLong);
     }
 
     //////////////////
@@ -356,43 +333,45 @@ contract Market is RoleValidation {
     //////////////////
 
     // Returns Price impact as a percentage of the position size
-    function _calculatePriceImpact(MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease)
+    function _calculatePriceImpact(
+        MarketStructs.PositionRequest memory _positionRequest, 
+        uint256 _signedBlockPrice
+    ) 
         internal
         view
         returns (int256)
     {
-        uint256 longOI = getIndexOpenInterestUSD(true); // existing function to get long OI in USD
-        uint256 shortOI = getIndexOpenInterestUSD(false); // existing function to get short OI in USD
+        uint256 longOI = getIndexOpenInterestUSD(true);
+        uint256 shortOI = getIndexOpenInterestUSD(false);
 
-        uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
+        SD59x18 skewBefore = longOI > shortOI ? sd(longOI.toInt256() - shortOI.toInt256()) : sd(shortOI.toInt256() - longOI.toInt256());
 
-        uint256 sizeDeltaUSD = _positionRequest.sizeDelta * getPrice(indexToken);
+        uint256 sizeDeltaUSD = _positionRequest.sizeDelta * _signedBlockPrice;
 
-        // Update open interest based on the action type
-        if (_isIncrease) {
+        if (_positionRequest.isIncrease) {
             _positionRequest.isLong ? longOI += sizeDeltaUSD : shortOI += sizeDeltaUSD;
         } else {
             _positionRequest.isLong ? longOI -= sizeDeltaUSD : shortOI -= sizeDeltaUSD;
         }
 
-        uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
+        SD59x18 skewAfter = longOI > shortOI ? sd(longOI.toInt256() - shortOI.toInt256()) : sd(shortOI.toInt256() - longOI.toInt256());
 
-        // Calculate the price impact
-        int256 priceImpact = ((skewBefore ** priceImpactExponent) * priceImpactFactor).toInt256()
-            - ((skewAfter ** priceImpactExponent) * priceImpactFactor).toInt256();
+        SD59x18 exponent = sd(priceImpactExponent.toInt256());
+        SD59x18 factor = sd(priceImpactFactor.toInt256());
 
-        if (priceImpact > MAX_PRICE_IMPACT) priceImpact = MAX_PRICE_IMPACT;
+        SD59x18 priceImpact = (skewBefore.pow(exponent)).mul(factor) - (skewAfter.pow(exponent)).mul(factor);
 
-        // Return the price impact as a percentage of the position size
-        return (priceImpact * 100 * PERCENTAGE_PRECISION.toInt256()) / sizeDeltaUSD.toInt256(); // scaled by percentage precision
+        if (unwrap(priceImpact) > MAX_PRICE_IMPACT) priceImpact = sd(MAX_PRICE_IMPACT);
+
+        return unwrap(priceImpact.mul(sd(100)).div(sd(sizeDeltaUSD.toInt256())));
     }
 
-    function getPriceImpact(MarketStructs.PositionRequest memory _positionRequest, bool _isIncrease)
+    function getPriceImpact(MarketStructs.PositionRequest memory _positionRequest, uint256 _signedBlockPrice)
         public
         view
         returns (int256)
     {
-        return _calculatePriceImpact(_positionRequest, _isIncrease);
+        return _calculatePriceImpact(_positionRequest, _signedBlockPrice);
     }
 
     /// @dev Only GlobalMarketConfig
@@ -420,6 +399,6 @@ contract Market is RoleValidation {
 
     function getMarketParameters() external view returns (uint256, uint256, uint256, uint256) {
         return
-            (longCumulativeFundingRate, shortCumulativeFundingRate, longCumulativeBorrowFee, shortCumulativeBorrowFee);
+            (longCumulativeFundingFees, shortCumulativeFundingFees, longCumulativeBorrowFee, shortCumulativeBorrowFee);
     }
 }
