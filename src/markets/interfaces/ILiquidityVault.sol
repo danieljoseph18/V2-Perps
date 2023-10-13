@@ -28,7 +28,6 @@ interface ILiquidityVault {
     // Fees
     function accumulateBorrowingFees(uint256 _amount) external;
     function accumulateTradingFees(uint256 _amount) external;
-    function accumulateFundingFees(uint256 _amount) external;
 
     // Allocations
     function updateMarketAllocations() external;

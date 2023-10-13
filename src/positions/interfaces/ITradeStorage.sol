@@ -48,4 +48,5 @@ interface ITradeStorage {
     function openPositions(bytes32 _key) external view returns (MarketStructs.Position memory);
     function openPositionKeys(bytes32 _key, bool _isLong) external view returns (bytes32[] memory);
     function orders(bool _isLimit, bytes32 _key) external view returns (MarketStructs.PositionRequest memory);
+    function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong) external;
 }

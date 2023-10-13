@@ -211,21 +211,31 @@ contract Market is RoleValidation {
     }
 
     // returns percentage of position size that is paid as funding fees
-    function _calculateFundingFees(MarketStructs.Position memory _position) internal view returns (int256) {
-        uint256 entryFunding = _position.isLong ? _position.entryParams.entryLongCumulativeFunding : _position.entryParams.entryShortCumulativeFunding;
-        uint256 currentFunding = _position.isLong ? longCumulativeFundingFees : shortCumulativeFundingFees;
+    /// Note Gets the total funding fees by a position, doesn't account for realised funding fees
+    /// Review Could this be gamed by adjusting the position size?
+    // Only calculates what the user owes, not what they could be owed
+    // Update so it returns what a short would owe and what a long would owe
+    function _calculateFundingFees(MarketStructs.Position memory _position) internal view returns (uint256, uint256) {
+        uint256 longLastFunding = _position.fundingParams.lastLongCumulativeFunding;
+        uint256 shortLastFunding = _position.fundingParams.lastShortCumulativeFunding;
 
-        uint256 accumulatedFunding = currentFunding - entryFunding;
+        uint256 longAccumulatedFunding = longCumulativeFundingFees - longLastFunding;
+        uint256 shortAccumulatedFunding = shortCumulativeFundingFees - shortLastFunding;
+
         uint256 timeSinceUpdate = block.timestamp - lastFundingUpdateTime; // might need to scale by 1e18
 
-        if (_position.isLong) {
-            return accumulatedFunding.toInt256() + (timeSinceUpdate.toInt256() * fundingRate);
+        // is the current funding rate +ve or -ve ?
+        // if +ve, need to add accumulated funding to long, if -ve need to add to short
+        if (fundingRate > 0) {
+            longAccumulatedFunding += (timeSinceUpdate * fundingRate.toUint256());
         } else {
-            return accumulatedFunding.toInt256() - (timeSinceUpdate.toInt256() * fundingRate);
+            shortAccumulatedFunding += (timeSinceUpdate * (-fundingRate).toUint256());
         }
+
+        return (longAccumulatedFunding, shortAccumulatedFunding);
     }
 
-    function getFundingFees(MarketStructs.Position memory _position) external view returns (int256) {
+    function getFundingFees(MarketStructs.Position memory _position) external view returns (uint256, uint256) {
         return _calculateFundingFees(_position);
     }
 
@@ -272,8 +282,8 @@ contract Market is RoleValidation {
     // Get the borrowing fees owed for a particular position
     function getBorrowingFees(MarketStructs.Position memory _position) public view returns (uint256) {
         return _position.isLong
-            ? longCumulativeBorrowFee - _position.entryParams.entryLongCumulativeBorrowFee
-            : shortCumulativeBorrowFee - _position.entryParams.entryShortCumulativeBorrowFee;
+            ? longCumulativeBorrowFee - _position.borrowParams.entryLongCumulativeBorrowFee
+            : shortCumulativeBorrowFee - _position.borrowParams.entryShortCumulativeBorrowFee;
     }
 
     /////////

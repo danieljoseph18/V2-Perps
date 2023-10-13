@@ -12,7 +12,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import { UD60x18, ud, unwrap } from "@prb/math/UD60x18.sol";
 
 /// @dev Needs Vault Role
-/// REPLACE WITH SOLMATE REENTRANCY GUARD
+/// Note REPLACE WITH SOLMATE REENTRANCY GUARD
 contract LiquidityVault is RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
@@ -24,17 +24,14 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     IMarketToken public liquidityToken;
     uint256 public liquidityFee; // 0.2% fee on all liquidity added/removed => 1e18 = 100%
 
-    /// Note Could run into trouble because USDC is 6 decimals
+    /// Note Will run into trouble because USDC is 6 decimals
     mapping(address _token => uint256 _poolAmount) public poolAmounts;
-    // how do we store this in a way that it never gets too large?
-
-    mapping(address => uint256) public fundingFeesEarned;
 
     // fees handled by fee handler contract
     // claim from here, reset to 0, send to fee handler
     // divide fees and handled distribution in fee handler
+    // trading fees, LP fees and borrow fees
     uint256 public accumulatedFees;
-    uint256 public accumulatedFundingFees;
 
     uint256 public lastStateUpdate; // last time state was updated by keepers
     bool public upkeepNeeded; // is a new state update required?
@@ -185,20 +182,6 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         UD60x18 amount = ud(_amount);
         UD60x18 liqFee = ud(liquidityFee);
         return _amount - unwrap(amount.mul(liqFee));
-    }
-
-    /// @dev Only to be called by TradeStorage
-    function accumulateFundingFees(uint256 _amount, address _account) external nonReentrant onlyTradeStorage {
-        // transfer funding fees in from trade storage
-        // validate the _amountIn == the amount that was transferred in
-        // add to the accumulatedFundingFeesMapping
-    }
-
-    // called by a trader to claim their earned funding fees
-    // only become claimable once a position is edited
-    function claimFundingFees() external nonReentrant {
-        // check the amount of funding fees a user is eligible to claim
-        // transfer the fees to the user
     }
 
     ///////////

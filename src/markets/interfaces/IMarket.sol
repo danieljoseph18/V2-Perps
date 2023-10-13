@@ -32,13 +32,24 @@ interface IMarket {
     function addLiquidityForAccount(address _account, uint256 _amount, address _tokenIn) external;
     function removeLiquidityForAccount(address _account, uint256 _marketTokenAmount, address _tokenOut) external;
     function setPriceImpactConfig(uint256 _priceImpactFactor, uint256 _priceImpactExponent) external;
-    function longCumulativeFundingRate() external view returns (uint256);
-    function shortCumulativeFundingRate() external view returns (uint256);
+    function longCumulativeFundingFees() external view returns (uint256);
+    function shortCumulativeFundingFees() external view returns (uint256);
     function longCumulativeBorrowFee() external view returns (uint256);
     function shortCumulativeBorrowFee() external view returns (uint256);
     function updateBorrowingRate(bool _isLong) external;
     function getBorrowingFees(MarketStructs.Position memory _position) external view returns (uint256);
-    function getFundingFees(MarketStructs.Position memory _position) external view returns (int256);
+    function getFundingFees(MarketStructs.Position memory _position) external view returns (uint256, uint256);
     function updateCumulativePricePerToken(uint256 _price, bool _isIncrease, bool _isLong) external;
     function getMarketParameters() external view returns (uint256, uint256, uint256, uint256);
+    function priceImpactFactor() external view returns (uint256);
+    function priceImpactExponent() external view returns (uint256);
+    function MAX_PRICE_IMPACT() external view returns (int256);
+    function getIndexOpenInterestUSD(bool _isLong) external view returns (uint256);
+    function lastFundingUpdateTime() external view returns (uint256);
+    function fundingRateVelocity() external view returns (int256);
+    function fundingRate() external view returns (int256);
+    function maxFundingRate() external view returns (int256);
+    function minFundingRate() external view returns (int256);
+    function skewScale() external view returns (uint256);
+    function maxFundingVelocity() external view returns (uint256);
 }

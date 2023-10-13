@@ -30,12 +30,20 @@ library MarketStructs {
         bool isIncrease; // increase or decrease position
     }
 
-    struct EntryParams {
-        uint256 entryLongCumulativeFunding;
-        uint256 entryShortCumulativeFunding;
+    struct BorrowParams {
         uint256 entryLongCumulativeBorrowFee; // borrow fee at entry for longs
         uint256 entryShortCumulativeBorrowFee; // borrow fee at entry for shorts
-        uint256 entryTime;
+    }
+
+    struct FundingParams {
+        uint256 realisedFees; // fees realised by position
+        uint256 feesPaid; // fees paid by position
+        uint256 longFeeDebt; // fees owed by longs per token
+        uint256 shortFeeDebt; // fees owed by shorts per token
+        uint256 claimableFees; // fees that can be claimed by the position
+        uint256 lastFundingUpdate; // last time funding was updated
+        uint256 lastLongCumulativeFunding; // last cumulative funding rate for longs
+        uint256 lastShortCumulativeFunding; // last cumulative funding rate for shorts
     }
 
     struct Position {
@@ -48,10 +56,11 @@ library MarketStructs {
         uint256 positionSize; // position size in index tokens, value fluctuates in USD giving PnL
         bool isLong; // will determine token used
         int256 realisedPnl;
-        int256 fundingFees; // negative or positive, pay or earn
-        EntryParams entryParams;
+        BorrowParams borrowParams;
+        FundingParams fundingParams;
         uint256 averagePricePerToken; // average price paid per 1 token in size in USD
         // use PRB Geometric Mean or avg ^^
+        uint256 entryTimestamp;
     }
 
     struct ExecutionParams {

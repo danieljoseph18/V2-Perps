@@ -52,13 +52,12 @@ contract RequestRouter {
         if (_isIncrease) {
             _validateAllocation(marketKey, _positionRequest.sizeDelta);
 
-            _transferInTokens(_positionRequest.indexToken, _positionRequest.user, _positionRequest.collateralDelta);
+            _transferInTokens(marketKey, _positionRequest.indexToken, _positionRequest.user, _positionRequest.collateralDelta, _positionRequest.isLong);
 
             _deductTradingFee(_positionRequest);
         }
 
-        ITradeStorage target = ITradeStorage(tradeStorage);
-        (uint256 marketLen, uint256 limitLen) = target.getRequestQueueLengths();
+        (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
         uint256 index = _isLimit ? limitLen : marketLen;
         // get the request type, if COLLAT, set size to 0, if SIZE, set collateral to 0, if REGULAR do nothing
         if (_positionRequest.requestType == MarketStructs.RequestType(0)) {
@@ -71,7 +70,7 @@ contract RequestRouter {
         _positionRequest.requestBlock = block.number;
         _positionRequest.priceImpact = _calculatePriceImpact(marketKey, _positionRequest, _positionRequest.isIncrease);
 
-        target.createOrderRequest(_positionRequest);
+        tradeStorage.createOrderRequest(_positionRequest);
     }
 
     // get position to close
@@ -81,14 +80,15 @@ contract RequestRouter {
         external
         payable
         validExecutionFee(_executionFee)
-    {
+    {   
+        // transfer execution fee to the liquidity vault
+        _sendFeeToStorage(_executionFee);
         // validate the request meets all safety parameters
         // open the request on the trade storage contract
-        ITradeStorage target = ITradeStorage(tradeStorage);
-        (uint256 marketLen, uint256 limitLen) = target.getRequestQueueLengths();
+        (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
 
         uint256 index = _isLimit ? limitLen : marketLen;
-        MarketStructs.Position memory _position = target.openPositions(_key);
+        MarketStructs.Position memory _position = tradeStorage.openPositions(_key);
         MarketStructs.PositionRequest memory _decreaseRequest = MarketStructs.PositionRequest({
             requestIndex: index,
             isLimit: _isLimit,
@@ -105,22 +105,25 @@ contract RequestRouter {
             isIncrease: false
         });
         _decreaseRequest.priceImpact = _calculatePriceImpact(_key, _decreaseRequest, _decreaseRequest.isIncrease);
-        target.createOrderRequest(_decreaseRequest);
+        tradeStorage.createOrderRequest(_decreaseRequest);
     }
 
-    function cancelOrderRequest(bytes32 _key, bool _isLimit) external {
+    function cancelOrderRequest(bytes32 _key, bool _isLimit, uint256 _executionFee) external payable validExecutionFee(_executionFee) {
+        // transfer execution fee to the liquidity vault
+        _sendFeeToStorage(_executionFee);
         // perform safety checks => it exists, it's their position etc.
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
 
-    function _transferInTokens(address _token, address _user, uint256 _amount) internal {
+    function _transferInTokens(bytes32 _marketKey, address _token, address _user, uint256 _amount, bool _isLong) internal {
         // transfer in the tokens
         // check tokens are stables
         // other safety checks
         IERC20(_token).safeTransferFrom(_user, address(tradeStorage), _amount);
+        _isLong ? tradeStorage.updateCollateralBalance(_marketKey, _amount, _isLong) : tradeStorage.updateCollateralBalance(_marketKey, _amount, _isLong);
     }
 
-    // Review
+    // Review => should go to LV LPs
     function _deductTradingFee(MarketStructs.PositionRequest memory _positionRequest) internal {
         // get the fee
         uint256 fee = tradeStorage.tradingFee();
@@ -129,11 +132,12 @@ contract RequestRouter {
 
         // transfer fee to trade storage
         // NEED FUNCTION IN TRADE STORAGE TO PROCESS FEES
+        /// Note Trading Fee should go to the liquidity vault LPs not trade storage
         IERC20(_positionRequest.collateralToken).safeTransfer(address(tradeStorage), feeAmount);
     }
 
     function _sendFeeToStorage(uint256 _executionFee) internal returns (bool) {
-        (bool success,) = address(tradeStorage).call{value: _executionFee}("");
+        (bool success,) = address(liquidityVault).call{value: _executionFee}("");
         require(success, "RequestRouter: fee transfer failed");
         return true;
     }
