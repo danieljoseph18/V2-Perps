@@ -52,4 +52,12 @@ interface IMarket {
     function minFundingRate() external view returns (int256);
     function skewScale() external view returns (uint256);
     function maxFundingVelocity() external view returns (uint256);
+    function borrowingFactor() external view returns (uint256);
+    function borrowingExponent() external view returns (uint256);
+    function lastBorrowUpdateTime() external view returns (uint256);
+    function getPoolBalanceUSD() external view returns (uint256);
+    function longBorrowingRate() external view returns (uint256);
+    function shortBorrowingRate() external view returns (uint256);
+    function longCumulativePricePerToken() external view returns (uint256);
+    function shortCumulativePricePerToken() external view returns (uint256);
 }

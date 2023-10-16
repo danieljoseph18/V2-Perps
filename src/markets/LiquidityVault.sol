@@ -9,7 +9,7 @@ import {IMarket} from "./interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import { UD60x18, ud, unwrap } from "@prb/math/UD60x18.sol";
+import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 
 /// @dev Needs Vault Role
 /// Note REPLACE WITH SOLMATE REENTRANCY GUARD
@@ -188,6 +188,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // STATE //
     ///////////
 
+    /// Note Needs to be called by keepers to regularly update the state of the net pnl and OI
     function updateState(int256 _netPnL, uint256 _netOpenInterest) external onlyStateUpdater {
         require(block.timestamp >= lastStateUpdate + STATE_UPDATE_INTERVAL, "Upkeep not needed");
         cachedNetPnL = _netPnL;

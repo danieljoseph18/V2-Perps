@@ -9,6 +9,7 @@ contract PriceOracle {
     // passing the address of a token will fetch price
     // pricing will be determined using Pyth and Chainlink as secondary
     // pricing should be upgradeable so we can improve pricing mechanism in future
+    // Need max block the price is valid until
 
     mapping(address => bool) whitelistedTokens;
     // token => block => price

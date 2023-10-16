@@ -8,7 +8,7 @@ import {MarketStructs} from "./MarketStructs.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
-import { UD60x18, ud, unwrap } from "@prb/math/UD60x18.sol";
+import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 
 contract MarketStorage is RoleValidation {
     using MarketStructs for MarketStructs.Market;

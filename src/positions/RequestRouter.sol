@@ -52,7 +52,13 @@ contract RequestRouter {
         if (_isIncrease) {
             _validateAllocation(marketKey, _positionRequest.sizeDelta);
 
-            _transferInTokens(marketKey, _positionRequest.indexToken, _positionRequest.user, _positionRequest.collateralDelta, _positionRequest.isLong);
+            _transferInTokens(
+                marketKey,
+                _positionRequest.indexToken,
+                _positionRequest.user,
+                _positionRequest.collateralDelta,
+                _positionRequest.isLong
+            );
 
             _deductTradingFee(_positionRequest);
         }
@@ -80,7 +86,7 @@ contract RequestRouter {
         external
         payable
         validExecutionFee(_executionFee)
-    {   
+    {
         // transfer execution fee to the liquidity vault
         _sendFeeToStorage(_executionFee);
         // validate the request meets all safety parameters
@@ -108,19 +114,27 @@ contract RequestRouter {
         tradeStorage.createOrderRequest(_decreaseRequest);
     }
 
-    function cancelOrderRequest(bytes32 _key, bool _isLimit, uint256 _executionFee) external payable validExecutionFee(_executionFee) {
+    function cancelOrderRequest(bytes32 _key, bool _isLimit, uint256 _executionFee)
+        external
+        payable
+        validExecutionFee(_executionFee)
+    {
         // transfer execution fee to the liquidity vault
         _sendFeeToStorage(_executionFee);
         // perform safety checks => it exists, it's their position etc.
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
 
-    function _transferInTokens(bytes32 _marketKey, address _token, address _user, uint256 _amount, bool _isLong) internal {
+    function _transferInTokens(bytes32 _marketKey, address _token, address _user, uint256 _amount, bool _isLong)
+        internal
+    {
         // transfer in the tokens
         // check tokens are stables
         // other safety checks
         IERC20(_token).safeTransferFrom(_user, address(tradeStorage), _amount);
-        _isLong ? tradeStorage.updateCollateralBalance(_marketKey, _amount, _isLong) : tradeStorage.updateCollateralBalance(_marketKey, _amount, _isLong);
+        _isLong
+            ? tradeStorage.updateCollateralBalance(_marketKey, _amount, _isLong)
+            : tradeStorage.updateCollateralBalance(_marketKey, _amount, _isLong);
     }
 
     // Review => should go to LV LPs

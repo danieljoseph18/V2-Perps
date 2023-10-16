@@ -6,12 +6,12 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import { SD59x18, sd, unwrap, pow } from "@prb/math/SD59x18.sol";
-import { UD60x18, ud, unwrap } from "@prb/math/UD60x18.sol";
+import {SD59x18, sd, unwrap, pow} from "@prb/math/SD59x18.sol";
+import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 // library responsible for handling all price impact calculations
-library PriceImpactCalculator {
+library ImpactCalculator {
     using SafeCast for uint256;
     using SafeCast for int256;
 
@@ -36,7 +36,8 @@ library PriceImpactCalculator {
         uint256 scaleFactor = 10 ** 4;
 
         // Convert priceImpact to scaled integer (e.g., 0.1% becomes 10 when scaleFactor is 10^4)
-        uint256 scaledImpact = (uint256(_priceImpact) >= 0 ? uint256(_priceImpact) : uint256(-_priceImpact)) * scaleFactor / 100;
+        uint256 scaledImpact =
+            (uint256(_priceImpact) >= 0 ? uint256(_priceImpact) : uint256(-_priceImpact)) * scaleFactor / 100;
 
         // Calculate the price change due to impact, then scale down
         uint256 priceDelta = (_signedBlockPrice * scaledImpact) / scaleFactor;
@@ -50,19 +51,16 @@ library PriceImpactCalculator {
     }
 
     // Returns Price impact as a percentage of the position size
-    function _calculatePriceImpact(
+    function calculatePriceImpact(
         address _market,
-        MarketStructs.PositionRequest memory _positionRequest, 
+        MarketStructs.PositionRequest memory _positionRequest,
         uint256 _signedBlockPrice
-    ) 
-        internal
-        view
-        returns (int256)
-    {
+    ) external view returns (int256) {
         uint256 longOI = IMarket(_market).getIndexOpenInterestUSD(true);
         uint256 shortOI = IMarket(_market).getIndexOpenInterestUSD(false);
 
-        SD59x18 skewBefore = longOI > shortOI ? sd(longOI.toInt256() - shortOI.toInt256()) : sd(shortOI.toInt256() - longOI.toInt256());
+        SD59x18 skewBefore =
+            longOI > shortOI ? sd(longOI.toInt256() - shortOI.toInt256()) : sd(shortOI.toInt256() - longOI.toInt256());
 
         uint256 sizeDeltaUSD = _positionRequest.sizeDelta * _signedBlockPrice;
 
@@ -72,7 +70,8 @@ library PriceImpactCalculator {
             _positionRequest.isLong ? longOI -= sizeDeltaUSD : shortOI -= sizeDeltaUSD;
         }
 
-        SD59x18 skewAfter = longOI > shortOI ? sd(longOI.toInt256() - shortOI.toInt256()) : sd(shortOI.toInt256() - longOI.toInt256());
+        SD59x18 skewAfter =
+            longOI > shortOI ? sd(longOI.toInt256() - shortOI.toInt256()) : sd(shortOI.toInt256() - longOI.toInt256());
 
         SD59x18 exponent = sd(_getPriceImpactExponent(_market).toInt256());
         SD59x18 factor = sd(_getPriceImpactFactor(_market).toInt256());
@@ -82,14 +81,6 @@ library PriceImpactCalculator {
         if (unwrap(priceImpact) > _getMaxPriceImpact(_market)) priceImpact = sd(_getMaxPriceImpact(_market));
 
         return unwrap(priceImpact.mul(sd(100)).div(sd(sizeDeltaUSD.toInt256())));
-    }
-
-    function getPriceImpact(address _market, MarketStructs.PositionRequest memory _positionRequest, uint256 _signedBlockPrice)
-        public
-        view
-        returns (int256)
-    {
-        return _calculatePriceImpact(_market, _positionRequest, _signedBlockPrice);
     }
 
     function _getPriceImpactFactor(address _market) internal view returns (uint256) {
@@ -103,5 +94,4 @@ library PriceImpactCalculator {
     function _getMaxPriceImpact(address _market) internal view returns (int256) {
         return IMarket(_market).MAX_PRICE_IMPACT();
     }
-
 }

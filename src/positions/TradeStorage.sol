@@ -9,7 +9,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import { UD60x18, ud, unwrap } from "@prb/math/UD60x18.sol";
+import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
+import {ImpactCalculator} from "./ImpactCalculator.sol";
+import {BorrowingCalculator} from "./BorrowingCalculator.sol";
+import {FundingCalculator} from "./FundingCalculator.sol";
+import {TradeHelper} from "./TradeHelper.sol";
+import {PnLCalculator} from "./PnLCalculator.sol";
 
 contract TradeStorage is RoleValidation {
     using SafeERC20 for IERC20;
@@ -27,20 +32,15 @@ contract TradeStorage is RoleValidation {
 
     mapping(address _user => uint256 _rewards) public accumulatedRewards;
 
-
     mapping(bytes32 _marketKey => uint256 _collateral) public longCollateral;
     mapping(bytes32 _marketKey => uint256 _collateral) public shortCollateral;
 
     IMarketStorage public marketStorage;
-    uint256 public liquidationFeeUsd; 
-    uint256 public tradingFee; 
+    uint256 public liquidationFeeUsd;
+    uint256 public tradingFee;
     uint256 public minExecutionFee = 0.001 ether;
 
     ILiquidityVault public liquidityVault;
-
-    uint256 public constant MIN_LEVERAGE = 1e18; // 1x
-    uint256 public constant MAX_LEVERAGE = 50e18; // 50x
-    uint256 public constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
 
     constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
         marketStorage = _marketStorage;
@@ -54,11 +54,12 @@ contract TradeStorage is RoleValidation {
     ///////////////////////
 
     function createOrderRequest(MarketStructs.PositionRequest memory _positionRequest) external onlyRouter {
-        bytes32 _key = _generateKey(_positionRequest);
-        _validateRequest(_key, _positionRequest.isLimit);
+        bytes32 _key = TradeHelper.generateKey(_positionRequest);
+        TradeHelper.validateRequest(address(this), _key, _positionRequest.isLimit);
         _assignRequest(_key, _positionRequest, _positionRequest.isLimit);
     }
 
+    /// Note Caller must be request creator
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external onlyRouter {
         require(orders[_isLimit][_key].user != address(0), "Order does not exist");
 
@@ -91,17 +92,19 @@ contract TradeStorage is RoleValidation {
         returns (MarketStructs.Position memory)
     {
         uint8 requestType = uint8(_executionParams.positionRequest.requestType);
-        bytes32 key = _generateKey(_executionParams.positionRequest);
+        bytes32 key = TradeHelper.generateKey(_executionParams.positionRequest);
 
-        uint256 price = _applyPriceImpact(
-            _executionParams.signedBlockPrice, _executionParams.positionRequest.priceImpact, _executionParams.positionRequest.isLong
+        uint256 price = ImpactCalculator.applyPriceImpact(
+            _executionParams.signedBlockPrice,
+            _executionParams.positionRequest.priceImpact,
+            _executionParams.positionRequest.isLong
         );
         bool isIncrease = _executionParams.positionRequest.isIncrease;
         // if type = 0 => collateral edit => only for collateral increase
         if (requestType == 0) {
-            _executeCollateralEdit(_executionParams.positionRequest, price, key, isIncrease);
+            _executeCollateralEdit(_executionParams.positionRequest, price, key);
         } else if (requestType == 1) {
-            _executeSizeEdit(_executionParams.positionRequest, price, key, isIncrease);
+            _executeSizeEdit(_executionParams.positionRequest, price, key);
         } else {
             isIncrease
                 ? _executePositionRequest(_executionParams.positionRequest, price, key)
@@ -115,102 +118,76 @@ contract TradeStorage is RoleValidation {
         return openPositions[key];
     }
 
-    function _executeCollateralEdit(
-        MarketStructs.PositionRequest memory _positionRequest,
-        uint256 _price,
-        bytes32 _key,
-        bool _isIncrease
-    ) internal {
+    function _executeCollateralEdit(MarketStructs.PositionRequest memory _positionRequest, uint256 _price, bytes32 _key)
+        internal
+    {
         // check the position exists
         require(openPositions[_key].user != address(0), "Position does not exist");
         // delete the request
         _deletePositionRequest(_key, _positionRequest.requestIndex, _positionRequest.isLimit);
         // if limit => ensure the limit has been met before deleting
-        if (_positionRequest.isLimit) {
-            // require current price >= limit price for shorts, <= limit price for longs
-            require(
-                _positionRequest.isLong
-                    ? _price <= _positionRequest.acceptablePrice
-                    : _price >= _positionRequest.acceptablePrice,
-                "Limit price not met"
-            );
-        }
+        if (_positionRequest.isLimit) TradeHelper.checkLimitPrice(_price, _positionRequest);
         // get the positions current collateral and size
         uint256 currentCollateral = openPositions[_key].collateralAmount;
         uint256 currentSize = openPositions[_key].positionSize;
 
         _updateFundingParameters(_key, _positionRequest);
-        
+
         // validate the added collateral won't push position below min leverage
-        if (_isIncrease) {
-            require(
-                ud(currentSize).div(ud(currentCollateral + _positionRequest.collateralDelta)) >= ud(MIN_LEVERAGE),
-                "Collateral can't exceed size"
-            );
+        if (_positionRequest.isIncrease) {
+            TradeHelper.checkLeverage(currentSize, currentCollateral + _positionRequest.collateralDelta);
             // edit the positions collateral and average entry price
-            openPositions[_key].collateralAmount += _positionRequest.collateralDelta;
-            openPositions[_key].averagePricePerToken += (openPositions[_key].averagePricePerToken + _price) / 2;
+            _editPosition(_positionRequest.collateralDelta, 0, 0, _price, true, _key);
         } else {
             uint256 afterFeeAmount = _subtractFundingFee(openPositions[_key], _positionRequest.collateralDelta);
             // Note Need to process Borrowing Fee here
-            require(
-                ud(currentSize).div(ud(currentCollateral - afterFeeAmount)) <= ud(MAX_LEVERAGE), "Collateral exceeds max leverage"
-            );
+            TradeHelper.checkLeverage(currentSize, currentCollateral - afterFeeAmount);
             // subtract the collateral
-            openPositions[_key].collateralAmount -= afterFeeAmount;
+            // Note Update 3rd argument after adding PNL
+            _editPosition(afterFeeAmount, 0, 0, 0, false, _key);
             // ADD transfer the collateral reduced
             // Note Remove the PNL Parameter, add PNL into processFees function
-            bytes32 marketKey = getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
-            _transferOutTokens(_positionRequest.collateralToken, marketKey, _positionRequest.user, afterFeeAmount, 0, _positionRequest.isLong);
+            bytes32 marketKey = TradeHelper.getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
+            _transferOutTokens(
+                _positionRequest.collateralToken,
+                marketKey,
+                _positionRequest.user,
+                afterFeeAmount,
+                0,
+                _positionRequest.isLong
+            );
         }
     }
 
-    function _executeSizeEdit(
-        MarketStructs.PositionRequest memory _positionRequest,
-        uint256 _price,
-        bytes32 _key,
-        bool _isIncrease
-    ) internal {
+    function _executeSizeEdit(MarketStructs.PositionRequest memory _positionRequest, uint256 _price, bytes32 _key)
+        internal
+    {
         // check the position exists
         require(openPositions[_key].user != address(0), "Position does not exist");
         // delete the request
         _deletePositionRequest(_key, _positionRequest.requestIndex, _positionRequest.isLimit);
         // if limit => ensure the limit has been met before deleting
-        if (_positionRequest.isLimit) {
-            // require current price >= limit price for shorts, <= limit price for longs
-            require(
-                _positionRequest.isLong
-                    ? _price <= _positionRequest.acceptablePrice
-                    : _price >= _positionRequest.acceptablePrice,
-                "Limit price not met"
-            );
-        }
+        if (_positionRequest.isLimit) TradeHelper.checkLimitPrice(_price, _positionRequest);
+
         // get the positions current collateral and size
         uint256 currentCollateral = openPositions[_key].collateralAmount;
         uint256 currentSize = openPositions[_key].positionSize;
 
         // calculate funding for the position
 
-        // update the funding parameters 
+        // update the funding parameters
 
-
-        if (_isIncrease) {
+        if (_positionRequest.isIncrease) {
             // validate added size won't push position above max leverage
-            require(
-                ud((currentSize + _positionRequest.sizeDelta)).div(ud(currentCollateral)) <= ud(MAX_LEVERAGE),
-                "Size exceeds max leverage"
-            );
+            TradeHelper.checkLeverage(currentSize + _positionRequest.sizeDelta, currentCollateral);
             // edit the positions size and average entry price
-            openPositions[_key].positionSize += _positionRequest.sizeDelta;
-            openPositions[_key].averagePricePerToken = (openPositions[_key].averagePricePerToken + _price) / 2;
+            _editPosition(0, _positionRequest.sizeDelta, 0, _price, true, _key);
         } else {
             // check that decreasing the size won't put position below the min leverage
-            require(
-                ud(currentSize - _positionRequest.sizeDelta).div(ud(openPositions[_key].collateralAmount)) >= ud(MIN_LEVERAGE),
-                "Size below min leverage"
-            );
+            TradeHelper.checkLeverage(currentSize - _positionRequest.sizeDelta, currentCollateral);
             // subtract the size
-            openPositions[_key].positionSize -= _positionRequest.sizeDelta;
+            // Note realise PNL and update 3rd argument
+            _editPosition(0, _positionRequest.sizeDelta, 0, _price, false, _key);
             // Note calculate and transfer any profit
             // Note claim funding and borrowing fees
         }
@@ -219,59 +196,31 @@ contract TradeStorage is RoleValidation {
     function _executePositionRequest(
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _price,
-        bytes32 _key
+        bytes32 _positionKey
     ) internal {
         // regular increase, or new position request
         // check the request is valid
-        if (_positionRequest.isLimit) {
-            // require current price >= limit price for shorts, <= limit price for longs
-            require(
-                _positionRequest.isLong
-                    ? _price <= _positionRequest.acceptablePrice
-                    : _price >= _positionRequest.acceptablePrice,
-                "Limit price not met"
-            );
-        }
+        if (_positionRequest.isLimit) TradeHelper.checkLimitPrice(_price, _positionRequest);
+
         // if position exists, edit existing position
-        _deletePositionRequest(_key, _positionRequest.requestIndex, _positionRequest.isLimit);
-        if (openPositions[_key].user != address(0)) {
+        _deletePositionRequest(_positionKey, _positionRequest.requestIndex, _positionRequest.isLimit);
+        if (openPositions[_positionKey].user != address(0)) {
             // if exists, leverage must remain constant
             // calculate the size delta from the collateral delta
             // size / current collateral = leverage, +1 collateral = (+1 x leverage) size
-            uint256 leverage = openPositions[_key].positionSize / openPositions[_key].collateralAmount;
+            /// Note USE PRB MATH
+            uint256 leverage = TradeHelper.calculateLeverage(
+                openPositions[_positionKey].positionSize, openPositions[_positionKey].collateralAmount
+            );
             uint256 sizeDelta = _positionRequest.collateralDelta * leverage;
 
             // add on to the position
-            openPositions[_key].collateralAmount += _positionRequest.collateralDelta;
-            openPositions[_key].positionSize += sizeDelta;
-            openPositions[_key].averagePricePerToken = (openPositions[_key].averagePricePerToken + _price) / 2;
+            _editPosition(_positionRequest.collateralDelta, sizeDelta, 0, _price, true, _positionKey);
         } else {
-            // create a new position
-            // calculate all input variables
-            bytes32 market = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken));
-            address marketAddress = IMarketStorage(marketStorage).getMarket(market).market;
-            (uint256 longFunding, uint256 shortFunding, uint256 longBorrowFee, uint256 shortBorrowFee) =
-                IMarket(marketAddress).getMarketParameters();
-            uint256 positionIndex = openPositionKeys[market][_positionRequest.isLong].length - 1;
-            // make sure all Position and PositionRequest instantiations are in the correct order.
-            openPositions[_key] = MarketStructs.Position({
-                index: positionIndex,
-                market: market,
-                indexToken: _positionRequest.indexToken,
-                collateralToken: _positionRequest.collateralToken,
-                user: _positionRequest.user,
-                collateralAmount: _positionRequest.collateralDelta,
-                positionSize: _positionRequest.sizeDelta,
-                isLong: _positionRequest.isLong,
-                realisedPnl: 0,
-                borrowParams: MarketStructs.BorrowParams(longBorrowFee, shortBorrowFee),
-                fundingParams: MarketStructs.FundingParams(0, 0, 0, 0, 0, block.timestamp, longFunding, shortFunding),
-                averagePricePerToken: _price,
-                entryTimestamp: block.timestamp
-            });
-            _positionRequest.isLong
-                ? openPositionKeys[market][true].push(_key)
-                : openPositionKeys[market][false].push(_key);
+            bytes32 marketKey = TradeHelper.getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
+            MarketStructs.Position memory _position =
+                TradeHelper.generateNewPosition(address(this), _positionRequest, _price, address(marketStorage));
+            _createNewPosition(_position, _positionKey, marketKey);
         }
     }
 
@@ -280,22 +229,14 @@ contract TradeStorage is RoleValidation {
         uint256 _price,
         bytes32 _key
     ) internal {
-        if (_positionRequest.isLimit) {
-            // require current price >= limit price for shorts, <= limit price for longs
-            require(
-                _positionRequest.isLong
-                    ? _price <= _positionRequest.acceptablePrice
-                    : _price >= _positionRequest.acceptablePrice,
-                "Limit price not met"
-            );
-        }
+        if (_positionRequest.isLimit) TradeHelper.checkLimitPrice(_price, _positionRequest);
         // decrease or close position
         _deletePositionRequest(_key, _positionRequest.requestIndex, _positionRequest.isLimit);
         // is it a full close or partial?
         // if full close, delete the position, transfer all of the collateral +- PNL
         // if partial close, calculate size delta from the collateral delta and decrease the position
         MarketStructs.Position storage _position = openPositions[_key];
-        uint256 leverage = unwrap(ud(_position.positionSize).div(ud(_position.collateralAmount)));
+        uint256 leverage = TradeHelper.calculateLeverage(_position.positionSize, _position.collateralAmount);
 
         //process the fees for the decrease and return after fee amount
         // Note separate into separate functions => 1 to pay funding to counterparty
@@ -306,42 +247,28 @@ contract TradeStorage is RoleValidation {
 
         uint256 sizeDelta = afterFeeAmount * leverage;
 
-        // only realise a percentage equivalent to the percentage of the position being closed
-        int256 valueDelta = (sizeDelta * _position.averagePricePerToken).toInt256() - (sizeDelta * _price).toInt256();
-        // if long, > 0 is profit, < 0 is loss
-        // if short, > 0 is loss, < 0 is profit
-        int256 pnl;
-        // if profit, add to realised pnl
-        if (valueDelta >= 0) {
-            _position.isLong ? pnl += valueDelta : pnl -= valueDelta;
-        } else {
-            // subtract from realised pnl
-            _position.isLong ? pnl -= valueDelta : pnl += valueDelta;
-        }
+        int256 pnl =
+            PnLCalculator.getDecreasePositionPnL(sizeDelta, _position.averagePricePerToken, _price, _position.isLong);
 
-        _position.realisedPnl += pnl;
-
-        _position.collateralAmount -= afterFeeAmount;
-        _position.positionSize -= sizeDelta;
+        _editPosition(afterFeeAmount, sizeDelta, pnl, 0, false, _key);
 
         // validate the decrease => if removing collat, lev must remain below threshold
         // add the size and collat deltas together
         // transfer that amount
 
-        bytes32 marketKey = getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
+        bytes32 marketKey = TradeHelper.getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
         // Note Separate PNL Substitution => add function here and return afterpnl amount
         _transferOutTokens(
-            _positionRequest.collateralToken, marketKey, _positionRequest.user, _positionRequest.collateralDelta, pnl, _positionRequest.isLong
+            _positionRequest.collateralToken,
+            marketKey,
+            _positionRequest.user,
+            _positionRequest.collateralDelta,
+            pnl,
+            _positionRequest.isLong
         );
 
         if (_position.positionSize == 0) {
-            delete openPositions[_key];
-            uint256 index = openPositions[_key].index;
-            if (_position.isLong) {
-                delete openPositionKeys[_position.market][true][index];
-            } else {
-                delete openPositionKeys[_position.market][false][index];
-            }
+            _deletePosition(_key, marketKey, _position.isLong);
         }
     }
 
@@ -352,8 +279,11 @@ contract TradeStorage is RoleValidation {
         // check that the position exists
         require(openPositions[_positionKey].user != address(0), "Position does not exist");
         // get the position fees
-        uint256 borrowFee = _getBorrowingFees(openPositions[_positionKey]);
-        // int256 fundingFees = _getFundingFees(_positionKey);
+        address market = TradeHelper.getMarket(
+            address(marketStorage), openPositions[_positionKey].indexToken, openPositions[_positionKey].collateralToken
+        );
+        uint256 borrowFee = BorrowingCalculator.getBorrowingFees(market, openPositions[_positionKey]);
+        // int256 fundingFees = FundingCalculator.getFundingFees(_positionKey);
         uint256 feesOwed = borrowFee;
         // fundingFees >= 0 ? feesOwed += fundingFees.toUint256() : feesOwed -= (-fundingFees).toUint256();
         // delete the position from storage
@@ -372,20 +302,54 @@ contract TradeStorage is RoleValidation {
         orderKeys[_isLimit].pop();
     }
 
-    function _validateRequest(bytes32 _key, bool _isLimit) internal view {
-        if (_isLimit) {
-            require(orders[true][_key].user == address(0), "Position already exists");
+    function _deletePosition(bytes32 _positionKey, bytes32 _marketKey, bool _isLong) internal {
+        delete openPositions[_positionKey];
+        uint256 index = openPositions[_positionKey].index;
+        if (_isLong) {
+            delete openPositionKeys[_marketKey][true][index];
         } else {
-            require(orders[false][_key].user == address(0), "Position already exists");
+            delete openPositionKeys[_marketKey][false][index];
         }
     }
 
-    function _generateKey(MarketStructs.PositionRequest memory _positionRequest) internal pure returns (bytes32) {
-        return keccak256(
-            abi.encodePacked(
-                _positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong
-            )
-        );
+    function _editPosition(
+        uint256 _collateralDelta,
+        uint256 _sizeDelta,
+        int256 _pnlDelta,
+        uint256 _price,
+        bool _isIncrease,
+        bytes32 _positionKey
+    ) internal {
+        MarketStructs.Position storage position = openPositions[_positionKey];
+        if (_isIncrease) {
+            if (_collateralDelta != 0) {
+                position.collateralAmount += _collateralDelta;
+            }
+            if (_sizeDelta != 0) {
+                position.positionSize += _sizeDelta;
+            }
+            if (_price != 0) {
+                position.averagePricePerToken =
+                    TradeHelper.calculateNewAveragePricePerToken(position.averagePricePerToken, _price);
+            }
+        } else {
+            if (_collateralDelta != 0) {
+                position.collateralAmount -= _collateralDelta;
+            }
+            if (_sizeDelta != 0) {
+                position.positionSize -= _sizeDelta;
+            }
+            if (_pnlDelta != 0) {
+                position.realisedPnl += _pnlDelta;
+            }
+        }
+    }
+
+    function _createNewPosition(MarketStructs.Position memory _position, bytes32 _positionKey, bytes32 _marketKey)
+        internal
+    {
+        openPositions[_positionKey] = _position;
+        openPositionKeys[_marketKey][_position.isLong].push(_positionKey);
     }
 
     function _assignRequest(bytes32 _key, MarketStructs.PositionRequest memory _positionRequest, bool _isLimit)
@@ -408,13 +372,21 @@ contract TradeStorage is RoleValidation {
     // perhaps need to adopt a plugin transfer method like GMX V1
     // Note Should only Do 1 thing, transfer out tokens and update state
     // Separate PNL substitution
-    function _transferOutTokens(address _token, bytes32 _marketKey, address _to, uint256 _collateralDelta, int256 _pnl, bool _isLong) internal {
+    // Move to TradeVault
+    function _transferOutTokens(
+        address _token,
+        bytes32 _marketKey,
+        address _to,
+        uint256 _collateralDelta,
+        int256 _pnl,
+        bool _isLong
+    ) internal {
         // profit = size now - initial size => initial size is not their
         uint256 amount = _collateralDelta;
         _pnl >= 0 ? amount += _pnl.toUint256() : amount -= (-_pnl).toUint256();
         _isLong ? longCollateral[_marketKey] -= amount : shortCollateral[_marketKey] -= amount;
         // NEED TO ALSO GET PNL FROM LIQUIDITY VAULT TO COVER THIS
-        IERC20(_token).safeTransfer( _to, amount);
+        IERC20(_token).safeTransfer(_to, amount);
     }
 
     function _sendExecutionFee(address _executor, uint256 _executionFee) internal returns (bool) {}
@@ -451,17 +423,16 @@ contract TradeStorage is RoleValidation {
         // }
     }
 
-    function _subtractFundingFee(MarketStructs.Position memory _position, uint256 _collateralDelta) internal returns (uint256 _afterFeeAmount) {
+    function _subtractFundingFee(MarketStructs.Position memory _position, uint256 _collateralDelta)
+        internal
+        returns (uint256 _afterFeeAmount)
+    {
         // get the funding fee owed on the position
-        (uint256 longFundingFees, uint256 shortFundingFees) = _getFundingFees(_position);
-        uint256 fundingFee = _position.isLong ? longFundingFees : shortFundingFees;
-        // if nothing is owed, return the collateral delta
-        if (fundingFee == 0) return _collateralDelta;
-        // if something is owed, subtract it from the collateral delta
-        uint256 fees = unwrap(ud(fundingFee) * ud(_collateralDelta));
+        address market = TradeHelper.getMarket(address(marketStorage), _position.indexToken, _position.collateralToken);
+        uint256 fees = FundingCalculator.getFeeSubtraction(market, _position, _collateralDelta);
         //uint256 feesOwed = unwrap(ud(earnedFundingFees) * ud(position.positionSize));
         // transfer the subtracted amount to the counterparties' liquidity
-        bytes32 marketKey = getMarketKey(_position.indexToken, _position.collateralToken);
+        bytes32 marketKey = TradeHelper.getMarketKey(_position.indexToken, _position.collateralToken);
         if (_position.isLong) {
             shortCollateral[marketKey] += fees;
             longCollateral[marketKey] -= fees;
@@ -469,15 +440,11 @@ contract TradeStorage is RoleValidation {
             longCollateral[marketKey] += fees;
             shortCollateral[marketKey] -= fees;
         }
-        bytes32 _positionKey = keccak256(
-            abi.encodePacked(
-                _position.indexToken, _position.user, _position.isLong
-            ));
+        bytes32 _positionKey = keccak256(abi.encodePacked(_position.indexToken, _position.user, _position.isLong));
         openPositions[_positionKey].fundingParams.feesPaid += fees;
         // return the collateral delta - the funding fee paid to the counterparty
         _afterFeeAmount = _collateralDelta - fees;
     }
-
 
     /// Claim funding fees for a specified position
     function claimFundingFees(bytes32 _positionKey) external {
@@ -486,7 +453,8 @@ contract TradeStorage is RoleValidation {
         // check that the position exists
         require(position.user != address(0), "Position does not exist");
         // get the funding fees a user is eligible to claim for that position
-        (uint256 longFunding, uint256 shortFunding) = _getFundingFees(position);
+        address market = TradeHelper.getMarket(address(marketStorage), position.indexToken, position.collateralToken);
+        (uint256 longFunding, uint256 shortFunding) = FundingCalculator.getFundingFees(market, position);
         // if none, revert
         uint256 earnedFundingFees = position.isLong ? shortFunding : longFunding;
         if (earnedFundingFees == 0) revert("No funding fees to claim"); // Note Update to custom revert
@@ -494,7 +462,7 @@ contract TradeStorage is RoleValidation {
         uint256 feesOwed = unwrap(ud(earnedFundingFees) * ud(position.positionSize)); // Note Check scale
         uint256 claimable = feesOwed - position.fundingParams.realisedFees; // underflow also = no fees
         if (claimable == 0) revert("No funding fees to claim"); // Note Update to custom revert
-        bytes32 marketKey = getMarketKey(position.indexToken, position.collateralToken);
+        bytes32 marketKey = TradeHelper.getMarketKey(position.indexToken, position.collateralToken);
         if (position.isLong) {
             require(shortCollateral[marketKey] >= claimable, "Not enough collateral to claim"); // Almost impossible scenario
         } else {
@@ -508,12 +476,11 @@ contract TradeStorage is RoleValidation {
         IERC20(position.collateralToken).safeTransfer(position.user, claimable);
     }
 
-    function _updateFundingParameters(
-        bytes32 _key,
-        MarketStructs.PositionRequest memory _positionRequest
-    ) internal {
+    function _updateFundingParameters(bytes32 _key, MarketStructs.PositionRequest memory _positionRequest) internal {
+        address market =
+            TradeHelper.getMarket(address(marketStorage), _positionRequest.indexToken, _positionRequest.collateralToken);
         // calculate funding for the position
-        (uint256 longFee, uint256 shortFee) = _getFundingFees(openPositions[_key]);
+        (uint256 longFee, uint256 shortFee) = FundingCalculator.getFundingFees(market, openPositions[_key]);
 
         // update funding parameters for the position
         openPositions[_key].fundingParams.longFeeDebt += longFee;
@@ -524,7 +491,6 @@ contract TradeStorage is RoleValidation {
 
         // get current long and short cumulative funding rates
         // get market address first => then call functions to get rates
-        address market = getMarket(_positionRequest.indexToken, _positionRequest.collateralToken);
         uint256 longCumulative = IMarket(market).longCumulativeFundingFees();
         uint256 shortCumulative = IMarket(market).shortCumulativeFundingFees();
 
@@ -541,7 +507,7 @@ contract TradeStorage is RoleValidation {
     //////////////////////
 
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
-        require(_liquidationFee <= MAX_LIQUIDATION_FEE, "Liquidation fee too high");
+        require(_liquidationFee <= TradeHelper.MAX_LIQUIDATION_FEE, "Liquidation fee too high");
         liquidationFeeUsd = _liquidationFee;
         tradingFee = _tradingFee;
     }
@@ -551,21 +517,9 @@ contract TradeStorage is RoleValidation {
     //////////////////////
 
     function getPositionFees(MarketStructs.Position memory _position) public view returns (uint256, uint256) {
-        address market = marketStorage.getMarket(_position.market).market;
+        address market = TradeHelper.getMarket(address(marketStorage), _position.indexToken, _position.collateralToken);
         uint256 borrowFee = IMarket(market).getBorrowingFees(_position);
         return (borrowFee, liquidationFeeUsd);
-    }
-
-    // if return value is negative, they're owed funding fees
-    // if return value is positive, they owe funding fees
-    function _getFundingFees(MarketStructs.Position memory _position) internal view returns (uint256 _longFunding, uint256 _shortFunding) {
-        address market = marketStorage.getMarket(_position.market).market;
-        return IMarket(market).getFundingFees(_position);
-    }
-
-    function _getBorrowingFees(MarketStructs.Position memory _position) internal view returns (uint256) {
-        address market = marketStorage.getMarket(_position.market).market;
-        return IMarket(market).getBorrowingFees(_position);
     }
 
     function getOrderKeys() external view returns (bytes32[] memory, bytes32[] memory) {
@@ -576,41 +530,8 @@ contract TradeStorage is RoleValidation {
         return (orderKeys[false].length, orderKeys[true].length);
     }
 
-    function getMarket(address _indexToken, address _collateralToken) public view returns (address) {
-        bytes32 market = keccak256(abi.encodePacked(_indexToken, _collateralToken));
-        return marketStorage.getMarket(market).market;
-    }
-
-    function getMarketKey(address _indexToken, address _collateralToken) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(_indexToken, _collateralToken));
-    }
-
-    //////////////////
-    // PRICE IMPACT //
-    //////////////////
-
-    // Note Wrong => Needs PRB Math not Scale Factor
-    // Review
-    function _applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpact, bool _isLong)
-        internal
-        pure
-        returns (uint256)
-    {
-        // Scaling factor; for example, 10^4 to handle four decimal places
-        uint256 scaleFactor = 10 ** 4;
-
-        // Convert priceImpact to scaled integer (e.g., 0.1% becomes 10 when scaleFactor is 10^4)
-        uint256 scaledImpact = (_priceImpact >= 0 ? _priceImpact : -_priceImpact).toUint256() * scaleFactor / 100;
-
-        // Calculate the price change due to impact, then scale down
-        uint256 priceDelta = (_signedBlockPrice * scaledImpact) / scaleFactor;
-
-        // Apply the price impact
-        if ((_priceImpact >= 0 && !_isLong) || (_priceImpact < 0 && _isLong)) {
-            return _signedBlockPrice + priceDelta;
-        } else {
-            return _signedBlockPrice - priceDelta; // Ensure non-negative
-        }
+    function getNextPositionIndex(bytes32 _marketKey, bool _isLong) external view returns (uint256) {
+        return openPositionKeys[_marketKey][_isLong].length - 1;
     }
 
     ////////////////////
@@ -620,6 +541,4 @@ contract TradeStorage is RoleValidation {
     function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong) external onlyRouter {
         _isLong ? longCollateral[_marketKey] += _amount : shortCollateral[_marketKey] += _amount;
     }
-
-
 }
