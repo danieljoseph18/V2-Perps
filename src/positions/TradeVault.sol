@@ -9,24 +9,40 @@ contract TradeVault is RoleValidation {
     using SafeERC20 for IERC20;
     // contract responsible for handling all tokens
 
+    address public collateralToken;
     mapping(bytes32 _marketKey => uint256 _collateral) public longCollateral;
     mapping(bytes32 _marketKey => uint256 _collateral) public shortCollateral;
 
+
     mapping(address _user => uint256 _rewards) public liquidationRewards;
 
-    constructor() RoleValidation(roleStorage) {}
+    constructor(address _collateralToken) RoleValidation(roleStorage) {
+        collateralToken = _collateralToken;
+    }
 
-    // contract must be validated to transfer funds from TradeStorage
-    // perhaps need to adopt a plugin transfer method like GMX V1
-    // Note Should only Do 1 thing, transfer out tokens and update state
-    // Separate PNL substitution
     function transferOutTokens(address _token, bytes32 _marketKey, address _to, uint256 _collateralDelta, bool _isLong)
         external
+        onlyTradeStorage
     {
+        require(_token == collateralToken, "TradeVault: token not collateral");
+        require(longCollateral[_marketKey] != 0, "TradeVault: incorrect market key");
+        require(_to != address(0), "TradeVault: cannot transfer to 0 address");
+        require(_collateralDelta != 0, "TradeVault: cannot transfer 0 tokens");
+        require(_isLong ? longCollateral[_marketKey] >= _collateralDelta : shortCollateral[_marketKey] >= _collateralDelta, "TradeVault: insufficient collateral");
         // profit = size now - initial size => initial size is not their
         uint256 amount = _collateralDelta;
         _isLong ? longCollateral[_marketKey] -= amount : shortCollateral[_marketKey] -= amount;
         // NEED TO ALSO GET PNL FROM LIQUIDITY VAULT TO COVER THIS
         IERC20(_token).safeTransfer(_to, amount);
     }
+
+    // Note Also needs to be callable from TradeStorage
+    function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong, bool _isIncrease) external onlyRouter {
+        if (_isLong) {
+            _isIncrease ? longCollateral[_marketKey] += _amount : longCollateral[_marketKey] -= _amount;
+        } else {
+            _isIncrease ? shortCollateral[_marketKey] += _amount : shortCollateral[_marketKey] -= _amount;
+        }
+    }
+
 }

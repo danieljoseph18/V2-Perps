@@ -88,6 +88,11 @@ library TradeHelper {
         });
     }
 
+    function calculateTradingFee(address _tradeStorage, uint256 _sizeDelta) external view returns (uint256) {
+        uint256 tradingFee = ITradeStorage(_tradeStorage).tradingFee();
+        return unwrap(ud(_sizeDelta).mul(ud(tradingFee))); //e.g 0.01e18 * 100e18 / 1e18 = 1e18 = 1 Token fee
+    }
+
     function getMarket(address _marketStorage, address _indexToken, address _collateralToken)
         public
         view

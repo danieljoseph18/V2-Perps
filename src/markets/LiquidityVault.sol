@@ -184,6 +184,10 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         return _amount - unwrap(amount.mul(liqFee));
     }
 
+    function accumulateFees(uint256 _amount) external onlyTradeStorage {
+        accumulatedFees += _amount;
+    }
+
     ///////////
     // STATE //
     ///////////

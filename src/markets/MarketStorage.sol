@@ -125,6 +125,22 @@ contract MarketStorage is RoleValidation {
     /// @param _marketKey The key of the market to update
     /// Note Create Vault Updater contract to update the state of the Vault for this function
     /// Review after completion of market params (funding, borrowing, price impact)
+    /* 
+        Idea: When a user creates a large trade request that will put the market's open interest
+        above the total allocation, the allocation should be increased to accomodate for the trade.
+        This will enable large trades on newer assets.
+        To do this, add a market allocation step in trade requests.
+        Market allocation should also include decreasing markets with low liquidity to free up
+        resources in other areas.
+        This of the allocation system as a resource distribution system, where markets are the
+        computers requesting a share of the resources, the liquidity vault is the CPU
+        and the allocation is the amount of CPU power allocated to each market.
+        Allocation should be a function of market complexity, not just open interest as this
+        could be represented by 1 or 2 traders. Other factors such as the number of traders,
+        average size of position, recency of trades, average time of trades, average pnl
+         should be considered. If a market is losing a lot (PNL heavily skewed negative) it can
+         be allocated more resources as this would be more profitable for LPs.
+    */
     function updateMarketAllocation(bytes32 _marketKey) external onlyStateUpdater {
         require(markets[_marketKey].market != address(0), "Market does not exist");
 

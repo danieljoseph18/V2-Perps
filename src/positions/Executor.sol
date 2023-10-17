@@ -101,6 +101,11 @@ contract Executor is RoleValidation {
     }
 
     // make facilitate increase and decrease
+    /**
+        Note: Should handle transfer of the execution fee in this contract in the same transaction.
+        If the position creation is succesful (i.e doesn't revert or returns true) then transfer the
+        execution fee to the executor at the end of the function
+     */
     function _executeTradeOrder(bytes32 _key, address _executor, bool _isLimit) internal {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);

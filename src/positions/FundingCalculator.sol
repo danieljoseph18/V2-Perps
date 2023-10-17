@@ -56,16 +56,4 @@ library FundingCalculator {
         return (longAccumulatedFunding, shortAccumulatedFunding);
     }
 
-    function getFeeSubtraction(address _market, MarketStructs.Position memory _position, uint256 _collateralDelta)
-        external
-        view
-        returns (uint256)
-    {
-        (uint256 longFundingFees, uint256 shortFundingFees) = getFundingFees(_market, _position);
-        uint256 fundingFee = _position.isLong ? longFundingFees : shortFundingFees;
-        // if nothing is owed, return the collateral delta
-        if (fundingFee == 0) return _collateralDelta;
-        // if something is owed, subtract it from the collateral delta
-        return unwrap(ud(fundingFee) * ud(_collateralDelta));
-    }
 }

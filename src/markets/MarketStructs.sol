@@ -37,10 +37,10 @@ library MarketStructs {
 
     struct FundingParams {
         uint256 realisedFees; // fees realised by position
-        uint256 feesPaid; // fees paid by position
         uint256 longFeeDebt; // fees owed by longs per token
         uint256 shortFeeDebt; // fees owed by shorts per token
-        uint256 claimableFees; // fees that can be claimed by the position
+        uint256 feesEarned; // fees earned by the position per token
+        uint256 feesOwed; // fees owed by the position per token
         uint256 lastFundingUpdate; // last time funding was updated
         uint256 lastLongCumulativeFunding; // last cumulative funding rate for longs
         uint256 lastShortCumulativeFunding; // last cumulative funding rate for shorts

@@ -21,4 +21,10 @@ library BorrowingCalculator {
             ? IMarket(_market).longCumulativeBorrowFee() - _position.borrowParams.entryLongCumulativeBorrowFee
             : IMarket(_market).shortCumulativeBorrowFee() - _position.borrowParams.entryShortCumulativeBorrowFee;
     }
+
+    function calculateBorrowingFee(address _market, MarketStructs.Position memory _position, uint256 _collateralDelta) public view returns (uint256) {
+        return _position.isLong
+            ? (IMarket(_market).longCumulativeBorrowFee() - _position.borrowParams.entryLongCumulativeBorrowFee) * _collateralDelta
+            : (IMarket(_market).shortCumulativeBorrowFee() - _position.borrowParams.entryShortCumulativeBorrowFee) * _collateralDelta;
+    }
 }
