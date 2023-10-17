@@ -60,4 +60,5 @@ interface IMarket {
     function shortBorrowingRate() external view returns (uint256);
     function longCumulativePricePerToken() external view returns (uint256);
     function shortCumulativePricePerToken() external view returns (uint256);
+    function indexToken() external view returns (address);
 }

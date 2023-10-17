@@ -2,19 +2,9 @@
 pragma solidity 0.8.20;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {SD59x18, sd, unwrap, pow} from "@prb/math/SD59x18.sol";
-import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {FundingCalculator} from "./FundingCalculator.sol";
 
 contract FeeProcessor is RoleValidation {
-    using SafeCast for uint256;
-    using SafeCast for int256;
     // contract handles the processing of all fees using the available libraries
 
     constructor() RoleValidation(roleStorage) {}

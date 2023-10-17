@@ -21,13 +21,14 @@ interface IMarketStorage {
         bool _shouldAdd
     ) external;
 
-    function keys(uint256 index) external view returns (bytes32);
+    function marketKeys() external view returns (bytes32[] memory);
     function markets(bytes32 _key) external view returns (MarketStructs.Market memory);
     function positions(bytes32 _key) external view returns (MarketStructs.Position memory);
     function collatTokenLongOpenInterest(bytes32 _key) external view returns (uint256);
     function collatTokenShortOpenInterest(bytes32 _key) external view returns (uint256);
     function indexTokenLongOpenInterest(bytes32 _key) external view returns (uint256);
     function indexTokenShortOpenInterest(bytes32 _key) external view returns (uint256);
-    function updateMarketAllocation(bytes32 _marketKey) external;
+    function updateMarketAllocation(bytes32 _marketKey, uint256 _newAllocation, uint256 _maxOI) external;
     function setIsWhitelisted(address _token, bool _isWhitelisted) external;
+    function overCollateralizationRatio() external view returns (uint256);
 }

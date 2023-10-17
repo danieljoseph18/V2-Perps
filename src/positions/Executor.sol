@@ -7,8 +7,6 @@ import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 
@@ -16,7 +14,6 @@ import {TradeHelper} from "./TradeHelper.sol";
 contract Executor is RoleValidation {
     error Executor_LimitNotHit();
 
-    using SafeERC20 for IERC20;
     // contract for executing trades
     // will be called by the TradeManager
     // will execute trades on the market contract
@@ -105,9 +102,9 @@ contract Executor is RoleValidation {
 
     // make facilitate increase and decrease
     /**
-        Note: Should handle transfer of the execution fee in this contract in the same transaction.
-        If the position creation is succesful (i.e doesn't revert or returns true) then transfer the
-        execution fee to the executor at the end of the function
+     * Note: Should handle transfer of the execution fee in this contract in the same transaction.
+     *     If the position creation is succesful (i.e doesn't revert or returns true) then transfer the
+     *     execution fee to the executor at the end of the function
      */
     function _executeTradeOrder(bytes32 _key, address _executor, bool _isLimit) internal {
         // get the position

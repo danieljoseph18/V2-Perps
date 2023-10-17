@@ -197,6 +197,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     ///////////
 
     /// Note Needs to be called by keepers to regularly update the state of the net pnl and OI
+    /// @dev Computation kept separate to future-proof against gas constraints.
     function updateState(int256 _netPnL, uint256 _netOpenInterest) external onlyStateUpdater {
         if (block.timestamp < lastStateUpdate + STATE_UPDATE_INTERVAL) {
             revert LiquidityVault_UpkeepNotNeeded();

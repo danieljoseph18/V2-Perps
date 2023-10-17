@@ -16,7 +16,7 @@ contract MarketStorage is RoleValidation {
 
     ILiquidityVault public liquidityVault;
 
-    bytes32[] public keys;
+    bytes32[] public marketKeys;
     mapping(bytes32 _marketKey => MarketStructs.Market) public markets;
 
     // reps liquidity allocated to each market in USDC
@@ -26,6 +26,7 @@ contract MarketStorage is RoleValidation {
     // Need a minimum allocation or users won't be able to trade new markets
     // Or we set allocation based on expected demand before trading commences
     mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
+    mapping(bytes32 _marketKey => uint256 _maxOI) public maxOpenInterests;
 
     // tracked by a bytes 32 key
     mapping(bytes32 _positionKey => MarketStructs.Position) public positions;
@@ -43,6 +44,7 @@ contract MarketStorage is RoleValidation {
     error MarketStorage_MarketAlreadyExists();
     error MarketStorage_NonExistentMarket();
 
+    /// Note move init number to initialize function
     constructor(ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
         liquidityVault = _liquidityVault;
         overCollateralizationRatio = 1.5e18; // 1.5 / 150%
@@ -53,7 +55,7 @@ contract MarketStorage is RoleValidation {
         bytes32 _key = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
         if (markets[_key].market != address(0)) revert MarketStorage_MarketAlreadyExists();
         // Store the market in the contract's storage
-        keys.push(_key);
+        marketKeys.push(_key);
         markets[_key] = _market;
     }
 
@@ -144,23 +146,13 @@ contract MarketStorage is RoleValidation {
          should be considered. If a market is losing a lot (PNL heavily skewed negative) it can
          be allocated more resources as this would be more profitable for LPs.
     */
-    function updateMarketAllocation(bytes32 _marketKey) external onlyStateUpdater {
+    /// @dev Repeat execution kept separate to future proof against gas constraints
+    function updateMarketAllocation(bytes32 _marketKey, uint256 _newAllocation, uint256 _maxOI)
+        external
+        onlyStateUpdater
+    {
         if (markets[_marketKey].market == address(0)) revert MarketStorage_NonExistentMarket();
-
-        uint256 totalOpenInterest = liquidityVault.getNetOpenInterest(); // Total OI across all markets
-        uint256 marketOpenInterest = IMarket(markets[_marketKey].market).getTotalOpenInterest(); // OI for this market
-
-        if (totalOpenInterest == 0 || marketOpenInterest == 0) {
-            marketAllocations[_marketKey] = 0;
-            return;
-        }
-
-        UD60x18 adjustedMarketOI = ud(marketOpenInterest).div(ud(overCollateralizationRatio)); // Adjust OI based on collateralization
-
-        UD60x18 allocation = adjustedMarketOI.div(ud(totalOpenInterest));
-
-        UD60x18 newAllocation = ud(liquidityVault.getAum()) * allocation; // Calculate new allocation
-
-        marketAllocations[_marketKey] = unwrap(newAllocation); // Update mapping
+        marketAllocations[_marketKey] = _newAllocation;
+        maxOpenInterests[_marketKey] = _maxOI;
     }
 }

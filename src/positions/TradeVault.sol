@@ -13,7 +13,6 @@ contract TradeVault is RoleValidation {
     mapping(bytes32 _marketKey => uint256 _collateral) public longCollateral;
     mapping(bytes32 _marketKey => uint256 _collateral) public shortCollateral;
 
-
     mapping(address _user => uint256 _rewards) public liquidationRewards;
 
     error TradeVault_InvalidToken();
@@ -47,12 +46,14 @@ contract TradeVault is RoleValidation {
     }
 
     // Note Also needs to be callable from TradeStorage
-    function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong, bool _isIncrease) external onlyRouter {
+    function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong, bool _isIncrease)
+        external
+        onlyRouter
+    {
         if (_isLong) {
             _isIncrease ? longCollateral[_marketKey] += _amount : longCollateral[_marketKey] -= _amount;
         } else {
             _isIncrease ? shortCollateral[_marketKey] += _amount : shortCollateral[_marketKey] -= _amount;
         }
     }
-
 }

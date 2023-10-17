@@ -51,9 +51,10 @@ contract TradeStorage is RoleValidation {
     error TradeStorage_LiquidationFeeExceedsMax();
     error TradeStorage_TradingFeeExceedsMax();
 
-
     /// Note Move all number initializations to an initialize function
-    constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault, ITradeVault _tradeVault) RoleValidation(roleStorage) {
+    constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault, ITradeVault _tradeVault)
+        RoleValidation(roleStorage)
+    {
         marketStorage = _marketStorage;
         liquidityVault = _liquidityVault;
         tradeVault = _tradeVault;
@@ -130,9 +131,11 @@ contract TradeStorage is RoleValidation {
         return openPositions[key];
     }
 
-    function _executeCollateralEdit(MarketStructs.PositionRequest memory _positionRequest, uint256 _price, bytes32 _positionKey)
-        internal
-    {
+    function _executeCollateralEdit(
+        MarketStructs.PositionRequest memory _positionRequest,
+        uint256 _price,
+        bytes32 _positionKey
+    ) internal {
         // check the position exists
         if (openPositions[_positionKey].user == address(0)) revert TradeStorage_PositionDoesNotExist();
         // if limit => ensure the limit has been met before deleting
@@ -167,9 +170,11 @@ contract TradeStorage is RoleValidation {
         }
     }
 
-    function _executeSizeEdit(MarketStructs.PositionRequest memory _positionRequest, uint256 _price, bytes32 _positionKey)
-        internal
-    {
+    function _executeSizeEdit(
+        MarketStructs.PositionRequest memory _positionRequest,
+        uint256 _price,
+        bytes32 _positionKey
+    ) internal {
         // check the position exists
         if (openPositions[_positionKey].user == address(0)) revert TradeStorage_PositionDoesNotExist();
         // delete the request
@@ -465,12 +470,16 @@ contract TradeStorage is RoleValidation {
         // if some to claim, add to realised funding of the position
         openPositions[_positionKey].fundingParams.realisedFees += claimable;
         // transfer funding from the counter parties' liquidity pool
-        position.isLong ? tradeVault.updateCollateralBalance(marketKey, claimable, false, false) : tradeVault.updateCollateralBalance(marketKey, claimable, true, false);
+        position.isLong
+            ? tradeVault.updateCollateralBalance(marketKey, claimable, false, false)
+            : tradeVault.updateCollateralBalance(marketKey, claimable, true, false);
         // transfer funding to the user
         IERC20(position.collateralToken).safeTransfer(position.user, claimable);
     }
 
-    function _updateFundingParameters(bytes32 _positionKey, MarketStructs.PositionRequest memory _positionRequest) internal {
+    function _updateFundingParameters(bytes32 _positionKey, MarketStructs.PositionRequest memory _positionRequest)
+        internal
+    {
         address market =
             TradeHelper.getMarket(address(marketStorage), _positionRequest.indexToken, _positionRequest.collateralToken);
         // calculate funding for the position
@@ -480,8 +489,12 @@ contract TradeStorage is RoleValidation {
         openPositions[_positionKey].fundingParams.longFeeDebt += longFee;
         openPositions[_positionKey].fundingParams.shortFeeDebt += shortFee;
 
-        uint256 earned = openPositions[_positionKey].isLong ? shortFee * openPositions[_positionKey].positionSize : longFee * openPositions[_positionKey].positionSize;
-        uint256 owed = openPositions[_positionKey].isLong ? longFee * openPositions[_positionKey].positionSize : shortFee * openPositions[_positionKey].positionSize;
+        uint256 earned = openPositions[_positionKey].isLong
+            ? shortFee * openPositions[_positionKey].positionSize
+            : longFee * openPositions[_positionKey].positionSize;
+        uint256 owed = openPositions[_positionKey].isLong
+            ? longFee * openPositions[_positionKey].positionSize
+            : shortFee * openPositions[_positionKey].positionSize;
         openPositions[_positionKey].fundingParams.feesEarned += earned;
         openPositions[_positionKey].fundingParams.feesOwed += owed;
 
@@ -530,5 +543,4 @@ contract TradeStorage is RoleValidation {
     function getNextPositionIndex(bytes32 _marketKey, bool _isLong) external view returns (uint256) {
         return openPositionKeys[_marketKey][_isLong].length - 1;
     }
-
 }

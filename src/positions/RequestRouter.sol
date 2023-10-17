@@ -33,7 +33,12 @@ contract RequestRouter {
     error RequestRouter_ExecutionFeeTransferFailed();
     error RequestRouter_PositionSizeTooLarge();
 
-    constructor(ITradeStorage _tradeStorage, ILiquidityVault _liquidityVault, IMarketStorage _marketStorage, ITradeVault _tradeVault) {
+    constructor(
+        ITradeStorage _tradeStorage,
+        ILiquidityVault _liquidityVault,
+        IMarketStorage _marketStorage,
+        ITradeVault _tradeVault
+    ) {
         tradeStorage = _tradeStorage;
         liquidityVault = _liquidityVault;
         marketStorage = _marketStorage;
@@ -76,7 +81,9 @@ contract RequestRouter {
 
         _positionRequest.requestIndex = index;
         _positionRequest.requestBlock = block.number;
-        _positionRequest.priceImpact = ImpactCalculator.calculatePriceImpact(address(marketStorage), marketKey, _positionRequest, _positionRequest.isIncrease);
+        _positionRequest.priceImpact = ImpactCalculator.calculatePriceImpact(
+            address(marketStorage), marketKey, _positionRequest, _positionRequest.isIncrease
+        );
 
         tradeStorage.createOrderRequest(_positionRequest);
     }
@@ -113,7 +120,9 @@ contract RequestRouter {
             isIncrease: false
         });
         bytes32 marketKey = TradeHelper.getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
-        _positionRequest.priceImpact = ImpactCalculator.calculatePriceImpact(address(marketStorage), marketKey, _positionRequest, _positionRequest.isIncrease);
+        _positionRequest.priceImpact = ImpactCalculator.calculatePriceImpact(
+            address(marketStorage), marketKey, _positionRequest, _positionRequest.isIncrease
+        );
         tradeStorage.createOrderRequest(_positionRequest);
     }
 
@@ -138,8 +147,12 @@ contract RequestRouter {
         IERC20(_positionRequest.collateralToken).safeTransferFrom(_positionRequest.user, address(liquidityVault), fee);
         // transfer the rest of the collateral to trade vault and updateCollateralBalance
         uint256 collateralAmount = _positionRequest.collateralDelta - fee;
-        tradeVault.updateCollateralBalance(_marketKey, collateralAmount, _positionRequest.isLong, _positionRequest.isIncrease);
-        IERC20(_positionRequest.collateralToken).safeTransferFrom(_positionRequest.user, address(tradeVault), collateralAmount);
+        tradeVault.updateCollateralBalance(
+            _marketKey, collateralAmount, _positionRequest.isLong, _positionRequest.isIncrease
+        );
+        IERC20(_positionRequest.collateralToken).safeTransferFrom(
+            _positionRequest.user, address(tradeVault), collateralAmount
+        );
     }
 
     function _sendExecutionFeeToStorage(uint256 _executionFee) internal returns (bool) {
@@ -160,5 +173,4 @@ contract RequestRouter {
         uint256 maxOI = (allocation / overcollateralization) * 100;
         if (totalOI + _sizeDelta > maxOI) revert RequestRouter_PositionSizeTooLarge();
     }
-
 }

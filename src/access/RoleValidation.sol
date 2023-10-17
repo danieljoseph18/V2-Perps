@@ -8,73 +8,75 @@ import {Roles} from "./Roles.sol";
 contract RoleValidation {
     RoleStorage public immutable roleStorage;
 
+    error RoleValidation_AccessDenied();
+
     modifier onlyAdmin() {
-        require(roleStorage.hasRole(Roles.DEFAULT_ADMIN_ROLE, msg.sender), "Sender must be admin");
+        if (!roleStorage.hasRole(Roles.DEFAULT_ADMIN_ROLE, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyModerator() {
-        require(roleStorage.hasRole(Roles.MODERATOR, msg.sender), "Sender must be a moderator");
+        if (!roleStorage.hasRole(Roles.MODERATOR, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyMarketMaker() {
-        require(roleStorage.hasRole(Roles.MARKET_MAKER, msg.sender), "Sender must be market maker");
+        if (!roleStorage.hasRole(Roles.MARKET_MAKER, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyLiquidator() {
-        require(roleStorage.hasRole(Roles.LIQUIDATOR, msg.sender), "Sender must be liquidator");
+        if (!roleStorage.hasRole(Roles.LIQUIDATOR, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyExecutor() {
-        require(roleStorage.hasRole(Roles.EXECUTOR, msg.sender), "Sender must be executor");
+        if (!roleStorage.hasRole(Roles.EXECUTOR, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyConfigurator() {
-        require(roleStorage.hasRole(Roles.CONFIGURATOR, msg.sender), "Sender must be configurator");
+        if (!roleStorage.hasRole(Roles.CONFIGURATOR, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyFactory() {
-        require(roleStorage.hasRole(Roles.FACTORY, msg.sender), "Sender must be factory");
+        if (!roleStorage.hasRole(Roles.FACTORY, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyTradeStorage() {
-        require(roleStorage.hasRole(Roles.TRADE_STORAGE, msg.sender), "Sender must be storage");
+        if (!roleStorage.hasRole(Roles.TRADE_STORAGE, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyVault() {
-        require(roleStorage.hasRole(Roles.VAULT, msg.sender), "Sender must be vault");
+        if (!roleStorage.hasRole(Roles.VAULT, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyKeeper() {
-        require(roleStorage.hasRole(Roles.KEEPER, msg.sender), "Sender must be keeper");
+        if (!roleStorage.hasRole(Roles.KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyRouter() {
-        require(roleStorage.hasRole(Roles.ROUTER, msg.sender), "Sender must be router");
+        if (!roleStorage.hasRole(Roles.ROUTER, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyStateUpdater() {
-        require(roleStorage.hasRole(Roles.STATE_UPDATER, msg.sender), "Sender must be state updater");
+        if (!roleStorage.hasRole(Roles.STATE_UPDATER, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyStateKeeper() {
-        require(roleStorage.hasRole(Roles.STATE_KEEPER, msg.sender), "Sender must be state keeper");
+        if (!roleStorage.hasRole(Roles.STATE_KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
     modifier onlyMarketStorage() {
-        require(roleStorage.hasRole(Roles.MARKET_STORAGE, msg.sender), "Sender must be market storage");
+        if (!roleStorage.hasRole(Roles.MARKET_STORAGE, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
