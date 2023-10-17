@@ -20,6 +20,10 @@ contract MarketFactory is RoleValidation {
 
     event MarketCreated(address indexed indexToken, address indexed stablecoin, address market);
 
+    error MarketFactory_TokenNotWhitelisted();
+    error MarketFactory_IncorrectCollateralToken();
+    error MarketFactory_MarketAlreadyExists();
+
     constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault, ITradeStorage _tradeStorage)
         RoleValidation(roleStorage)
     {
@@ -29,21 +33,21 @@ contract MarketFactory is RoleValidation {
     }
 
     // Only callable by MARKET_MAKER roles
-    function createMarket(address _indexToken, address _stablecoin) public onlyAdmin {
+    function createMarket(address _indexToken, address _collateralToken) public onlyAdmin {
         // long and short tokens cant be same, short must be stables
-        require(marketStorage.isStable(_stablecoin), "Short token must be a stable token");
-        require(_stablecoin != address(0), "Zero address not allowed");
-        require(_indexToken != address(0), "Zero address not allowed");
+        if (!marketStorage.isWhitelistedToken(_indexToken)) revert MarketFactory_TokenNotWhitelisted();
+        if (_collateralToken != liquidityVault.collateralToken()) revert MarketFactory_IncorrectCollateralToken();
+
         // pool cant already exist
-        bytes32 _key = keccak256(abi.encodePacked(_indexToken, _stablecoin));
-        require(marketStorage.getMarket(_key).market == address(0), "Market already exists");
+        bytes32 _key = keccak256(abi.encodePacked(_indexToken, _collateralToken));
+        if (marketStorage.getMarket(_key).market != address(0)) revert MarketFactory_MarketAlreadyExists();
         // Create new Market contract
-        Market _market = new Market(_indexToken, _stablecoin, marketStorage, liquidityVault, tradeStorage);
+        Market _market = new Market(_indexToken, _collateralToken, marketStorage, liquidityVault, tradeStorage);
         // Store everything in MarketStorage
-        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, _stablecoin, address(_market));
+        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, _collateralToken, address(_market));
         marketStorage.storeMarket(_marketInfo);
         liquidityVault.addMarket(_marketInfo);
 
-        emit MarketCreated(_indexToken, _stablecoin, address(_market));
+        emit MarketCreated(_indexToken, _collateralToken, address(_market));
     }
 }

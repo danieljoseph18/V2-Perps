@@ -35,6 +35,7 @@ interface ILiquidityVault {
     function updateLiquidityFee(uint256 _fee) external;
 
     // Getters for state variables
+    function collateralToken() external view returns (address);
     function getStablecoin() external view returns (address);
     function getLiquidityToken() external view returns (address);
     function getPoolAmounts(address _token) external view returns (uint256);

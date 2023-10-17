@@ -10,6 +10,7 @@ import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
+import {TradeHelper} from "./TradeHelper.sol";
 
 /// @dev Needs Executor Role
 contract Executor is RoleValidation {
@@ -26,6 +27,8 @@ contract Executor is RoleValidation {
     ITradeStorage public tradeStorage;
     address public priceOracle;
     ILiquidityVault public liquidityVault;
+
+    error Executor_InvalidRequestKey();
 
     constructor(
         IMarketStorage _marketStorage,
@@ -109,7 +112,7 @@ contract Executor is RoleValidation {
     function _executeTradeOrder(bytes32 _key, address _executor, bool _isLimit) internal {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);
-        require(_positionRequest.user != address(0), "Executor: Invalid Request Key");
+        if (_positionRequest.user == address(0)) revert Executor_InvalidRequestKey();
         // get the market and block to get the signed block price
         address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(
             _positionRequest.indexToken, _positionRequest.collateralToken
@@ -118,11 +121,7 @@ contract Executor is RoleValidation {
         uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(_market, _block);
 
         if (_isLimit) {
-            require(
-                (_positionRequest.isLong && _signedBlockPrice <= _positionRequest.acceptablePrice)
-                    || (!_positionRequest.isLong && _signedBlockPrice >= _positionRequest.acceptablePrice),
-                "Executor: Price Target Not Hit"
-            );
+            TradeHelper.checkLimitPrice(_signedBlockPrice, _positionRequest);
         }
         // execute the trade
         MarketStructs.Position memory _position =

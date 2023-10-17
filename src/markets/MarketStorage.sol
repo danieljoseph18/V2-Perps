@@ -30,8 +30,8 @@ contract MarketStorage is RoleValidation {
     // tracked by a bytes 32 key
     mapping(bytes32 _positionKey => MarketStructs.Position) public positions;
 
-    // tracks globally allowed stablecoins
-    mapping(address _stablecoin => bool _isWhitelisted) public isStable;
+    // tracks globally allowed collateral
+    mapping(address _token => bool _isWhitelisted) public isWhitelistedToken;
 
     mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenLongOpenInterest; // OI of collat token long
     mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenShortOpenInterest;
@@ -39,6 +39,9 @@ contract MarketStorage is RoleValidation {
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenShortOpenInterest;
 
     uint256 public overCollateralizationRatio; // 150e18 = 150% ratio => 1.5x collateral
+
+    error MarketStorage_MarketAlreadyExists();
+    error MarketStorage_NonExistentMarket();
 
     constructor(ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
         liquidityVault = _liquidityVault;
@@ -48,15 +51,15 @@ contract MarketStorage is RoleValidation {
     /// @dev Only MarketFactory
     function storeMarket(MarketStructs.Market memory _market) external onlyMarketMaker {
         bytes32 _key = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
-        require(markets[_key].market == address(0), "Market already exists");
+        if (markets[_key].market != address(0)) revert MarketStorage_MarketAlreadyExists();
         // Store the market in the contract's storage
         keys.push(_key);
         markets[_key] = _market;
     }
 
     /// @dev Only GlobalMarketConfig
-    function setIsStable(address _stablecoin, bool _isStable) external onlyConfigurator {
-        isStable[_stablecoin] = _isStable;
+    function setIsWhitelisted(address _token, bool _isWhitelisted) external onlyConfigurator {
+        isWhitelistedToken[_token] = _isWhitelisted;
     }
 
     // should only be callable by permissioned roles STORAGE_ADMIN
@@ -142,7 +145,7 @@ contract MarketStorage is RoleValidation {
          be allocated more resources as this would be more profitable for LPs.
     */
     function updateMarketAllocation(bytes32 _marketKey) external onlyStateUpdater {
-        require(markets[_marketKey].market != address(0), "Market does not exist");
+        if (markets[_marketKey].market == address(0)) revert MarketStorage_NonExistentMarket();
 
         uint256 totalOpenInterest = liquidityVault.getNetOpenInterest(); // Total OI across all markets
         uint256 marketOpenInterest = IMarket(markets[_marketKey].market).getTotalOpenInterest(); // OI for this market

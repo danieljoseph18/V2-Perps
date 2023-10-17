@@ -43,6 +43,14 @@ contract TradeStorage is RoleValidation {
     uint256 public minExecutionFee = 0.001 ether;
     uint256 public accumulatedBorrowFees;
 
+    error TradeStorage_InsufficientBalance();
+    error TradeStorage_OrderDoesNotExist();
+    error TradeStorage_PositionDoesNotExist();
+    error TradeStorage_FeeExceedsCollateralDelta();
+    error TradeStorage_InsufficientCollateralToClaim();
+    error TradeStorage_LiquidationFeeExceedsMax();
+    error TradeStorage_TradingFeeExceedsMax();
+
 
     /// Note Move all number initializations to an initialize function
     constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault, ITradeVault _tradeVault) RoleValidation(roleStorage) {
@@ -65,7 +73,7 @@ contract TradeStorage is RoleValidation {
 
     /// Note Caller must be request creator
     function cancelOrderRequest(bytes32 _positionKey, bool _isLimit) external onlyRouter {
-        require(orders[_isLimit][_positionKey].user != address(0), "Order does not exist");
+        if (orders[_isLimit][_positionKey].user == address(0)) revert TradeStorage_OrderDoesNotExist();
 
         uint256 index = orders[_isLimit][_positionKey].requestIndex;
         uint256 lastIndex = orderKeys[_isLimit].length - 1;
@@ -126,7 +134,7 @@ contract TradeStorage is RoleValidation {
         internal
     {
         // check the position exists
-        require(openPositions[_positionKey].user != address(0), "Position does not exist");
+        if (openPositions[_positionKey].user == address(0)) revert TradeStorage_PositionDoesNotExist();
         // if limit => ensure the limit has been met before deleting
         if (_positionRequest.isLimit) TradeHelper.checkLimitPrice(_price, _positionRequest);
         // delete the request
@@ -163,7 +171,7 @@ contract TradeStorage is RoleValidation {
         internal
     {
         // check the position exists
-        require(openPositions[_positionKey].user != address(0), "Position does not exist");
+        if (openPositions[_positionKey].user == address(0)) revert TradeStorage_PositionDoesNotExist();
         // delete the request
         _deletePositionRequest(_positionKey, _positionRequest.requestIndex, _positionRequest.isLimit);
         // if limit => ensure the limit has been met before deleting
@@ -278,7 +286,7 @@ contract TradeStorage is RoleValidation {
     /// Note Should also transfer funding fees to the counterparty of the position
     function liquidatePosition(bytes32 _positionKey, address _liquidator) external onlyLiquidator {
         // check that the position exists
-        require(openPositions[_positionKey].user != address(0), "Position does not exist");
+        if (openPositions[_positionKey].user == address(0)) revert TradeStorage_PositionDoesNotExist();
         // get the position fees
         address market = TradeHelper.getMarket(
             address(marketStorage), openPositions[_positionKey].indexToken, openPositions[_positionKey].collateralToken
@@ -370,7 +378,7 @@ contract TradeStorage is RoleValidation {
     ////////////////////
 
     function _sendExecutionFee(address _executor, uint256 _executionFee) internal {
-        require(address(this).balance >= _executionFee, "TradeStorage: Insufficient balance");
+        if (address(this).balance < _executionFee) revert TradeStorage_InsufficientBalance();
         payable(_executor).transfer(_executionFee);
     }
 
@@ -398,7 +406,7 @@ contract TradeStorage is RoleValidation {
         // get the funding fee owed on the position
         uint256 feesOwed = _position.fundingParams.feesOwed;
         // Note: User shouldn't be able to reduce collateral by less than the fees owed
-        require(feesOwed <= _collateralDelta, "TradeStorage: FEES OWED EXCEEDS COLLATERAL DELTA");
+        if (feesOwed > _collateralDelta) revert TradeStorage_FeeExceedsCollateralDelta();
         //uint256 feesOwed = unwrap(ud(earnedFundingFees) * ud(position.positionSize));
         // transfer the subtracted amount to the counterparties' liquidity
         bytes32 marketKey = TradeHelper.getMarketKey(_position.indexToken, _position.collateralToken);
@@ -426,8 +434,8 @@ contract TradeStorage is RoleValidation {
         return borrowFee;
     }
 
-    function _sendFeeToVault(address _token, uint256 _amount) internal returns(bool) {
-        require(IERC20(_token).balanceOf(address(this)) >= _amount, "TradeStorage: Insufficient balance");
+    function _sendFeeToVault(address _token, uint256 _amount) internal {
+        if (IERC20(_token).balanceOf(address(this)) < _amount) revert TradeStorage_InsufficientBalance();
         liquidityVault.accumulateBorrowingFees(_amount);
         IERC20(_token).safeTransfer(address(liquidityVault), _amount);
     }
@@ -437,7 +445,7 @@ contract TradeStorage is RoleValidation {
         // get the position
         MarketStructs.Position memory position = openPositions[_positionKey];
         // check that the position exists
-        require(position.user != address(0), "Position does not exist");
+        if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
         // get the funding fees a user is eligible to claim for that position
         address market = TradeHelper.getMarket(address(marketStorage), position.indexToken, position.collateralToken);
         (uint256 longFunding, uint256 shortFunding) = FundingCalculator.getFundingFees(market, position);
@@ -450,9 +458,9 @@ contract TradeStorage is RoleValidation {
         if (claimable == 0) revert("No funding fees to claim"); // Note Update to custom revert
         bytes32 marketKey = TradeHelper.getMarketKey(position.indexToken, position.collateralToken);
         if (position.isLong) {
-            require(tradeVault.shortCollateral(marketKey) >= claimable, "Not enough collateral to claim"); // Almost impossible scenario
+            if (tradeVault.shortCollateral(marketKey) < claimable) revert TradeStorage_InsufficientCollateralToClaim();
         } else {
-            require(tradeVault.longCollateral(marketKey) >= claimable, "Not enough collateral to claim"); // Almost impossible scenario
+            if (tradeVault.longCollateral(marketKey) < claimable) revert TradeStorage_InsufficientCollateralToClaim();
         }
         // if some to claim, add to realised funding of the position
         openPositions[_positionKey].fundingParams.realisedFees += claimable;
@@ -495,7 +503,8 @@ contract TradeStorage is RoleValidation {
     //////////////////////
 
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
-        require(_liquidationFee <= TradeHelper.MAX_LIQUIDATION_FEE, "Liquidation fee too high");
+        if (_liquidationFee > TradeHelper.MAX_LIQUIDATION_FEE) revert TradeStorage_LiquidationFeeExceedsMax();
+        if (_tradingFee > TradeHelper.MAX_TRADING_FEE) revert TradeStorage_TradingFeeExceedsMax();
         liquidationFeeUsd = _liquidationFee;
         tradingFee = _tradingFee;
     }

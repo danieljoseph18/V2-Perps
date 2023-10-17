@@ -17,7 +17,8 @@ import {BorrowingCalculator} from "../positions/BorrowingCalculator.sol";
 import {PnLCalculator} from "../positions/PnLCalculator.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
-/// Note Need to Add Allocation Flagging on interaction
+/// Note Need to Add Allocation Flagging on interaction => of Oi below threshold percentage of allocation, reduce
+/// Otherwise increase the allocation
 contract Market is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;

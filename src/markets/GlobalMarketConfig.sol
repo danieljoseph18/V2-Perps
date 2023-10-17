@@ -48,8 +48,8 @@ contract GlobalMarketConfig is RoleValidation {
         return keccak256(abi.encodePacked(_indexToken, _stablecoin));
     }
 
-    function setStableCoin(address _stablecoin, bool _isStable) external onlyModerator {
-        marketStorage.setIsStable(_stablecoin, _isStable);
+    function setWhitelistedToken(address _token, bool _isWhitelisted) external onlyModerator {
+        marketStorage.setIsWhitelisted(_token, _isWhitelisted);
     }
 
     function setMarketPriceImpactConfig(bytes32 _marketKey, uint256 _priceImpactFactor, uint256 _priceImpactExponent)

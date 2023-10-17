@@ -13,15 +13,18 @@ library TradeHelper {
     uint256 public constant MIN_LEVERAGE = 1e18; // 1x
     uint256 public constant MAX_LEVERAGE = 50e18; // 50x
     uint256 public constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
+    uint256 public constant MAX_TRADING_FEE = 0.01e18; // 1%
+
+    error TradeHelper_LimitPriceNotMet();
+    error TradeHelper_PositionAlreadyExists();
+    error TradeHelper_InvalidLeverage();
 
     // Validate whether a request should execute or not
+    /// Note What is this???
+    // Believe it's 1 of 3 steps in trade storage request function
     function validateRequest(address _tradeStorage, bytes32 _key, bool _isLimit) external view returns (bool) {
         MarketStructs.PositionRequest memory request = ITradeStorage(_tradeStorage).orders(_isLimit, _key);
-        if (_isLimit) {
-            require(request.user == address(0), "Position already exists");
-        } else {
-            require(request.user == address(0), "Position already exists");
-        }
+        if (request.user != address(0)) revert TradeHelper_PositionAlreadyExists();
         return true;
     }
 
@@ -30,19 +33,18 @@ library TradeHelper {
     }
 
     function checkLimitPrice(uint256 _price, MarketStructs.PositionRequest memory _positionRequest) external pure {
-        require(
-            _positionRequest.isLong
-                ? _price <= _positionRequest.acceptablePrice
-                : _price >= _positionRequest.acceptablePrice,
-            "Limit price not met"
-        );
+        if (_positionRequest.isLong) {
+            if (_price > _positionRequest.acceptablePrice) revert TradeHelper_LimitPriceNotMet();
+        } else {
+            if (_price < _positionRequest.acceptablePrice) revert TradeHelper_LimitPriceNotMet();
+        }
     }
 
     function checkLeverage(uint256 _size, uint256 _collateral) external pure {
-        require(
-            ud(_size).div(ud(_collateral)) >= ud(MIN_LEVERAGE) && ud(_size).div(ud(_collateral)) <= ud(MAX_LEVERAGE),
-            "TradeHelper: Invalid Leverage"
-        );
+        UD60x18 leverage = ud(_size).div(ud(_collateral));
+        if (leverage < ud(MIN_LEVERAGE) || leverage > ud(MAX_LEVERAGE)) {
+            revert TradeHelper_InvalidLeverage();
+        }
     }
 
     function calculateLeverage(uint256 _size, uint256 _collateral) external pure returns (uint256) {

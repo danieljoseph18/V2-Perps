@@ -5,7 +5,7 @@ import {MarketStructs} from "../MarketStructs.sol";
 
 interface IMarketStorage {
     function storeMarket(MarketStructs.Market memory _market) external;
-    function setIsStable(address _stablecoin, bool _isStable) external;
+    function isWhitelistedToken(address _token) external view returns (bool);
     function deleteMarket(bytes32 _key) external;
     function getMarket(bytes32 _key) external view returns (MarketStructs.Market memory);
     function getMarketFromIndexToken(address _indexToken, address _stablecoin)
@@ -29,5 +29,5 @@ interface IMarketStorage {
     function indexTokenLongOpenInterest(bytes32 _key) external view returns (uint256);
     function indexTokenShortOpenInterest(bytes32 _key) external view returns (uint256);
     function updateMarketAllocation(bytes32 _marketKey) external;
-    function isStable(address _stablecoin) external view returns (bool);
+    function setIsWhitelisted(address _token, bool _isWhitelisted) external;
 }

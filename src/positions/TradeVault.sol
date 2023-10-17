@@ -16,6 +16,12 @@ contract TradeVault is RoleValidation {
 
     mapping(address _user => uint256 _rewards) public liquidationRewards;
 
+    error TradeVault_InvalidToken();
+    error TradeVault_IncorrectMarketKey();
+    error TradeVault_ZeroAddressTransfer();
+    error TradeVault_ZeroBalanceTransfer();
+    error TradeVault_InsufficientCollateral();
+
     constructor(address _collateralToken) RoleValidation(roleStorage) {
         collateralToken = _collateralToken;
     }
@@ -24,11 +30,15 @@ contract TradeVault is RoleValidation {
         external
         onlyTradeStorage
     {
-        require(_token == collateralToken, "TradeVault: token not collateral");
-        require(longCollateral[_marketKey] != 0, "TradeVault: incorrect market key");
-        require(_to != address(0), "TradeVault: cannot transfer to 0 address");
-        require(_collateralDelta != 0, "TradeVault: cannot transfer 0 tokens");
-        require(_isLong ? longCollateral[_marketKey] >= _collateralDelta : shortCollateral[_marketKey] >= _collateralDelta, "TradeVault: insufficient collateral");
+        if (_token != collateralToken) revert TradeVault_InvalidToken();
+        if (longCollateral[_marketKey] == 0 && shortCollateral[_marketKey] == 0) revert TradeVault_IncorrectMarketKey();
+        if (_to == address(0)) revert TradeVault_ZeroAddressTransfer();
+        if (_collateralDelta == 0) revert TradeVault_ZeroBalanceTransfer();
+        if (_isLong) {
+            if (longCollateral[_marketKey] < _collateralDelta) revert TradeVault_InsufficientCollateral();
+        } else {
+            if (shortCollateral[_marketKey] < _collateralDelta) revert TradeVault_InsufficientCollateral();
+        }
         // profit = size now - initial size => initial size is not their
         uint256 amount = _collateralDelta;
         _isLong ? longCollateral[_marketKey] -= amount : shortCollateral[_marketKey] -= amount;

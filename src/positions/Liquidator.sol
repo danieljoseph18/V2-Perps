@@ -22,6 +22,10 @@ contract Liquidator is RoleValidation {
     ITradeStorage public tradeStorage;
     IMarketStorage public marketStorage;
 
+    error Liquidator_PositionAlreadyFlagged();
+    error Liquidator_PositionNotLiquidatable();
+    error Liquidator_PositionNotFlagged();
+
     constructor(ITradeStorage _tradeStorage, IMarketStorage _marketStorage) RoleValidation(roleStorage) {
         tradeStorage = _tradeStorage;
         marketStorage = _marketStorage;
@@ -29,11 +33,11 @@ contract Liquidator is RoleValidation {
 
     function flagForLiquidation(bytes32 _positionKey) external onlyKeeper {
         // check if position is already flagged for liquidation
-        require(!isFlagged[_positionKey], "Position already flagged for liquidation");
+        if (isFlagged[_positionKey]) revert Liquidator_PositionAlreadyFlagged();
         // get the position
         MarketStructs.Position memory _position = tradeStorage.openPositions(_positionKey);
         // check if collateral is below liquidation threshold
-        require(_checkIsLiquidatable(_position), "Position is not liquidatable");
+        if (!_checkIsLiquidatable(_position)) revert Liquidator_PositionNotLiquidatable();
         isFlagged[_positionKey] = true;
     }
 
@@ -41,7 +45,7 @@ contract Liquidator is RoleValidation {
     // let the liquidator claim liquidation rewards from the tradestorage contract
     function liquidatePosition(bytes32 _positionKey) external onlyKeeper {
         // check if position is flagged for liquidation
-        require(isFlagged[_positionKey], "Position not flagged for liquidation");
+        if (!isFlagged[_positionKey]) revert Liquidator_PositionNotFlagged();
         tradeStorage.liquidatePosition(_positionKey, msg.sender);
     }
 

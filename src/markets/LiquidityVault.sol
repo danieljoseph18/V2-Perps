@@ -18,9 +18,13 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     using MarketStructs for MarketStructs.Market;
     using SafeCast for int256;
 
+    error LiquidityVault_InvalidTokenAmount();
+    error LiquidityVault_InvalidToken();
+    error LiquidityVault_UpkeepNotNeeded();
+
     uint256 public constant STATE_UPDATE_INTERVAL = 5 seconds;
 
-    address public stablecoin;
+    address public collateralToken;
     IMarketToken public liquidityToken;
     uint256 public liquidityFee; // 0.2% fee on all liquidity added/removed => 1e18 = 100%
 
@@ -42,8 +46,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // liquidity token = market token
     // another contract should handle minting and burning of LP token
     // change to intialize function
-    constructor(address _stablecoin, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
-        stablecoin = _stablecoin;
+    constructor(address _collateralToken, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
+        collateralToken = _collateralToken;
         liquidityToken = _liquidityToken;
         liquidityFee = 0.02e18;
     }
@@ -86,8 +90,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     // subtract fees, many additional safety checks needed
     function _addLiquidity(address _account, uint256 _amount, address _tokenIn) internal {
-        require(_amount > 0, "Invalid amount");
-        require(_tokenIn == stablecoin, "Invalid token");
+        if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
+        if (_tokenIn != collateralToken) revert LiquidityVault_InvalidToken();
 
         uint256 afterFeeAmount = _deductLiquidityFees(_amount);
 
@@ -104,8 +108,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     // subtract fees, many additional safety checks needed
     function _removeLiquidity(address _account, uint256 _liquidityTokenAmount, address _tokenOut) internal {
-        require(_liquidityTokenAmount > 0, "Invalid amount");
-        require(_tokenOut == stablecoin, "Invalid token");
+        if (_liquidityTokenAmount == 0) revert LiquidityVault_InvalidTokenAmount();
+        if (_tokenOut != collateralToken) revert LiquidityVault_InvalidToken();
 
         // remove liquidity from the market
         UD60x18 marketTokenValue = ud(_liquidityTokenAmount * getMarketTokenPrice());
@@ -141,7 +145,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         // get the AUM of the market in USD
         // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
         // liquidity in USD
-        uint256 liquidity = (poolAmounts[stablecoin] * getPrice(stablecoin));
+        uint256 liquidity = (poolAmounts[collateralToken] * getPrice(collateralToken));
         aum = liquidity;
         int256 pendingPnL = getNetPnL();
         pendingPnL > 0 ? aum -= pendingPnL.toUint256() : aum += pendingPnL.toUint256(); // if in profit, subtract, if at loss, add
@@ -194,7 +198,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     /// Note Needs to be called by keepers to regularly update the state of the net pnl and OI
     function updateState(int256 _netPnL, uint256 _netOpenInterest) external onlyStateUpdater {
-        require(block.timestamp >= lastStateUpdate + STATE_UPDATE_INTERVAL, "Upkeep not needed");
+        if (block.timestamp < lastStateUpdate + STATE_UPDATE_INTERVAL) {
+            revert LiquidityVault_UpkeepNotNeeded();
+        }
         cachedNetPnL = _netPnL;
         cachedNetOI = _netOpenInterest;
     }

@@ -28,6 +28,11 @@ contract RequestRouter {
     IMarketStorage public marketStorage;
     ITradeVault public tradeVault;
 
+    error RequestRouter_ExecutionFeeTooLow();
+    error RequestRouter_IncorrectFee();
+    error RequestRouter_ExecutionFeeTransferFailed();
+    error RequestRouter_PositionSizeTooLarge();
+
     constructor(ITradeStorage _tradeStorage, ILiquidityVault _liquidityVault, IMarketStorage _marketStorage, ITradeVault _tradeVault) {
         tradeStorage = _tradeStorage;
         liquidityVault = _liquidityVault;
@@ -37,8 +42,8 @@ contract RequestRouter {
 
     modifier validExecutionFee(uint256 _executionFee) {
         uint256 minExecutionFee = tradeStorage.minExecutionFee();
-        require(msg.value >= minExecutionFee, "RequestRouter: fee too low");
-        require(msg.value == _executionFee, "RequestRouter: incorrect fee");
+        if (msg.value < minExecutionFee) revert RequestRouter_ExecutionFeeTooLow();
+        if (msg.value != _executionFee) revert RequestRouter_IncorrectFee();
         _;
     }
 
@@ -139,7 +144,7 @@ contract RequestRouter {
 
     function _sendExecutionFeeToStorage(uint256 _executionFee) internal returns (bool) {
         (bool success,) = address(liquidityVault).call{value: _executionFee}("");
-        require(success, "RequestRouter: fee transfer failed");
+        if (!success) revert RequestRouter_ExecutionFeeTransferFailed();
         return true;
     }
 
@@ -153,7 +158,7 @@ contract RequestRouter {
         address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
         uint256 totalOI = IMarket(market).getTotalOpenInterest();
         uint256 maxOI = (allocation / overcollateralization) * 100;
-        require(totalOI + _sizeDelta <= maxOI, "Position size too large");
+        if (totalOI + _sizeDelta > maxOI) revert RequestRouter_PositionSizeTooLarge();
     }
 
 }
