@@ -18,10 +18,6 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     using MarketStructs for MarketStructs.Market;
     using SafeCast for int256;
 
-    error LiquidityVault_InvalidTokenAmount();
-    error LiquidityVault_InvalidToken();
-    error LiquidityVault_UpkeepNotNeeded();
-
     uint256 public constant STATE_UPDATE_INTERVAL = 5 seconds;
 
     address public collateralToken;
@@ -30,6 +26,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     /// Note Will run into trouble because USDC is 6 decimals
     mapping(address _token => uint256 _poolAmount) public poolAmounts;
+    mapping (address _handler => mapping(address _lp => bool _isHandler)) public isHandler;
 
     // fees handled by fee handler contract
     // claim from here, reset to 0, send to fee handler
@@ -42,6 +39,12 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     uint256 private cachedNetOI;
     int256 private cachedNetPnL;
+
+    error LiquidityVault_InvalidTokenAmount();
+    error LiquidityVault_InvalidToken();
+    error LiquidityVault_UpkeepNotNeeded();
+    error LiquidityVault_ZeroAddress();
+    error LiquidityVault_InvalidHandler();
 
     // liquidity token = market token
     // another contract should handle minting and burning of LP token
@@ -61,6 +64,10 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         liquidityFee = _fee;
     }
 
+    function setIsHandler(address _handler, bool _isHandler) external {
+        isHandler[_handler][msg.sender] = _isHandler;
+    }
+
     ///////////////
     // LIQUIDITY //
     ///////////////
@@ -73,18 +80,16 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         _removeLiquidity(msg.sender, _marketTokenAmount, _tokenOut);
     }
 
-    // allows users to delegate permissions from ledger to hot wallet
     function addLiquidityForAccount(address _account, uint256 _amount, address _tokenIn) external nonReentrant {
-        // check if msg.sender is approved to add liquidity for _account
+        _validateHandler(msg.sender, _account);
         _addLiquidity(_account, _amount, _tokenIn);
     }
 
-    // allows users to delegate permissions from ledger to hot wallet
     function removeLiquidityForAccount(address _account, uint256 _liquidityTokenAmount, address _tokenOut)
         external
         nonReentrant
     {
-        // check if msg.sender is approved to remove liquidity for _account
+        _validateHandler(msg.sender, _account);
         _removeLiquidity(_account, _liquidityTokenAmount, _tokenOut);
     }
 
@@ -92,6 +97,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     function _addLiquidity(address _account, uint256 _amount, address _tokenIn) internal {
         if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
         if (_tokenIn != collateralToken) revert LiquidityVault_InvalidToken();
+        if (_account == address(0)) revert LiquidityVault_ZeroAddress();
 
         uint256 afterFeeAmount = _deductLiquidityFees(_amount);
 
@@ -110,6 +116,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     function _removeLiquidity(address _account, uint256 _liquidityTokenAmount, address _tokenOut) internal {
         if (_liquidityTokenAmount == 0) revert LiquidityVault_InvalidTokenAmount();
         if (_tokenOut != collateralToken) revert LiquidityVault_InvalidToken();
+        if (_account == address(0)) revert LiquidityVault_ZeroAddress();
 
         // remove liquidity from the market
         UD60x18 marketTokenValue = ud(_liquidityTokenAmount * getMarketTokenPrice());
@@ -123,6 +130,10 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         uint256 afterFeeAmount = _deductLiquidityFees(tokenAmount);
 
         IERC20(_tokenOut).safeTransfer(_account, afterFeeAmount);
+    }
+
+    function _validateHandler(address _sender, address _handler) internal view {
+        if (!isHandler[_sender][_handler]) revert LiquidityVault_InvalidHandler();
     }
 
     /////////////

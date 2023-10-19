@@ -52,11 +52,11 @@ contract MarketStorage is RoleValidation {
 
     /// @dev Only MarketFactory
     function storeMarket(MarketStructs.Market memory _market) external onlyMarketMaker {
-        bytes32 _key = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
-        if (markets[_key].market != address(0)) revert MarketStorage_MarketAlreadyExists();
+        bytes32 _marketKey = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
+        if (markets[_marketKey].market != address(0)) revert MarketStorage_MarketAlreadyExists();
         // Store the market in the contract's storage
-        marketKeys.push(_key);
-        markets[_key] = _market;
+        marketKeys.push(_marketKey);
+        markets[_marketKey] = _market;
     }
 
     /// @dev Only GlobalMarketConfig
@@ -64,11 +64,6 @@ contract MarketStorage is RoleValidation {
         isWhitelistedToken[_token] = _isWhitelisted;
     }
 
-    // should only be callable by permissioned roles STORAGE_ADMIN
-    // adds value in tokens and usd to track Pnl
-    // should never be callable by an EOA
-    // long + decrease = subtract, short + decrease = add, long + increase = add, short + increase = subtract
-    // Tracks total open interest across all markets ??????????????????????????
     /// @dev Only Executor
     function updateOpenInterest(
         bytes32 _marketKey,
@@ -78,21 +73,21 @@ contract MarketStorage is RoleValidation {
         bool _shouldAdd
     ) external onlyExecutor {
         if (_shouldAdd) {
-            // add to open interest
-            _isLong
-                ? collatTokenLongOpenInterest[_marketKey] += _collateralTokenAmount
-                : collatTokenShortOpenInterest[_marketKey] += _collateralTokenAmount;
-            _isLong
-                ? indexTokenLongOpenInterest[_marketKey] += _indexTokenAmount
-                : indexTokenShortOpenInterest[_marketKey] += _indexTokenAmount;
+            if (_isLong) {
+                collatTokenLongOpenInterest[_marketKey] += _collateralTokenAmount;
+                indexTokenLongOpenInterest[_marketKey] += _indexTokenAmount;
+            } else {
+                collatTokenShortOpenInterest[_marketKey] += _collateralTokenAmount;
+                indexTokenShortOpenInterest[_marketKey] += _indexTokenAmount;
+            }
         } else {
-            // subtract from open interest
-            _isLong
-                ? collatTokenLongOpenInterest[_marketKey] -= _collateralTokenAmount
-                : collatTokenShortOpenInterest[_marketKey] -= _collateralTokenAmount;
-            _isLong
-                ? indexTokenLongOpenInterest[_marketKey] -= _indexTokenAmount
-                : indexTokenShortOpenInterest[_marketKey] -= _indexTokenAmount;
+            if (_isLong) {
+                collatTokenLongOpenInterest[_marketKey] -= _collateralTokenAmount;
+                indexTokenLongOpenInterest[_marketKey] -= _indexTokenAmount;
+            } else {
+                collatTokenShortOpenInterest[_marketKey] -= _collateralTokenAmount;
+                indexTokenShortOpenInterest[_marketKey] -= _indexTokenAmount;
+            }
         }
     }
 

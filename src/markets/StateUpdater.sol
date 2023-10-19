@@ -12,7 +12,7 @@ import {IMarket} from "./interfaces/IMarket.sol";
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {PnLCalculator} from "../positions/PnLCalculator.sol";
+import {PricingCalculator} from "../positions/PricingCalculator.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 /// @dev needs StateUpdater Role
 /// Note When arrays are too large, the contract could break as loops would exceed block gas limit
@@ -44,11 +44,11 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
         uint256 openInterest;
         for (uint256 i = 0; i < len;) {
             address market = marketStorage.getMarket(_marketKeys[i]).market;
-            int256 marketPnL = PnLCalculator.getNetPnL(
-                market, address(tradeStorage), address(marketStorage), _marketKeys[i], true
-            ) + PnLCalculator.getNetPnL(market, address(tradeStorage), address(marketStorage), _marketKeys[i], false);
+            int256 marketPnL = PricingCalculator.getNetPnL(
+                market, address(marketStorage), _marketKeys[i], true
+            ) + PricingCalculator.getNetPnL(market, address(marketStorage), _marketKeys[i], false);
             netPnL += marketPnL;
-            uint256 marketOpenInterest = PnLCalculator.calculateTotalIndexOpenInterestUSD(
+            uint256 marketOpenInterest = PricingCalculator.calculateTotalIndexOpenInterestUSD(
                 address(marketStorage), market, _marketKeys[i], IMarket(market).indexToken()
             );
             openInterest += marketOpenInterest;
@@ -75,7 +75,7 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
         uint256 totalOI = liquidityVault.getNetOpenInterest();
         for (uint256 i = 0; i < len;) {
             address market = marketStorage.getMarket(_marketKeys[i]).market;
-            uint256 marketOI = PnLCalculator.calculateTotalIndexOpenInterestUSD(
+            uint256 marketOI = PricingCalculator.calculateTotalIndexOpenInterestUSD(
                 address(marketStorage), market, _marketKeys[i], IMarket(market).indexToken()
             );
             UD60x18 divisor = ud(marketOI).div(ud(totalOI));

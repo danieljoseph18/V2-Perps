@@ -14,7 +14,7 @@ import {SD59x18, sd, unwrap, pow} from "@prb/math/SD59x18.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {FundingCalculator} from "../positions/FundingCalculator.sol";
 import {BorrowingCalculator} from "../positions/BorrowingCalculator.sol";
-import {PnLCalculator} from "../positions/PnLCalculator.sol";
+import {PricingCalculator} from "../positions/PricingCalculator.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
 /// Note Need to Add Allocation Flagging on interaction => of Oi below threshold percentage of allocation, reduce
@@ -63,8 +63,10 @@ contract Market is RoleValidation {
     uint256 public priceImpactExponent = 1e18;
     uint256 public priceImpactFactor = 0.0001e18; // 0.0001%
 
-    uint256 public longCumulativePricePerToken; // long cumulative price paid for all index tokens in OI
-    uint256 public shortCumulativePricePerToken; // short cumulative price paid for all index tokens in OI
+    uint256 public longTotalWAEP; // long total weighted average entry price
+    uint256 public shortTotalWAEP; // short total weighted average entry price
+    uint256 public longSizeSumUSD; // Used to calculate WAEP
+    uint256 public shortSizeSumUSD; // Used to calculate WAEP
 
     uint256 public lastAllocation; // last time allocation was updated
 
@@ -117,14 +119,16 @@ contract Market is RoleValidation {
         minFundingRate = _minFundingRate;
     }
 
-    function _updateFundingRate(uint256 _positionSize, bool _isLong) internal {
-        uint256 longOI = PnLCalculator.calculateIndexOpenInterestUSD(
+    /// @dev 1 USD = 1e18
+    /// Note should be called for every position entry / exit
+    function updateFundingRate(uint256 _positionSizeUSD, bool _isLong) external onlyExecutor {
+        uint256 longOI = PricingCalculator.calculateIndexOpenInterestUSD(
             address(marketStorage), address(this), getMarketKey(), collateralToken, true
         );
-        uint256 shortOI = PnLCalculator.calculateIndexOpenInterestUSD(
+        uint256 shortOI = PricingCalculator.calculateIndexOpenInterestUSD(
             address(marketStorage), address(this), getMarketKey(), collateralToken, false
         );
-        _isLong ? longOI += _positionSize : shortOI += _positionSize;
+        _isLong ? longOI += _positionSizeUSD : shortOI += _positionSizeUSD;
         int256 skew = unwrap(sd(longOI.toInt256()) - sd(shortOI.toInt256())); // 500 USD skew = 500e18
         int256 velocity = FundingCalculator.calculateFundingRateVelocity(address(this), skew); // int scaled by 1e18
 
@@ -169,22 +173,22 @@ contract Market is RoleValidation {
 
     // Function to calculate borrowing fees per second
     /// @dev uses GMX Synth borrow rate calculation
+    /*
+        borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
+     */
+    /// @dev Call every time OI is updated (trade open / close)
     function updateBorrowingRate(bool _isLong) external {
-        uint256 openInterest = PnLCalculator.calculateIndexOpenInterestUSD(
+        uint256 openInterest = PricingCalculator.calculateIndexOpenInterestUSD(
             address(marketStorage), address(this), getMarketKey(), collateralToken, _isLong
         ); // OI USD
         uint256 poolBalance =
-            PnLCalculator.getPoolBalanceUSD(address(liquidityVault), getMarketKey(), address(this), collateralToken); // Pool balance in USD
-
-        int256 pendingPnL = PnLCalculator.getNetPnL(
-            address(this), address(tradeStorage), address(marketStorage), getMarketKey(), _isLong
-        ); // PNL USD
+            PricingCalculator.getPoolBalanceUSD(address(liquidityVault), getMarketKey(), address(this), collateralToken); // Pool balance in USD
 
         uint256 borrowingRate = _isLong ? longBorrowingRate : shortBorrowingRate;
 
-        SD59x18 feeBase = _isLong ? sd(openInterest.toInt256()) + sd(pendingPnL) : sd(openInterest.toInt256());
+        UD60x18 feeBase = ud(openInterest);
         UD60x18 fee =
-            ud(borrowingFactor) * (ud(unwrap(feeBase).toUint256()).pow(ud(borrowingExponent))) / ud(poolBalance);
+            ud(borrowingFactor) * (ud(unwrap(feeBase)).pow(ud(borrowingExponent))) / ud(poolBalance);
 
         // update cumulative fees with current borrowing rate
         if (_isLong) {
@@ -203,11 +207,13 @@ contract Market is RoleValidation {
     /////////
 
     // check this is updated correctly in the executor
-    function updateCumulativePricePerToken(uint256 _price, bool _isIncrease, bool _isLong) external onlyExecutor {
+    function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external onlyExecutor {
         if (_isLong) {
-            _isIncrease ? longCumulativePricePerToken += _price : longCumulativePricePerToken -= _price;
+            longTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price);
+            _sizeDeltaUsd > 0 ? longSizeSumUSD += _sizeDeltaUsd.toUint256() : longSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
         } else {
-            _isIncrease ? shortCumulativePricePerToken += _price : shortCumulativePricePerToken -= _price;
+            shortTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price);
+            _sizeDeltaUsd > 0 ? shortSizeSumUSD += _sizeDeltaUsd.toUint256() : shortSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
         }
     }
 

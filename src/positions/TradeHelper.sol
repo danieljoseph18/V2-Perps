@@ -59,23 +59,21 @@ library TradeHelper {
         return unwrap(ud(_prevAveragePricePerToken).avg(ud(_newPrice)));
     }
 
+    /// @dev Direct Hashing etc. to prevent Stack Too Deep Error
     function generateNewPosition(
+        address _market,
         address _tradeStorage,
         MarketStructs.PositionRequest memory _positionRequest,
-        uint256 _price,
-        address _marketStorage
+        uint256 _price
     ) external view returns (MarketStructs.Position memory) {
         // create a new position
         // calculate all input variables
-        address marketAddress = getMarket(_marketStorage, _positionRequest.indexToken, _positionRequest.collateralToken);
-        bytes32 marketKey = getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
         (uint256 longFunding, uint256 shortFunding, uint256 longBorrowFee, uint256 shortBorrowFee) =
-            IMarket(marketAddress).getMarketParameters();
-        uint256 nextIndex = ITradeStorage(_tradeStorage).getNextPositionIndex(marketKey, _positionRequest.isLong);
+            IMarket(_market).getMarketParameters();
         // make sure all Position and PositionRequest instantiations are in the correct order.
         return MarketStructs.Position({
-            index: nextIndex,
-            market: marketKey,
+            index: ITradeStorage(_tradeStorage).getNextPositionIndex(keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken)), _positionRequest.isLong),
+            market: keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken)),
             indexToken: _positionRequest.indexToken,
             collateralToken: _positionRequest.collateralToken,
             user: _positionRequest.user,
@@ -84,8 +82,8 @@ library TradeHelper {
             isLong: _positionRequest.isLong,
             realisedPnl: 0,
             borrowParams: MarketStructs.BorrowParams(longBorrowFee, shortBorrowFee),
-            fundingParams: MarketStructs.FundingParams(0, 0, 0, 0, 0, block.timestamp, longFunding, shortFunding),
-            averagePricePerToken: _price,
+            fundingParams: MarketStructs.FundingParams(0, 0, 0, block.timestamp, longFunding, shortFunding),
+            pnlParams: MarketStructs.PnLParams(_price, _positionRequest.sizeDelta * _price, unwrap(ud(_positionRequest.sizeDelta).div(ud(_positionRequest.collateralDelta)))),
             entryTimestamp: block.timestamp
         });
     }
@@ -93,6 +91,10 @@ library TradeHelper {
     function calculateTradingFee(address _tradeStorage, uint256 _sizeDelta) external view returns (uint256) {
         uint256 tradingFee = ITradeStorage(_tradeStorage).tradingFee();
         return unwrap(ud(_sizeDelta).mul(ud(tradingFee))); //e.g 0.01e18 * 100e18 / 1e18 = 1e18 = 1 Token fee
+    }
+
+    function getTradeSizeUsd(uint256 _sizeDelta, uint256 _signedPrice) external pure returns (uint256) {
+        return unwrap(ud(_sizeDelta).mul(ud(_signedPrice)));
     }
 
     function getMarket(address _marketStorage, address _indexToken, address _collateralToken)

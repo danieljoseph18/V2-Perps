@@ -12,42 +12,21 @@ library ImpactCalculator {
     using SafeCast for uint256;
     using SafeCast for int256;
 
-    function calculatePriceImpact(
-        address _marketStorage,
-        bytes32 _marketKey,
-        MarketStructs.PositionRequest memory _positionRequest,
-        bool _isIncrease
-    ) external view returns (int256) {
-        address market = IMarketStorage(_marketStorage).getMarket(_marketKey).market;
-        return IMarket(market).getPriceImpact(_positionRequest, _isIncrease);
-    }
 
-    // Note Wrong => Needs PRB Math not Scale Factor
-    // Review
-    function applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpact, bool _isLong)
+    function applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpact)
         external
         pure
         returns (uint256)
     {
-        // Scaling factor; for example, 10^4 to handle four decimal places
-        uint256 scaleFactor = 10 ** 4;
-
-        // Convert priceImpact to scaled integer (e.g., 0.1% becomes 10 when scaleFactor is 10^4)
-        uint256 scaledImpact =
-            (uint256(_priceImpact) >= 0 ? uint256(_priceImpact) : uint256(-_priceImpact)) * scaleFactor / 100;
-
-        // Calculate the price change due to impact, then scale down
-        uint256 priceDelta = (_signedBlockPrice * scaledImpact) / scaleFactor;
-
-        // Apply the price impact
-        if ((_priceImpact >= 0 && !_isLong) || (_priceImpact < 0 && _isLong)) {
-            return _signedBlockPrice + priceDelta;
-        } else {
-            return _signedBlockPrice - priceDelta; // Ensure non-negative
-        }
+        // multiply price impact by signed block price => e.g 0.05e18 * 1000e18 = 50e18 (5%)
+        int256 impactUSD = _priceImpact * _signedBlockPrice.toInt256();
+        // negative, subtract, positive add
+        uint256 impactedPrice = (_signedBlockPrice.toInt256() + impactUSD).toUint256();
+        // return new price
+        return impactedPrice;
     }
 
-    // Returns Price impact as a percentage of the position size
+    // Returns Price impact as a decimal
     function calculatePriceImpact(
         address _market,
         MarketStructs.PositionRequest memory _positionRequest,
@@ -77,7 +56,7 @@ library ImpactCalculator {
 
         if (unwrap(priceImpact) > _getMaxPriceImpact(_market)) priceImpact = sd(_getMaxPriceImpact(_market));
 
-        return unwrap(priceImpact.mul(sd(100)).div(sd(sizeDeltaUSD.toInt256())));
+        return unwrap(priceImpact.div(sd(sizeDeltaUSD.toInt256())));
     }
 
     function _getPriceImpactFactor(address _market) internal view returns (uint256) {

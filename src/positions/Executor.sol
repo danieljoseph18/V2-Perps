@@ -9,9 +9,12 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {TradeHelper} from "./TradeHelper.sol";
+import {ImpactCalculator} from "./ImpactCalculator.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Needs Executor Role
 contract Executor is RoleValidation {
+    using SafeCast for uint256;
     error Executor_LimitNotHit();
 
     // contract for executing trades
@@ -46,21 +49,22 @@ contract Executor is RoleValidation {
     // when executing a trade, store it in MarketStorage
     // update the open interest in MarketStorage
     // if decrease, subtract size delta from open interest
+    // Note Only updates the open interest values in storage
     function _updateOpenInterest(
         bytes32 _marketKey,
         uint256 _collateralDelta,
         uint256 _sizeDelta,
         bool _isLong,
-        bool _isDecrease
+        bool _isIncrease
     ) internal {
-        bool shouldAdd = (_isLong && !_isDecrease) || (!_isLong && _isDecrease);
-        IMarketStorage(marketStorage).updateOpenInterest(_marketKey, _collateralDelta, _sizeDelta, _isLong, shouldAdd);
+        IMarketStorage(marketStorage).updateOpenInterest(_marketKey, _collateralDelta, _sizeDelta, _isLong, _isIncrease);
     }
 
     // in every action that interacts with Market, call _updateFundingRate();
-    function _updateFundingRate(bytes32 _marketKey) internal {
+    function _updateFundingRate(MarketStructs.PositionRequest memory _positionRequest, uint256 _signedPrice, bytes32 _marketKey) internal {
         address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
-        IMarket(market).updateFundingRate();
+        uint256 tradeSizeUsd = TradeHelper.getTradeSizeUsd(_positionRequest.sizeDelta, _signedPrice);
+        IMarket(market).updateFundingRate(tradeSizeUsd, _positionRequest.isLong);
     }
 
     function _updateBorrowingRate(bytes32 _marketKey, bool _isLong) internal {
@@ -68,11 +72,11 @@ contract Executor is RoleValidation {
         IMarket(market).updateBorrowingRate(_isLong);
     }
 
-    function _updateCumulativePricePerToken(bytes32 _marketKey, uint256 _pricePaid, bool _isIncrease, bool _isLong)
+    function _updateTotalWAEP(bytes32 _marketKey, uint256 _pricePaid, int256 _sizeDeltaUsd, bool _isLong)
         internal
     {
         address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
-        IMarket(market).updateCumulativePricePerToken(_pricePaid, _isIncrease, _isLong);
+        IMarket(market).updateTotalWAEP(_pricePaid, _sizeDeltaUsd, _isLong);
     }
 
     //////////////////////////
@@ -82,16 +86,14 @@ contract Executor is RoleValidation {
     // only permissioned roles can call
     // called on set intervals, e.g every 5 - 10 seconds => crucial to prevent a backlog from building up
     // if too much backlog builds up, may be too expensive to loop through entire request array
-    // can execute all limit orders, or all market orders
-    function executeTradeOrders(bool _limits) external onlyKeeper {
+    function executeTradeOrders() external onlyKeeper {
         // cache the order queue
-        (bytes32[] memory limitOrders, bytes32[] memory marketOrders) = tradeStorage.getOrderKeys();
-        bytes32[] memory orders = _limits ? limitOrders : marketOrders;
-        uint256 len = orders.length;
+        (, bytes32[] memory marketOrders) = tradeStorage.getOrderKeys();
+        uint256 len = marketOrders.length;
         // loop through => get Position => fulfill position at signed block price
         for (uint256 i = 0; i < len; ++i) {
-            bytes32 _key = orders[i];
-            _executeTradeOrder(_key, msg.sender, _limits);
+            bytes32 _key = marketOrders[i];
+            _executeTradeOrder(_key, msg.sender, false);
         }
     }
 
@@ -111,18 +113,21 @@ contract Executor is RoleValidation {
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);
         if (_positionRequest.user == address(0)) revert Executor_InvalidRequestKey();
         // get the market and block to get the signed block price
-        address _market = IMarketStorage(marketStorage).getMarketFromIndexToken(
+        address market = IMarketStorage(marketStorage).getMarketFromIndexToken(
             _positionRequest.indexToken, _positionRequest.collateralToken
         ).market;
         uint256 _block = _positionRequest.requestBlock;
-        uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(_market, _block);
+        uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(market, _block);
+        _positionRequest.priceImpact = ImpactCalculator.calculatePriceImpact(market, _positionRequest, _signedBlockPrice);
 
         if (_isLimit) {
             TradeHelper.checkLimitPrice(_signedBlockPrice, _positionRequest);
         }
+        uint256 price = ImpactCalculator.applyPriceImpact(_signedBlockPrice, _positionRequest.priceImpact);
+        int256 sizeDeltaUsd = _positionRequest.isIncrease ? (_positionRequest.sizeDelta * price).toInt256() : (_positionRequest.sizeDelta * price).toInt256() * -1;
         // execute the trade
         MarketStructs.Position memory _position =
-            tradeStorage.executeTrade(MarketStructs.ExecutionParams(_positionRequest, _signedBlockPrice, _executor));
+            tradeStorage.executeTrade(MarketStructs.ExecutionParams(_positionRequest, price, _executor));
         // update open interest
         // always increase => should add is equal to isLong
         _updateOpenInterest(
@@ -130,12 +135,11 @@ contract Executor is RoleValidation {
             _positionRequest.collateralDelta,
             _positionRequest.sizeDelta,
             _positionRequest.isLong,
-            _positionRequest.isLong
+            _positionRequest.isIncrease
         );
-        // update funding rate
-        _updateFundingRate(_position.market);
+        _updateFundingRate(_positionRequest, price, _position.market);
         _updateBorrowingRate(_position.market, _positionRequest.isLong);
-        _updateCumulativePricePerToken(_position.market, _signedBlockPrice, true, _positionRequest.isLong);
+        _updateTotalWAEP(_position.market, price, sizeDeltaUsd, _positionRequest.isLong);
     }
 
     // used as a stop loss => how do we get trailing stop losses

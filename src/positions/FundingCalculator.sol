@@ -21,23 +21,14 @@ library FundingCalculator {
         return c.toInt256() * unwrap(skew);
     }
 
-    // returns percentage of position size that is paid as funding fees
-    /// Note Gets the total funding fees by a position, doesn't account for realised funding fees
-    /// Review Could this be gamed by adjusting the position size?
-    // Only calculates what the user owes, not what they could be owed
-    // Update so it returns what a short would owe and what a long would owe
-    // if return value is negative, they're owed funding fees
-    // if return value is positive, they owe funding fees
-    function getFundingFees(address _market, MarketStructs.Position memory _position)
+    /// @dev Get the Funding Fees Accumulated Since Last Update For Both Sides
+    function getFundingFees(address _market)
         public
         view
         returns (uint256, uint256)
     {
-        uint256 longLastFunding = _position.fundingParams.lastLongCumulativeFunding;
-        uint256 shortLastFunding = _position.fundingParams.lastShortCumulativeFunding;
-
-        uint256 longAccumulatedFunding = IMarket(_market).longCumulativeFundingFees() - longLastFunding;
-        uint256 shortAccumulatedFunding = IMarket(_market).shortCumulativeFundingFees() - shortLastFunding;
+        uint256 longAccumulatedFunding = IMarket(_market).longCumulativeFundingFees();
+        uint256 shortAccumulatedFunding = IMarket(_market).shortCumulativeFundingFees();
 
         uint256 timeSinceUpdate = block.timestamp - IMarket(_market).lastFundingUpdateTime(); // might need to scale by 1e18
 
@@ -51,5 +42,23 @@ library FundingCalculator {
         }
 
         return (longAccumulatedFunding, shortAccumulatedFunding);
+    }
+
+    /// @dev Get the Funding Fees Owed by a Position Since Last Update
+    function getFeesSinceLastPositionUpdate(address _market, MarketStructs.Position memory _position)
+        public
+        view
+        returns (uint256 feesEarned, uint256 feesOwed)
+    {
+        // get cumulative funding fees since last update
+        uint256 longAccumulatedFunding = IMarket(_market).longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
+        uint256 shortAccumulatedFunding = IMarket(_market).shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
+        // multiply by size
+        uint256 longFundingFees = longAccumulatedFunding * _position.positionSize;
+        uint256 shortFundingFees = shortAccumulatedFunding * _position.positionSize;
+        // if long, add short fees to fees earned, if short, add long fees to fees earned
+        feesEarned = _position.isLong ? shortFundingFees : longFundingFees;
+        // if short, add short fees to fees owed, if long, add long fees to fees owed
+        feesOwed = _position.isLong ? longFundingFees : shortFundingFees;
     }
 }

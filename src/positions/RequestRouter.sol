@@ -16,7 +16,6 @@ import {TradeHelper} from "./TradeHelper.sol";
 contract RequestRouter {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.PositionRequest;
-    using MarketStructs for MarketStructs.RequestType;
     // contract for creating requests for trades
     // limit orders, market orders, all will have 2 step process
     // swap orders included
@@ -72,18 +71,9 @@ contract RequestRouter {
 
         (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
         uint256 index = _isLimit ? limitLen : marketLen;
-        // get the request type, if COLLAT, set size to 0, if SIZE, set collateral to 0, if REGULAR do nothing
-        if (_positionRequest.requestType == MarketStructs.RequestType(0)) {
-            _positionRequest.collateralDelta = 0;
-        } else if (_positionRequest.requestType == MarketStructs.RequestType(1)) {
-            _positionRequest.sizeDelta = 0;
-        }
 
         _positionRequest.requestIndex = index;
         _positionRequest.requestBlock = block.number;
-        _positionRequest.priceImpact = ImpactCalculator.calculatePriceImpact(
-            address(marketStorage), marketKey, _positionRequest, _positionRequest.isIncrease
-        );
 
         tradeStorage.createOrderRequest(_positionRequest);
     }
@@ -112,17 +102,12 @@ contract RequestRouter {
             collateralToken: _position.collateralToken,
             collateralDelta: _position.collateralAmount,
             sizeDelta: _position.positionSize,
-            requestType: MarketStructs.RequestType(2), // set to regular request
             requestBlock: block.number,
             acceptablePrice: _acceptablePrice,
             priceImpact: 0,
             isLong: _position.isLong,
             isIncrease: false
         });
-        bytes32 marketKey = TradeHelper.getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
-        _positionRequest.priceImpact = ImpactCalculator.calculatePriceImpact(
-            address(marketStorage), marketKey, _positionRequest, _positionRequest.isIncrease
-        );
         tradeStorage.createOrderRequest(_positionRequest);
     }
 

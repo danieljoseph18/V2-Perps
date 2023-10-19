@@ -11,7 +11,7 @@ interface IMarket {
     function getOpenInterest(bool _isLong) external view returns (uint256);
     function getTotalOpenInterest() external view returns (uint256);
     function upkeepNeeded() external view returns (bool);
-    function updateFundingRate() external;
+    function updateFundingRate(uint256 _positionSizeUSD, bool _isLong) external;
     function setFundingConfig(
         uint256 _fundingInterval,
         uint256 _maxFundingVelocity,
@@ -39,7 +39,7 @@ interface IMarket {
     function updateBorrowingRate(bool _isLong) external;
     function getBorrowingFees(MarketStructs.Position memory _position) external view returns (uint256);
     function getFundingFees(MarketStructs.Position memory _position) external view returns (uint256, uint256);
-    function updateCumulativePricePerToken(uint256 _price, bool _isIncrease, bool _isLong) external;
+    function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external;
     function getMarketParameters() external view returns (uint256, uint256, uint256, uint256);
     function priceImpactFactor() external view returns (uint256);
     function priceImpactExponent() external view returns (uint256);
@@ -58,7 +58,9 @@ interface IMarket {
     function getPoolBalanceUSD() external view returns (uint256);
     function longBorrowingRate() external view returns (uint256);
     function shortBorrowingRate() external view returns (uint256);
-    function longCumulativePricePerToken() external view returns (uint256);
-    function shortCumulativePricePerToken() external view returns (uint256);
+    function longTotalWAEP() external view returns (uint256);
+    function shortTotalWAEP() external view returns (uint256);
+    function longSizeSumUSD() external view returns (uint256);
+    function shortSizeSumUSD() external view returns (uint256);
     function indexToken() external view returns (address);
 }

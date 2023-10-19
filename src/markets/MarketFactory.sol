@@ -39,12 +39,12 @@ contract MarketFactory is RoleValidation {
         if (_collateralToken != liquidityVault.collateralToken()) revert MarketFactory_IncorrectCollateralToken();
 
         // pool cant already exist
-        bytes32 _key = keccak256(abi.encodePacked(_indexToken, _collateralToken));
-        if (marketStorage.getMarket(_key).market != address(0)) revert MarketFactory_MarketAlreadyExists();
+        bytes32 _marketKey = keccak256(abi.encodePacked(_indexToken, _collateralToken));
+        if (marketStorage.getMarket(_marketKey).market != address(0)) revert MarketFactory_MarketAlreadyExists();
         // Create new Market contract
         Market _market = new Market(_indexToken, _collateralToken, marketStorage, liquidityVault, tradeStorage);
         // Store everything in MarketStorage
-        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, _collateralToken, address(_market));
+        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, _collateralToken, address(_market), _marketKey);
         marketStorage.storeMarket(_marketInfo);
         liquidityVault.addMarket(_marketInfo);
 

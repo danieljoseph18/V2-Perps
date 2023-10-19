@@ -2,16 +2,12 @@
 pragma solidity 0.8.20;
 
 library MarketStructs {
-    enum RequestType {
-        COLLATERAL,
-        SIZE,
-        REGULAR
-    }
 
     struct Market {
         address indexToken;
         address stablecoin;
         address market;
+        bytes32 marketKey; // Note Use where applicable to save on gas
     }
 
     struct PositionRequest {
@@ -22,7 +18,6 @@ library MarketStructs {
         address collateralToken;
         uint256 collateralDelta;
         uint256 sizeDelta;
-        RequestType requestType;
         uint256 requestBlock;
         uint256 acceptablePrice;
         int256 priceImpact;
@@ -37,14 +32,26 @@ library MarketStructs {
 
     struct FundingParams {
         uint256 realisedFees; // fees realised by position
-        uint256 longFeeDebt; // fees owed by longs per token
-        uint256 shortFeeDebt; // fees owed by shorts per token
         uint256 feesEarned; // fees earned by the position per token
         uint256 feesOwed; // fees owed by the position per token
         uint256 lastFundingUpdate; // last time funding was updated
         uint256 lastLongCumulativeFunding; // last cumulative funding rate for longs
         uint256 lastShortCumulativeFunding; // last cumulative funding rate for shorts
     }
+
+    struct PnLParams {
+        uint256 weightedAvgEntryPrice;
+        uint256 sigmaIndexSizeUSD; // Sum of all increases and decreases in index size USD
+        uint256 leverage;
+    }
+    /*
+        liqValue = entryValue - (entryValue * (freeCollateral / entryValue))
+        weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
+        PNL = (Current price of index tokens - Weighted average entry price) * (Total position size / Current price of index tokens)
+        RealizedPNL=(Current price − Weighted average entry price)×(Realized position size/Current price)
+        int256 pnl = int256(amountToRealize * currentTokenPrice) - int256(amountToRealize * userPos.entryPriceWeighted);
+        indexSize = collateralAdded * leverage
+    */
 
     struct Position {
         uint256 index; // position in array
@@ -58,8 +65,7 @@ library MarketStructs {
         int256 realisedPnl;
         BorrowParams borrowParams;
         FundingParams fundingParams;
-        uint256 averagePricePerToken; // average price paid per 1 token in size in USD
-        // use PRB Geometric Mean or avg ^^
+        PnLParams pnlParams;
         uint256 entryTimestamp;
     }
 
