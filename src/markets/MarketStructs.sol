@@ -2,7 +2,6 @@
 pragma solidity 0.8.20;
 
 library MarketStructs {
-
     struct Market {
         address indexToken;
         address stablecoin;
@@ -42,7 +41,7 @@ library MarketStructs {
     struct PnLParams {
         uint256 weightedAvgEntryPrice;
         uint256 sigmaIndexSizeUSD; // Sum of all increases and decreases in index size USD
-        uint256 leverage;
+        uint256 leverage; // Note It's crucial leverage remains constant
     }
     /*
         liqValue = entryValue - (entryValue * (freeCollateral / entryValue))

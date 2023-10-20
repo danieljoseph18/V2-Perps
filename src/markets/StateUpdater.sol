@@ -17,6 +17,7 @@ import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 /// @dev needs StateUpdater Role
 /// Note When arrays are too large, the contract could break as loops would exceed block gas limit
 /// When this happens, state is to be updated with use of Off-chain computation or an alternative solution
+/// Note Use Solmate Reentrancy Guard
 
 contract StateUpdater is RoleValidation, ReentrancyGuard {
     ILiquidityVault public liquidityVault;
@@ -44,9 +45,8 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
         uint256 openInterest;
         for (uint256 i = 0; i < len;) {
             address market = marketStorage.getMarket(_marketKeys[i]).market;
-            int256 marketPnL = PricingCalculator.getNetPnL(
-                market, address(marketStorage), _marketKeys[i], true
-            ) + PricingCalculator.getNetPnL(market, address(marketStorage), _marketKeys[i], false);
+            int256 marketPnL = PricingCalculator.getNetPnL(market, address(marketStorage), _marketKeys[i], true)
+                + PricingCalculator.getNetPnL(market, address(marketStorage), _marketKeys[i], false);
             netPnL += marketPnL;
             uint256 marketOpenInterest = PricingCalculator.calculateTotalIndexOpenInterestUSD(
                 address(marketStorage), market, _marketKeys[i], IMarket(market).indexToken()

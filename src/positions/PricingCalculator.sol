@@ -30,15 +30,19 @@ library PricingCalculator {
         int256 deltaPriceUsd = indexPrice.toInt256() - _position.pnlParams.weightedAvgEntryPrice.toInt256();
         uint256 scalar = unwrap(ud(_position.positionSize).div(ud(indexPrice)));
 
-        return _position.isLong
-            ? deltaPriceUsd * scalar.toInt256()
-            : -deltaPriceUsd * scalar.toInt256();
+        return _position.isLong ? deltaPriceUsd * scalar.toInt256() : -deltaPriceUsd * scalar.toInt256();
     }
 
     /// weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
     /// @dev Calculates the Next WAEP after a delta in a position
-    function calculateWeightedAverageEntryPrice(uint256 _prevWAEP, uint256 _prevSISU, int256 _sizeDeltaUsd, uint256 _price) external pure returns (uint256) {
-        uint256 nextSISU = _sizeDeltaUsd > 0 ? _prevSISU + _sizeDeltaUsd.toUint256() : _prevSISU - _sizeDeltaUsd.toUint256();
+    function calculateWeightedAverageEntryPrice(
+        uint256 _prevWAEP,
+        uint256 _prevSISU,
+        int256 _sizeDeltaUsd,
+        uint256 _price
+    ) external pure returns (uint256) {
+        uint256 nextSISU =
+            _sizeDeltaUsd > 0 ? _prevSISU + _sizeDeltaUsd.toUint256() : _prevSISU - _sizeDeltaUsd.toUint256();
         uint256 prevSum = _prevWAEP * _prevSISU;
         int256 nextSum = _sizeDeltaUsd * _price.toInt256();
         uint256 sum = nextSum > 0 ? prevSum + nextSum.toUint256() : prevSum - nextSum.toUint256();
@@ -59,15 +63,13 @@ library PricingCalculator {
     /// RealizedPNL=(Current price − Weighted average entry price)×(Realized position size/Current price)
     /// int256 pnl = int256(amountToRealize * currentTokenPrice) - int256(amountToRealize * userPos.entryPriceWeighted);
     /// Note If decreasing a position and realizing PNL, it's crucial to adjust the WAEP
-    function getDecreasePositionPnL(
-        uint256 _sizeDelta,
-        uint256 _positionWAEP,
-        uint256 _currentPrice,
-        bool _isLong
-    ) external pure returns (int256) {
+    function getDecreasePositionPnL(uint256 _sizeDelta, uint256 _positionWAEP, uint256 _currentPrice, bool _isLong)
+        external
+        pure
+        returns (int256)
+    {
         // only realise a percentage equivalent to the percentage of the position being closed
-        int256 valueDelta =
-            (_sizeDelta * _positionWAEP).toInt256() - (_sizeDelta * _currentPrice).toInt256();
+        int256 valueDelta = (_sizeDelta * _positionWAEP).toInt256() - (_sizeDelta * _currentPrice).toInt256();
         // if long, > 0 is profit, < 0 is loss
         // if short, > 0 is loss, < 0 is profit
         int256 pnl;
@@ -81,18 +83,59 @@ library PricingCalculator {
         return pnl;
     }
 
-    ///////////////////
-    // OPEN INTEREST //
-    ///////////////////
+    // Get the principle deposited for the amount of index tokens being realised
+    function getDecreasePositionPrinciple(uint256 _sizeDelta, uint256 _positionWAEP, uint256 _leverage)
+        external
+        pure
+        returns (uint256)
+    {
+        // principle = (sizeDelta * WAEP) / leverage
+        return (_sizeDelta * _positionWAEP) / _leverage;
+    }
 
-    function getTotalEntryValue(
-        address _market,
+    function getPoolBalanceUSD(address _liquidityVault, bytes32 _marketKey, address _market, address _collateralToken)
+        external
+        view
+        returns (uint256)
+    {
+        return getPoolBalance(_liquidityVault, _marketKey) * IMarket(_market).getPrice(_collateralToken);
+    }
+
+    function calculateTotalCollateralOpenInterestUSD(
         address _marketStorage,
+        address _market,
         bytes32 _marketKey,
-        bool _isLong
-    ) public view returns (uint256) {
-        uint256 totalWAEP =
-            _isLong ? IMarket(_market).longTotalWAEP() : IMarket(_market).shortTotalWAEP();
+        address _collateralToken
+    ) external view returns (uint256) {
+        return calculateCollateralOpenInterestUSD(_marketStorage, _market, _marketKey, _collateralToken, true)
+            + calculateCollateralOpenInterestUSD(_marketStorage, _market, _marketKey, _collateralToken, false);
+    }
+
+    function calculateTotalIndexOpenInterestUSD(
+        address _marketStorage,
+        address _market,
+        bytes32 _marketKey,
+        address _indexToken
+    ) external view returns (uint256) {
+        return calculateIndexOpenInterestUSD(_marketStorage, _market, _marketKey, _indexToken, true)
+            + calculateIndexOpenInterestUSD(_marketStorage, _market, _marketKey, _indexToken, false);
+    }
+
+    function calculateTotalCollateralOpenInterest(address _marketStorage, bytes32 _marketKey)
+        external
+        view
+        returns (uint256)
+    {
+        return calculateCollateralOpenInterest(_marketStorage, _marketKey, true)
+            + calculateCollateralOpenInterest(_marketStorage, _marketKey, false);
+    }
+
+    function getTotalEntryValue(address _market, address _marketStorage, bytes32 _marketKey, bool _isLong)
+        public
+        view
+        returns (uint256)
+    {
+        uint256 totalWAEP = _isLong ? IMarket(_market).longTotalWAEP() : IMarket(_market).shortTotalWAEP();
         return totalWAEP * calculateIndexOpenInterest(_marketStorage, _marketKey, _isLong);
     }
 
@@ -131,7 +174,7 @@ library PricingCalculator {
         uint256 collateralOpenInterest = calculateCollateralOpenInterest(_marketStorage, _marketKey, _isLong);
         return collateralOpenInterest * IMarket(_market).getPrice(_collateralToken);
     }
-    
+
     /// Note Make sure variables scaled by 1e18
     function calculateIndexOpenInterestUSD(
         address _marketStorage,
@@ -145,15 +188,6 @@ library PricingCalculator {
         return indexOpenInterest * indexPrice;
     }
 
-    function calculateTotalCollateralOpenInterest(address _marketStorage, bytes32 _marketKey)
-        public
-        view
-        returns (uint256)
-    {
-        return calculateCollateralOpenInterest(_marketStorage, _marketKey, true)
-            + calculateCollateralOpenInterest(_marketStorage, _marketKey, false);
-    }
-
     function calculateTotalIndexOpenInterest(address _marketStorage, bytes32 _marketKey)
         public
         view
@@ -163,36 +197,7 @@ library PricingCalculator {
             + calculateIndexOpenInterest(_marketStorage, _marketKey, false);
     }
 
-    function calculateTotalCollateralOpenInterestUSD(
-        address _marketStorage,
-        address _market,
-        bytes32 _marketKey,
-        address _collateralToken
-    ) public view returns (uint256) {
-        return calculateCollateralOpenInterestUSD(_marketStorage, _market, _marketKey, _collateralToken, true)
-            + calculateCollateralOpenInterestUSD(_marketStorage, _market, _marketKey, _collateralToken, false);
-    }
-
-    function calculateTotalIndexOpenInterestUSD(
-        address _marketStorage,
-        address _market,
-        bytes32 _marketKey,
-        address _indexToken
-    ) public view returns (uint256) {
-        return calculateIndexOpenInterestUSD(_marketStorage, _market, _marketKey, _indexToken, true)
-            + calculateIndexOpenInterestUSD(_marketStorage, _market, _marketKey, _indexToken, false);
-    }
-
     function getPoolBalance(address _liquidityVault, bytes32 _marketKey) public view returns (uint256) {
         return ILiquidityVault(_liquidityVault).getMarketAllocation(_marketKey);
     }
-
-    function getPoolBalanceUSD(address _liquidityVault, bytes32 _marketKey, address _market, address _collateralToken)
-        public
-        view
-        returns (uint256)
-    {
-        return getPoolBalance(_liquidityVault, _marketKey) * IMarket(_market).getPrice(_collateralToken);
-    }
-
 }

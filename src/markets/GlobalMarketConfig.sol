@@ -23,14 +23,14 @@ contract GlobalMarketConfig is RoleValidation {
 
     function setMarketFundingConfig(
         bytes32 _marketKey,
-        uint256 _fundingInterval,
         uint256 _maxFundingVelocity,
         uint256 _skewScale,
-        uint256 _maxFundingRate
+        int256 _maxFundingRate,
+        int256 _minFundingRate
     ) external onlyModerator {
         address market = marketStorage.getMarket(_marketKey).market;
         require(market != address(0), "Market does not exist");
-        IMarket(market).setFundingConfig(_fundingInterval, _maxFundingVelocity, _skewScale, _maxFundingRate);
+        IMarket(market).setFundingConfig(_maxFundingVelocity, _skewScale, _maxFundingRate, _minFundingRate);
     }
 
     function setMarketBorrowingConfig(

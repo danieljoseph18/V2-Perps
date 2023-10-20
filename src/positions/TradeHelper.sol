@@ -59,7 +59,6 @@ library TradeHelper {
         return unwrap(ud(_prevAveragePricePerToken).avg(ud(_newPrice)));
     }
 
-    /// @dev Direct Hashing etc. to prevent Stack Too Deep Error
     function generateNewPosition(
         address _market,
         address _tradeStorage,
@@ -72,7 +71,10 @@ library TradeHelper {
             IMarket(_market).getMarketParameters();
         // make sure all Position and PositionRequest instantiations are in the correct order.
         return MarketStructs.Position({
-            index: ITradeStorage(_tradeStorage).getNextPositionIndex(keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken)), _positionRequest.isLong),
+            index: ITradeStorage(_tradeStorage).getNextPositionIndex(
+                keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken)),
+                _positionRequest.isLong
+                ),
             market: keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken)),
             indexToken: _positionRequest.indexToken,
             collateralToken: _positionRequest.collateralToken,
@@ -83,7 +85,11 @@ library TradeHelper {
             realisedPnl: 0,
             borrowParams: MarketStructs.BorrowParams(longBorrowFee, shortBorrowFee),
             fundingParams: MarketStructs.FundingParams(0, 0, 0, block.timestamp, longFunding, shortFunding),
-            pnlParams: MarketStructs.PnLParams(_price, _positionRequest.sizeDelta * _price, unwrap(ud(_positionRequest.sizeDelta).div(ud(_positionRequest.collateralDelta)))),
+            pnlParams: MarketStructs.PnLParams(
+                _price,
+                _positionRequest.sizeDelta * _price,
+                unwrap(ud(_positionRequest.sizeDelta).div(ud(_positionRequest.collateralDelta)))
+                ),
             entryTimestamp: block.timestamp
         });
     }

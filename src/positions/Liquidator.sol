@@ -12,15 +12,11 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 contract Liquidator is RoleValidation {
     using MarketStructs for MarketStructs.Position;
     using SafeCast for int256;
-    // interacts with the TradeManager contract to liquidate positions
-    // if collateral falls below threshold, user is liquidated
-    // liquidator can be anyone, but must pay gas to liquidate
-    // liquidator gets a fee for liquidating
-
-    mapping(bytes32 => bool) isFlagged;
 
     ITradeStorage public tradeStorage;
     IMarketStorage public marketStorage;
+
+    mapping(bytes32 => bool) isFlagged;
 
     error Liquidator_PositionAlreadyFlagged();
     error Liquidator_PositionNotLiquidatable();

@@ -24,6 +24,10 @@ contract TradeStorage is RoleValidation {
     using SafeCast for uint256;
     using SafeCast for int256;
 
+    IMarketStorage public marketStorage;
+    ILiquidityVault public liquidityVault;
+    ITradeVault public tradeVault;
+
     mapping(bool _isLimit => mapping(bytes32 _orderKey => MarketStructs.PositionRequest)) public orders;
     mapping(bool _isLimit => bytes32[] _orderKeys) public orderKeys;
 
@@ -33,15 +37,21 @@ contract TradeStorage is RoleValidation {
 
     mapping(address _user => uint256 _rewards) public accumulatedRewards;
 
-    IMarketStorage public marketStorage;
-    ILiquidityVault public liquidityVault;
-    ITradeVault public tradeVault;
-
     /// Note move over to libraries
     uint256 public liquidationFeeUsd;
     uint256 public tradingFee;
     uint256 public minExecutionFee = 0.001 ether;
-    uint256 public accumulatedBorrowFees;
+    uint256 public accumulatedBorrowFees; //Note Should accumulate in tradevault not here
+
+    event OrderRequestCreated(bytes32 _orderKey, MarketStructs.PositionRequest _positionRequest);
+    event OrderRequestCancelled(bytes32 _orderKey);
+    event TradeExecuted(MarketStructs.ExecutionParams _executionParams);
+    event DecreaseTokenTransfer(address _user, address _token, uint256 _principle, int256 _pnl);
+    event LiquidatePosition(bytes32 _positionKey, address _liquidator, uint256 _fee);
+    event ExecutionFeeSent(address _executor, uint256 _fee);
+    event FeesProcessed(bytes32 _positionKey, uint256 _fundingFee, uint256 _borrowFee);
+    event FundingFeesClaimed(address _user, uint256 _fundingFees);
+    event TradingFeesSet(uint256 _liquidationFee, uint256 _tradingFee);
 
     error TradeStorage_InsufficientBalance();
     error TradeStorage_OrderDoesNotExist();
@@ -64,14 +74,11 @@ contract TradeStorage is RoleValidation {
         tradingFee = 0.001e18; // 0.1%
     }
 
-    ///////////////////////
-    // REQUEST FUNCTIONS //
-    ///////////////////////
-
     function createOrderRequest(MarketStructs.PositionRequest memory _positionRequest) external onlyRouter {
         bytes32 _positionKey = TradeHelper.generateKey(_positionRequest);
         TradeHelper.validateRequest(address(this), _positionKey, _positionRequest.isLimit);
         _assignRequest(_positionKey, _positionRequest, _positionRequest.isLimit);
+        emit OrderRequestCreated(_positionKey, _positionRequest);
     }
 
     /// Note Caller must be request creator
@@ -93,14 +100,9 @@ contract TradeStorage is RoleValidation {
 
         // Remove the last key
         orderKeys[_isLimit].pop();
+        emit OrderRequestCancelled(_positionKey);
     }
 
-    //////////////////////////
-    // EXECUTION FUNCTIONS //
-    ////////////////////////
-
-    // only callable from executor contracts
-    // DEFINITELY NEED A LOT MORE SECURITY CHECKS
     function executeTrade(MarketStructs.ExecutionParams memory _executionParams)
         external
         onlyExecutor
@@ -109,25 +111,106 @@ contract TradeStorage is RoleValidation {
         bytes32 key = TradeHelper.generateKey(_executionParams.positionRequest);
 
         uint256 price = ImpactCalculator.applyPriceImpact(
-            _executionParams.signedBlockPrice,
-            _executionParams.positionRequest.priceImpact
+            _executionParams.signedBlockPrice, _executionParams.positionRequest.priceImpact
         );
         // if type = 0 => collateral edit => only for collateral increase
         if (_executionParams.positionRequest.sizeDelta == 0) {
             _executeCollateralEdit(_executionParams.positionRequest, price, key);
         } else {
             _executionParams.positionRequest.isIncrease
-            ? _executePositionRequest(_executionParams.positionRequest, price, key)
-            : _executeDecreasePosition(_executionParams.positionRequest, price, key);
+                ? _executePositionRequest(_executionParams.positionRequest, price, key)
+                : _executeDecreasePosition(_executionParams.positionRequest, price, key);
         }
         _sendExecutionFee(_executionParams.executor, minExecutionFee);
 
         // fire event to be picked up by backend and stored in DB
-
+        emit TradeExecuted(_executionParams);
         // return the edited position
         return openPositions[key];
     }
 
+    // only callable from liquidator contract
+    /// Note NEEDS FIX
+    /// Note Should also transfer funding fees to the counterparty of the position
+    function liquidatePosition(bytes32 _positionKey, address _liquidator) external onlyLiquidator {
+        // check that the position exists
+        if (openPositions[_positionKey].user == address(0)) revert TradeStorage_PositionDoesNotExist();
+        // get the position fees
+        address market = TradeHelper.getMarket(
+            address(marketStorage), openPositions[_positionKey].indexToken, openPositions[_positionKey].collateralToken
+        );
+        uint256 borrowFee = BorrowingCalculator.getBorrowingFees(market, openPositions[_positionKey]);
+        // int256 fundingFees = FundingCalculator.getFundingFees(_positionKey);
+        uint256 feesOwed = borrowFee;
+        // fundingFees >= 0 ? feesOwed += fundingFees.toUint256() : feesOwed -= (-fundingFees).toUint256();
+        // delete the position from storage
+        delete openPositions[_positionKey];
+        // transfer the liquidation fee to the liquidator
+        accumulatedRewards[_liquidator] += liquidationFeeUsd;
+        // transfer the remaining collateral to the liquidity vault
+        // Note LIQUDITY VAULT NEEDS FUNCTION TO CALL CLAIM REWARDS
+        accumulatedRewards[address(liquidityVault)] += feesOwed;
+        emit LiquidatePosition(_positionKey, _liquidator, feesOwed);
+    }
+
+    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
+        if (_liquidationFee > TradeHelper.MAX_LIQUIDATION_FEE) revert TradeStorage_LiquidationFeeExceedsMax();
+        if (_tradingFee > TradeHelper.MAX_TRADING_FEE) revert TradeStorage_TradingFeeExceedsMax();
+        liquidationFeeUsd = _liquidationFee;
+        tradingFee = _tradingFee;
+        emit TradingFeesSet(_liquidationFee, _tradingFee);
+    }
+
+    /// Claim funding fees for a specified position
+    /// Review => Check claimable fee scale converts to tokens
+    function claimFundingFees(bytes32 _positionKey) external {
+        // get the position
+        MarketStructs.Position storage position = openPositions[_positionKey];
+        // check that the position exists
+        if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
+        // get the funding fees a user is eligible to claim for that position
+        _updateFundingParameters(_positionKey, position.indexToken, position.collateralToken);
+        // if none, revert
+        uint256 earnedFees = position.fundingParams.feesEarned;
+        if (earnedFees == 0) revert TradeStorage_NoFeesToClaim();
+        uint256 claimable = earnedFees - position.fundingParams.realisedFees;
+        if (claimable == 0) revert TradeStorage_NoFeesToClaim();
+        bytes32 marketKey = TradeHelper.getMarketKey(position.indexToken, position.collateralToken);
+        if (position.isLong) {
+            if (tradeVault.shortCollateral(marketKey) < claimable) revert TradeStorage_InsufficientCollateralToClaim();
+        } else {
+            if (tradeVault.longCollateral(marketKey) < claimable) revert TradeStorage_InsufficientCollateralToClaim();
+        }
+        // if some to claim, add to realised funding of the position
+        openPositions[_positionKey].fundingParams.realisedFees += claimable;
+        // transfer funding from the counter parties' liquidity pool
+        position.isLong
+            ? tradeVault.updateCollateralBalance(marketKey, claimable, false, false)
+            : tradeVault.updateCollateralBalance(marketKey, claimable, true, false);
+        // transfer funding to the user
+        IERC20(position.collateralToken).safeTransfer(position.user, claimable);
+        emit FundingFeesClaimed(position.user, claimable);
+    }
+
+    function getNextPositionIndex(bytes32 _marketKey, bool _isLong) external view returns (uint256) {
+        return openPositionKeys[_marketKey][_isLong].length - 1;
+    }
+
+    function getOrderKeys() external view returns (bytes32[] memory, bytes32[] memory) {
+        return (orderKeys[true], orderKeys[false]);
+    }
+
+    function getPositionFees(MarketStructs.Position memory _position) public view returns (uint256, uint256) {
+        address market = TradeHelper.getMarket(address(marketStorage), _position.indexToken, _position.collateralToken);
+        uint256 borrowFee = IMarket(market).getBorrowingFees(_position);
+        return (borrowFee, liquidationFeeUsd);
+    }
+
+    function getRequestQueueLengths() public view returns (uint256, uint256) {
+        return (orderKeys[false].length, orderKeys[true].length);
+    }
+
+    /// Review Check Flow With Tree Diagram
     function _executeCollateralEdit(
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _price,
@@ -135,8 +218,6 @@ contract TradeStorage is RoleValidation {
     ) internal {
         // check the position exists
         if (openPositions[_positionKey].user == address(0)) revert TradeStorage_PositionDoesNotExist();
-        // if limit => ensure the limit has been met before deleting
-        if (_positionRequest.isLimit) TradeHelper.checkLimitPrice(_price, _positionRequest);
         // delete the request
         _deletePositionRequest(_positionKey, _positionRequest.requestIndex, _positionRequest.isLimit);
         // get the positions current collateral and size
@@ -151,12 +232,13 @@ contract TradeStorage is RoleValidation {
             // edit the positions collateral and average entry price
             _editPosition(_positionRequest.collateralDelta, 0, 0, _price, true, _positionKey);
         } else {
-            // Note can probably combine into 1 function alongside process fees to send them to the correct areas
+            // Pay user's funding and borrowing fees off
             uint256 afterFeeAmount = processFees(_positionKey, _positionRequest);
             TradeHelper.checkLeverage(currentSize, currentCollateral - _positionRequest.collateralDelta);
             // Note check the remaining collateral is above the PNL losses + liquidaton fee (minimum collateral)
             _editPosition(afterFeeAmount, 0, 0, 0, false, _positionKey);
             bytes32 marketKey = TradeHelper.getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
+            // Note Where is the borrow fee being transferred to the LiquidityVault?
             tradeVault.transferOutTokens(
                 _positionRequest.collateralToken,
                 marketKey,
@@ -220,9 +302,13 @@ contract TradeStorage is RoleValidation {
 
         uint256 sizeDelta = afterFeeAmount * leverage;
 
-        // Review: Probably some issues => Pos or negative PNL?
-        int256 pnl =
-            PricingCalculator.getDecreasePositionPnL(sizeDelta, _position.pnlParams.weightedAvgEntryPrice, _price, _position.isLong);
+        int256 pnl = PricingCalculator.getDecreasePositionPnL(
+            sizeDelta, _position.pnlParams.weightedAvgEntryPrice, _price, _position.isLong
+        );
+
+        uint256 principle = PricingCalculator.getDecreasePositionPrinciple(
+            sizeDelta, _position.pnlParams.weightedAvgEntryPrice, _position.pnlParams.leverage
+        );
 
         _editPosition(afterFeeAmount, sizeDelta, pnl, 0, false, _positionKey);
 
@@ -231,41 +317,43 @@ contract TradeStorage is RoleValidation {
         // transfer that amount
 
         bytes32 marketKey = TradeHelper.getMarketKey(_positionRequest.indexToken, _positionRequest.collateralToken);
-        // Note Separate PNL Substitution => add function here and return afterpnl amount, replace collateralDelta
-        tradeVault.transferOutTokens(
-            _positionRequest.collateralToken,
-            marketKey,
-            _positionRequest.user,
-            _positionRequest.collateralDelta,
-            _positionRequest.isLong
-        );
+
+        // Handle Principle + PNL Transfers
+        _handleTokenTransfers(_positionRequest, marketKey, pnl, principle);
 
         if (_position.positionSize == 0) {
             _deletePosition(_positionKey, marketKey, _position.isLong);
         }
     }
 
-    // only callable from liquidator contract
-    /// Note NEEDS FIX
-    /// Note Should also transfer funding fees to the counterparty of the position
-    function liquidatePosition(bytes32 _positionKey, address _liquidator) external onlyLiquidator {
-        // check that the position exists
-        if (openPositions[_positionKey].user == address(0)) revert TradeStorage_PositionDoesNotExist();
-        // get the position fees
-        address market = TradeHelper.getMarket(
-            address(marketStorage), openPositions[_positionKey].indexToken, openPositions[_positionKey].collateralToken
-        );
-        uint256 borrowFee = BorrowingCalculator.getBorrowingFees(market, openPositions[_positionKey]);
-        // int256 fundingFees = FundingCalculator.getFundingFees(_positionKey);
-        uint256 feesOwed = borrowFee;
-        // fundingFees >= 0 ? feesOwed += fundingFees.toUint256() : feesOwed -= (-fundingFees).toUint256();
-        // delete the position from storage
-        delete openPositions[_positionKey];
-        // transfer the liquidation fee to the liquidator
-        accumulatedRewards[_liquidator] += liquidationFeeUsd;
-        // transfer the remaining collateral to the liquidity vault
-        // Note LIQUDITY VAULT NEEDS FUNCTION TO CALL CLAIM REWARDS
-        accumulatedRewards[address(liquidityVault)] += feesOwed;
+    function _handleTokenTransfers(
+        MarketStructs.PositionRequest memory _positionRequest,
+        bytes32 _marketKey,
+        int256 _pnl,
+        uint256 _principle
+    ) internal {
+        if (_pnl < 0) {
+            // Loss scenario
+            uint256 lossAmount = uint256(-_pnl); // Convert the negative PnL to a positive value for calculations
+            require(_principle >= lossAmount, "Loss exceeds principle"); // Ensure that the principle can cover the loss
+            // Note ^^ convert to revert
+
+            uint256 userAmount = _principle - lossAmount;
+            tradeVault.transferOutTokens(
+                _positionRequest.collateralToken, _marketKey, _positionRequest.user, userAmount, _positionRequest.isLong
+            );
+
+            // Transfer the lossAmount to liquidity vault (assuming there's a function for it)
+            tradeVault.transferLossToLiquidityVault(_positionRequest.collateralToken, lossAmount);
+        } else {
+            // Profit scenario
+            tradeVault.transferOutTokens(
+                _positionRequest.collateralToken, _marketKey, _positionRequest.user, _principle, _positionRequest.isLong
+            );
+            // Assuming liquidityVault has a function to transfer the profit
+            liquidityVault.transferPositionProfit(_positionRequest.user, uint256(_pnl));
+        }
+        emit DecreaseTokenTransfer(_positionRequest.user, _positionRequest.collateralToken, _principle, _pnl);
     }
 
     // deletes a position request from storage
@@ -302,9 +390,11 @@ contract TradeStorage is RoleValidation {
                 position.positionSize += _sizeDelta;
             }
             if (_price != 0) {
-                int256 sizeDeltaUsd = _isIncrease ? _sizeDelta.toInt256() * _price.toInt256() : -_sizeDelta.toInt256() * _price.toInt256();
-                position.pnlParams.weightedAvgEntryPrice =
-                    PricingCalculator.calculateWeightedAverageEntryPrice(position.pnlParams.weightedAvgEntryPrice, position.pnlParams.sigmaIndexSizeUSD, sizeDeltaUsd, _price);
+                int256 sizeDeltaUsd =
+                    _isIncrease ? _sizeDelta.toInt256() * _price.toInt256() : -_sizeDelta.toInt256() * _price.toInt256();
+                position.pnlParams.weightedAvgEntryPrice = PricingCalculator.calculateWeightedAverageEntryPrice(
+                    position.pnlParams.weightedAvgEntryPrice, position.pnlParams.sigmaIndexSizeUSD, sizeDeltaUsd, _price
+                );
             }
         } else {
             if (_collateralDelta != 0) {
@@ -338,14 +428,11 @@ contract TradeStorage is RoleValidation {
         }
     }
 
-    /////////////////////
-    // TOKEN RELATED //
-    ////////////////////
-
     function _sendExecutionFee(address _executor, uint256 _executionFee) internal {
         if (address(this).balance < _executionFee) revert TradeStorage_InsufficientBalance();
-        (bool success, ) = _executor.call{value: _executionFee}("");
+        (bool success,) = _executor.call{value: _executionFee}("");
         if (!success) revert TradeStorage_FailedToSendExecutionFee();
+        emit ExecutionFeeSent(_executor, _executionFee);
     }
 
     // takes in borrow and funding fees owed
@@ -360,6 +447,8 @@ contract TradeStorage is RoleValidation {
         uint256 borrowFee = _subtractBorrowingFee(openPositions[_positionKey], _positionRequest.collateralDelta);
         // transfer borrow fee to LPs in the LiquidityVault
         _sendFeeToVault(_positionRequest.collateralToken, borrowFee);
+
+        emit FeesProcessed(_positionKey, fundingFee, borrowFee);
 
         return _positionRequest.collateralDelta - fundingFee - borrowFee;
     }
@@ -389,6 +478,8 @@ contract TradeStorage is RoleValidation {
         _fee = feesOwed;
     }
 
+    /// Note Needs fix => should accumulate in TradeVault
+    /// Review Where is token transfer happening?
     function _subtractBorrowingFee(MarketStructs.Position memory _position, uint256 _collateralDelta)
         internal
         returns (uint256 _fee)
@@ -399,49 +490,18 @@ contract TradeStorage is RoleValidation {
         return borrowFee;
     }
 
+    /// Note Needs Permission To Transfer From TradeVault
     function _sendFeeToVault(address _token, uint256 _amount) internal {
         if (IERC20(_token).balanceOf(address(this)) < _amount) revert TradeStorage_InsufficientBalance();
         liquidityVault.accumulateBorrowingFees(_amount);
-        IERC20(_token).safeTransfer(address(liquidityVault), _amount);
+        IERC20(_token).safeTransferFrom(address(tradeVault), address(liquidityVault), _amount);
     }
 
-    /// Claim funding fees for a specified position
-    /// Review => Check claimable fee scale converts to tokens
-    function claimFundingFees(bytes32 _positionKey) external {
-        // get the position
-        MarketStructs.Position storage position = openPositions[_positionKey];
-        // check that the position exists
-        if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
-        // get the funding fees a user is eligible to claim for that position
-        _updateFundingParameters(_positionKey, position.indexToken, position.collateralToken);
-        // if none, revert
-        uint256 earnedFees = position.fundingParams.feesEarned;
-        if (earnedFees == 0) revert TradeStorage_NoFeesToClaim();
-        uint256 claimable = earnedFees - position.fundingParams.realisedFees;
-        if (claimable == 0) revert TradeStorage_NoFeesToClaim();
-        bytes32 marketKey = TradeHelper.getMarketKey(position.indexToken, position.collateralToken);
-        if (position.isLong) {
-            if (tradeVault.shortCollateral(marketKey) < claimable) revert TradeStorage_InsufficientCollateralToClaim();
-        } else {
-            if (tradeVault.longCollateral(marketKey) < claimable) revert TradeStorage_InsufficientCollateralToClaim();
-        }
-        // if some to claim, add to realised funding of the position
-        openPositions[_positionKey].fundingParams.realisedFees += claimable;
-        // transfer funding from the counter parties' liquidity pool
-        position.isLong
-            ? tradeVault.updateCollateralBalance(marketKey, claimable, false, false)
-            : tradeVault.updateCollateralBalance(marketKey, claimable, true, false);
-        // transfer funding to the user
-        IERC20(position.collateralToken).safeTransfer(position.user, claimable);
-    }
-
-    function _updateFundingParameters(bytes32 _positionKey, address _indexToken, address _collateralToken)
-        internal
-    {
-        address market =
-            TradeHelper.getMarket(address(marketStorage), _indexToken, _collateralToken);
+    function _updateFundingParameters(bytes32 _positionKey, address _indexToken, address _collateralToken) internal {
+        address market = TradeHelper.getMarket(address(marketStorage), _indexToken, _collateralToken);
         // calculate funding for the position
-        (uint256 earned, uint256 owed) = FundingCalculator.getFeesSinceLastPositionUpdate(market, openPositions[_positionKey]);
+        (uint256 earned, uint256 owed) =
+            FundingCalculator.getFeesSinceLastPositionUpdate(market, openPositions[_positionKey]);
 
         openPositions[_positionKey].fundingParams.feesEarned += earned;
         openPositions[_positionKey].fundingParams.feesOwed += owed;
@@ -455,40 +515,5 @@ contract TradeStorage is RoleValidation {
         openPositions[_positionKey].fundingParams.lastShortCumulativeFunding = shortCumulative;
 
         openPositions[_positionKey].fundingParams.lastFundingUpdate = block.timestamp;
-    }
-
-    /// Note Need function to process PNL => Check positions PNL and subtract a % of it whenever edited
-
-    //////////////////////
-    // SETTER FUNCTIONS //
-    //////////////////////
-
-    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
-        if (_liquidationFee > TradeHelper.MAX_LIQUIDATION_FEE) revert TradeStorage_LiquidationFeeExceedsMax();
-        if (_tradingFee > TradeHelper.MAX_TRADING_FEE) revert TradeStorage_TradingFeeExceedsMax();
-        liquidationFeeUsd = _liquidationFee;
-        tradingFee = _tradingFee;
-    }
-
-    //////////////////////
-    // GETTER FUNCTIONS //
-    //////////////////////
-
-    function getPositionFees(MarketStructs.Position memory _position) public view returns (uint256, uint256) {
-        address market = TradeHelper.getMarket(address(marketStorage), _position.indexToken, _position.collateralToken);
-        uint256 borrowFee = IMarket(market).getBorrowingFees(_position);
-        return (borrowFee, liquidationFeeUsd);
-    }
-
-    function getOrderKeys() external view returns (bytes32[] memory, bytes32[] memory) {
-        return (orderKeys[true], orderKeys[false]);
-    }
-
-    function getRequestQueueLengths() public view returns (uint256, uint256) {
-        return (orderKeys[false].length, orderKeys[true].length);
-    }
-
-    function getNextPositionIndex(bytes32 _marketKey, bool _isLong) external view returns (uint256) {
-        return openPositionKeys[_marketKey][_isLong].length - 1;
     }
 }

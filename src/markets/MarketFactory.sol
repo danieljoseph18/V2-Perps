@@ -33,7 +33,7 @@ contract MarketFactory is RoleValidation {
     }
 
     // Only callable by MARKET_MAKER roles
-    function createMarket(address _indexToken, address _collateralToken) public onlyAdmin {
+    function createMarket(address _indexToken, address _collateralToken) external onlyAdmin {
         // long and short tokens cant be same, short must be stables
         if (!marketStorage.isWhitelistedToken(_indexToken)) revert MarketFactory_TokenNotWhitelisted();
         if (_collateralToken != liquidityVault.collateralToken()) revert MarketFactory_IncorrectCollateralToken();
@@ -44,7 +44,8 @@ contract MarketFactory is RoleValidation {
         // Create new Market contract
         Market _market = new Market(_indexToken, _collateralToken, marketStorage, liquidityVault, tradeStorage);
         // Store everything in MarketStorage
-        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, _collateralToken, address(_market), _marketKey);
+        MarketStructs.Market memory _marketInfo =
+            MarketStructs.Market(_indexToken, _collateralToken, address(_market), _marketKey);
         marketStorage.storeMarket(_marketInfo);
         liquidityVault.addMarket(_marketInfo);
 

@@ -13,10 +13,10 @@ interface IMarket {
     function upkeepNeeded() external view returns (bool);
     function updateFundingRate(uint256 _positionSizeUSD, bool _isLong) external;
     function setFundingConfig(
-        uint256 _fundingInterval,
         uint256 _maxFundingVelocity,
         uint256 _skewScale,
-        uint256 _maxFundingRate
+        int256 _maxFundingRate,
+        int256 _minFundingRate
     ) external;
     function setBorrowingConfig(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide)
         external;

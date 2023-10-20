@@ -46,4 +46,5 @@ interface ILiquidityVault {
     function accumulateFundingFees(uint256 _amount, address _account) external;
     function updateState(int256 _netPnL, uint256 _netOpenInterest) external;
     function accumulateFees(uint256 _amount) external;
+    function transferPositionProfit(address _user, uint256 _amount) external;
 }

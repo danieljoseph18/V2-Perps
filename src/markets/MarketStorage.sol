@@ -16,30 +16,31 @@ contract MarketStorage is RoleValidation {
 
     ILiquidityVault public liquidityVault;
 
-    bytes32[] public marketKeys;
     mapping(bytes32 _marketKey => MarketStructs.Market) public markets;
-
-    // reps liquidity allocated to each market in USDC
-    // OI is capped to % of allocation
-    // whenever a trade is opened, check it won't put the OI over the allocation
-    // cap = marketAllocation(market) * 100% / overCollateralizationRatio
     // Need a minimum allocation or users won't be able to trade new markets
     // Or we set allocation based on expected demand before trading commences
     mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
     mapping(bytes32 _marketKey => uint256 _maxOI) public maxOpenInterests;
-
-    // tracked by a bytes 32 key
     mapping(bytes32 _positionKey => MarketStructs.Position) public positions;
-
-    // tracks globally allowed collateral
     mapping(address _token => bool _isWhitelisted) public isWhitelistedToken;
-
     mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenLongOpenInterest; // OI of collat token long
     mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenShortOpenInterest;
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenLongOpenInterest; // OI of index token long
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenShortOpenInterest;
 
+    bytes32[] public marketKeys;
     uint256 public overCollateralizationRatio; // 150e18 = 150% ratio => 1.5x collateral
+
+    event OpenInterestUpdated(
+        bytes32 indexed _marketKey,
+        uint256 _collateralTokenAmount,
+        uint256 _indexTokenAmount,
+        bool _isLong,
+        bool _isAddition
+    );
+    event OverCollateralizationRatioUpdated(uint256 _percentage);
+    event WhitelistedTokenUpdated(address _token, bool _isWhitelisted);
+    event MarketAllocationUpdated(bytes32 indexed _marketKey, uint256 indexed _newAllocation, uint256 _maxOI);
 
     error MarketStorage_MarketAlreadyExists();
     error MarketStorage_NonExistentMarket();
@@ -62,6 +63,7 @@ contract MarketStorage is RoleValidation {
     /// @dev Only GlobalMarketConfig
     function setIsWhitelisted(address _token, bool _isWhitelisted) external onlyConfigurator {
         isWhitelistedToken[_token] = _isWhitelisted;
+        emit WhitelistedTokenUpdated(_token, _isWhitelisted);
     }
 
     /// @dev Only Executor
@@ -89,11 +91,13 @@ contract MarketStorage is RoleValidation {
                 indexTokenShortOpenInterest[_marketKey] -= _indexTokenAmount;
             }
         }
+        emit OpenInterestUpdated(_marketKey, _collateralTokenAmount, _indexTokenAmount, _isLong, _shouldAdd);
     }
 
     /// @dev only GlobalMarketConfig
-    function updateoverCollateralizationRatio(uint256 _percentage) external onlyConfigurator {
+    function updateOverCollateralizationRatio(uint256 _percentage) external onlyConfigurator {
         overCollateralizationRatio = _percentage;
+        emit OverCollateralizationRatioUpdated(_percentage);
     }
 
     function getMarket(bytes32 _key) external view returns (MarketStructs.Market memory) {
@@ -109,10 +113,6 @@ contract MarketStorage is RoleValidation {
         bytes32 _key = keccak256(abi.encodePacked(_indexToken, _stablecoin));
         return markets[_key];
     }
-
-    /////////////////
-    // ALLOCATIONS //
-    /////////////////
 
     /*
         numerator = total OI
@@ -149,5 +149,6 @@ contract MarketStorage is RoleValidation {
         if (markets[_marketKey].market == address(0)) revert MarketStorage_NonExistentMarket();
         marketAllocations[_marketKey] = _newAllocation;
         maxOpenInterests[_marketKey] = _maxOI;
+        emit MarketAllocationUpdated(_marketKey, _newAllocation, _maxOI);
     }
 }

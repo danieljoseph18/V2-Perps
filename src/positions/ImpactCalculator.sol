@@ -12,12 +12,7 @@ library ImpactCalculator {
     using SafeCast for uint256;
     using SafeCast for int256;
 
-
-    function applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpact)
-        external
-        pure
-        returns (uint256)
-    {
+    function applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpact) external pure returns (uint256) {
         // multiply price impact by signed block price => e.g 0.05e18 * 1000e18 = 50e18 (5%)
         int256 impactUSD = _priceImpact * _signedBlockPrice.toInt256();
         // negative, subtract, positive add

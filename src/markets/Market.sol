@@ -70,6 +70,15 @@ contract Market is RoleValidation {
 
     uint256 public lastAllocation; // last time allocation was updated
 
+    event MarketFundingConfigUpdated(
+        uint256 _maxFundingVelocity, uint256 _skewScale, int256 _maxFundingRate, int256 _minFundingRate
+    );
+    event FundingRateUpdated(int256 _fundingRate, int256 _fundingRateVelocity);
+    event BorrowingConfigUpdated(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide);
+    event BorrowingRateUpdated(bool _isLong, uint256 _borrowingRate);
+    event TotalWAEPUpdated(uint256 _longTotalWAEP, uint256 _shortTotalWAEP);
+    event PriceImpactConfigUpdated(uint256 _priceImpactFactor, uint256 _priceImpactExponent);
+
     // might need to update to an initialize function instead of constructor
     constructor(
         address _indexToken,
@@ -83,40 +92,6 @@ contract Market is RoleValidation {
         marketStorage = _marketStorage;
         liquidityVault = _liquidityVault;
         tradeStorage = _tradeStorage;
-    }
-
-    /////////////
-    // PRICING //
-    /////////////
-
-    function getPrice(address _token) public view returns (uint256) {
-        // perform safety checks
-        return _getPrice(_token);
-    }
-
-    function _getPrice(address _token) internal view returns (uint256) {
-        // call the oracle contract and return the price of the token
-    }
-
-    function getMarketKey() public view returns (bytes32) {
-        return keccak256(abi.encodePacked(indexToken, collateralToken));
-    }
-
-    /////////////
-    // Funding //
-    /////////////
-
-    /// @dev Only GlobalMarketConfig
-    function setFundingConfig(
-        uint256 _maxFundingVelocity,
-        uint256 _skewScale,
-        int256 _maxFundingRate,
-        int256 _minFundingRate
-    ) public onlyConfigurator {
-        maxFundingVelocity = _maxFundingVelocity;
-        skewScale = _skewScale;
-        maxFundingRate = _maxFundingRate;
-        minFundingRate = _minFundingRate;
     }
 
     /// @dev 1 USD = 1e18
@@ -154,11 +129,8 @@ contract Market is RoleValidation {
         }
         fundingRateVelocity = velocity;
         lastFundingUpdateTime = block.timestamp;
+        emit FundingRateUpdated(fundingRate, fundingRateVelocity);
     }
-
-    ////////////////////
-    // BORROWING FEES //
-    ////////////////////
 
     // Function to update borrowing parameters (consider appropriate access control)
     /// @dev Only GlobalMarketConfig
@@ -169,6 +141,7 @@ contract Market is RoleValidation {
         borrowingFactor = _borrowingFactor;
         borrowingExponent = _borrowingExponent;
         feeForSmallerSide = _feeForSmallerSide;
+        emit BorrowingConfigUpdated(_borrowingFactor, _borrowingExponent, _feeForSmallerSide);
     }
 
     // Function to calculate borrowing fees per second
@@ -187,8 +160,7 @@ contract Market is RoleValidation {
         uint256 borrowingRate = _isLong ? longBorrowingRate : shortBorrowingRate;
 
         UD60x18 feeBase = ud(openInterest);
-        UD60x18 fee =
-            ud(borrowingFactor) * (ud(unwrap(feeBase)).pow(ud(borrowingExponent))) / ud(poolBalance);
+        UD60x18 fee = ud(borrowingFactor) * (ud(unwrap(feeBase)).pow(ud(borrowingExponent))) / ud(poolBalance);
 
         // update cumulative fees with current borrowing rate
         if (_isLong) {
@@ -200,39 +172,65 @@ contract Market is RoleValidation {
         lastBorrowUpdateTime = block.timestamp;
         // update borrowing rate
         _isLong ? longBorrowingRate = unwrap(fee) : shortBorrowingRate = unwrap(fee);
+        emit BorrowingRateUpdated(_isLong, unwrap(fee));
     }
-
-    /////////
-    // PNL //
-    /////////
 
     // check this is updated correctly in the executor
     function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external onlyExecutor {
         if (_isLong) {
-            longTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price);
-            _sizeDeltaUsd > 0 ? longSizeSumUSD += _sizeDeltaUsd.toUint256() : longSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
+            longTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
+                longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price
+            );
+            _sizeDeltaUsd > 0
+                ? longSizeSumUSD += _sizeDeltaUsd.toUint256()
+                : longSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
         } else {
-            shortTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price);
-            _sizeDeltaUsd > 0 ? shortSizeSumUSD += _sizeDeltaUsd.toUint256() : shortSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
+            shortTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
+                shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price
+            );
+            _sizeDeltaUsd > 0
+                ? shortSizeSumUSD += _sizeDeltaUsd.toUint256()
+                : shortSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
         }
+        emit TotalWAEPUpdated(longTotalWAEP, shortTotalWAEP);
     }
 
-    //////////////////
-    // PRICE IMPACT //
-    //////////////////
+    /// @dev Only GlobalMarketConfig
+    function setFundingConfig(
+        uint256 _maxFundingVelocity,
+        uint256 _skewScale,
+        int256 _maxFundingRate,
+        int256 _minFundingRate
+    ) external onlyConfigurator {
+        maxFundingVelocity = _maxFundingVelocity;
+        skewScale = _skewScale;
+        maxFundingRate = _maxFundingRate;
+        minFundingRate = _minFundingRate;
+        emit MarketFundingConfigUpdated(_maxFundingVelocity, _skewScale, _maxFundingRate, _minFundingRate);
+    }
 
     /// @dev Only GlobalMarketConfig
     function setPriceImpactConfig(uint256 _priceImpactFactor, uint256 _priceImpactExponent) external onlyConfigurator {
         priceImpactFactor = _priceImpactFactor;
         priceImpactExponent = _priceImpactExponent;
+        emit PriceImpactConfigUpdated(_priceImpactFactor, _priceImpactExponent);
     }
-
-    /////////////
-    // GETTERS //
-    /////////////
 
     function getMarketParameters() external view returns (uint256, uint256, uint256, uint256) {
         return
             (longCumulativeFundingFees, shortCumulativeFundingFees, longCumulativeBorrowFee, shortCumulativeBorrowFee);
+    }
+
+    function getPrice(address _token) public view returns (uint256) {
+        // perform safety checks
+        return _getPrice(_token);
+    }
+
+    function getMarketKey() public view returns (bytes32) {
+        return keccak256(abi.encodePacked(indexToken, collateralToken));
+    }
+
+    function _getPrice(address _token) internal view returns (uint256) {
+        // call the oracle contract and return the price of the token
     }
 }

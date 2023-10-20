@@ -22,11 +22,7 @@ library FundingCalculator {
     }
 
     /// @dev Get the Funding Fees Accumulated Since Last Update For Both Sides
-    function getFundingFees(address _market)
-        public
-        view
-        returns (uint256, uint256)
-    {
+    function getFundingFees(address _market) external view returns (uint256, uint256) {
         uint256 longAccumulatedFunding = IMarket(_market).longCumulativeFundingFees();
         uint256 shortAccumulatedFunding = IMarket(_market).shortCumulativeFundingFees();
 
@@ -46,13 +42,15 @@ library FundingCalculator {
 
     /// @dev Get the Funding Fees Owed by a Position Since Last Update
     function getFeesSinceLastPositionUpdate(address _market, MarketStructs.Position memory _position)
-        public
+        external
         view
         returns (uint256 feesEarned, uint256 feesOwed)
     {
         // get cumulative funding fees since last update
-        uint256 longAccumulatedFunding = IMarket(_market).longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
-        uint256 shortAccumulatedFunding = IMarket(_market).shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
+        uint256 longAccumulatedFunding =
+            IMarket(_market).longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
+        uint256 shortAccumulatedFunding =
+            IMarket(_market).shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
         // multiply by size
         uint256 longFundingFees = longAccumulatedFunding * _position.positionSize;
         uint256 shortFundingFees = shortAccumulatedFunding * _position.positionSize;
