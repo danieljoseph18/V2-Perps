@@ -7,12 +7,11 @@ import {IMarketToken} from "./interfaces/IMarketToken.sol";
 import {MarketStructs} from "./MarketStructs.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 
 /// @dev Needs Vault Role
-/// Note REPLACE WITH SOLMATE REENTRANCY GUARD
 contract LiquidityVault is RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
@@ -37,6 +36,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     uint256 private cachedNetOI;
     int256 private cachedNetPnL;
     uint256 public liquidityFee; // 0.2% fee on all liquidity added/removed => 1e18 = 100%
+    bool private isInitialized;
 
     event LiquidityFeeUpdated(uint256 liquidityFee);
     event HandlerSet(address handler, bool isHandler);
@@ -52,14 +52,24 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     error LiquidityVault_ZeroAddress();
     error LiquidityVault_InvalidHandler();
     error LiquidityVault_InsufficientFunds();
+    error LiquidityVault_AlreadyInitialized();
 
     // liquidity token = market token
     // another contract should handle minting and burning of LP token
     // change to intialize function
     constructor(address _collateralToken, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
+        if (_collateralToken == address(0)) revert LiquidityVault_InvalidToken();
+        if (_liquidityToken == IMarketToken(address(0))) revert LiquidityVault_InvalidToken();
         collateralToken = _collateralToken;
         liquidityToken = _liquidityToken;
-        liquidityFee = 0.02e18;
+    }
+
+    /// @dev Liquidity Fee needs 18 decimals => e.g 0.002e18 = 0.2% fee
+    /// @dev Must be Called before contract is interacted with
+    function initialize(uint256 _liquidityFee) external onlyAdmin {
+        if (isInitialized) revert LiquidityVault_AlreadyInitialized();
+        liquidityFee = _liquidityFee;
+        isInitialized = true;
     }
 
     /// @dev only GlobalMarketConfig

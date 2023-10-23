@@ -8,4 +8,7 @@ interface ITradeVault {
     function transferOutTokens(address _token, bytes32 _marketKey, address _to, uint256 _collateralDelta, bool _isLong)
         external;
     function transferLossToLiquidityVault(address _token, uint256 _amount) external;
+    function liquidatePositionCollateral(bytes32 _marketKey, uint256 _totalCollateral, uint256 _fundingOwed, bool _isLong) external;
+    function swapFundingAmount(bytes32 _marketKey, uint256 _amount, bool _isLong) external;
+    function claimFundingFees(bytes32 _marketKey, address _user, uint256 _claimed, bool _isLong) external;
 }

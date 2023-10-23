@@ -7,9 +7,14 @@ import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {FundingCalculator} from "./FundingCalculator.sol";
+import {BorrowingCalculator} from "./BorrowingCalculator.sol";
+import {PricingCalculator} from "./PricingCalculator.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 // Helper functions for trade related logic
 library TradeHelper {
+    using SafeCast for uint256;
+
     uint256 public constant MIN_LEVERAGE = 1e18; // 1x
     uint256 public constant MAX_LEVERAGE = 50e18; // 50x
     uint256 public constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
@@ -18,6 +23,7 @@ library TradeHelper {
     error TradeHelper_LimitPriceNotMet();
     error TradeHelper_PositionAlreadyExists();
     error TradeHelper_InvalidLeverage();
+    error TradeHelper_PositionNotLiquidatable();
 
     // Validate whether a request should execute or not
     /// Note What is this???
@@ -101,6 +107,34 @@ library TradeHelper {
 
     function getTradeSizeUsd(uint256 _sizeDelta, uint256 _signedPrice) external pure returns (uint256) {
         return unwrap(ud(_sizeDelta).mul(ud(_signedPrice)));
+    }
+
+    // Value Provided USD > Liquidation Fee + Fees + Losses USD    
+    function checkIsLiquidatable(MarketStructs.Position calldata _position, uint256 _collateralPriceUsd, address _tradeStorage, address _marketStorage) external view {
+        address market = getMarket(_marketStorage, _position.indexToken, _position.collateralToken);
+        // get the total value provided in USD
+        uint256 collateralValueUsd = _position.collateralAmount * _collateralPriceUsd;
+        // get the liquidation fee in USD
+        uint256 liquidationFeeUsd = ITradeStorage(_tradeStorage).liquidationFeeUsd();
+        // get the total fees owed (funding + borrowing) in USD => funding should be net
+        // If fees earned > fees owed, should just be 0 => Let's extrapolate this out to FUnding Calculator
+        uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _collateralPriceUsd, _marketStorage);
+        // get the total losses in USD
+        int256 pnl = PricingCalculator.calculatePnL(market, _position);
+        int256 reminance = collateralValueUsd.toInt256() - liquidationFeeUsd.toInt256() - totalFeesOwedUsd.toInt256() + pnl;
+        // check if value provided > liquidation fee + fees + losses
+        if(reminance <= 0) {
+            revert TradeHelper_PositionNotLiquidatable();
+        }
+    }
+
+    function getTotalFeesOwedUsd(MarketStructs.Position memory _position, uint256 _collateralPriceUsd, address _market) public view returns (uint256) {
+        uint256 valueUsd = _position.collateralAmount * _collateralPriceUsd;
+        uint256 borrowingFeesUsd = BorrowingCalculator.getBorrowingFees(_market, _position) * valueUsd;
+        uint256 fundingFeeOwed = FundingCalculator.getTotalPositionFeeOwed(_market, _position);
+        // should return % of total value => e.g 0.05 * 100 = 5
+        uint256 fundingValueUsd = unwrap(ud(fundingFeeOwed) * ud(valueUsd));
+        return borrowingFeesUsd + fundingValueUsd;
     }
 
     function getMarket(address _marketStorage, address _indexToken, address _collateralToken)

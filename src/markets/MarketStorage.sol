@@ -29,7 +29,7 @@ contract MarketStorage is RoleValidation {
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenShortOpenInterest;
 
     bytes32[] public marketKeys;
-    uint256 public overCollateralizationRatio; // 150e18 = 150% ratio => 1.5x collateral
+    uint256 public overCollateralizationRatio;
 
     event OpenInterestUpdated(
         bytes32 indexed _marketKey,
@@ -48,7 +48,12 @@ contract MarketStorage is RoleValidation {
     /// Note move init number to initialize function
     constructor(ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
         liquidityVault = _liquidityVault;
-        overCollateralizationRatio = 1.5e18; // 1.5 / 150%
+    }
+
+    /// @dev 18 Decimals e.g 1.5e18 = 1.5 = 150%
+    /// @dev Must be Called before contract is interacted with
+    function initialize(uint256 _overCollateralizationRatio) external onlyAdmin {
+        overCollateralizationRatio = _overCollateralizationRatio;
     }
 
     /// @dev Only MarketFactory

@@ -38,21 +38,23 @@ contract Market is RoleValidation {
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
 
+    bool isInitialized;
+
     uint256 public lastFundingUpdateTime; // last time funding was updated
     uint256 public lastBorrowUpdateTime; // last time borrowing fee was updated
     // positive rate = longs pay shorts, negative rate = shorts pay longs
     int256 public fundingRate; // RATE PER SECOND Stored as a fixed-point number 1 = 1e18
     int256 public fundingRateVelocity; // VELOCITY PER SECOND
-    uint256 public skewScale = 1_000_000e18; // Skew scale in USDC (1_000_000)
-    uint256 public maxFundingVelocity = 0.03e18; // 0.03% represented as fixed-point
-    int256 public maxFundingRate = 5e18; // 5% represented as fixed-point
-    int256 public minFundingRate = -5e18; // -5% fixed point
+    uint256 public skewScale;
+    uint256 public maxFundingVelocity;
+    int256 public maxFundingRate;
+    int256 public minFundingRate;
 
     uint256 public longCumulativeFundingFees; // how much longs have owed shorts per token, 18 decimals
     uint256 public shortCumulativeFundingFees; // how much shorts have owed longs per token, 18 decimals
 
-    uint256 public borrowingFactor = 0.0000035e18; // = 0.0000035% per second
-    uint256 public borrowingExponent = 1e18; // 1.00...
+    uint256 public borrowingFactor;
+    uint256 public borrowingExponent;
     // Flag for skipping borrowing fee for the smaller side
     bool public feeForSmallerSide;
     uint256 public longCumulativeBorrowFee;
@@ -60,8 +62,8 @@ contract Market is RoleValidation {
     uint256 public longBorrowingRate; // borrow fee per second for longs per second (0.0001e18 = 0.01%)
     uint256 public shortBorrowingRate; // borrow fee per second for shorts per second
 
-    uint256 public priceImpactExponent = 1e18;
-    uint256 public priceImpactFactor = 0.0001e18; // 0.0001%
+    uint256 public priceImpactExponent;
+    uint256 public priceImpactFactor;
 
     uint256 public longTotalWAEP; // long total weighted average entry price
     uint256 public shortTotalWAEP; // short total weighted average entry price
@@ -79,6 +81,8 @@ contract Market is RoleValidation {
     event TotalWAEPUpdated(uint256 _longTotalWAEP, uint256 _shortTotalWAEP);
     event PriceImpactConfigUpdated(uint256 _priceImpactFactor, uint256 _priceImpactExponent);
 
+    error Market_AlreadyInitialized();
+
     // might need to update to an initialize function instead of constructor
     constructor(
         address _indexToken,
@@ -92,6 +96,32 @@ contract Market is RoleValidation {
         marketStorage = _marketStorage;
         liquidityVault = _liquidityVault;
         tradeStorage = _tradeStorage;
+    }
+
+    /// @dev All values need 18 decimals => e.g 0.0003e18 = 0.03%
+    /// @dev Can only be called by MarketFactory
+    /// @dev Must be Called before contract is interacted with
+    function initialize(
+        uint256 _maxFundingVelocity, // 0.0003e18 = 0.03%
+        uint256 _skewScale, // 1_000_000e18 Skew scale in USDC (1_000_000)
+        int256 _maxFundingRate, // 500e18  5% represented as fixed-point
+        int256 _minFundingRate, // -500e18
+        uint256 _borrowingFactor, // 0.000000035e18 = 0.0000035% per second
+        uint256 _borrowingExponent, // Not 18 decimals => 1:1
+        bool _feeForSmallerSide, // Flag for skipping borrowing fee for the smaller side
+        uint256 _priceImpactFactor, // 0.000001e18 = 0.0001%
+        uint256 _priceImpactExponent // Not 18 decimals => 1:1
+    ) external onlyMarketMaker() {
+        if (isInitialized) revert Market_AlreadyInitialized();
+        maxFundingVelocity = _maxFundingVelocity;
+        skewScale = _skewScale;
+        maxFundingRate = _maxFundingRate;
+        minFundingRate = _minFundingRate;
+        borrowingFactor = _borrowingFactor;
+        borrowingExponent = _borrowingExponent;
+        feeForSmallerSide = _feeForSmallerSide;
+        priceImpactFactor = _priceImpactFactor;
+        priceImpactExponent = _priceImpactExponent;
     }
 
     /// @dev 1 USD = 1e18

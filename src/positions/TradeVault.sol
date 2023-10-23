@@ -29,6 +29,7 @@ contract TradeVault is RoleValidation {
     error TradeVault_ZeroAddressTransfer();
     error TradeVault_ZeroBalanceTransfer();
     error TradeVault_InsufficientCollateral();
+    error TradeVault_InsufficientCollateralToClaim();
 
     constructor(address _collateralToken, ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
         collateralToken = _collateralToken;
@@ -57,18 +58,59 @@ contract TradeVault is RoleValidation {
     }
 
     /// @dev If a position loses, this function transfers losses to LV
-    function transferLossToLiquidityVault(address _token, uint256 _amount) external onlyTradeStorage {
-        if (_token != collateralToken) revert TradeVault_InvalidToken();
-        if (_amount == 0) revert TradeVault_ZeroBalanceTransfer();
-        liquidityVault.accumulateFees(_amount);
-        IERC20(_token).safeTransfer(address(liquidityVault), _amount);
-        emit LossesTransferred(_token, _amount);
+    function transferLossToLiquidityVault(uint256 _amount) external onlyTradeStorage {
+        _sendFeesToLiquidityVault(_amount);
     }
 
-    // Note Also needs to be callable from TradeStorage
+    /// Note Also needs to be callable from TradeStorage
     function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong, bool _isIncrease)
         external
         onlyRouter
+    {
+        _updateCollateralBalance(_marketKey, _amount, _isLong, _isIncrease);
+    }
+
+    function swapFundingAmount(bytes32 _marketKey, uint256 _amount, bool _isLong) external onlyTradeStorage {
+        _swapFundingAmount(_marketKey, _amount, _isLong);
+    }
+
+    function liquidatePositionCollateral(bytes32 _marketKey, uint256 _totalCollateral, uint256 _fundingOwed, bool _isLong) external onlyTradeStorage {
+        // funding
+        _swapFundingAmount(_marketKey, _fundingOwed, _isLong);
+        // remaining = borrowing + losses => send all to Liq Vault
+        uint256 remainingCollateral = _totalCollateral - _fundingOwed;
+        if (_isLong) {
+            longCollateral[_marketKey] -= remainingCollateral;
+        } else {
+            shortCollateral[_marketKey] -= remainingCollateral;
+        }
+        _sendFeesToLiquidityVault(remainingCollateral);
+    }
+
+    function claimFundingFees(bytes32 _marketKey, address _user, uint256 _claimed, bool _isLong) external onlyTradeStorage {
+        if (_isLong) {
+            if (shortCollateral[_marketKey] < _claimed) revert TradeVault_InsufficientCollateralToClaim();
+        } else {
+            if (longCollateral[_marketKey] < _claimed) revert TradeVault_InsufficientCollateralToClaim();
+        }
+        // transfer funding from the counter parties' liquidity pool
+        _updateCollateralBalance(_marketKey, _claimed, _isLong, false);
+        // transfer funding to the user
+        IERC20(collateralToken).safeTransfer(_user, _claimed);
+    }
+
+    function _swapFundingAmount(bytes32 _marketKey, uint256 _amount, bool _isLong) internal {
+        if (_isLong) {
+            longCollateral[_marketKey] -= _amount;
+            shortCollateral[_marketKey] += _amount;
+        } else {
+            shortCollateral[_marketKey] -= _amount;
+            longCollateral[_marketKey] += _amount;
+        }
+    }
+
+    function _updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong, bool _isIncrease)
+        internal
     {
         if (_isLong) {
             _isIncrease ? longCollateral[_marketKey] += _amount : longCollateral[_marketKey] -= _amount;
@@ -77,4 +119,12 @@ contract TradeVault is RoleValidation {
         }
         emit UpdateCollateralBalance(_marketKey, _amount, _isLong, _isIncrease);
     }
+
+    function _sendFeesToLiquidityVault(uint256 _amount) internal {
+        if (_amount == 0) revert TradeVault_ZeroBalanceTransfer();
+        liquidityVault.accumulateFees(_amount);
+        IERC20(collateralToken).safeTransfer(address(liquidityVault), _amount);
+        emit LossesTransferred(collateralToken, _amount);
+    }
+
 }

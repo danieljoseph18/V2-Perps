@@ -42,7 +42,7 @@ library FundingCalculator {
 
     /// @dev Get the Funding Fees Owed by a Position Since Last Update
     function getFeesSinceLastPositionUpdate(address _market, MarketStructs.Position memory _position)
-        external
+        public
         view
         returns (uint256 feesEarned, uint256 feesOwed)
     {
@@ -58,5 +58,11 @@ library FundingCalculator {
         feesEarned = _position.isLong ? shortFundingFees : longFundingFees;
         // if short, add short fees to fees owed, if long, add long fees to fees owed
         feesOwed = _position.isLong ? longFundingFees : shortFundingFees;
+    }
+
+    function getTotalPositionFeeOwed(address _market, MarketStructs.Position calldata _position) external view returns (uint256) {
+        uint256 feesOwed;
+        (, feesOwed) = getFeesSinceLastPositionUpdate(_market, _position);
+        return feesOwed += _position.fundingParams.feesOwed;
     }
 }

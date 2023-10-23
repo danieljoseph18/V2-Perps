@@ -11,7 +11,7 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {PricingCalculator} from "../positions/PricingCalculator.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 /// @dev needs StateUpdater Role

@@ -43,6 +43,8 @@ contract MarketFactory is RoleValidation {
         if (marketStorage.getMarket(_marketKey).market != address(0)) revert MarketFactory_MarketAlreadyExists();
         // Create new Market contract
         Market _market = new Market(_indexToken, _collateralToken, marketStorage, liquidityVault, tradeStorage);
+        // Initialize With Default Values
+        Market(_market).initialize(0.0003e18, 1_000_000e18, 500e18, -500e18, 0.000000035e18, 1, false, 0.000001e18, 1);
         // Store everything in MarketStorage
         MarketStructs.Market memory _marketInfo =
             MarketStructs.Market(_indexToken, _collateralToken, address(_market), _marketKey);
