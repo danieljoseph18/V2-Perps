@@ -23,7 +23,7 @@ interface ILiquidityVault {
     function getNetPnL(bool _isLong) external view returns (int256);
 
     // Open Interest
-    function getNetOpenInterest() external view returns (uint256);
+    function getNetOpenInterestUsd() external view returns (uint256);
 
     // Fees
     function accumulateBorrowingFees(uint256 _amount) external;
@@ -35,7 +35,7 @@ interface ILiquidityVault {
     function updateLiquidityFee(uint256 _fee) external;
 
     // Getters for state variables
-    function collateralToken() external view returns (address);
+    function p3usd() external view returns (address);
     function getStablecoin() external view returns (address);
     function getLiquidityToken() external view returns (address);
     function poolAmounts(address _token) external view returns (uint256);

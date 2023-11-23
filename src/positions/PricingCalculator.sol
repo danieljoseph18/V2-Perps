@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.20;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
@@ -9,6 +9,8 @@ import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {SD59x18, sd, unwrap, pow} from "@prb/math/SD59x18.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
+import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
 /*
     weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -93,22 +95,22 @@ library PricingCalculator {
         return (_sizeDelta * _positionWAEP) / _leverage;
     }
 
-    function getPoolBalanceUSD(address _liquidityVault, bytes32 _marketKey, address _market, address _collateralToken)
+    function getPoolBalanceUSD(address _liquidityVault, bytes32 _marketKey, address _priceOracle, address _usdc)
         external
         view
         returns (uint256)
     {
-        return getPoolBalance(_liquidityVault, _marketKey) * IMarket(_market).getPrice(_collateralToken);
+        return getPoolBalance(_liquidityVault, _marketKey) * IPriceOracle(_priceOracle).getPrice(_usdc);
     }
 
     function calculateTotalCollateralOpenInterestUSD(
         address _marketStorage,
         address _market,
-        bytes32 _marketKey,
-        address _collateralToken
+        address _priceOracle,
+        bytes32 _marketKey
     ) external view returns (uint256) {
-        return calculateCollateralOpenInterestUSD(_marketStorage, _market, _marketKey, _collateralToken, true)
-            + calculateCollateralOpenInterestUSD(_marketStorage, _market, _marketKey, _collateralToken, false);
+        return calculateCollateralOpenInterestUSD(_marketStorage, _priceOracle, _market, _marketKey, true)
+            + calculateCollateralOpenInterestUSD(_marketStorage, _priceOracle, _market, _marketKey, false);
     }
 
     function calculateTotalIndexOpenInterestUSD(
@@ -166,13 +168,13 @@ library PricingCalculator {
 
     function calculateCollateralOpenInterestUSD(
         address _marketStorage,
-        address _market,
+        address _priceOracle,
+        address _usdc,
         bytes32 _marketKey,
-        address _collateralToken,
         bool _isLong
     ) public view returns (uint256) {
         uint256 collateralOpenInterest = calculateCollateralOpenInterest(_marketStorage, _marketKey, _isLong);
-        return collateralOpenInterest * IMarket(_market).getPrice(_collateralToken);
+        return collateralOpenInterest * IPriceOracle(_priceOracle).getPrice(_usdc);
     }
 
     /// Note Make sure variables scaled by 1e18

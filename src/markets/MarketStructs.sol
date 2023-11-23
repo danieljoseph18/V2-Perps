@@ -1,10 +1,9 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.20;
 
 library MarketStructs {
     struct Market {
         address indexToken;
-        address stablecoin;
         address market;
         bytes32 marketKey; // Note Use where applicable to save on gas
     }
@@ -14,7 +13,6 @@ library MarketStructs {
         bool isLimit;
         address indexToken; // used to derive which market
         address user;
-        address collateralToken;
         uint256 collateralDelta;
         uint256 sizeDelta;
         uint256 requestBlock;
@@ -55,8 +53,7 @@ library MarketStructs {
     struct Position {
         uint256 index; // position in array
         bytes32 market; // can get index token from market ?
-        address indexToken;
-        address collateralToken;
+        address indexToken; // collateralToken is only WUSDC
         address user;
         uint256 collateralAmount; // vs size = leverage
         uint256 positionSize; // position size in index tokens, value fluctuates in USD giving PnL

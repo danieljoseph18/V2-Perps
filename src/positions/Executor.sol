@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.20;
 
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
@@ -15,6 +15,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 /// @dev Needs Executor Role
 contract Executor is RoleValidation {
     using SafeCast for uint256;
+    using SafeCast for int256;
 
     error Executor_LimitNotHit();
 
@@ -71,9 +72,7 @@ contract Executor is RoleValidation {
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);
         if (_positionRequest.user == address(0)) revert Executor_InvalidRequestKey();
         // get the market and block to get the signed block price
-        address market = IMarketStorage(marketStorage).getMarketFromIndexToken(
-            _positionRequest.indexToken, _positionRequest.collateralToken
-        ).market;
+        address market = IMarketStorage(marketStorage).getMarketFromIndexToken(_positionRequest.indexToken).market;
         uint256 _block = _positionRequest.requestBlock;
         uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(market, _block);
         _positionRequest.priceImpact =
@@ -98,9 +97,9 @@ contract Executor is RoleValidation {
             _positionRequest.isLong,
             _positionRequest.isIncrease
         );
-        _updateFundingRate(_positionRequest, price, _position.market);
-        _updateBorrowingRate(_position.market, _positionRequest.isLong);
-        _updateTotalWAEP(_position.market, price, sizeDeltaUsd, _positionRequest.isLong);
+        _updateFundingRate(market, sizeDeltaUsd, _positionRequest.isLong);
+        _updateBorrowingRate(market, _positionRequest.isLong);
+        _updateTotalWAEP(market, price, sizeDeltaUsd, _positionRequest.isLong);
     }
 
     // when executing a trade, store it in MarketStorage
@@ -118,23 +117,15 @@ contract Executor is RoleValidation {
     }
 
     // in every action that interacts with Market, call _updateFundingRate();
-    function _updateFundingRate(
-        MarketStructs.PositionRequest memory _positionRequest,
-        uint256 _signedPrice,
-        bytes32 _marketKey
-    ) internal {
-        address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
-        uint256 tradeSizeUsd = TradeHelper.getTradeSizeUsd(_positionRequest.sizeDelta, _signedPrice);
-        IMarket(market).updateFundingRate(tradeSizeUsd, _positionRequest.isLong);
+    function _updateFundingRate(address _market, int256 _sizeDeltaUsd, bool _isLong) internal {
+        IMarket(_market).updateFundingRate(_sizeDeltaUsd, _isLong);
     }
 
-    function _updateBorrowingRate(bytes32 _marketKey, bool _isLong) internal {
-        address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
-        IMarket(market).updateBorrowingRate(_isLong);
+    function _updateBorrowingRate(address _market, bool _isLong) internal {
+        IMarket(_market).updateBorrowingRate(_isLong);
     }
 
-    function _updateTotalWAEP(bytes32 _marketKey, uint256 _pricePaid, int256 _sizeDeltaUsd, bool _isLong) internal {
-        address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
-        IMarket(market).updateTotalWAEP(_pricePaid, _sizeDeltaUsd, _isLong);
+    function _updateTotalWAEP(address _market, uint256 _pricePaid, int256 _sizeDeltaUsd, bool _isLong) internal {
+        IMarket(_market).updateTotalWAEP(_pricePaid, _sizeDeltaUsd, _isLong);
     }
 }

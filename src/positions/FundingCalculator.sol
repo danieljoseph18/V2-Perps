@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.20;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
@@ -10,15 +10,11 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 library FundingCalculator {
     using SafeCast for uint256;
     using SafeCast for int256;
-    // library responsible for handling all funding calculations
 
-    /// Note Used by Market
     function calculateFundingRateVelocity(address _market, int256 _skew) external view returns (int256) {
-        uint256 c = unwrap(ud(IMarket(_market).maxFundingVelocity()).div(ud(IMarket(_market).skewScale()))); // will underflow (3 mil < 10 mil)
-        SD59x18 skew = sd(_skew); // skew of 1 = 1e18
-        // scaled by 1e18
-        // c = 3/10000 = 0.0003 * 100 =  0.3% = 3e14
-        return c.toInt256() * unwrap(skew);
+        UD60x18 c = ud(IMarket(_market).maxFundingVelocity()).div(ud(IMarket(_market).skewScale())); // will underflow (3 mil < 10 mil)
+        SD59x18 skew = sd(_skew);
+        return unwrap((c.intoSD59x18()).mul(skew));
     }
 
     /// @dev Get the Funding Fees Accumulated Since Last Update For Both Sides
@@ -26,15 +22,15 @@ library FundingCalculator {
         uint256 longAccumulatedFunding = IMarket(_market).longCumulativeFundingFees();
         uint256 shortAccumulatedFunding = IMarket(_market).shortCumulativeFundingFees();
 
-        uint256 timeSinceUpdate = block.timestamp - IMarket(_market).lastFundingUpdateTime(); // might need to scale by 1e18
+        uint256 timeElapsed = block.timestamp - IMarket(_market).lastFundingUpdateTime(); // might need to scale by 1e18
 
         // is the current funding rate +ve or -ve ?
         // if +ve, need to add accumulated funding to long, if -ve need to add to short
         int256 fundingRate = IMarket(_market).fundingRate();
-        if (fundingRate > 0) {
-            longAccumulatedFunding += (timeSinceUpdate * fundingRate.toUint256());
+        if (fundingRate >= 0) {
+            longAccumulatedFunding += (timeElapsed * fundingRate.toUint256());
         } else {
-            shortAccumulatedFunding += (timeSinceUpdate * (-fundingRate).toUint256());
+            shortAccumulatedFunding += (timeElapsed * (-fundingRate).toUint256());
         }
 
         return (longAccumulatedFunding, shortAccumulatedFunding);
@@ -60,7 +56,11 @@ library FundingCalculator {
         feesOwed = _position.isLong ? longFundingFees : shortFundingFees;
     }
 
-    function getTotalPositionFeeOwed(address _market, MarketStructs.Position calldata _position) external view returns (uint256) {
+    function getTotalPositionFeeOwed(address _market, MarketStructs.Position calldata _position)
+        external
+        view
+        returns (uint256)
+    {
         uint256 feesOwed;
         (, feesOwed) = getFeesSinceLastPositionUpdate(_market, _position);
         return feesOwed += _position.fundingParams.feesOwed;

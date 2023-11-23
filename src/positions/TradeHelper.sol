@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.20;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
@@ -78,12 +78,10 @@ library TradeHelper {
         // make sure all Position and PositionRequest instantiations are in the correct order.
         return MarketStructs.Position({
             index: ITradeStorage(_tradeStorage).getNextPositionIndex(
-                keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken)),
-                _positionRequest.isLong
+                keccak256(abi.encodePacked(_positionRequest.indexToken)), _positionRequest.isLong
                 ),
-            market: keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken)),
+            market: keccak256(abi.encodePacked(_positionRequest.indexToken)),
             indexToken: _positionRequest.indexToken,
-            collateralToken: _positionRequest.collateralToken,
             user: _positionRequest.user,
             collateralAmount: _positionRequest.collateralDelta,
             positionSize: _positionRequest.sizeDelta,
@@ -109,9 +107,14 @@ library TradeHelper {
         return unwrap(ud(_sizeDelta).mul(ud(_signedPrice)));
     }
 
-    // Value Provided USD > Liquidation Fee + Fees + Losses USD    
-    function checkIsLiquidatable(MarketStructs.Position calldata _position, uint256 _collateralPriceUsd, address _tradeStorage, address _marketStorage) external view {
-        address market = getMarket(_marketStorage, _position.indexToken, _position.collateralToken);
+    // Value Provided USD > Liquidation Fee + Fees + Losses USD
+    function checkIsLiquidatable(
+        MarketStructs.Position calldata _position,
+        uint256 _collateralPriceUsd,
+        address _tradeStorage,
+        address _marketStorage
+    ) external view {
+        address market = getMarket(_marketStorage, _position.indexToken);
         // get the total value provided in USD
         uint256 collateralValueUsd = _position.collateralAmount * _collateralPriceUsd;
         // get the liquidation fee in USD
@@ -121,14 +124,19 @@ library TradeHelper {
         uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _collateralPriceUsd, _marketStorage);
         // get the total losses in USD
         int256 pnl = PricingCalculator.calculatePnL(market, _position);
-        int256 reminance = collateralValueUsd.toInt256() - liquidationFeeUsd.toInt256() - totalFeesOwedUsd.toInt256() + pnl;
+        int256 reminance =
+            collateralValueUsd.toInt256() - liquidationFeeUsd.toInt256() - totalFeesOwedUsd.toInt256() + pnl;
         // check if value provided > liquidation fee + fees + losses
-        if(reminance <= 0) {
+        if (reminance <= 0) {
             revert TradeHelper_PositionNotLiquidatable();
         }
     }
 
-    function getTotalFeesOwedUsd(MarketStructs.Position memory _position, uint256 _collateralPriceUsd, address _market) public view returns (uint256) {
+    function getTotalFeesOwedUsd(MarketStructs.Position memory _position, uint256 _collateralPriceUsd, address _market)
+        public
+        view
+        returns (uint256)
+    {
         uint256 valueUsd = _position.collateralAmount * _collateralPriceUsd;
         uint256 borrowingFeesUsd = BorrowingCalculator.getBorrowingFees(_market, _position) * valueUsd;
         uint256 fundingFeeOwed = FundingCalculator.getTotalPositionFeeOwed(_market, _position);
@@ -137,16 +145,12 @@ library TradeHelper {
         return borrowingFeesUsd + fundingValueUsd;
     }
 
-    function getMarket(address _marketStorage, address _indexToken, address _collateralToken)
-        public
-        view
-        returns (address)
-    {
-        bytes32 market = keccak256(abi.encodePacked(_indexToken, _collateralToken));
+    function getMarket(address _marketStorage, address _indexToken) public view returns (address) {
+        bytes32 market = keccak256(abi.encodePacked(_indexToken));
         return IMarketStorage(_marketStorage).getMarket(market).market;
     }
 
-    function getMarketKey(address _indexToken, address _collateralToken) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(_indexToken, _collateralToken));
+    function getMarketKey(address _indexToken) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(_indexToken));
     }
 }

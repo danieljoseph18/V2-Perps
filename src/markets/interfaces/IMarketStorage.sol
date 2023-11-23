@@ -8,10 +8,7 @@ interface IMarketStorage {
     function isWhitelistedToken(address _token) external view returns (bool);
     function deleteMarket(bytes32 _key) external;
     function getMarket(bytes32 _key) external view returns (MarketStructs.Market memory);
-    function getMarketFromIndexToken(address _indexToken, address _stablecoin)
-        external
-        view
-        returns (MarketStructs.Market memory);
+    function getMarketFromIndexToken(address _indexToken) external view returns (MarketStructs.Market memory);
     function getAllMarkets() external view returns (MarketStructs.Market[] memory);
     function updateOpenInterest(
         bytes32 _key,

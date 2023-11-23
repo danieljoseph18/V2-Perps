@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.20;
 
 // Contract stores all data for markets
@@ -58,11 +58,10 @@ contract MarketStorage is RoleValidation {
 
     /// @dev Only MarketFactory
     function storeMarket(MarketStructs.Market memory _market) external onlyMarketMaker {
-        bytes32 _marketKey = keccak256(abi.encodePacked(_market.indexToken, _market.stablecoin));
-        if (markets[_marketKey].market != address(0)) revert MarketStorage_MarketAlreadyExists();
+        if (markets[_market.marketKey].market != address(0)) revert MarketStorage_MarketAlreadyExists();
         // Store the market in the contract's storage
-        marketKeys.push(_marketKey);
-        markets[_marketKey] = _market;
+        marketKeys.push(_market.marketKey);
+        markets[_market.marketKey] = _market;
     }
 
     /// @dev Only GlobalMarketConfig
@@ -100,22 +99,17 @@ contract MarketStorage is RoleValidation {
     }
 
     /// @dev only GlobalMarketConfig
-    function updateOverCollateralizationRatio(uint256 _percentage) external onlyConfigurator {
-        overCollateralizationRatio = _percentage;
-        emit OverCollateralizationRatioUpdated(_percentage);
+    function updateOverCollateralizationRatio(uint256 _ratio) external onlyConfigurator {
+        overCollateralizationRatio = _ratio;
+        emit OverCollateralizationRatioUpdated(_ratio);
     }
 
     function getMarket(bytes32 _key) external view returns (MarketStructs.Market memory) {
-        // Return the information for the market associated with the key
         return markets[_key];
     }
 
-    function getMarketFromIndexToken(address _indexToken, address _stablecoin)
-        external
-        view
-        returns (MarketStructs.Market memory)
-    {
-        bytes32 _key = keccak256(abi.encodePacked(_indexToken, _stablecoin));
+    function getMarketFromIndexToken(address _indexToken) external view returns (MarketStructs.Market memory) {
+        bytes32 _key = keccak256(abi.encodePacked(_indexToken));
         return markets[_key];
     }
 

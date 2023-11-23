@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -15,6 +15,8 @@ import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {FundingCalculator} from "../positions/FundingCalculator.sol";
 import {BorrowingCalculator} from "../positions/BorrowingCalculator.sol";
 import {PricingCalculator} from "../positions/PricingCalculator.sol";
+import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
+import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
 /// Note Need to Add Allocation Flagging on interaction => of Oi below threshold percentage of allocation, reduce
@@ -28,15 +30,12 @@ contract Market is RoleValidation {
 
     int256 public constant MAX_PRICE_IMPACT = 33e18; // 33%
 
-    // represents a market
-    // allows users to trade in and out
-    // holds funds for users
-    // initialized with a market token
     address public indexToken;
-    address public collateralToken;
     ILiquidityVault public liquidityVault;
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
+    IPriceOracle public priceOracle;
+    IWUSDC public immutable WUSDC;
 
     bool isInitialized;
 
@@ -86,16 +85,18 @@ contract Market is RoleValidation {
     // might need to update to an initialize function instead of constructor
     constructor(
         address _indexToken,
-        address _collateralToken,
         IMarketStorage _marketStorage,
         ILiquidityVault _liquidityVault,
-        ITradeStorage _tradeStorage
+        ITradeStorage _tradeStorage,
+        IPriceOracle _priceOracle,
+        IWUSDC _wusdc
     ) RoleValidation(roleStorage) {
         indexToken = _indexToken;
-        collateralToken = _collateralToken;
         marketStorage = _marketStorage;
         liquidityVault = _liquidityVault;
         tradeStorage = _tradeStorage;
+        priceOracle = _priceOracle;
+        WUSDC = _wusdc;
     }
 
     /// @dev All values need 18 decimals => e.g 0.0003e18 = 0.03%
@@ -111,7 +112,7 @@ contract Market is RoleValidation {
         bool _feeForSmallerSide, // Flag for skipping borrowing fee for the smaller side
         uint256 _priceImpactFactor, // 0.000001e18 = 0.0001%
         uint256 _priceImpactExponent // Not 18 decimals => 1:1
-    ) external onlyMarketMaker() {
+    ) external onlyMarketMaker {
         if (isInitialized) revert Market_AlreadyInitialized();
         maxFundingVelocity = _maxFundingVelocity;
         skewScale = _skewScale;
@@ -126,21 +127,27 @@ contract Market is RoleValidation {
 
     /// @dev 1 USD = 1e18
     /// Note should be called for every position entry / exit
-    function updateFundingRate(uint256 _positionSizeUSD, bool _isLong) external onlyExecutor {
+    /// @dev what if the position is a decrease???
+    function updateFundingRate(int256 _positionSizeUSD, bool _isLong) external onlyExecutor {
         uint256 longOI = PricingCalculator.calculateIndexOpenInterestUSD(
-            address(marketStorage), address(this), getMarketKey(), collateralToken, true
+            address(marketStorage), address(this), getMarketKey(), indexToken, true
         );
         uint256 shortOI = PricingCalculator.calculateIndexOpenInterestUSD(
-            address(marketStorage), address(this), getMarketKey(), collateralToken, false
+            address(marketStorage), address(this), getMarketKey(), indexToken, false
         );
-        _isLong ? longOI += _positionSizeUSD : shortOI += _positionSizeUSD;
+        if (_positionSizeUSD >= 0) {
+            _isLong ? longOI += _positionSizeUSD.toUint256() : shortOI += _positionSizeUSD.toUint256();
+        } else {
+            _isLong ? longOI -= (-_positionSizeUSD).toUint256() : shortOI -= (-_positionSizeUSD).toUint256();
+        }
         int256 skew = unwrap(sd(longOI.toInt256()) - sd(shortOI.toInt256())); // 500 USD skew = 500e18
-        int256 velocity = FundingCalculator.calculateFundingRateVelocity(address(this), skew); // int scaled by 1e18
 
         // Calculate time since last funding update
-        uint256 timeElapsed = unwrap(ud(block.timestamp) - ud(lastFundingUpdateTime));
+        uint256 timeElapsed = block.timestamp - lastFundingUpdateTime;
         // Add the previous velocity to the funding rate
-        int256 deltaRate = unwrap((sd(fundingRateVelocity)).mul(sd(timeElapsed.toInt256())).div(sd(1 days)));
+        int256 deltaRate = unwrap((sd(fundingRateVelocity)).mul(sd(timeElapsed.toInt256())));
+        // Calculate the new velocity
+        int256 velocity = FundingCalculator.calculateFundingRateVelocity(address(this), skew); // int scaled by 1e18
 
         // Update Cumulative Fees
         if (fundingRate > 0) {
@@ -152,8 +159,8 @@ contract Market is RoleValidation {
         // if funding rate addition puts it above / below limit, set to limit
         if (fundingRate + deltaRate > maxFundingRate) {
             fundingRate = maxFundingRate;
-        } else if (fundingRate - deltaRate < minFundingRate) {
-            fundingRate = -maxFundingRate;
+        } else if (fundingRate + deltaRate < minFundingRate) {
+            fundingRate = minFundingRate;
         } else {
             fundingRate += deltaRate;
         }
@@ -182,15 +189,16 @@ contract Market is RoleValidation {
     /// @dev Call every time OI is updated (trade open / close)
     function updateBorrowingRate(bool _isLong) external {
         uint256 openInterest = PricingCalculator.calculateIndexOpenInterestUSD(
-            address(marketStorage), address(this), getMarketKey(), collateralToken, _isLong
+            address(marketStorage), address(this), getMarketKey(), indexToken, _isLong
         ); // OI USD
-        uint256 poolBalance =
-            PricingCalculator.getPoolBalanceUSD(address(liquidityVault), getMarketKey(), address(this), collateralToken); // Pool balance in USD
-
+        uint256 poolBalance = PricingCalculator.getPoolBalanceUSD(
+            address(liquidityVault), getMarketKey(), address(priceOracle), address(WUSDC.USDC())
+        ); // Pool balance in USD
+        // function getPoolBalanceUSD(address _liquidityVault, bytes32 _marketKey, address _priceOracle, address _usdc)
         uint256 borrowingRate = _isLong ? longBorrowingRate : shortBorrowingRate;
 
         UD60x18 feeBase = ud(openInterest);
-        UD60x18 fee = ud(borrowingFactor) * (ud(unwrap(feeBase)).pow(ud(borrowingExponent))) / ud(poolBalance);
+        UD60x18 rate = (ud(borrowingFactor).mul(ud(unwrap(feeBase)).pow(ud(borrowingExponent)))).div(ud(poolBalance));
 
         // update cumulative fees with current borrowing rate
         if (_isLong) {
@@ -201,8 +209,8 @@ contract Market is RoleValidation {
         // update last update time
         lastBorrowUpdateTime = block.timestamp;
         // update borrowing rate
-        _isLong ? longBorrowingRate = unwrap(fee) : shortBorrowingRate = unwrap(fee);
-        emit BorrowingRateUpdated(_isLong, unwrap(fee));
+        _isLong ? longBorrowingRate = unwrap(rate) : shortBorrowingRate = unwrap(rate);
+        emit BorrowingRateUpdated(_isLong, unwrap(rate));
     }
 
     // check this is updated correctly in the executor
@@ -257,7 +265,7 @@ contract Market is RoleValidation {
     }
 
     function getMarketKey() public view returns (bytes32) {
-        return keccak256(abi.encodePacked(indexToken, collateralToken));
+        return keccak256(abi.encodePacked(indexToken));
     }
 
     function _getPrice(address _token) internal view returns (uint256) {

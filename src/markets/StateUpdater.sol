@@ -3,7 +3,7 @@
 // function is separated from the liquidity vault to enable scalability
 // when markets get too many, the contract could break as loops would exceed block gas limit
 
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.20;
 
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
@@ -67,12 +67,13 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
     // calculate percentage of total OI that market represents
     // multiply percentage by AUM to get percentage of tokens to allocate to the market
     // set the max open interest to tokens to allocate / overcollateralization ratio
+    /// @dev Call update state before this  is ever called
     function updateAllocations() external nonReentrant onlyStateKeeper {
         bytes32[] memory _marketKeys = marketStorage.marketKeys();
         uint256 len = _marketKeys.length;
-        uint256 aum = liquidityVault.poolAmounts(liquidityVault.collateralToken());
+        uint256 aum = liquidityVault.getAum();
         uint256 allocatedAssets;
-        uint256 totalOI = liquidityVault.getNetOpenInterest();
+        uint256 totalOI = liquidityVault.getNetOpenInterestUsd();
         for (uint256 i = 0; i < len;) {
             address market = marketStorage.getMarket(_marketKeys[i]).market;
             uint256 marketOI = PricingCalculator.calculateTotalIndexOpenInterestUSD(

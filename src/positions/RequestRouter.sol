@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.20;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
@@ -11,6 +11,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeVault} from "./interfaces/ITradeVault.sol";
 import {ImpactCalculator} from "./ImpactCalculator.sol";
 import {TradeHelper} from "./TradeHelper.sol";
+import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 
 /// @dev Needs Router role
 contract RequestRouter {
@@ -26,6 +27,7 @@ contract RequestRouter {
     ILiquidityVault public liquidityVault;
     IMarketStorage public marketStorage;
     ITradeVault public tradeVault;
+    IWUSDC public immutable WUSDC;
 
     error RequestRouter_ExecutionFeeTooLow();
     error RequestRouter_IncorrectFee();
@@ -36,12 +38,14 @@ contract RequestRouter {
         ITradeStorage _tradeStorage,
         ILiquidityVault _liquidityVault,
         IMarketStorage _marketStorage,
-        ITradeVault _tradeVault
+        ITradeVault _tradeVault,
+        IWUSDC _wusdc
     ) {
         tradeStorage = _tradeStorage;
         liquidityVault = _liquidityVault;
         marketStorage = _marketStorage;
         tradeVault = _tradeVault;
+        WUSDC = _wusdc;
     }
 
     modifier validExecutionFee(uint256 _executionFee) {
@@ -51,7 +55,6 @@ contract RequestRouter {
         _;
     }
 
-    // UPDATE TO CALL CREATE ORDER REQUEST
     function createTradeRequest(
         MarketStructs.PositionRequest memory _positionRequest,
         bool _isLimit,
@@ -61,12 +64,14 @@ contract RequestRouter {
         _sendExecutionFeeToStorage(_executionFee);
 
         // get the key for the market
-        bytes32 marketKey = keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.collateralToken));
+        bytes32 marketKey = keccak256(abi.encodePacked(_positionRequest.indexToken));
 
         if (_isIncrease) {
             _validateAllocation(marketKey, _positionRequest.sizeDelta);
 
-            _transferOutTokens(_positionRequest, marketKey);
+            uint256 wusdcAmount = _transferInCollateral(_positionRequest.collateralDelta);
+
+            _transferOutTokens(_positionRequest, wusdcAmount, marketKey);
         }
 
         (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
@@ -99,7 +104,6 @@ contract RequestRouter {
             isLimit: _isLimit,
             indexToken: _position.indexToken,
             user: _position.user,
-            collateralToken: _position.collateralToken,
             collateralDelta: _position.collateralAmount,
             sizeDelta: _position.positionSize,
             requestBlock: block.number,
@@ -122,28 +126,39 @@ contract RequestRouter {
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
 
+    function _transferInCollateral(uint256 _amountIn) internal returns (uint256) {
+        IERC20(WUSDC.USDC()).safeTransferFrom(msg.sender, address(this), _amountIn);
+        return _wrapUsdc(_amountIn);
+    }
+
     // Note: User must approve full collateral amount for transfer
-    function _transferOutTokens(MarketStructs.PositionRequest memory _positionRequest, bytes32 _marketKey) internal {
+    function _transferOutTokens(
+        MarketStructs.PositionRequest memory _positionRequest,
+        uint256 _wusdcAmount,
+        bytes32 _marketKey
+    ) internal {
         // deduct trading fee from amount
         uint256 fee = TradeHelper.calculateTradingFee(address(tradeStorage), _positionRequest.sizeDelta);
         // validate fee vs request => can fee be deducted from collateral and still remain above minimum?
         // transfer fee to liquidity vault and increase accumulated fees
         liquidityVault.accumulateFees(fee);
-        IERC20(_positionRequest.collateralToken).safeTransferFrom(_positionRequest.user, address(liquidityVault), fee);
+        WUSDC.transfer(address(liquidityVault), fee);
         // transfer the rest of the collateral to trade vault and updateCollateralBalance
-        uint256 collateralAmount = _positionRequest.collateralDelta - fee;
+        uint256 collateralAmount = _wusdcAmount - fee;
         tradeVault.updateCollateralBalance(
             _marketKey, collateralAmount, _positionRequest.isLong, _positionRequest.isIncrease
         );
-        IERC20(_positionRequest.collateralToken).safeTransferFrom(
-            _positionRequest.user, address(tradeVault), collateralAmount
-        );
+        WUSDC.transfer(address(tradeVault), collateralAmount);
     }
 
     function _sendExecutionFeeToStorage(uint256 _executionFee) internal returns (bool) {
         (bool success,) = address(liquidityVault).call{value: _executionFee}("");
         if (!success) revert RequestRouter_ExecutionFeeTransferFailed();
         return true;
+    }
+
+    function _wrapUsdc(uint256 _amount) internal returns (uint256) {
+        return WUSDC.deposit(_amount);
     }
 
     // validate that the additional open interest won't put the market over the max open interest (allocated reserves)

@@ -11,7 +11,7 @@ interface IMarket {
     function getOpenInterest(bool _isLong) external view returns (uint256);
     function getTotalOpenInterest() external view returns (uint256);
     function upkeepNeeded() external view returns (bool);
-    function updateFundingRate(uint256 _positionSizeUSD, bool _isLong) external;
+    function updateFundingRate(int256 _positionSizeUSD, bool _isLong) external;
     function setFundingConfig(
         uint256 _maxFundingVelocity,
         uint256 _skewScale,
@@ -64,14 +64,14 @@ interface IMarket {
     function shortSizeSumUSD() external view returns (uint256);
     function indexToken() external view returns (address);
     function initialize(
-        uint256 _maxFundingVelocity, 
-        uint256 _skewScale, 
-        int256 _maxFundingRate, 
-        int256 _minFundingRate, 
-        uint256 _borrowingFactor, 
-        uint256 _borrowingExponent, 
-        bool _feeForSmallerSide, 
-        uint256 _priceImpactFactor, 
-        uint256 _priceImpactExponent 
+        uint256 _maxFundingVelocity,
+        uint256 _skewScale,
+        int256 _maxFundingRate,
+        int256 _minFundingRate,
+        uint256 _borrowingFactor,
+        uint256 _borrowingExponent,
+        bool _feeForSmallerSide,
+        uint256 _priceImpactFactor,
+        uint256 _priceImpactExponent
     ) external;
 }
