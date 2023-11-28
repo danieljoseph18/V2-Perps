@@ -21,8 +21,6 @@ contract MarketStorage is RoleValidation {
     // Or we set allocation based on expected demand before trading commences
     mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
     mapping(bytes32 _marketKey => uint256 _maxOI) public maxOpenInterests;
-    mapping(bytes32 _positionKey => MarketStructs.Position) public positions;
-    mapping(address _token => bool _isWhitelisted) public isWhitelistedToken;
     mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenLongOpenInterest; // OI of collat token long
     mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenShortOpenInterest;
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenLongOpenInterest; // OI of index token long
@@ -62,12 +60,6 @@ contract MarketStorage is RoleValidation {
         // Store the market in the contract's storage
         marketKeys.push(_market.marketKey);
         markets[_market.marketKey] = _market;
-    }
-
-    /// @dev Only GlobalMarketConfig
-    function setIsWhitelisted(address _token, bool _isWhitelisted) external onlyConfigurator {
-        isWhitelistedToken[_token] = _isWhitelisted;
-        emit WhitelistedTokenUpdated(_token, _isWhitelisted);
     }
 
     /// @dev Only Executor

@@ -44,13 +44,14 @@ library PricingCalculator {
         uint256 _price
     ) external pure returns (uint256) {
         uint256 nextSISU =
-            _sizeDeltaUsd > 0 ? _prevSISU + _sizeDeltaUsd.toUint256() : _prevSISU - _sizeDeltaUsd.toUint256();
+            _sizeDeltaUsd > 0 ? _prevSISU + _sizeDeltaUsd.toUint256() : _prevSISU - (-_sizeDeltaUsd).toUint256();
         uint256 prevSum = _prevWAEP * _prevSISU;
-        int256 nextSum = _sizeDeltaUsd * _price.toInt256();
-        uint256 sum = nextSum > 0 ? prevSum + nextSum.toUint256() : prevSum - nextSum.toUint256();
+        int256 positionSum = _sizeDeltaUsd * _price.toInt256();
+        uint256 sum = positionSum > 0 ? prevSum + positionSum.toUint256() : prevSum - positionSum.toUint256();
         return sum / nextSISU;
     }
 
+    /// @dev Positive for profit, negative for loss
     function getNetPnL(address _market, address _marketStorage, bytes32 _marketKey, bool _isLong)
         external
         view
@@ -199,7 +200,7 @@ library PricingCalculator {
             + calculateIndexOpenInterest(_marketStorage, _marketKey, false);
     }
 
-    function getPoolBalance(address _liquidityVault, bytes32 _marketKey) public view returns (uint256) {
-        return ILiquidityVault(_liquidityVault).getMarketAllocation(_marketKey);
+    function getPoolBalance(address _marketStorage, bytes32 _marketKey) public view returns (uint256) {
+        return IMarketStorage(_marketStorage).marketAllocations(_marketKey);
     }
 }

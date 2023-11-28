@@ -11,10 +11,12 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
+import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 
 /// @dev Needs Vault Role
 contract LiquidityVault is RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using SafeERC20 for IMarketToken;
     using MarketStructs for MarketStructs.Market;
     using SafeCast for int256;
 
@@ -22,14 +24,13 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     IWUSDC public immutable WUSDC;
     IMarketToken public liquidityToken;
+    IDataOracle public dataOracle;
 
     /// @dev Amount of liquidity in the pool
     uint256 public poolAmounts;
     mapping(address _handler => mapping(address _lp => bool _isHandler)) public isHandler;
-    mapping(address _market => bool _isIncluded) public pnlIncluded;
 
     uint256 public accumulatedFees;
-    int256 private cachedNetPnL;
     uint256 public liquidityFee;
     bool private isInitialized;
 
@@ -50,19 +51,21 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     error LiquidityVault_AlreadyInitialized();
 
     // liquidity token = market token
-    constructor(IWUSDC _wusdc, IMarketToken _liquidityToken) RoleValidation(roleStorage) {
+    constructor(IWUSDC _wusdc, IMarketToken _liquidityToken, IDataOracle _dataOracle, uint256 _liquidityFee)
+        RoleValidation(roleStorage)
+    {
         if (address(_wusdc) == address(0)) revert LiquidityVault_InvalidToken();
         if (_liquidityToken == IMarketToken(address(0))) revert LiquidityVault_InvalidToken();
         WUSDC = _wusdc;
         liquidityToken = _liquidityToken;
+        dataOracle = _dataOracle;
+        /// @dev Liquidity Fee needs 18 decimals => e.g 0.002e18 = 0.2% fee
+        liquidityFee = _liquidityFee;
     }
 
-    /// @dev Liquidity Fee needs 18 decimals => e.g 0.002e18 = 0.2% fee
-    /// @dev Must be Called before contract is interacted with
-    function initialize(uint256 _liquidityFee) external onlyAdmin {
-        if (isInitialized) revert LiquidityVault_AlreadyInitialized();
-        liquidityFee = _liquidityFee;
-        isInitialized = true;
+    function setDataOracle(IDataOracle _dataOracle) external onlyAdmin {
+        if (address(_dataOracle) == address(0)) revert LiquidityVault_ZeroAddress();
+        dataOracle = _dataOracle;
     }
 
     /// @dev only GlobalMarketConfig
@@ -113,26 +116,6 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         emit ProfitTransferred(_user, _amount);
     }
 
-    /**
-     * @dev Updates the Net PNL to keep getAum calculations accurate
-     * Every time a market is interacted with, the global pnl value is updated
-     * @param _prevMarketPnl The previous pnl of the market
-     * @param _nextMarketPnl The next pnl of the market
-     * @notice This function is called by the market contract
-     */
-    function updateNetPnl(int256 _prevMarketPnl, int256 _nextMarketPnl) external {
-        if (!pnlIncluded[msg.sender]) {
-            cachedNetPnL += _nextMarketPnl;
-            pnlIncluded[msg.sender] = true;
-        } else {
-            cachedNetPnL += _nextMarketPnl - _prevMarketPnl;
-        }
-    }
-
-    function getNetPnL() public view returns (int256) {
-        return cachedNetPnL;
-    }
-
     // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
     // price per 1 token (1e18 decimals)
     // returns price of token in USD => $1 = 1e18
@@ -146,12 +129,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // Returns AUM in USD value
     /// do we need to include borrow fees?
     function getAum() public view returns (uint256 aum) {
-        // get the AUM of the market in USD
-        // must factor in worth of all tokens deposited, pending PnL, pending borrow fees
-        // liquidity in USD
         uint256 liquidity = (poolAmounts * getPrice(address(WUSDC.USDC())));
         aum = liquidity;
-        int256 pendingPnL = getNetPnL();
+        int256 pendingPnL = dataOracle.getCumulativeNetPnl();
         pendingPnL > 0 ? aum -= pendingPnL.toUint256() : aum += pendingPnL.toUint256(); // if in profit, subtract, if at loss, add
         return aum;
     }
@@ -161,33 +141,35 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         return _getPrice(_token);
     }
 
-    // subtract fees, many additional safety checks needed
-    /// @dev Check wrapping works as intended
+    /// @dev Gas Inefficient -> Revisit
     function _addLiquidity(address _account, uint256 _amount) internal {
         if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
         if (_account == address(0)) revert LiquidityVault_ZeroAddress();
 
         // Transfer From User to Contract
         IERC20(WUSDC.USDC()).safeTransferFrom(_account, address(this), _amount);
-        // Wrap Stablecoin into P3 => Ensure msg.sender is address(this)
+        // Wrap Stablecoin
         uint256 wusdcAmount = _wrapUsdc(_amount);
-        // Deduct Fees in P3
+        // Deduct Fees
         uint256 afterFeeAmount = _deductLiquidityFees(wusdcAmount);
         // add full amount to the pool
         poolAmounts += wusdcAmount;
 
         // mint market tokens (afterFeeAmount)
-        uint256 mintAmount = (afterFeeAmount * getPrice(address(WUSDC))) / getLiquidityTokenPrice();
+        uint256 mintAmount =
+            unwrap((ud(afterFeeAmount).mul(ud(getPrice(address(WUSDC))))).div(ud(getLiquidityTokenPrice())));
         liquidityToken.mint(_account, mintAmount);
         // Fire event
         emit LiquidityAdded(_account, wusdcAmount, mintAmount);
     }
 
-    // subtract fees, many additional safety checks needed
-    /// @dev Check unwrapping works as intended
+    /// @dev Gas Inefficient -> Revisit
     function _removeLiquidity(address _account, uint256 _liquidityTokenAmount) internal {
         if (_liquidityTokenAmount == 0) revert LiquidityVault_InvalidTokenAmount();
         if (_account == address(0)) revert LiquidityVault_ZeroAddress();
+
+        // Transfer LP Tokens from User to Contract
+        liquidityToken.safeTransferFrom(_account, address(this), _liquidityTokenAmount);
 
         // remove liquidity from the market
         UD60x18 liquidityTokenValue = ud(_liquidityTokenAmount * getLiquidityTokenPrice());
@@ -196,10 +178,10 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
         poolAmounts -= tokenAmount;
 
-        liquidityToken.burn(_account, _liquidityTokenAmount);
-        // Deduct Fees in P
+        liquidityToken.burn(address(this), _liquidityTokenAmount);
+        // Deduct Fees
         uint256 afterFeeAmount = _deductLiquidityFees(tokenAmount);
-        // Unwrap P3 to Stablecoin
+        // Unwrap
         uint256 tokenOutAmount = _unwrapUsdc(afterFeeAmount);
         // Transfer Stablecoin to User
         IERC20(WUSDC.USDC()).safeTransfer(_account, tokenOutAmount);
@@ -224,9 +206,10 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     // Returns % amount after fee deduction
-    function _deductLiquidityFees(uint256 _amount) internal view returns (uint256) {
+    function _deductLiquidityFees(uint256 _amount) internal returns (uint256) {
         UD60x18 amount = ud(_amount);
-        UD60x18 liqFee = ud(liquidityFee);
-        return _amount - unwrap(amount.mul(liqFee));
+        UD60x18 liqFee = ud(liquidityFee).mul(amount);
+        accumulatedFees += unwrap(liqFee);
+        return unwrap(amount.sub(liqFee));
     }
 }

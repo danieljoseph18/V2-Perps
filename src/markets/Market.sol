@@ -19,8 +19,6 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
-/// Note Need to Add Allocation Flagging on interaction => of Oi below threshold percentage of allocation, reduce
-/// Otherwise increase the allocation
 contract Market is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
@@ -69,8 +67,6 @@ contract Market is RoleValidation {
     uint256 public longSizeSumUSD; // Used to calculate WAEP
     uint256 public shortSizeSumUSD; // Used to calculate WAEP
 
-    uint256 public lastAllocation; // last time allocation was updated
-
     event MarketFundingConfigUpdated(
         uint256 _maxFundingVelocity, uint256 _skewScale, int256 _maxFundingRate, int256 _minFundingRate
     );
@@ -82,7 +78,6 @@ contract Market is RoleValidation {
 
     error Market_AlreadyInitialized();
 
-    // might need to update to an initialize function instead of constructor
     constructor(
         address _indexToken,
         IMarketStorage _marketStorage,
@@ -125,50 +120,6 @@ contract Market is RoleValidation {
         priceImpactExponent = _priceImpactExponent;
     }
 
-    /// @dev 1 USD = 1e18
-    /// Note should be called for every position entry / exit
-    /// @dev what if the position is a decrease???
-    function updateFundingRate(int256 _positionSizeUSD, bool _isLong) external onlyExecutor {
-        uint256 longOI = PricingCalculator.calculateIndexOpenInterestUSD(
-            address(marketStorage), address(this), getMarketKey(), indexToken, true
-        );
-        uint256 shortOI = PricingCalculator.calculateIndexOpenInterestUSD(
-            address(marketStorage), address(this), getMarketKey(), indexToken, false
-        );
-        if (_positionSizeUSD >= 0) {
-            _isLong ? longOI += _positionSizeUSD.toUint256() : shortOI += _positionSizeUSD.toUint256();
-        } else {
-            _isLong ? longOI -= (-_positionSizeUSD).toUint256() : shortOI -= (-_positionSizeUSD).toUint256();
-        }
-        int256 skew = unwrap(sd(longOI.toInt256()) - sd(shortOI.toInt256())); // 500 USD skew = 500e18
-
-        // Calculate time since last funding update
-        uint256 timeElapsed = block.timestamp - lastFundingUpdateTime;
-        // Add the previous velocity to the funding rate
-        int256 deltaRate = unwrap((sd(fundingRateVelocity)).mul(sd(timeElapsed.toInt256())));
-        // Calculate the new velocity
-        int256 velocity = FundingCalculator.calculateFundingRateVelocity(address(this), skew); // int scaled by 1e18
-
-        // Update Cumulative Fees
-        if (fundingRate > 0) {
-            longCumulativeFundingFees += (fundingRate.toUint256() * timeElapsed); // if funding rate has 18 decimals, rate per token = rate
-        } else if (fundingRate < 0) {
-            shortCumulativeFundingFees += ((-fundingRate).toUint256() * timeElapsed);
-        }
-
-        // if funding rate addition puts it above / below limit, set to limit
-        if (fundingRate + deltaRate > maxFundingRate) {
-            fundingRate = maxFundingRate;
-        } else if (fundingRate + deltaRate < minFundingRate) {
-            fundingRate = minFundingRate;
-        } else {
-            fundingRate += deltaRate;
-        }
-        fundingRateVelocity = velocity;
-        lastFundingUpdateTime = block.timestamp;
-        emit FundingRateUpdated(fundingRate, fundingRateVelocity);
-    }
-
     // Function to update borrowing parameters (consider appropriate access control)
     /// @dev Only GlobalMarketConfig
     function setBorrowingConfig(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide)
@@ -179,58 +130,6 @@ contract Market is RoleValidation {
         borrowingExponent = _borrowingExponent;
         feeForSmallerSide = _feeForSmallerSide;
         emit BorrowingConfigUpdated(_borrowingFactor, _borrowingExponent, _feeForSmallerSide);
-    }
-
-    // Function to calculate borrowing fees per second
-    /// @dev uses GMX Synth borrow rate calculation
-    /*
-        borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
-     */
-    /// @dev Call every time OI is updated (trade open / close)
-    function updateBorrowingRate(bool _isLong) external {
-        uint256 openInterest = PricingCalculator.calculateIndexOpenInterestUSD(
-            address(marketStorage), address(this), getMarketKey(), indexToken, _isLong
-        ); // OI USD
-        uint256 poolBalance = PricingCalculator.getPoolBalanceUSD(
-            address(liquidityVault), getMarketKey(), address(priceOracle), address(WUSDC.USDC())
-        ); // Pool balance in USD
-        // function getPoolBalanceUSD(address _liquidityVault, bytes32 _marketKey, address _priceOracle, address _usdc)
-        uint256 borrowingRate = _isLong ? longBorrowingRate : shortBorrowingRate;
-
-        UD60x18 feeBase = ud(openInterest);
-        UD60x18 rate = (ud(borrowingFactor).mul(ud(unwrap(feeBase)).pow(ud(borrowingExponent)))).div(ud(poolBalance));
-
-        // update cumulative fees with current borrowing rate
-        if (_isLong) {
-            longCumulativeBorrowFee += borrowingRate * (block.timestamp - lastBorrowUpdateTime);
-        } else {
-            shortCumulativeBorrowFee += borrowingRate * (block.timestamp - lastBorrowUpdateTime);
-        }
-        // update last update time
-        lastBorrowUpdateTime = block.timestamp;
-        // update borrowing rate
-        _isLong ? longBorrowingRate = unwrap(rate) : shortBorrowingRate = unwrap(rate);
-        emit BorrowingRateUpdated(_isLong, unwrap(rate));
-    }
-
-    // check this is updated correctly in the executor
-    function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external onlyExecutor {
-        if (_isLong) {
-            longTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
-                longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price
-            );
-            _sizeDeltaUsd > 0
-                ? longSizeSumUSD += _sizeDeltaUsd.toUint256()
-                : longSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
-        } else {
-            shortTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
-                shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price
-            );
-            _sizeDeltaUsd > 0
-                ? shortSizeSumUSD += _sizeDeltaUsd.toUint256()
-                : shortSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
-        }
-        emit TotalWAEPUpdated(longTotalWAEP, shortTotalWAEP);
     }
 
     /// @dev Only GlobalMarketConfig
@@ -252,6 +151,107 @@ contract Market is RoleValidation {
         priceImpactFactor = _priceImpactFactor;
         priceImpactExponent = _priceImpactExponent;
         emit PriceImpactConfigUpdated(_priceImpactFactor, _priceImpactExponent);
+    }
+
+    /// @dev 1 USD = 1e18
+    /// Note should be called for every position entry / exit
+    function updateFundingRate(int256 _positionSizeUSD, bool _isLong) external onlyExecutor {
+        uint256 longOI = PricingCalculator.calculateIndexOpenInterestUSD(
+            address(marketStorage), address(this), getMarketKey(), indexToken, true
+        );
+        uint256 shortOI = PricingCalculator.calculateIndexOpenInterestUSD(
+            address(marketStorage), address(this), getMarketKey(), indexToken, false
+        );
+        // If Increase ... Else Decrease
+        if (_positionSizeUSD >= 0) {
+            _isLong ? longOI += _positionSizeUSD.toUint256() : shortOI += _positionSizeUSD.toUint256();
+        } else {
+            _isLong ? longOI -= (-_positionSizeUSD).toUint256() : shortOI -= (-_positionSizeUSD).toUint256();
+        }
+        int256 skew = unwrap(sd(longOI.toInt256()) - sd(shortOI.toInt256())); // 500 USD skew = 500e18
+
+        // Calculate time since last funding update
+        uint256 timeElapsed = block.timestamp - lastFundingUpdateTime;
+
+        // Update Cumulative Fees
+        if (fundingRate > 0) {
+            longCumulativeFundingFees += (fundingRate.toUint256() * timeElapsed); // if funding rate has 18 decimals, rate per token = rate
+        } else if (fundingRate < 0) {
+            shortCumulativeFundingFees += ((-fundingRate).toUint256() * timeElapsed);
+        }
+
+        // Add the previous velocity to the funding rate
+        int256 deltaRate = unwrap((sd(fundingRateVelocity)).mul(sd(timeElapsed.toInt256())));
+        // if funding rate addition puts it above / below limit, set to limit
+        if (fundingRate + deltaRate > maxFundingRate) {
+            fundingRate = maxFundingRate;
+        } else if (fundingRate + deltaRate < minFundingRate) {
+            fundingRate = minFundingRate;
+        } else {
+            fundingRate += deltaRate;
+        }
+
+        // Calculate the new velocity
+        int256 velocity = FundingCalculator.calculateFundingRateVelocity(address(this), skew); // int scaled by 1e18
+
+        fundingRateVelocity = velocity;
+        lastFundingUpdateTime = block.timestamp;
+        emit FundingRateUpdated(fundingRate, fundingRateVelocity);
+    }
+
+    // Function to calculate borrowing fees per second
+    /// @dev uses GMX Synth borrow rate calculation
+    /*
+        borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
+     */
+    /// @dev Call every time OI is updated (trade open / close)
+    function updateBorrowingRate(bool _isLong) external onlyExecutor {
+        uint256 openInterest = PricingCalculator.calculateIndexOpenInterestUSD(
+            address(marketStorage), address(this), getMarketKey(), indexToken, _isLong
+        ); // OI USD
+        uint256 poolBalance = PricingCalculator.getPoolBalanceUSD(
+            address(liquidityVault), getMarketKey(), address(priceOracle), address(WUSDC.USDC())
+        ); // Pool balance in USD
+
+        UD60x18 feeBase = ud(openInterest);
+        UD60x18 rate = (ud(borrowingFactor).mul(ud(unwrap(feeBase)).pow(ud(borrowingExponent)))).div(ud(poolBalance));
+
+        // update cumulative fees with current borrowing rate
+        uint256 borrowingRate;
+        if (_isLong) {
+            borrowingRate = longBorrowingRate;
+            longCumulativeBorrowFee += borrowingRate * (block.timestamp - lastBorrowUpdateTime);
+            longBorrowingRate = unwrap(rate);
+        } else {
+            borrowingRate = shortBorrowingRate;
+            shortCumulativeBorrowFee += borrowingRate * (block.timestamp - lastBorrowUpdateTime);
+            shortBorrowingRate = unwrap(rate);
+        }
+        // update last update time
+        lastBorrowUpdateTime = block.timestamp;
+        // update borrowing rate
+        emit BorrowingRateUpdated(_isLong, unwrap(rate));
+    }
+
+    // check this is updated correctly in the executor
+    /// @dev Updates Weighted Average Entry Price => Used to Track PNL For a Market
+    function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external onlyExecutor {
+        if (_isLong) {
+            longTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
+                longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price
+            );
+            _sizeDeltaUsd > 0
+                ? longSizeSumUSD += _sizeDeltaUsd.toUint256()
+                : longSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
+        } else {
+            shortTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
+                shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price
+            );
+            _sizeDeltaUsd > 0
+                ? shortSizeSumUSD += _sizeDeltaUsd.toUint256()
+                : shortSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
+        }
+        emit TotalWAEPUpdated(longTotalWAEP, shortTotalWAEP);
     }
 
     function getMarketParameters() external view returns (uint256, uint256, uint256, uint256) {

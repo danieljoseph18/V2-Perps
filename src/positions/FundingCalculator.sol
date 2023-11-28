@@ -22,7 +22,7 @@ library FundingCalculator {
         uint256 longAccumulatedFunding = IMarket(_market).longCumulativeFundingFees();
         uint256 shortAccumulatedFunding = IMarket(_market).shortCumulativeFundingFees();
 
-        uint256 timeElapsed = block.timestamp - IMarket(_market).lastFundingUpdateTime(); // might need to scale by 1e18
+        uint256 timeElapsed = block.timestamp - IMarket(_market).lastFundingUpdateTime();
 
         // is the current funding rate +ve or -ve ?
         // if +ve, need to add accumulated funding to long, if -ve need to add to short
@@ -34,6 +34,16 @@ library FundingCalculator {
         }
 
         return (longAccumulatedFunding, shortAccumulatedFunding);
+    }
+
+    function getTotalPositionFeeOwed(address _market, MarketStructs.Position calldata _position)
+        external
+        view
+        returns (uint256)
+    {
+        uint256 feesOwed;
+        (, feesOwed) = getFeesSinceLastPositionUpdate(_market, _position);
+        return feesOwed += _position.fundingParams.feesOwed;
     }
 
     /// @dev Get the Funding Fees Owed by a Position Since Last Update
@@ -54,15 +64,5 @@ library FundingCalculator {
         feesEarned = _position.isLong ? shortFundingFees : longFundingFees;
         // if short, add short fees to fees owed, if long, add long fees to fees owed
         feesOwed = _position.isLong ? longFundingFees : shortFundingFees;
-    }
-
-    function getTotalPositionFeeOwed(address _market, MarketStructs.Position calldata _position)
-        external
-        view
-        returns (uint256)
-    {
-        uint256 feesOwed;
-        (, feesOwed) = getFeesSinceLastPositionUpdate(_market, _position);
-        return feesOwed += _position.fundingParams.feesOwed;
     }
 }

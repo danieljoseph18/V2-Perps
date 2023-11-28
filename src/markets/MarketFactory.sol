@@ -24,10 +24,6 @@ contract MarketFactory is RoleValidation {
 
     event MarketCreated(address indexed indexToken, address indexed market);
 
-    error MarketFactory_TokenNotWhitelisted();
-    error MarketFactory_IncorrectCollateralToken();
-    error MarketFactory_MarketAlreadyExists();
-
     constructor(
         IMarketStorage _marketStorage,
         ILiquidityVault _liquidityVault,
@@ -44,11 +40,8 @@ contract MarketFactory is RoleValidation {
 
     // Only callable by MARKET_MAKER roles
     function createMarket(address _indexToken) external onlyAdmin {
-        // long and short tokens cant be same, short must be stables
-        if (!marketStorage.isWhitelistedToken(_indexToken)) revert MarketFactory_TokenNotWhitelisted();
         // pool cant already exist
         bytes32 _marketKey = keccak256(abi.encodePacked(_indexToken));
-        if (marketStorage.getMarket(_marketKey).market != address(0)) revert MarketFactory_MarketAlreadyExists();
         // Create new Market contract
         Market _market = new Market(_indexToken, marketStorage, liquidityVault, tradeStorage, priceOracle, WUSDC);
         // Initialize With Default Values

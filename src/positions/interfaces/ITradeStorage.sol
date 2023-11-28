@@ -40,6 +40,7 @@ interface ITradeStorage {
     function liquidationFeeUsd() external view returns (uint256);
     function tradingFee() external view returns (uint256);
     function minExecutionFee() external view returns (uint256);
+    function minCollateralUsd() external view returns (uint256);
     function liquidityVault() external view returns (ILiquidityVault);
     function MIN_LEVERAGE() external pure returns (uint256);
     function MAX_LEVERAGE() external pure returns (uint256);

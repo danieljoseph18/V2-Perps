@@ -24,10 +24,9 @@ library TradeHelper {
     error TradeHelper_PositionAlreadyExists();
     error TradeHelper_InvalidLeverage();
     error TradeHelper_PositionNotLiquidatable();
+    error TradeHelper_InvalidCollateralReduction();
 
     // Validate whether a request should execute or not
-    /// Note What is this???
-    // Believe it's 1 of 3 steps in trade storage request function
     function validateRequest(address _tradeStorage, bytes32 _key, bool _isLimit) external view returns (bool) {
         MarketStructs.PositionRequest memory request = ITradeStorage(_tradeStorage).orders(_isLimit, _key);
         if (request.user != address(0)) revert TradeHelper_PositionAlreadyExists();
@@ -109,11 +108,11 @@ library TradeHelper {
 
     // Value Provided USD > Liquidation Fee + Fees + Losses USD
     function checkIsLiquidatable(
-        MarketStructs.Position calldata _position,
+        MarketStructs.Position memory _position,
         uint256 _collateralPriceUsd,
         address _tradeStorage,
         address _marketStorage
-    ) external view {
+    ) public view returns (bool) {
         address market = getMarket(_marketStorage, _position.indexToken);
         // get the total value provided in USD
         uint256 collateralValueUsd = _position.collateralAmount * _collateralPriceUsd;
@@ -128,8 +127,36 @@ library TradeHelper {
             collateralValueUsd.toInt256() - liquidationFeeUsd.toInt256() - totalFeesOwedUsd.toInt256() + pnl;
         // check if value provided > liquidation fee + fees + losses
         if (reminance <= 0) {
-            revert TradeHelper_PositionNotLiquidatable();
+            return true;
+        } else {
+            return false;
         }
+    }
+
+    function checkMinCollateral(
+        MarketStructs.PositionRequest memory _positionRequest,
+        uint256 _collateralPriceUsd,
+        address _tradeStorage
+    ) external view returns (bool) {
+        uint256 minCollateralUsd = ITradeStorage(_tradeStorage).minCollateralUsd();
+        uint256 requestCollateralUsd = _positionRequest.collateralDelta * _collateralPriceUsd;
+        if (requestCollateralUsd < minCollateralUsd) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    function checkCollateralReduction(
+        MarketStructs.Position memory _position,
+        uint256 _collateralDelta,
+        uint256 _collateralPriceUsd,
+        address _marketStorage
+    ) external view returns (bool) {
+        if (_position.collateralAmount <= _collateralDelta) return false;
+        _position.collateralAmount -= _collateralDelta;
+        bool isValid = !checkIsLiquidatable(_position, _collateralPriceUsd, _marketStorage, _marketStorage);
+        return isValid;
     }
 
     function getTotalFeesOwedUsd(MarketStructs.Position memory _position, uint256 _collateralPriceUsd, address _market)

@@ -12,7 +12,10 @@ library ImpactCalculator {
     using SafeCast for uint256;
     using SafeCast for int256;
 
+    error ImpactCalculator_ZeroParameters();
+
     function applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpact) external pure returns (uint256) {
+        if (_signedBlockPrice == 0 || _priceImpact == 0) revert ImpactCalculator_ZeroParameters();
         // multiply price impact by signed block price => e.g 0.05e18 * 1000e18 = 50e18 (5%)
         int256 impactUSD = _priceImpact * _signedBlockPrice.toInt256();
         // negative, subtract, positive add
@@ -27,8 +30,12 @@ library ImpactCalculator {
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _signedBlockPrice
     ) external view returns (int256) {
-        uint256 longOI = IMarket(_market).getIndexOpenInterestUSD(true);
-        uint256 shortOI = IMarket(_market).getIndexOpenInterestUSD(false);
+        if (_signedBlockPrice == 0 || _market == address(0) || _positionRequest.user == address(0)) {
+            revert ImpactCalculator_ZeroParameters();
+        }
+        IMarket market = IMarket(_market);
+        uint256 longOI = market.getIndexOpenInterestUSD(true);
+        uint256 shortOI = market.getIndexOpenInterestUSD(false);
 
         SD59x18 skewBefore =
             longOI > shortOI ? sd(longOI.toInt256() - shortOI.toInt256()) : sd(shortOI.toInt256() - longOI.toInt256());
@@ -44,25 +51,13 @@ library ImpactCalculator {
         SD59x18 skewAfter =
             longOI > shortOI ? sd(longOI.toInt256() - shortOI.toInt256()) : sd(shortOI.toInt256() - longOI.toInt256());
 
-        SD59x18 exponent = sd(_getPriceImpactExponent(_market).toInt256());
-        SD59x18 factor = sd(_getPriceImpactFactor(_market).toInt256());
+        SD59x18 exponent = sd(market.priceImpactExponent().toInt256());
+        SD59x18 factor = sd(market.priceImpactFactor().toInt256());
 
         SD59x18 priceImpact = (skewBefore.pow(exponent)).mul(factor) - (skewAfter.pow(exponent)).mul(factor);
 
-        if (unwrap(priceImpact) > _getMaxPriceImpact(_market)) priceImpact = sd(_getMaxPriceImpact(_market));
+        if (unwrap(priceImpact) > market.MAX_PRICE_IMPACT()) priceImpact = sd(market.MAX_PRICE_IMPACT());
 
         return unwrap(priceImpact.div(sd(sizeDeltaUSD.toInt256())));
-    }
-
-    function _getPriceImpactFactor(address _market) internal view returns (uint256) {
-        return IMarket(_market).priceImpactFactor();
-    }
-
-    function _getPriceImpactExponent(address _market) internal view returns (uint256) {
-        return IMarket(_market).priceImpactExponent();
-    }
-
-    function _getMaxPriceImpact(address _market) internal view returns (int256) {
-        return IMarket(_market).MAX_PRICE_IMPACT();
     }
 }

@@ -22,14 +22,15 @@ contract Executor is RoleValidation {
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
     ILiquidityVault public liquidityVault;
-    address public priceOracle;
+    IPriceOracle public priceOracle;
 
     error Executor_InvalidRequestKey();
+    error Executor_CantDecreaseNonExistingPosition();
 
     constructor(
         IMarketStorage _marketStorage,
         ITradeStorage _tradeStorage,
-        address _priceOracle,
+        IPriceOracle _priceOracle,
         ILiquidityVault _liquidityVault
     ) RoleValidation(roleStorage) {
         marketStorage = _marketStorage;
@@ -38,21 +39,12 @@ contract Executor is RoleValidation {
         liquidityVault = _liquidityVault;
     }
 
-    //////////////////////////
-    // EXECUTION FUNCTIONS //
-    ////////////////////////
-
-    // only permissioned roles can call
-    // called on set intervals, e.g every 5 - 10 seconds => crucial to prevent a backlog from building up
-    // if too much backlog builds up, may be too expensive to loop through entire request array
     function executeTradeOrders() external onlyKeeper {
-        // cache the order queue
         (, bytes32[] memory marketOrders) = tradeStorage.getOrderKeys();
         uint256 len = marketOrders.length;
-        // loop through => get Position => fulfill position at signed block price
         for (uint256 i = 0; i < len; ++i) {
             bytes32 _key = marketOrders[i];
-            _executeTradeOrder(_key, msg.sender, false);
+            try this.executeTradeOrder(_key, false) {} catch {}
         }
     }
 
@@ -61,35 +53,43 @@ contract Executor is RoleValidation {
         _executeTradeOrder(_key, msg.sender, _isLimit);
     }
 
-    // make facilitate increase and decrease
-    /**
-     * Note: Should handle transfer of the execution fee in this contract in the same transaction.
-     *     If the position creation is succesful (i.e doesn't revert or returns true) then transfer the
-     *     execution fee to the executor at the end of the function
-     */
+    /// @dev needs work
     function _executeTradeOrder(bytes32 _key, address _executor, bool _isLimit) internal {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);
         if (_positionRequest.user == address(0)) revert Executor_InvalidRequestKey();
         // get the market and block to get the signed block price
-        address market = IMarketStorage(marketStorage).getMarketFromIndexToken(_positionRequest.indexToken).market;
+        address market = marketStorage.getMarketFromIndexToken(_positionRequest.indexToken).market;
         uint256 _block = _positionRequest.requestBlock;
-        uint256 _signedBlockPrice = IPriceOracle(priceOracle).getSignedPrice(market, _block);
-        _positionRequest.priceImpact =
-            ImpactCalculator.calculatePriceImpact(market, _positionRequest, _signedBlockPrice);
-
+        uint256 _signedBlockPrice = priceOracle.getSignedPrice(market, _block);
+        if (_signedBlockPrice == 0) {
+            //cancel order and return
+            tradeStorage.cancelOrderRequest(_key, _isLimit);
+            return;
+        }
         if (_isLimit) {
             TradeHelper.checkLimitPrice(_signedBlockPrice, _positionRequest);
         }
+
+        _positionRequest.priceImpact =
+            ImpactCalculator.calculatePriceImpact(market, _positionRequest, _signedBlockPrice);
+
         uint256 price = ImpactCalculator.applyPriceImpact(_signedBlockPrice, _positionRequest.priceImpact);
+        // check impacted price is acceptable within slippage
+        // #################################################
         int256 sizeDeltaUsd = _positionRequest.isIncrease
             ? (_positionRequest.sizeDelta * price).toInt256()
             : (_positionRequest.sizeDelta * price).toInt256() * -1;
+        // if decrease, check position exists and sizeDeltaUsd is less than the position's size
+        if (!_positionRequest.isIncrease) {
+            if (tradeStorage.openPositions(_key).positionSize < _positionRequest.sizeDelta) {
+                revert Executor_CantDecreaseNonExistingPosition();
+            }
+        }
         // execute the trade
         MarketStructs.Position memory _position =
             tradeStorage.executeTrade(MarketStructs.ExecutionParams(_positionRequest, price, _executor));
-        // update open interest
-        // always increase => should add is equal to isLong
+
         _updateOpenInterest(
             _position.market,
             _positionRequest.collateralDelta,

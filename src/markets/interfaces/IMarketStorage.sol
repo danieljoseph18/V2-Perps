@@ -19,6 +19,7 @@ interface IMarketStorage {
     ) external;
 
     function marketKeys() external view returns (bytes32[] memory);
+    function marketAllocations(bytes32 _key) external view returns (uint256);
     function markets(bytes32 _key) external view returns (MarketStructs.Market memory);
     function positions(bytes32 _key) external view returns (MarketStructs.Position memory);
     function collatTokenLongOpenInterest(bytes32 _key) external view returns (uint256);
