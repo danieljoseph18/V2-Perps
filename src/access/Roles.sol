@@ -14,8 +14,6 @@ library Roles {
 
     bytes32 public constant CONFIGURATOR = keccak256("CONFIGURATOR");
 
-    bytes32 public constant FACTORY = keccak256("FACTORY");
-
     bytes32 public constant TRADE_STORAGE = keccak256("TRADE_STORAGE");
 
     bytes32 public constant VAULT = keccak256("VAULT");

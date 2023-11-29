@@ -5,19 +5,15 @@ import {MarketStructs} from "../markets/MarketStructs.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {FundingCalculator} from "./FundingCalculator.sol";
 import {BorrowingCalculator} from "./BorrowingCalculator.sol";
 import {PricingCalculator} from "./PricingCalculator.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 // Helper functions for trade related logic
 library TradeHelper {
-    using SafeCast for uint256;
-
     uint256 public constant MIN_LEVERAGE = 1e18; // 1x
-    uint256 public constant MAX_LEVERAGE = 50e18; // 50x
-    uint256 public constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
+    uint256 public constant MAX_LEVERAGE = 5000; // 50x
+    uint256 public constant MAX_LIQUIDATION_FEE = 100e30; // 100 USD
     uint256 public constant MAX_TRADING_FEE = 0.01e18; // 1%
 
     error TradeHelper_LimitPriceNotMet();
@@ -45,23 +41,16 @@ library TradeHelper {
         }
     }
 
+    // 1x = 100
     function checkLeverage(uint256 _size, uint256 _collateral) external pure {
-        UD60x18 leverage = ud(_size).div(ud(_collateral));
-        if (leverage < ud(MIN_LEVERAGE) || leverage > ud(MAX_LEVERAGE)) {
+        uint256 leverage = (_size * 100) / _collateral;
+        if (leverage < MIN_LEVERAGE || leverage > MAX_LEVERAGE) {
             revert TradeHelper_InvalidLeverage();
         }
     }
 
     function calculateLeverage(uint256 _size, uint256 _collateral) external pure returns (uint256) {
-        return unwrap(ud(_size).div(ud(_collateral)));
-    }
-
-    function calculateNewAveragePricePerToken(uint256 _prevAveragePricePerToken, uint256 _newPrice)
-        external
-        pure
-        returns (uint256)
-    {
-        return unwrap(ud(_prevAveragePricePerToken).avg(ud(_newPrice)));
+        return (_size * 100) / _collateral;
     }
 
     function generateNewPosition(
@@ -86,12 +75,12 @@ library TradeHelper {
             positionSize: _positionRequest.sizeDelta,
             isLong: _positionRequest.isLong,
             realisedPnl: 0,
-            borrowParams: MarketStructs.BorrowParams(longBorrowFee, shortBorrowFee),
-            fundingParams: MarketStructs.FundingParams(0, 0, 0, block.timestamp, longFunding, shortFunding),
+            borrowParams: MarketStructs.BorrowParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
+            fundingParams: MarketStructs.FundingParams(0, 0, block.timestamp, longFunding, shortFunding),
             pnlParams: MarketStructs.PnLParams(
                 _price,
                 _positionRequest.sizeDelta * _price,
-                unwrap(ud(_positionRequest.sizeDelta).div(ud(_positionRequest.collateralDelta)))
+                (_positionRequest.sizeDelta * 100) / _positionRequest.collateralDelta
                 ),
             entryTimestamp: block.timestamp
         });
@@ -99,11 +88,12 @@ library TradeHelper {
 
     function calculateTradingFee(address _tradeStorage, uint256 _sizeDelta) external view returns (uint256) {
         uint256 tradingFee = ITradeStorage(_tradeStorage).tradingFee();
-        return unwrap(ud(_sizeDelta).mul(ud(tradingFee))); //e.g 0.01e18 * 100e18 / 1e18 = 1e18 = 1 Token fee
+        uint256 divisor = 1e18 / tradingFee;
+        return _sizeDelta / divisor; //e.g 1e18 / 0.01e18 = 100 => x / 100 = fee
     }
 
     function getTradeSizeUsd(uint256 _sizeDelta, uint256 _signedPrice) external pure returns (uint256) {
-        return unwrap(ud(_sizeDelta).mul(ud(_signedPrice)));
+        return _sizeDelta * _signedPrice;
     }
 
     // Value Provided USD > Liquidation Fee + Fees + Losses USD
@@ -123,8 +113,7 @@ library TradeHelper {
         uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _collateralPriceUsd, _marketStorage);
         // get the total losses in USD
         int256 pnl = PricingCalculator.calculatePnL(market, _position);
-        int256 reminance =
-            collateralValueUsd.toInt256() - liquidationFeeUsd.toInt256() - totalFeesOwedUsd.toInt256() + pnl;
+        int256 reminance = int256(collateralValueUsd) - int256(liquidationFeeUsd) - int256(totalFeesOwedUsd) + pnl;
         // check if value provided > liquidation fee + fees + losses
         if (reminance <= 0) {
             return true;
@@ -159,16 +148,20 @@ library TradeHelper {
         return isValid;
     }
 
-    function getTotalFeesOwedUsd(MarketStructs.Position memory _position, uint256 _collateralPriceUsd, address _market)
+    function getTotalFeesOwedUsd(MarketStructs.Position memory _position, uint256 _price, address _market)
         public
         view
         returns (uint256)
     {
-        uint256 valueUsd = _position.collateralAmount * _collateralPriceUsd;
-        uint256 borrowingFeesUsd = BorrowingCalculator.getBorrowingFees(_market, _position) * valueUsd;
+        uint256 valueUsd = _position.positionSize * _price;
+        uint256 borrowingFees = BorrowingCalculator.getBorrowingFees(_market, _position);
+        uint256 borrowingDivisor = 1e18 / borrowingFees;
+
+        uint256 borrowingFeesUsd = valueUsd / borrowingDivisor;
+
         uint256 fundingFeeOwed = FundingCalculator.getTotalPositionFeeOwed(_market, _position);
-        // should return % of total value => e.g 0.05 * 100 = 5
-        uint256 fundingValueUsd = unwrap(ud(fundingFeeOwed) * ud(valueUsd));
+        uint256 fundingValueUsd = fundingFeeOwed * _price;
+
         return borrowingFeesUsd + fundingValueUsd;
     }
 

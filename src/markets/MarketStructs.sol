@@ -23,14 +23,15 @@ library MarketStructs {
     }
 
     struct BorrowParams {
-        uint256 entryLongCumulativeBorrowFee; // borrow fee at entry for longs
-        uint256 entryShortCumulativeBorrowFee; // borrow fee at entry for shorts
+        uint256 feesOwed;
+        uint256 lastBorrowUpdate;
+        uint256 lastLongCumulativeBorrowFee; // borrow fee at last for longs
+        uint256 lastShortCumulativeBorrowFee; // borrow fee at entry for shorts
     }
 
     struct FundingParams {
-        uint256 realisedFees; // fees realised by position
-        uint256 feesEarned; // fees earned by the position per token
-        uint256 feesOwed; // fees owed by the position per token
+        uint256 feesEarned; // fees earned by the position in index tokens
+        uint256 feesOwed; // fees owed by the position in index tokens
         uint256 lastFundingUpdate; // last time funding was updated
         uint256 lastLongCumulativeFunding; // last cumulative funding rate for longs
         uint256 lastShortCumulativeFunding; // last cumulative funding rate for shorts
@@ -41,14 +42,6 @@ library MarketStructs {
         uint256 sigmaIndexSizeUSD; // Sum of all increases and decreases in index size USD
         uint256 leverage;
     }
-    /*
-        liqValue = entryValue - (entryValue * (freeCollateral / entryValue))
-        weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
-        PNL = (Current price of index tokens - Weighted average entry price) * (Total position size / Current price of index tokens)
-        RealizedPNL=(Current price − Weighted average entry price)×(Realized position size/Current price)
-        int256 pnl = int256(amountToRealize * currentTokenPrice) - int256(amountToRealize * userPos.entryPriceWeighted);
-        indexSize = collateralAdded * leverage
-    */
 
     struct Position {
         uint256 index; // position in array

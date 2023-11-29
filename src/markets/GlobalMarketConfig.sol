@@ -7,18 +7,18 @@ import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 
-/// @dev GRANT THE CONFIGURATOR ROLE
+/// @dev Needs Configurator Role
 contract GlobalMarketConfig is RoleValidation {
     IMarketStorage public marketStorage;
     ILiquidityVault public liquidityVault;
     ITradeStorage public tradeStorage;
 
-    constructor(IMarketStorage _marketStorage, ILiquidityVault _liquidityVault, ITradeStorage _tradeStorage)
-        RoleValidation(roleStorage)
+    constructor(address _marketStorage, address _liquidityVault, address _tradeStorage, address _roleStorage)
+        RoleValidation(_roleStorage)
     {
-        marketStorage = _marketStorage;
-        liquidityVault = _liquidityVault;
-        tradeStorage = _tradeStorage;
+        marketStorage = IMarketStorage(_marketStorage);
+        liquidityVault = ILiquidityVault(_liquidityVault);
+        tradeStorage = ITradeStorage(_tradeStorage);
     }
 
     function setMarketFundingConfig(

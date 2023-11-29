@@ -63,7 +63,7 @@ interface IMarket {
     function longSizeSumUSD() external view returns (uint256);
     function shortSizeSumUSD() external view returns (uint256);
     function indexToken() external view returns (address);
-    function initialize(
+    function initialise(
         uint256 _maxFundingVelocity,
         uint256 _skewScale,
         int256 _maxFundingRate,

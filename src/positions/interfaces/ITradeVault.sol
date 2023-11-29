@@ -6,7 +6,7 @@ interface ITradeVault {
     function shortCollateral(bytes32 _marketKey) external view returns (uint256);
     function longCollateral(bytes32 _marketKey) external view returns (uint256);
     function transferOutTokens(bytes32 _marketKey, address _to, uint256 _collateralDelta, bool _isLong) external;
-    function transferLossToLiquidityVault(uint256 _amount) external;
+    function transferToLiquidityVault(uint256 _amount) external;
     function liquidatePositionCollateral(
         bytes32 _marketKey,
         uint256 _totalCollateral,

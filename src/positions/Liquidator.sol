@@ -6,22 +6,20 @@ import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 
 /// @dev Needs Liquidator role
 contract Liquidator is RoleValidation {
     using MarketStructs for MarketStructs.Position;
-    using SafeCast for int256;
 
     ITradeStorage public tradeStorage;
     IMarketStorage public marketStorage;
 
     error Liquidator_PositionNotLiquidatable();
 
-    constructor(ITradeStorage _tradeStorage, IMarketStorage _marketStorage) RoleValidation(roleStorage) {
-        tradeStorage = _tradeStorage;
-        marketStorage = _marketStorage;
+    constructor(address _tradeStorage, address _marketStorage, address _roleStorage) RoleValidation(_roleStorage) {
+        tradeStorage = ITradeStorage(_tradeStorage);
+        marketStorage = IMarketStorage(_marketStorage);
     }
 
     // need to store who flagged and liquidated

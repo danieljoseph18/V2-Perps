@@ -7,6 +7,7 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 
+/// @dev Needs Vault Role
 contract TradeVault is RoleValidation {
     using SafeERC20 for IWUSDC;
 
@@ -28,9 +29,9 @@ contract TradeVault is RoleValidation {
     error TradeVault_InsufficientCollateral();
     error TradeVault_InsufficientCollateralToClaim();
 
-    constructor(IWUSDC _wusdc, ILiquidityVault _liquidityVault) RoleValidation(roleStorage) {
-        WUSDC = _wusdc;
-        liquidityVault = _liquidityVault;
+    constructor(address _wusdc, address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
+        WUSDC = IWUSDC(_wusdc);
+        liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
     function transferOutTokens(bytes32 _marketKey, address _to, uint256 _collateralDelta, bool _isLong)
@@ -45,20 +46,16 @@ contract TradeVault is RoleValidation {
         } else {
             if (shortCollateral[_marketKey] < _collateralDelta) revert TradeVault_InsufficientCollateral();
         }
-        // profit = size now - initial size => initial size is not their
         uint256 amount = _collateralDelta;
         _isLong ? longCollateral[_marketKey] -= amount : shortCollateral[_marketKey] -= amount;
-        // NEED TO ALSO GET PNL FROM LIQUIDITY VAULT TO COVER THIS
         WUSDC.safeTransfer(_to, amount);
         emit TransferOutTokens(_marketKey, _to, _collateralDelta, _isLong);
     }
 
-    /// @dev If a position loses, this function transfers losses to LV
-    function transferLossToLiquidityVault(uint256 _amount) external onlyTradeStorage {
-        _sendFeesToLiquidityVault(_amount);
+    function transferToLiquidityVault(uint256 _amount) external onlyTradeStorage {
+        _sendTokensToLiquidityVault(_amount);
     }
 
-    /// Note Also needs to be callable from TradeStorage
     function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong, bool _isIncrease)
         external
         onlyRouter
@@ -85,7 +82,7 @@ contract TradeVault is RoleValidation {
         } else {
             shortCollateral[_marketKey] -= remainingCollateral;
         }
-        _sendFeesToLiquidityVault(remainingCollateral);
+        _sendTokensToLiquidityVault(remainingCollateral);
     }
 
     function claimFundingFees(bytes32 _marketKey, address _user, uint256 _claimed, bool _isLong)
@@ -122,7 +119,7 @@ contract TradeVault is RoleValidation {
         emit UpdateCollateralBalance(_marketKey, _amount, _isLong, _isIncrease);
     }
 
-    function _sendFeesToLiquidityVault(uint256 _amount) internal {
+    function _sendTokensToLiquidityVault(uint256 _amount) internal {
         if (_amount == 0) revert TradeVault_ZeroBalanceTransfer();
         liquidityVault.accumulateFees(_amount);
         WUSDC.safeTransfer(address(liquidityVault), _amount);

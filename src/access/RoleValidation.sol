@@ -4,7 +4,6 @@ pragma solidity 0.8.20;
 import {RoleStorage} from "./RoleStorage.sol";
 import {Roles} from "./Roles.sol";
 
-// inheritance adds gas bloating, reconfigure with all required roles
 contract RoleValidation {
     RoleStorage public immutable roleStorage;
 
@@ -37,11 +36,6 @@ contract RoleValidation {
 
     modifier onlyConfigurator() {
         if (!roleStorage.hasRole(Roles.CONFIGURATOR, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
-    modifier onlyFactory() {
-        if (!roleStorage.hasRole(Roles.FACTORY, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
@@ -80,7 +74,7 @@ contract RoleValidation {
         _;
     }
 
-    constructor(RoleStorage _roleStorage) {
-        roleStorage = _roleStorage;
+    constructor(address _roleStorage) {
+        roleStorage = RoleStorage(_roleStorage);
     }
 }

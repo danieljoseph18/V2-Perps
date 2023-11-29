@@ -6,9 +6,6 @@ import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
-import {SD59x18, sd, unwrap, pow} from "@prb/math/SD59x18.sol";
-import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
@@ -18,21 +15,14 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
  */
 
 library PricingCalculator {
-    using SafeCast for uint256;
-    using SafeCast for int256;
-
-    /////////
-    // PNL //
-    /////////
-
     // if long, entry - position = pnl, if short, position - entry = pnl
     /// PNL = (Current price of index tokens - Weighted average entry price) * (Total position size / Current price of index tokens)
     function calculatePnL(address _market, MarketStructs.Position memory _position) external view returns (int256) {
         uint256 indexPrice = IMarket(_market).getPrice(_position.indexToken);
-        int256 deltaPriceUsd = indexPrice.toInt256() - _position.pnlParams.weightedAvgEntryPrice.toInt256();
-        uint256 scalar = unwrap(ud(_position.positionSize).div(ud(indexPrice)));
+        int256 deltaPriceUsd = int256(indexPrice) - int256(_position.pnlParams.weightedAvgEntryPrice);
+        uint256 scalar = _position.positionSize / indexPrice;
 
-        return _position.isLong ? deltaPriceUsd * scalar.toInt256() : -deltaPriceUsd * scalar.toInt256();
+        return _position.isLong ? deltaPriceUsd * int256(scalar) : -deltaPriceUsd * int256(scalar);
     }
 
     /// weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -43,11 +33,10 @@ library PricingCalculator {
         int256 _sizeDeltaUsd,
         uint256 _price
     ) external pure returns (uint256) {
-        uint256 nextSISU =
-            _sizeDeltaUsd > 0 ? _prevSISU + _sizeDeltaUsd.toUint256() : _prevSISU - (-_sizeDeltaUsd).toUint256();
+        uint256 nextSISU = _sizeDeltaUsd > 0 ? _prevSISU + uint256(_sizeDeltaUsd) : _prevSISU - uint256(-_sizeDeltaUsd);
         uint256 prevSum = _prevWAEP * _prevSISU;
-        int256 positionSum = _sizeDeltaUsd * _price.toInt256();
-        uint256 sum = positionSum > 0 ? prevSum + positionSum.toUint256() : prevSum - positionSum.toUint256();
+        int256 positionSum = _sizeDeltaUsd * int256(_price);
+        uint256 sum = positionSum > 0 ? prevSum + uint256(positionSum) : prevSum - uint256(positionSum);
         return sum / nextSISU;
     }
 
@@ -60,11 +49,11 @@ library PricingCalculator {
         uint256 indexValue = IMarket(_market).getIndexOpenInterestUSD(_isLong);
         uint256 entryValue = getTotalEntryValue(_market, _marketStorage, _marketKey, _isLong);
 
-        return _isLong ? indexValue.toInt256() - entryValue.toInt256() : entryValue.toInt256() - indexValue.toInt256();
+        return _isLong ? int256(indexValue) - int256(entryValue) : int256(entryValue) - int256(indexValue);
     }
 
-    /// RealizedPNL=(Current price − Weighted average entry price)×(Realized position size/Current price)
-    /// int256 pnl = int256(amountToRealize * currentTokenPrice) - int256(amountToRealize * userPos.entryPriceWeighted);
+    /// RealisedPNL=(Current price − Weighted average entry price)×(Realised position size/Current price)
+    /// int256 pnl = int256(amountToRealise * currentTokenPrice) - int256(amountToRealise * userPos.entryPriceWeighted);
     /// Note If decreasing a position and realizing PNL, it's crucial to adjust the WAEP
     function getDecreasePositionPnL(uint256 _sizeDelta, uint256 _positionWAEP, uint256 _currentPrice, bool _isLong)
         external
@@ -72,7 +61,7 @@ library PricingCalculator {
         returns (int256)
     {
         // only realise a percentage equivalent to the percentage of the position being closed
-        int256 valueDelta = (_sizeDelta * _positionWAEP).toInt256() - (_sizeDelta * _currentPrice).toInt256();
+        int256 valueDelta = int256(_sizeDelta * _positionWAEP) - int256(_sizeDelta * _currentPrice);
         // if long, > 0 is profit, < 0 is loss
         // if short, > 0 is loss, < 0 is profit
         int256 pnl;
@@ -84,16 +73,6 @@ library PricingCalculator {
             _isLong ? pnl -= valueDelta : pnl += valueDelta;
         }
         return pnl;
-    }
-
-    // Get the principle deposited for the amount of index tokens being realised
-    function getDecreasePositionPrinciple(uint256 _sizeDelta, uint256 _positionWAEP, uint256 _leverage)
-        external
-        pure
-        returns (uint256)
-    {
-        // principle = (sizeDelta * WAEP) / leverage
-        return (_sizeDelta * _positionWAEP) / _leverage;
     }
 
     function getPoolBalanceUSD(address _liquidityVault, bytes32 _marketKey, address _priceOracle, address _usdc)

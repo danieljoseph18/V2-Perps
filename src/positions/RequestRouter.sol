@@ -17,11 +17,6 @@ import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 contract RequestRouter {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.PositionRequest;
-    // contract for creating requests for trades
-    // limit orders, market orders, all will have 2 step process
-    // swap orders included
-    // orders will be stored in storage
-    // orders will be executed by the Executor, which will put them on TradeManager
 
     ITradeStorage public tradeStorage;
     ILiquidityVault public liquidityVault;
@@ -35,17 +30,17 @@ contract RequestRouter {
     error RequestRouter_PositionSizeTooLarge();
 
     constructor(
-        ITradeStorage _tradeStorage,
-        ILiquidityVault _liquidityVault,
-        IMarketStorage _marketStorage,
-        ITradeVault _tradeVault,
-        IWUSDC _wusdc
+        address _tradeStorage,
+        address _liquidityVault,
+        address _marketStorage,
+        address _tradeVault,
+        address _wusdc
     ) {
-        tradeStorage = _tradeStorage;
-        liquidityVault = _liquidityVault;
-        marketStorage = _marketStorage;
-        tradeVault = _tradeVault;
-        WUSDC = _wusdc;
+        tradeStorage = ITradeStorage(_tradeStorage);
+        liquidityVault = ILiquidityVault(_liquidityVault);
+        marketStorage = IMarketStorage(_marketStorage);
+        tradeVault = ITradeVault(_tradeVault);
+        WUSDC = IWUSDC(_wusdc);
     }
 
     modifier validExecutionFee(uint256 _executionFee) {
@@ -161,16 +156,10 @@ contract RequestRouter {
         return WUSDC.deposit(_amount);
     }
 
-    // validate that the additional open interest won't put the market over the max open interest (allocated reserves)
-    // call the mapping to get the allocation and divide by over collateralization then * 100
-    // compare to what the size delta will put the open interest to
-    // Review
     function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) internal view {
-        uint256 allocation = ILiquidityVault(liquidityVault).getMarketAllocation(_marketKey);
-        uint256 overcollateralization = ILiquidityVault(liquidityVault).overCollateralizationPercentage();
         address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
         uint256 totalOI = IMarket(market).getTotalOpenInterest();
-        uint256 maxOI = (allocation / overcollateralization) * 100;
+        uint256 maxOI = IMarketStorage(marketStorage).maxOpenInterests(_marketKey);
         if (totalOI + _sizeDelta > maxOI) revert RequestRouter_PositionSizeTooLarge();
     }
 }

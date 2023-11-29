@@ -16,21 +16,22 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
 /// @dev Needs MarketMaker role
 contract MarketFactory is RoleValidation {
-    IWUSDC public immutable WUSDC;
-    IMarketStorage public marketStorage;
-    ILiquidityVault public liquidityVault;
-    ITradeStorage public tradeStorage;
-    IPriceOracle public priceOracle;
+    address public immutable WUSDC;
+    address public marketStorage;
+    address public liquidityVault;
+    address public tradeStorage;
+    address public priceOracle;
 
     event MarketCreated(address indexed indexToken, address indexed market);
 
     constructor(
-        IMarketStorage _marketStorage,
-        ILiquidityVault _liquidityVault,
-        ITradeStorage _tradeStorage,
-        IWUSDC _wusdc,
-        IPriceOracle _priceOracle
-    ) RoleValidation(roleStorage) {
+        address _marketStorage,
+        address _liquidityVault,
+        address _tradeStorage,
+        address _wusdc,
+        address _priceOracle,
+        address _roleStorage
+    ) RoleValidation(_roleStorage) {
         marketStorage = _marketStorage;
         liquidityVault = _liquidityVault;
         tradeStorage = _tradeStorage;
@@ -38,18 +39,18 @@ contract MarketFactory is RoleValidation {
         priceOracle = _priceOracle;
     }
 
-    // Only callable by MARKET_MAKER roles
     function createMarket(address _indexToken) external onlyAdmin {
         // pool cant already exist
         bytes32 _marketKey = keccak256(abi.encodePacked(_indexToken));
         // Create new Market contract
-        Market _market = new Market(_indexToken, marketStorage, liquidityVault, tradeStorage, priceOracle, WUSDC);
-        // Initialize With Default Values
-        Market(_market).initialize(0.0003e18, 1_000_000e18, 500e18, -500e18, 0.000000035e18, 1, false, 0.000001e18, 1);
+        Market _market = new Market(
+            _indexToken, marketStorage, liquidityVault, tradeStorage, priceOracle, WUSDC, address(roleStorage)
+        );
+        // Initialise With Default Values
+        Market(_market).initialise(0.0003e18, 1_000_000e18, 500e16, -500e16, 0.000000035e18, 1, false, 0.000001e18, 1);
         // Store everything in MarketStorage
         MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, address(_market), _marketKey);
-        marketStorage.storeMarket(_marketInfo);
-        liquidityVault.addMarket(_marketInfo);
+        IMarketStorage(marketStorage).storeMarket(_marketInfo);
 
         emit MarketCreated(_indexToken, address(_market));
     }

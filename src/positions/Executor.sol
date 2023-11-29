@@ -10,13 +10,9 @@ import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 import {ImpactCalculator} from "./ImpactCalculator.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Needs Executor Role
 contract Executor is RoleValidation {
-    using SafeCast for uint256;
-    using SafeCast for int256;
-
     error Executor_LimitNotHit();
 
     IMarketStorage public marketStorage;
@@ -28,15 +24,16 @@ contract Executor is RoleValidation {
     error Executor_CantDecreaseNonExistingPosition();
 
     constructor(
-        IMarketStorage _marketStorage,
-        ITradeStorage _tradeStorage,
-        IPriceOracle _priceOracle,
-        ILiquidityVault _liquidityVault
-    ) RoleValidation(roleStorage) {
-        marketStorage = _marketStorage;
-        tradeStorage = _tradeStorage;
-        priceOracle = _priceOracle;
-        liquidityVault = _liquidityVault;
+        address _marketStorage,
+        address _tradeStorage,
+        address _priceOracle,
+        address _liquidityVault,
+        address _roleStorage
+    ) RoleValidation(_roleStorage) {
+        marketStorage = IMarketStorage(_marketStorage);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        priceOracle = IPriceOracle(_priceOracle);
+        liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
     function executeTradeOrders() external onlyKeeper {
@@ -78,8 +75,8 @@ contract Executor is RoleValidation {
         // check impacted price is acceptable within slippage
         // #################################################
         int256 sizeDeltaUsd = _positionRequest.isIncrease
-            ? (_positionRequest.sizeDelta * price).toInt256()
-            : (_positionRequest.sizeDelta * price).toInt256() * -1;
+            ? int256(_positionRequest.sizeDelta * price)
+            : int256(_positionRequest.sizeDelta * price) * -1;
         // if decrease, check position exists and sizeDeltaUsd is less than the position's size
         if (!_positionRequest.isIncrease) {
             if (tradeStorage.openPositions(_key).positionSize < _positionRequest.sizeDelta) {

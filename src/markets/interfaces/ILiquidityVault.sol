@@ -2,49 +2,34 @@
 pragma solidity ^0.8.20;
 
 import {MarketStructs} from "../MarketStructs.sol";
+import {IDataOracle} from "../../oracle/interfaces/IDataOracle.sol";
+import {IWUSDC} from "../../token/interfaces/IWUSDC.sol";
+import {IMarketToken} from "./IMarketToken.sol";
 
 interface ILiquidityVault {
-    // Setters
-    function updateOverCollateralizationPercentage(uint256 _percentage) external;
-    function addMarket(MarketStructs.Market memory _market) external;
+    // Public State Variables
+    function WUSDC() external view returns (IWUSDC);
+    function liquidityToken() external view returns (IMarketToken);
+    function dataOracle() external view returns (IDataOracle);
+    function poolAmounts() external view returns (uint256);
+    function accumulatedFees() external view returns (uint256);
+    function liquidityFee() external view returns (uint256);
+    function isHandler(address handler, address lp) external view returns (bool);
 
-    // Liquidity
-    function addLiquidity(uint256 _amount, address _tokenIn) external;
-    function removeLiquidity(uint256 _marketTokenAmount, address _tokenOut) external;
-    function addLiquidityForAccount(address _account, uint256 _amount, address _tokenIn) external;
-    function removeLiquidityForAccount(address _account, uint256 _liquidityTokenAmount, address _tokenOut) external;
-
-    // Pricing
-    function getMarketTokenPrice() external view returns (uint256);
-    function getAum() external view returns (uint256 aum);
-    function getPrice(address _token) external view returns (uint256);
-
-    // PnL
-    function getNetPnL(bool _isLong) external view returns (int256);
-
-    // Open Interest
-    function getNetOpenInterestUsd() external view returns (uint256);
-
-    // Fees
-    function accumulateBorrowingFees(uint256 _amount) external;
-    function accumulateTradingFees(uint256 _amount) external;
-
-    // Allocations
-    function updateMarketAllocations() external;
-
-    function updateLiquidityFee(uint256 _fee) external;
-
-    // Getters for state variables
-    function p3usd() external view returns (address);
-    function getStablecoin() external view returns (address);
-    function getLiquidityToken() external view returns (address);
-    function poolAmounts(address _token) external view returns (uint256);
-    function getMarket(bytes32 _marketKey) external view returns (MarketStructs.Market memory);
-    function getMarketAllocation(bytes32 key) external view returns (uint256);
-    function getAccumulatedFees() external view returns (uint256);
-    function overCollateralizationPercentage() external view returns (uint256);
-    function accumulateFundingFees(uint256 _amount, address _account) external;
-    function updateState(int256 _netPnL, uint256 _netOpenInterest) external;
+    // External Functions
+    function setDataOracle(IDataOracle _dataOracle) external;
+    function updateLiquidityFee(uint256 _liquidityFee) external;
+    function setIsHandler(address _handler, bool _isHandler) external;
+    function addLiquidity(uint256 _amount) external;
+    function removeLiquidity(uint256 _marketTokenAmount) external;
+    function addLiquidityForAccount(address _account, uint256 _amount) external;
+    function removeLiquidityForAccount(address _account, uint256 _liquidityTokenAmount) external;
     function accumulateFees(uint256 _amount) external;
     function transferPositionProfit(address _user, uint256 _amount) external;
+    function initialise(IDataOracle _dataOracle, uint256 _liquidityFee) external;
+
+    // View Functions
+    function getLiquidityTokenPrice() external view returns (uint256);
+    function getAum() external view returns (uint256);
+    function getPrice(address _token) external view returns (uint256);
 }

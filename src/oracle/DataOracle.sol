@@ -14,13 +14,13 @@ contract DataOracle is RoleValidation {
     MarketStructs.Market[] public markets;
     mapping(bytes32 => bool) public isMarket;
 
-    constructor(address _marketStorage) RoleValidation(roleStorage) {
+    constructor(address _marketStorage, address _roleStorage) RoleValidation(_roleStorage) {
         marketStorage = IMarketStorage(_marketStorage);
     }
 
     function setMarkets(MarketStructs.Market[] memory _markets) external onlyAdmin {
-        markets = _markets;
         for (uint256 i = 0; i < _markets.length; i++) {
+            markets.push(_markets[i]);
             isMarket[_markets[i].marketKey] = true;
         }
     }
@@ -40,6 +40,7 @@ contract DataOracle is RoleValidation {
             + PricingCalculator.getNetPnL(_market.market, address(marketStorage), _market.marketKey, false);
     }
 
+    /// @dev To convert to usd, needs to be 1e30 DPs
     function getCumulativeNetPnl() external view returns (int256 totalPnl) {
         for (uint256 i = 0; i < markets.length; i++) {
             totalPnl += getNetPnl(markets[i]);

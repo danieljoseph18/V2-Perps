@@ -9,9 +9,6 @@ import {MarketStructs} from "./MarketStructs.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {SD59x18, sd, unwrap, pow} from "@prb/math/SD59x18.sol";
-import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {FundingCalculator} from "../positions/FundingCalculator.sol";
 import {BorrowingCalculator} from "../positions/BorrowingCalculator.sol";
 import {PricingCalculator} from "../positions/PricingCalculator.sol";
@@ -23,10 +20,9 @@ contract Market is RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
-    using SafeCast for uint256;
-    using SafeCast for int256;
 
-    int256 public constant MAX_PRICE_IMPACT = 33e18; // 33%
+    int256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
+    uint256 public constant SCALING_FACTOR = 1e18;
 
     address public indexToken;
     ILiquidityVault public liquidityVault;
@@ -35,7 +31,7 @@ contract Market is RoleValidation {
     IPriceOracle public priceOracle;
     IWUSDC public immutable WUSDC;
 
-    bool isInitialized;
+    bool isInitialised;
 
     uint256 public lastFundingUpdateTime; // last time funding was updated
     uint256 public lastBorrowUpdateTime; // last time borrowing fee was updated
@@ -76,39 +72,40 @@ contract Market is RoleValidation {
     event TotalWAEPUpdated(uint256 _longTotalWAEP, uint256 _shortTotalWAEP);
     event PriceImpactConfigUpdated(uint256 _priceImpactFactor, uint256 _priceImpactExponent);
 
-    error Market_AlreadyInitialized();
+    error Market_AlreadyInitialised();
 
     constructor(
         address _indexToken,
-        IMarketStorage _marketStorage,
-        ILiquidityVault _liquidityVault,
-        ITradeStorage _tradeStorage,
-        IPriceOracle _priceOracle,
-        IWUSDC _wusdc
-    ) RoleValidation(roleStorage) {
+        address _marketStorage,
+        address _liquidityVault,
+        address _tradeStorage,
+        address _priceOracle,
+        address _wusdc,
+        address _roleStorage
+    ) RoleValidation(_roleStorage) {
         indexToken = _indexToken;
-        marketStorage = _marketStorage;
-        liquidityVault = _liquidityVault;
-        tradeStorage = _tradeStorage;
-        priceOracle = _priceOracle;
-        WUSDC = _wusdc;
+        marketStorage = IMarketStorage(_marketStorage);
+        liquidityVault = ILiquidityVault(_liquidityVault);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        priceOracle = IPriceOracle(_priceOracle);
+        WUSDC = IWUSDC(_wusdc);
     }
 
     /// @dev All values need 18 decimals => e.g 0.0003e18 = 0.03%
     /// @dev Can only be called by MarketFactory
     /// @dev Must be Called before contract is interacted with
-    function initialize(
+    function initialise(
         uint256 _maxFundingVelocity, // 0.0003e18 = 0.03%
         uint256 _skewScale, // 1_000_000e18 Skew scale in USDC (1_000_000)
-        int256 _maxFundingRate, // 500e18  5% represented as fixed-point
-        int256 _minFundingRate, // -500e18
+        int256 _maxFundingRate, // 500e16  5% represented as fixed-point
+        int256 _minFundingRate, // -500e16
         uint256 _borrowingFactor, // 0.000000035e18 = 0.0000035% per second
         uint256 _borrowingExponent, // Not 18 decimals => 1:1
         bool _feeForSmallerSide, // Flag for skipping borrowing fee for the smaller side
         uint256 _priceImpactFactor, // 0.000001e18 = 0.0001%
         uint256 _priceImpactExponent // Not 18 decimals => 1:1
     ) external onlyMarketMaker {
-        if (isInitialized) revert Market_AlreadyInitialized();
+        if (isInitialised) revert Market_AlreadyInitialised();
         maxFundingVelocity = _maxFundingVelocity;
         skewScale = _skewScale;
         maxFundingRate = _maxFundingRate;
@@ -164,24 +161,24 @@ contract Market is RoleValidation {
         );
         // If Increase ... Else Decrease
         if (_positionSizeUSD >= 0) {
-            _isLong ? longOI += _positionSizeUSD.toUint256() : shortOI += _positionSizeUSD.toUint256();
+            _isLong ? longOI += uint256(_positionSizeUSD) : shortOI += uint256(_positionSizeUSD);
         } else {
-            _isLong ? longOI -= (-_positionSizeUSD).toUint256() : shortOI -= (-_positionSizeUSD).toUint256();
+            _isLong ? longOI -= uint256(-_positionSizeUSD) : shortOI -= uint256(-_positionSizeUSD);
         }
-        int256 skew = unwrap(sd(longOI.toInt256()) - sd(shortOI.toInt256())); // 500 USD skew = 500e18
+        int256 skew = int256(longOI) - int256(shortOI); // 500 USD skew = 500e30 (USD scaled by 30)
 
         // Calculate time since last funding update
         uint256 timeElapsed = block.timestamp - lastFundingUpdateTime;
 
         // Update Cumulative Fees
         if (fundingRate > 0) {
-            longCumulativeFundingFees += (fundingRate.toUint256() * timeElapsed); // if funding rate has 18 decimals, rate per token = rate
+            longCumulativeFundingFees += uint256(fundingRate) * timeElapsed; // if funding rate has 18 decimals, rate per token = rate
         } else if (fundingRate < 0) {
-            shortCumulativeFundingFees += ((-fundingRate).toUint256() * timeElapsed);
+            shortCumulativeFundingFees += (uint256(-fundingRate) * timeElapsed);
         }
 
         // Add the previous velocity to the funding rate
-        int256 deltaRate = unwrap((sd(fundingRateVelocity)).mul(sd(timeElapsed.toInt256())));
+        int256 deltaRate = fundingRateVelocity * int256(timeElapsed);
         // if funding rate addition puts it above / below limit, set to limit
         if (fundingRate + deltaRate > maxFundingRate) {
             fundingRate = maxFundingRate;
@@ -213,43 +210,36 @@ contract Market is RoleValidation {
             address(liquidityVault), getMarketKey(), address(priceOracle), address(WUSDC.USDC())
         ); // Pool balance in USD
 
-        UD60x18 feeBase = ud(openInterest);
-        UD60x18 rate = (ud(borrowingFactor).mul(ud(unwrap(feeBase)).pow(ud(borrowingExponent)))).div(ud(poolBalance));
-
+        uint256 rate = (borrowingFactor * (openInterest ** borrowingExponent)) / poolBalance;
         // update cumulative fees with current borrowing rate
         uint256 borrowingRate;
         if (_isLong) {
             borrowingRate = longBorrowingRate;
             longCumulativeBorrowFee += borrowingRate * (block.timestamp - lastBorrowUpdateTime);
-            longBorrowingRate = unwrap(rate);
+            longBorrowingRate = rate;
         } else {
             borrowingRate = shortBorrowingRate;
             shortCumulativeBorrowFee += borrowingRate * (block.timestamp - lastBorrowUpdateTime);
-            shortBorrowingRate = unwrap(rate);
+            shortBorrowingRate = rate;
         }
         // update last update time
         lastBorrowUpdateTime = block.timestamp;
         // update borrowing rate
-        emit BorrowingRateUpdated(_isLong, unwrap(rate));
+        emit BorrowingRateUpdated(_isLong, rate);
     }
 
-    // check this is updated correctly in the executor
     /// @dev Updates Weighted Average Entry Price => Used to Track PNL For a Market
     function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external onlyExecutor {
         if (_isLong) {
             longTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
                 longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price
             );
-            _sizeDeltaUsd > 0
-                ? longSizeSumUSD += _sizeDeltaUsd.toUint256()
-                : longSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
+            _sizeDeltaUsd > 0 ? longSizeSumUSD += uint256(_sizeDeltaUsd) : longSizeSumUSD -= uint256(-_sizeDeltaUsd);
         } else {
             shortTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
                 shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price
             );
-            _sizeDeltaUsd > 0
-                ? shortSizeSumUSD += _sizeDeltaUsd.toUint256()
-                : shortSizeSumUSD -= (-_sizeDeltaUsd).toUint256();
+            _sizeDeltaUsd > 0 ? shortSizeSumUSD += uint256(_sizeDeltaUsd) : shortSizeSumUSD -= uint256(-_sizeDeltaUsd);
         }
         emit TotalWAEPUpdated(longTotalWAEP, shortTotalWAEP);
     }
