@@ -40,7 +40,6 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
         nonReentrant
         onlyStateKeeper
     {
-        // How do we get the marketKey from the market address???
         bytes32 marketKey = marketStorage.getMarketFromIndexToken(_indexToken).marketKey;
         marketStorage.updateState(marketKey, _allocation, _maxOI);
     }

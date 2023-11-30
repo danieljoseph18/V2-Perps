@@ -20,6 +20,10 @@ contract MockPriceOracle is IPriceOracle {
         whitelistedTokens[_token] = true;
     }
 
+    function updatePriceSource(address _token, address _newPriceSource) external {
+        return;
+    }
+
     function getSignedPrice(address _token, uint256 _block) external view returns (uint256) {
         return 1000e30;
     }

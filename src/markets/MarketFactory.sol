@@ -39,9 +39,11 @@ contract MarketFactory is RoleValidation {
         priceOracle = _priceOracle;
     }
 
-    function createMarket(address _indexToken) external onlyAdmin {
+    function createMarket(address _indexToken, address _priceFeed) external onlyAdmin {
         // pool cant already exist
         bytes32 _marketKey = keccak256(abi.encodePacked(_indexToken));
+        // Set Up Price Oracle
+        IPriceOracle(priceOracle).updatePriceSource(_indexToken, _priceFeed);
         // Create new Market contract
         Market _market = new Market(
             _indexToken, marketStorage, liquidityVault, tradeStorage, priceOracle, WUSDC, address(roleStorage)

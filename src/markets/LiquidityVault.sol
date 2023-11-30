@@ -124,13 +124,13 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         if (supply == 0 || aum == 0) {
             return 0;
         } else {
-            return aum / supply;
+            return (aum * 1e18) / supply;
         }
     }
 
     // Returns AUM in USD value
     function getAum() public view returns (uint256 aum) {
-        uint256 liquidity = (poolAmounts * getPrice(address(WUSDC.USDC())));
+        uint256 liquidity = (poolAmounts * getPrice(address(WUSDC.USDC()))) / 1e18;
         aum = liquidity;
         int256 pendingPnL = dataOracle.getCumulativeNetPnl();
         pendingPnL > 0 ? aum -= uint256(pendingPnL) : aum += uint256(pendingPnL);
@@ -149,7 +149,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         if (_account == address(0)) revert LiquidityVault_ZeroAddress();
 
         // Transfer From User to Contract
-        IERC20(WUSDC.USDC()).safeTransferFrom(_account, address(this), _amount);
+        IERC20(WUSDC.USDC()).safeTransferFrom(msg.sender, address(this), _amount);
         // Wrap Stablecoin
         uint256 wusdcAmount = _wrapUsdc(_amount);
         // Deduct Fees

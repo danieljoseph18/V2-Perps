@@ -7,4 +7,5 @@ interface IPriceOracle {
     function getSignedPrice(address _token, uint256 _block) external view returns (uint256);
     function setSignedPrice(address _token, uint256 _block, uint256 _price) external;
     function getCollateralPrice() external pure returns (uint256);
+    function updatePriceSource(address _token, address _newPriceSource) external;
 }

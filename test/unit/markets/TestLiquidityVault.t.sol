@@ -21,7 +21,7 @@ import {TradeVault} from "../../../src/positions/TradeVault.sol";
 import {WUSDC} from "../../../src/token/WUSDC.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 
-contract TestDeployment is Test {
+contract TestLiquidityVault is Test {
     RoleStorage roleStorage;
     GlobalMarketConfig globalMarketConfig;
     LiquidityVault liquidityVault;
@@ -67,8 +67,9 @@ contract TestDeployment is Test {
         OWNER = contracts.owner;
     }
 
-    modifier mintUsdc(address _to) {
-        usdc.mint(_to, LARGE_AMOUNT);
+    modifier mintUsdc() {
+        usdc.mint(OWNER, LARGE_AMOUNT);
+        usdc.mint(USER, LARGE_AMOUNT);
         _;
     }
 
@@ -96,7 +97,7 @@ contract TestDeployment is Test {
     //     Value a: 0
     //     Value b: 0
 
-    function testLiqVaultAddLiquidityWorks() public mintUsdc(OWNER) {
+    function testLiqVaultAddLiquidityWorks() public mintUsdc {
         vm.startPrank(OWNER);
         usdc.approve(address(liquidityVault), LARGE_AMOUNT);
         liquidityVault.addLiquidity(100e6);
@@ -107,7 +108,7 @@ contract TestDeployment is Test {
         vm.stopPrank();
     }
 
-    function testLiqVaultLpTokenPriceAfterAddingLiquidity() public mintUsdc(OWNER) {
+    function testLiqVaultLpTokenPriceAfterAddingLiquidity() public mintUsdc {
         vm.startPrank(OWNER);
         usdc.approve(address(liquidityVault), LARGE_AMOUNT);
         liquidityVault.addLiquidity(100e6);
@@ -115,7 +116,7 @@ contract TestDeployment is Test {
         console.log(liquidityVault.getLiquidityTokenPrice());
     }
 
-    function testLiqVaultRemoveLiquidityWorks() public mintUsdc(OWNER) {
+    function testLiqVaultRemoveLiquidityWorks() public mintUsdc {
         vm.startPrank(OWNER);
         usdc.approve(address(liquidityVault), LARGE_AMOUNT);
         liquidityVault.addLiquidity(100e6);
@@ -128,5 +129,52 @@ contract TestDeployment is Test {
         assertGt(usdc.balanceOf(OWNER), usdcBalBefore);
         assertEq(marketToken.balanceOf(OWNER), 0);
         vm.stopPrank();
+    }
+
+    function testLiqVaultAddLiquidityWorksFromAHandler() public mintUsdc {
+        vm.prank(USER);
+        liquidityVault.setIsHandler(OWNER, true);
+
+        vm.startPrank(OWNER);
+        usdc.approve(address(liquidityVault), LARGE_AMOUNT);
+        liquidityVault.addLiquidityForAccount(USER, 100e6);
+        vm.stopPrank();
+
+        assertGt(marketToken.balanceOf(USER), 0);
+    }
+
+    function testLiqVaultRemoveLiquidityWorksFromAHandler() public mintUsdc {
+        vm.startPrank(OWNER);
+        liquidityVault.setIsHandler(USER, true);
+        usdc.approve(address(liquidityVault), LARGE_AMOUNT);
+        liquidityVault.addLiquidity(100e6);
+        vm.stopPrank();
+
+        uint256 mintAmount = marketToken.balanceOf(OWNER);
+        uint256 usdcBalBefore = usdc.balanceOf(OWNER);
+
+        vm.prank(OWNER);
+        marketToken.approve(address(liquidityVault), mintAmount);
+
+        vm.prank(USER);
+        liquidityVault.removeLiquidityForAccount(OWNER, mintAmount);
+
+        assertGt(usdc.balanceOf(OWNER), usdcBalBefore);
+        assertEq(marketToken.balanceOf(OWNER), 0);
+    }
+
+    function testLiqVaultAddOrRemoveRevertsFromFakeHandler() public mintUsdc {
+        vm.prank(OWNER);
+        vm.expectRevert();
+        liquidityVault.addLiquidityForAccount(USER, 100e6);
+
+        vm.startPrank(OWNER);
+        usdc.approve(address(liquidityVault), LARGE_AMOUNT);
+        liquidityVault.addLiquidity(100e6);
+        vm.stopPrank();
+
+        vm.prank(USER);
+        vm.expectRevert();
+        liquidityVault.removeLiquidityForAccount(OWNER, 100e6);
     }
 }
