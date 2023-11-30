@@ -40,7 +40,7 @@ contract PriceOracle {
         // return price of token at block
     }
 
-    // return price of USDC
+    // return price of USDC / WUSD
     function getCollateralPrice() external pure returns (uint256) {
         return 1e30;
     }

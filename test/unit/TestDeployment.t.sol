@@ -38,6 +38,8 @@ contract TestDeployment is Test {
     TradeVault tradeVault;
     WUSDC wusdc;
 
+    address public OWNER;
+
     function setUp() public {
         DeployV2 deploy = new DeployV2();
         DeployV2.Contracts memory contracts = deploy.run();
@@ -57,6 +59,7 @@ contract TestDeployment is Test {
         tradeStorage = contracts.tradeStorage;
         tradeVault = contracts.tradeVault;
         wusdc = contracts.wusdc;
+        OWNER = contracts.owner;
     }
 
     function testDeployment() public view {
@@ -76,5 +79,6 @@ contract TestDeployment is Test {
         console.log(address(tradeStorage));
         console.log(address(tradeVault));
         console.log(address(wusdc));
+        console.log(OWNER);
     }
 }

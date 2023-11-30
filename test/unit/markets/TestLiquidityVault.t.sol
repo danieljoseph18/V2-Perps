@@ -19,6 +19,7 @@ import {RequestRouter} from "../../../src/positions/RequestRouter.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {TradeVault} from "../../../src/positions/TradeVault.sol";
 import {WUSDC} from "../../../src/token/WUSDC.sol";
+import {Roles} from "../../../src/access/Roles.sol";
 
 contract TestDeployment is Test {
     RoleStorage roleStorage;
@@ -37,6 +38,12 @@ contract TestDeployment is Test {
     TradeStorage tradeStorage;
     TradeVault tradeVault;
     WUSDC wusdc;
+
+    address public OWNER;
+    address public USER = makeAddr("user");
+
+    uint256 public constant LARGE_AMOUNT = 1e30;
+    uint256 public constant CONVERSION_RATE = 1e12;
 
     function setUp() public {
         DeployV2 deploy = new DeployV2();
@@ -57,24 +64,69 @@ contract TestDeployment is Test {
         tradeStorage = contracts.tradeStorage;
         tradeVault = contracts.tradeVault;
         wusdc = contracts.wusdc;
+        OWNER = contracts.owner;
     }
 
-    function testDeployment() public view {
-        console.log(address(roleStorage));
-        console.log(address(globalMarketConfig));
-        console.log(address(liquidityVault));
-        console.log(address(marketFactory));
-        console.log(address(marketStorage));
-        console.log(address(marketToken));
-        console.log(address(stateUpdater));
-        console.log(address(priceOracle));
-        console.log(address(usdc));
-        console.log(address(dataOracle));
-        console.log(address(executor));
-        console.log(address(liquidator));
-        console.log(address(requestRouter));
-        console.log(address(tradeStorage));
-        console.log(address(tradeVault));
-        console.log(address(wusdc));
+    modifier mintUsdc(address _to) {
+        usdc.mint(_to, LARGE_AMOUNT);
+        _;
+    }
+
+    /**
+     * ================ Adding Liquidity ================
+     */
+
+    /**
+     * Invariants:
+     * - Liquidity should be wrapped to WUSDC from USDC
+     * - Can't be reentrancy attacked
+     * - Can't add more liquidity than I own
+     * - Can't add liquidity for another account without permission
+     * - Fee is charged correctly
+     * - Liquidity is minted correctly
+     * - Liquidity is added to the vault
+     * - Fees are accumulated in the right place
+     */
+
+    //     Logs:
+    //   Error: a == b not satisfied [uint]
+    //         Left: 0
+    //        Right: 999999999999999999999900000000
+    //   Error: a > b not satisfied [uint]
+    //     Value a: 0
+    //     Value b: 0
+
+    function testLiqVaultAddLiquidityWorks() public mintUsdc(OWNER) {
+        vm.startPrank(OWNER);
+        usdc.approve(address(liquidityVault), LARGE_AMOUNT);
+        liquidityVault.addLiquidity(100e6);
+        assertEq(liquidityVault.poolAmounts(), 100e6 * CONVERSION_RATE);
+        assertEq(usdc.balanceOf(OWNER), LARGE_AMOUNT - 100e6);
+        assertGt(marketToken.balanceOf(OWNER), 0);
+        assertGt(liquidityVault.accumulatedFees(), 0);
+        vm.stopPrank();
+    }
+
+    function testLiqVaultLpTokenPriceAfterAddingLiquidity() public mintUsdc(OWNER) {
+        vm.startPrank(OWNER);
+        usdc.approve(address(liquidityVault), LARGE_AMOUNT);
+        liquidityVault.addLiquidity(100e6);
+        vm.stopPrank();
+        console.log(liquidityVault.getLiquidityTokenPrice());
+    }
+
+    function testLiqVaultRemoveLiquidityWorks() public mintUsdc(OWNER) {
+        vm.startPrank(OWNER);
+        usdc.approve(address(liquidityVault), LARGE_AMOUNT);
+        liquidityVault.addLiquidity(100e6);
+        uint256 mintAmount = marketToken.balanceOf(OWNER);
+        uint256 usdcBalBefore = usdc.balanceOf(OWNER);
+
+        marketToken.approve(address(liquidityVault), mintAmount);
+        liquidityVault.removeLiquidity(mintAmount);
+
+        assertGt(usdc.balanceOf(OWNER), usdcBalBefore);
+        assertEq(marketToken.balanceOf(OWNER), 0);
+        vm.stopPrank();
     }
 }

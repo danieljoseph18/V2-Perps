@@ -41,6 +41,7 @@ contract DeployV2 is Script {
         TradeStorage tradeStorage;
         TradeVault tradeVault;
         WUSDC wusdc;
+        address owner;
     }
 
     address public priceOracle;
@@ -70,7 +71,8 @@ contract DeployV2 is Script {
             RequestRouter(address(0)),
             TradeStorage(address(0)),
             TradeVault(address(0)),
-            WUSDC(address(0))
+            WUSDC(address(0)),
+            msg.sender
         );
 
         /**
@@ -86,16 +88,13 @@ contract DeployV2 is Script {
         contracts.liquidityVault =
             new LiquidityVault(address(contracts.wusdc), address(contracts.marketToken), address(contracts.roleStorage));
 
-        // Needs Liquidity Vault
         contracts.marketStorage = new MarketStorage(address(contracts.liquidityVault), address(contracts.roleStorage));
 
-        // Needs Market Storage
         contracts.dataOracle = new DataOracle(address(contracts.marketStorage), address(contracts.roleStorage));
 
         contracts.tradeVault =
             new TradeVault(address(contracts.wusdc), address(contracts.liquidityVault), address(contracts.roleStorage));
 
-        // Needs Market Storage, Liquidity Vault, Trade Vault, contracts.WUSDC, Price Oracle
         contracts.tradeStorage = new TradeStorage(
             address(contracts.marketStorage),
             address(contracts.liquidityVault),
@@ -105,7 +104,6 @@ contract DeployV2 is Script {
             address(contracts.roleStorage)
         );
 
-        // Needs contracts.MarketStorage, contracts.LiquidityVault, TradeStorage, contracts.WUSDC, PriceOracle
         contracts.marketFactory = new MarketFactory(
             address(contracts.marketStorage),
             address(contracts.liquidityVault),
@@ -167,6 +165,7 @@ contract DeployV2 is Script {
         contracts.roleStorage.grantRole(Roles.LIQUIDATOR, address(contracts.liquidator));
         contracts.roleStorage.grantRole(Roles.TRADE_STORAGE, address(contracts.tradeStorage));
         contracts.roleStorage.grantRole(Roles.ROUTER, address(contracts.requestRouter));
+        contracts.roleStorage.grantRole(Roles.DEFAULT_ADMIN_ROLE, contracts.owner);
 
         vm.stopBroadcast();
 

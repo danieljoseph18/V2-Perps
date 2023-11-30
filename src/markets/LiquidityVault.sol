@@ -19,6 +19,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     uint256 public constant STATE_UPDATE_INTERVAL = 5 seconds;
     uint256 public constant SCALING_FACTOR = 1e18;
+    uint256 public constant PRICE_PRECISION = 1e30;
 
     IWUSDC public immutable WUSDC;
     IMarketToken public immutable liquidityToken;
@@ -118,9 +119,13 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // $1 = 1e30
     function getLiquidityTokenPrice() public view returns (uint256) {
         // market token price = (worth of market pool in USD) / total supply
-        uint256 aum = getAum() * 100;
+        uint256 aum = getAum();
         uint256 supply = IERC20(address(liquidityToken)).totalSupply();
-        return aum / supply;
+        if (supply == 0 || aum == 0) {
+            return 0;
+        } else {
+            return aum / supply;
+        }
     }
 
     // Returns AUM in USD value
@@ -151,8 +156,20 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         uint256 afterFeeAmount = _deductLiquidityFees(wusdcAmount);
         // add full amount to the pool
         poolAmounts += wusdcAmount;
-        // mint market tokens (afterFeeAmount)
-        uint256 mintAmount = (afterFeeAmount * getPrice(address(WUSDC))) / getLiquidityTokenPrice();
+        // mint market tokens
+        uint256 price = getPrice(address(WUSDC));
+
+        uint256 valueUsd = afterFeeAmount * price;
+        uint256 lpTokenPrice = getLiquidityTokenPrice();
+
+        uint256 mintAmount;
+
+        if (lpTokenPrice == 0) {
+            mintAmount = valueUsd / PRICE_PRECISION;
+        } else {
+            mintAmount = valueUsd / lpTokenPrice;
+        }
+
         liquidityToken.mint(_account, mintAmount);
         // Fire event
         emit LiquidityAdded(_account, wusdcAmount, mintAmount);
@@ -185,6 +202,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     function _wrapUsdc(uint256 _amount) internal returns (uint256) {
+        address usdc = WUSDC.USDC();
+        IERC20(usdc).approve(address(WUSDC), _amount);
         return WUSDC.deposit(_amount);
     }
 
@@ -197,7 +216,11 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     function _getPrice(address _token) internal view returns (uint256) {
-        // call the oracle contract and return the price of the token passed in as an argument
+        if (_token == address(WUSDC) || _token == address(WUSDC.USDC())) {
+            return 1e30;
+        } else {
+            return 1000e30;
+        }
     }
 
     // Returns % amount after fee deduction
