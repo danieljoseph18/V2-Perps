@@ -18,6 +18,7 @@ import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
 /// @dev Needs TradeStorage Role
+/// @dev Need to add liquidity reservation for positions
 contract TradeStorage is RoleValidation {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWUSDC;

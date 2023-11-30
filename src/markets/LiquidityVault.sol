@@ -27,6 +27,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     /// @dev Amount of liquidity in the pool
     uint256 public poolAmounts;
+    uint256 public reservedAmounts;
     mapping(address _handler => mapping(address _lp => bool _isHandler)) public isHandler;
 
     uint256 public accumulatedFees;
@@ -116,6 +117,18 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         emit ProfitTransferred(_user, _amount);
     }
 
+    /// @dev Used to reserve / unreserve funds for open positions
+    function updateReservation(int256 _amount) external onlyTradeStorage {
+        if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
+        if (_amount > 0) {
+            reservedAmounts += uint256(_amount);
+        } else {
+            uint256 amount = uint256(-_amount);
+            if (amount > reservedAmounts) revert LiquidityVault_InsufficientFunds();
+            reservedAmounts -= amount;
+        }
+    }
+
     // $1 = 1e30
     function getLiquidityTokenPrice() public view returns (uint256) {
         // market token price = (worth of market pool in USD) / total supply
@@ -124,17 +137,27 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         if (supply == 0 || aum == 0) {
             return 0;
         } else {
-            return (aum * 1e18) / supply;
+            return (aum * SCALING_FACTOR) / supply;
         }
     }
 
     // Returns AUM in USD value
+    /// Need to reserve a portion of assets for open positions
+    /// Can do for a reservedAmounts mapping for each position
+    /// Users shouldn't be able to withdraw assets being used for open trades
+    /// Markets need to remain liquid to pay out potential profits
     function getAum() public view returns (uint256 aum) {
-        uint256 liquidity = (poolAmounts * getPrice(address(WUSDC.USDC()))) / 1e18;
+        // pool amount * price / decimals
+        uint256 liquidity = (poolAmounts * getPrice(address(WUSDC.USDC()))) / SCALING_FACTOR;
         aum = liquidity;
+        // subtract pnl and reserved amounts => should only reflect available liquidity
         int256 pendingPnL = dataOracle.getCumulativeNetPnl();
         pendingPnL > 0 ? aum -= uint256(pendingPnL) : aum += uint256(pendingPnL);
         return aum;
+    }
+
+    function getAumInWusdc() public view returns (uint256) {
+        return (getAum() * SCALING_FACTOR) / PRICE_PRECISION;
     }
 
     // Price has 30 DPs
@@ -159,15 +182,16 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         // mint market tokens
         uint256 price = getPrice(address(WUSDC));
 
-        uint256 valueUsd = afterFeeAmount * price;
-        uint256 lpTokenPrice = getLiquidityTokenPrice();
+        uint256 valueUsd = (afterFeeAmount * price) / PRICE_PRECISION;
+        uint256 aum = getAumInWusdc();
+        uint256 supply = liquidityToken.totalSupply();
 
         uint256 mintAmount;
 
-        if (lpTokenPrice == 0) {
-            mintAmount = valueUsd / PRICE_PRECISION;
+        if (aum == 0 || supply == 0) {
+            mintAmount = valueUsd;
         } else {
-            mintAmount = valueUsd / lpTokenPrice;
+            mintAmount = (valueUsd * supply) / aum;
         }
 
         liquidityToken.mint(_account, mintAmount);
@@ -184,9 +208,12 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         liquidityToken.safeTransferFrom(_account, address(this), _liquidityTokenAmount);
 
         // remove liquidity from the market
-        uint256 liquidityTokenValue = _liquidityTokenAmount * getLiquidityTokenPrice();
-        uint256 price = getPrice(address(WUSDC));
-        uint256 tokenAmount = liquidityTokenValue / price;
+        uint256 aum = getAumInWusdc();
+        uint256 supply = liquidityToken.totalSupply();
+
+        uint256 tokenAmount = _liquidityTokenAmount * aum / supply;
+
+        if (tokenAmount > poolAmounts) revert LiquidityVault_InsufficientFunds();
 
         poolAmounts -= tokenAmount;
 

@@ -73,10 +73,6 @@ contract TestTrading is Test {
     modifier mintUsdcAndAddLiquidity() {
         usdc.mint(OWNER, LARGE_AMOUNT);
         usdc.mint(USER, LARGE_AMOUNT);
-        _;
-    }
-
-    function testLiquidityWasAddedAndSetUpIsComplete() public mintUsdcAndAddLiquidity {
         vm.startPrank(OWNER);
         usdc.approve(address(liquidityVault), LARGE_AMOUNT);
         liquidityVault.addLiquidity(DEPOSIT_AMOUNT);
@@ -88,8 +84,6 @@ contract TestTrading is Test {
         usdc.approve(address(liquidityVault), LARGE_AMOUNT);
         liquidityVault.addLiquidity(DEPOSIT_AMOUNT);
         vm.stopPrank();
-        console.log("After:", liquidityVault.getAum());
-        console.log("After:", liquidityVault.getLiquidityTokenPrice());
-        console.log("After:", marketToken.totalSupply());
+        _;
     }
 }
