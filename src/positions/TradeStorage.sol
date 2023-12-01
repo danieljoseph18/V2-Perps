@@ -16,6 +16,7 @@ import {TradeHelper} from "./TradeHelper.sol";
 import {PricingCalculator} from "./PricingCalculator.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
+import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 
 /// @dev Needs TradeStorage Role
 /// @dev Need to add liquidity reservation for positions
@@ -31,10 +32,10 @@ contract TradeStorage is RoleValidation {
     IMarketStorage public marketStorage;
     ILiquidityVault public liquidityVault;
     ITradeVault public tradeVault;
+    IDataOracle public dataOracle;
 
     mapping(bool _isLimit => mapping(bytes32 _orderKey => MarketStructs.PositionRequest)) public orders;
     mapping(bool _isLimit => bytes32[] _orderKeys) public orderKeys;
-    mapping(address => uint256) public tokenDecimals;
     // Track open positions
     mapping(bytes32 _positionKey => MarketStructs.Position) public openPositions;
     mapping(bytes32 _marketKey => mapping(bool _isLong => bytes32[] _positionKeys)) public openPositionKeys;
@@ -80,6 +81,7 @@ contract TradeStorage is RoleValidation {
         address _tradeVault,
         address _wusdc,
         address _priceOracle,
+        address _dataOracle,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         marketStorage = IMarketStorage(_marketStorage);
@@ -87,6 +89,7 @@ contract TradeStorage is RoleValidation {
         tradeVault = ITradeVault(_tradeVault);
         WUSDC = IWUSDC(_wusdc);
         priceOracle = IPriceOracle(_priceOracle);
+        dataOracle = IDataOracle(_dataOracle);
     }
 
     function initialise(
@@ -532,11 +535,13 @@ contract TradeStorage is RoleValidation {
     }
 
     function _reserveLiquidity(uint256 _sizeDelta, uint256 _price, address _indexToken, bool _isIncrease) internal {
+        uint256 decimalDiv = 10 ** dataOracle.getDecimals(_indexToken);
         // convert sizeDelta to USD
-        uint256 sizeDeltaUsd = (_sizeDelta * _price) / tokenDecimals[_indexToken];
+        uint256 sizeDeltaUsd = (_sizeDelta * _price) / decimalDiv;
         // convert USD to WUSDC amount
         uint256 wusdcPrice = priceOracle.getCollateralPrice();
-        uint256 wusdcAmount = (sizeDeltaUsd * tokenDecimals[address(WUSDC)]) / wusdcPrice;
+        // WUSDC has 18 decimals
+        uint256 wusdcAmount = (sizeDeltaUsd * 1e18) / wusdcPrice;
         // if increase, reserve WUSDC amount, else unreserve WUSDC amount
         if (_isIncrease) {
             liquidityVault.updateReservation(int256(wusdcAmount));

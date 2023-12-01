@@ -37,7 +37,6 @@ interface IMarket {
     function priceImpactFactor() external view returns (uint256);
     function priceImpactExponent() external view returns (uint256);
     function MAX_PRICE_IMPACT() external view returns (int256);
-    function getIndexOpenInterestUSD(bool _isLong) external view returns (uint256);
     function lastFundingUpdateTime() external view returns (uint256);
     function fundingRateVelocity() external view returns (int256);
     function fundingRate() external view returns (int256);
@@ -48,7 +47,6 @@ interface IMarket {
     function borrowingFactor() external view returns (uint256);
     function borrowingExponent() external view returns (uint256);
     function lastBorrowUpdateTime() external view returns (uint256);
-    function getPoolBalanceUSD() external view returns (uint256);
     function longBorrowingRate() external view returns (uint256);
     function shortBorrowingRate() external view returns (uint256);
     function longTotalWAEP() external view returns (uint256);

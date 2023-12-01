@@ -10,12 +10,15 @@ contract DataOracle is RoleValidation {
     error DataOracle_InvalidMarket();
 
     IMarketStorage public marketStorage;
+    address public priceOracle;
 
     MarketStructs.Market[] public markets;
     mapping(bytes32 => bool) public isMarket;
+    mapping(address => uint256) public tokenDecimals;
 
-    constructor(address _marketStorage, address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(address _marketStorage, address _priceOracle, address _roleStorage) RoleValidation(_roleStorage) {
         marketStorage = IMarketStorage(_marketStorage);
+        priceOracle = _priceOracle;
     }
 
     function setMarkets(MarketStructs.Market[] memory _markets) external onlyAdmin {
@@ -25,6 +28,10 @@ contract DataOracle is RoleValidation {
         }
     }
 
+    function setDecimals(address _token, uint256 _decimals) external onlyMarketMaker {
+        tokenDecimals[_token] = _decimals;
+    }
+
     function clearMarkets() external onlyAdmin {
         for (uint256 i = 0; i < markets.length; i++) {
             isMarket[markets[i].marketKey] = false;
@@ -32,12 +39,16 @@ contract DataOracle is RoleValidation {
         delete markets;
     }
 
-    // getNetPnL(address _market, address _marketStorage, bytes32 _marketKey, bool _isLong)
+    // function getNetPnL(address _market, address _marketStorage, address _dataOracle, address _priceOracle, bool _isLong)
 
     function getNetPnl(MarketStructs.Market memory _market) public view returns (int256) {
         if (!isMarket[_market.marketKey]) revert DataOracle_InvalidMarket();
-        return PricingCalculator.getNetPnL(_market.market, address(marketStorage), _market.marketKey, true)
-            + PricingCalculator.getNetPnL(_market.market, address(marketStorage), _market.marketKey, false);
+        return PricingCalculator.getNetPnL(
+            _market.market, address(marketStorage), address(this), address(priceOracle), true
+        )
+            + PricingCalculator.getNetPnL(
+                _market.market, address(marketStorage), address(this), address(priceOracle), false
+            );
     }
 
     /// @dev To convert to usd, needs to be 1e30 DPs
@@ -46,5 +57,9 @@ contract DataOracle is RoleValidation {
             totalPnl += getNetPnl(markets[i]);
         }
         return totalPnl;
+    }
+
+    function getDecimals(address _token) external view returns (uint256) {
+        return tokenDecimals[_token];
     }
 }

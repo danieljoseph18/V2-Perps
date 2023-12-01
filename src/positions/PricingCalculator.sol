@@ -8,6 +8,7 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
+import {MarketHelper} from "../markets/MarketHelper.sol";
 
 /*
     weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -41,13 +42,16 @@ library PricingCalculator {
     }
 
     /// @dev Positive for profit, negative for loss
-    function getNetPnL(address _market, address _marketStorage, bytes32 _marketKey, bool _isLong)
+    function getNetPnL(address _market, address _marketStorage, address _dataOracle, address _priceOracle, bool _isLong)
         external
         view
         returns (int256)
     {
-        uint256 indexValue = IMarket(_market).getIndexOpenInterestUSD(_isLong);
-        uint256 entryValue = getTotalEntryValue(_market, _marketStorage, _marketKey, _isLong);
+        address indexToken = IMarket(_market).indexToken();
+        // Get OI in USD
+        uint256 indexValue =
+            MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, indexToken, _isLong);
+        uint256 entryValue = MarketHelper.getTotalEntryValue(_market, _marketStorage, _dataOracle, _isLong);
 
         return _isLong ? int256(indexValue) - int256(entryValue) : int256(entryValue) - int256(indexValue);
     }
@@ -73,113 +77,5 @@ library PricingCalculator {
             _isLong ? pnl -= valueDelta : pnl += valueDelta;
         }
         return pnl;
-    }
-
-    function getPoolBalanceUSD(address _liquidityVault, bytes32 _marketKey, address _priceOracle, address _usdc)
-        external
-        view
-        returns (uint256)
-    {
-        return getPoolBalance(_liquidityVault, _marketKey) * IPriceOracle(_priceOracle).getPrice(_usdc);
-    }
-
-    function calculateTotalCollateralOpenInterestUSD(
-        address _marketStorage,
-        address _market,
-        address _priceOracle,
-        bytes32 _marketKey
-    ) external view returns (uint256) {
-        return calculateCollateralOpenInterestUSD(_marketStorage, _priceOracle, _market, _marketKey, true)
-            + calculateCollateralOpenInterestUSD(_marketStorage, _priceOracle, _market, _marketKey, false);
-    }
-
-    function calculateTotalIndexOpenInterestUSD(
-        address _marketStorage,
-        address _market,
-        bytes32 _marketKey,
-        address _indexToken
-    ) external view returns (uint256) {
-        return calculateIndexOpenInterestUSD(_marketStorage, _market, _marketKey, _indexToken, true)
-            + calculateIndexOpenInterestUSD(_marketStorage, _market, _marketKey, _indexToken, false);
-    }
-
-    function calculateTotalCollateralOpenInterest(address _marketStorage, bytes32 _marketKey)
-        external
-        view
-        returns (uint256)
-    {
-        return calculateCollateralOpenInterest(_marketStorage, _marketKey, true)
-            + calculateCollateralOpenInterest(_marketStorage, _marketKey, false);
-    }
-
-    function getTotalEntryValue(address _market, address _marketStorage, bytes32 _marketKey, bool _isLong)
-        public
-        view
-        returns (uint256)
-    {
-        uint256 totalWAEP = _isLong ? IMarket(_market).longTotalWAEP() : IMarket(_market).shortTotalWAEP();
-        return totalWAEP * calculateIndexOpenInterest(_marketStorage, _marketKey, _isLong);
-    }
-
-    // returns total trade open interest in stablecoins
-    function calculateCollateralOpenInterest(address _marketStorage, bytes32 _marketKey, bool _isLong)
-        public
-        view
-        returns (uint256)
-    {
-        // If long, return the long open interest
-        // If short, return the short open interest
-        return _isLong
-            ? IMarketStorage(_marketStorage).collatTokenLongOpenInterest(_marketKey)
-            : IMarketStorage(_marketStorage).collatTokenShortOpenInterest(_marketKey);
-    }
-
-    // returns the open interest in tokens of the index token
-    // basically how many collateral tokens have been exchanged for index tokens
-    function calculateIndexOpenInterest(address _marketStorage, bytes32 _marketKey, bool _isLong)
-        public
-        view
-        returns (uint256)
-    {
-        return _isLong
-            ? IMarketStorage(_marketStorage).indexTokenLongOpenInterest(_marketKey)
-            : IMarketStorage(_marketStorage).indexTokenShortOpenInterest(_marketKey);
-    }
-
-    function calculateCollateralOpenInterestUSD(
-        address _marketStorage,
-        address _priceOracle,
-        address _usdc,
-        bytes32 _marketKey,
-        bool _isLong
-    ) public view returns (uint256) {
-        uint256 collateralOpenInterest = calculateCollateralOpenInterest(_marketStorage, _marketKey, _isLong);
-        return collateralOpenInterest * IPriceOracle(_priceOracle).getPrice(_usdc);
-    }
-
-    /// Note Make sure variables scaled by 1e18
-    function calculateIndexOpenInterestUSD(
-        address _marketStorage,
-        address _market,
-        bytes32 _marketKey,
-        address _indexToken,
-        bool _isLong
-    ) public view returns (uint256) {
-        uint256 indexOpenInterest = calculateIndexOpenInterest(_marketStorage, _marketKey, _isLong);
-        uint256 indexPrice = IMarket(_market).getPrice(_indexToken);
-        return indexOpenInterest * indexPrice;
-    }
-
-    function calculateTotalIndexOpenInterest(address _marketStorage, bytes32 _marketKey)
-        public
-        view
-        returns (uint256)
-    {
-        return calculateIndexOpenInterest(_marketStorage, _marketKey, true)
-            + calculateIndexOpenInterest(_marketStorage, _marketKey, false);
-    }
-
-    function getPoolBalance(address _marketStorage, bytes32 _marketKey) public view returns (uint256) {
-        return IMarketStorage(_marketStorage).marketAllocations(_marketKey);
     }
 }

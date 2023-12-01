@@ -12,7 +12,9 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {FundingCalculator} from "../positions/FundingCalculator.sol";
 import {BorrowingCalculator} from "../positions/BorrowingCalculator.sol";
 import {PricingCalculator} from "../positions/PricingCalculator.sol";
+import {MarketHelper} from "./MarketHelper.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
+import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
@@ -29,6 +31,7 @@ contract Market is RoleValidation {
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
     IPriceOracle public priceOracle;
+    IDataOracle public dataOracle;
     IWUSDC public immutable WUSDC;
 
     bool isInitialised;
@@ -80,6 +83,7 @@ contract Market is RoleValidation {
         address _liquidityVault,
         address _tradeStorage,
         address _priceOracle,
+        address _dataOracle,
         address _wusdc,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
@@ -88,6 +92,7 @@ contract Market is RoleValidation {
         liquidityVault = ILiquidityVault(_liquidityVault);
         tradeStorage = ITradeStorage(_tradeStorage);
         priceOracle = IPriceOracle(_priceOracle);
+        dataOracle = IDataOracle(_dataOracle);
         WUSDC = IWUSDC(_wusdc);
     }
 
@@ -150,14 +155,24 @@ contract Market is RoleValidation {
         emit PriceImpactConfigUpdated(_priceImpactFactor, _priceImpactExponent);
     }
 
+    /**
+     * function getIndexOpenInterestUSD(
+     *     address _marketStorage,
+     *     address _dataOracle,
+     *     address _priceOracle,
+     *     address _indexToken,
+     *     bool _isLong
+     * )
+     */
+
     /// @dev 1 USD = 1e18
     /// Note should be called for every position entry / exit
     function updateFundingRate(int256 _positionSizeUSD, bool _isLong) external onlyExecutor {
-        uint256 longOI = PricingCalculator.calculateIndexOpenInterestUSD(
-            address(marketStorage), address(this), getMarketKey(), indexToken, true
+        uint256 longOI = MarketHelper.getIndexOpenInterestUSD(
+            address(marketStorage), address(dataOracle), address(priceOracle), indexToken, true
         );
-        uint256 shortOI = PricingCalculator.calculateIndexOpenInterestUSD(
-            address(marketStorage), address(this), getMarketKey(), indexToken, false
+        uint256 shortOI = MarketHelper.getIndexOpenInterestUSD(
+            address(marketStorage), address(dataOracle), address(priceOracle), indexToken, false
         );
         // If Increase ... Else Decrease
         if (_positionSizeUSD >= 0) {
@@ -203,11 +218,11 @@ contract Market is RoleValidation {
      */
     /// @dev Call every time OI is updated (trade open / close)
     function updateBorrowingRate(bool _isLong) external onlyExecutor {
-        uint256 openInterest = PricingCalculator.calculateIndexOpenInterestUSD(
-            address(marketStorage), address(this), getMarketKey(), indexToken, _isLong
+        uint256 openInterest = MarketHelper.getIndexOpenInterestUSD(
+            address(marketStorage), address(dataOracle), address(priceOracle), indexToken, true
         ); // OI USD
-        uint256 poolBalance = PricingCalculator.getPoolBalanceUSD(
-            address(liquidityVault), getMarketKey(), address(priceOracle), address(WUSDC.USDC())
+        uint256 poolBalance = MarketHelper.getPoolBalanceUSD(
+            address(marketStorage), getMarketKey(), address(priceOracle), address(WUSDC.USDC())
         ); // Pool balance in USD
 
         uint256 rate = (borrowingFactor * (openInterest ** borrowingExponent)) / poolBalance;
@@ -249,16 +264,7 @@ contract Market is RoleValidation {
             (longCumulativeFundingFees, shortCumulativeFundingFees, longCumulativeBorrowFee, shortCumulativeBorrowFee);
     }
 
-    function getPrice(address _token) public view returns (uint256) {
-        // perform safety checks
-        return _getPrice(_token);
-    }
-
     function getMarketKey() public view returns (bytes32) {
         return keccak256(abi.encodePacked(indexToken));
-    }
-
-    function _getPrice(address _token) internal view returns (uint256) {
-        // call the oracle contract and return the price of the token
     }
 }

@@ -13,11 +13,14 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
+import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 
 /// @dev Needs MarketMaker role
 contract MarketFactory is RoleValidation {
     address public immutable WUSDC;
+
     address public marketStorage;
+    address public dataOracle;
     address public liquidityVault;
     address public tradeStorage;
     address public priceOracle;
@@ -30,29 +33,39 @@ contract MarketFactory is RoleValidation {
         address _tradeStorage,
         address _wusdc,
         address _priceOracle,
+        address _dataOracle,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         marketStorage = _marketStorage;
+        dataOracle = _dataOracle;
         liquidityVault = _liquidityVault;
         tradeStorage = _tradeStorage;
         WUSDC = _wusdc;
         priceOracle = _priceOracle;
     }
 
-    function createMarket(address _indexToken, address _priceFeed) external onlyAdmin {
+    function createMarket(address _indexToken, address _priceFeed, uint256 _tokenDecimals) external onlyAdmin {
         // pool cant already exist
         bytes32 _marketKey = keccak256(abi.encodePacked(_indexToken));
         // Set Up Price Oracle
         IPriceOracle(priceOracle).updatePriceSource(_indexToken, _priceFeed);
         // Create new Market contract
         Market _market = new Market(
-            _indexToken, marketStorage, liquidityVault, tradeStorage, priceOracle, WUSDC, address(roleStorage)
+            _indexToken,
+            address(marketStorage),
+            liquidityVault,
+            tradeStorage,
+            priceOracle,
+            address(dataOracle),
+            WUSDC,
+            address(roleStorage)
         );
         // Initialise With Default Values
         Market(_market).initialise(0.0003e18, 1_000_000e18, 500e16, -500e16, 0.000000035e18, 1, false, 0.000001e18, 1);
         // Store everything in MarketStorage
         MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, address(_market), _marketKey);
         IMarketStorage(marketStorage).storeMarket(_marketInfo);
+        IDataOracle(dataOracle).setDecimals(_indexToken, _tokenDecimals);
 
         emit MarketCreated(_indexToken, address(_market));
     }

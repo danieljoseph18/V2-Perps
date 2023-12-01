@@ -80,19 +80,6 @@ contract MarketStorage is RoleValidation {
         emit OpenInterestUpdated(_marketKey, _collateralTokenAmount, _indexTokenAmount, _isLong, _shouldAdd);
     }
 
-    function getMarket(bytes32 _key) external view returns (MarketStructs.Market memory) {
-        return markets[_key];
-    }
-
-    function getMarketFromIndexToken(address _indexToken) external view returns (MarketStructs.Market memory) {
-        bytes32 _key = keccak256(abi.encodePacked(_indexToken));
-        return markets[_key];
-    }
-
-    function getTotalIndexOpenInterest(address _indexToken) external view returns (uint256 _totalOI) {
-        bytes32 _key = keccak256(abi.encodePacked(_indexToken));
-        return indexTokenLongOpenInterest[_key] + indexTokenShortOpenInterest[_key];
-    }
     /// @dev Maximum amount of liquidity allocated to markets
 
     function updateState(bytes32 _marketKey, uint256 _newAllocation, uint256 _maxOI) external onlyStateUpdater {

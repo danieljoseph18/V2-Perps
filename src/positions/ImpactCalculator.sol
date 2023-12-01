@@ -4,6 +4,7 @@ pragma solidity 0.8.20;
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {MarketHelper} from "../markets/MarketHelper.sol";
 
 // library responsible for handling all price impact calculations
 library ImpactCalculator {
@@ -23,15 +24,22 @@ library ImpactCalculator {
     // Returns Price impact as a decimal
     function calculatePriceImpact(
         address _market,
+        address _marketStorage,
+        address _dataOracle,
+        address _priceOracle,
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _signedBlockPrice
     ) external view returns (int256) {
         if (_signedBlockPrice == 0 || _market == address(0) || _positionRequest.user == address(0)) {
             revert ImpactCalculator_ZeroParameters();
         }
+
         IMarket market = IMarket(_market);
-        uint256 longOI = market.getIndexOpenInterestUSD(true);
-        uint256 shortOI = market.getIndexOpenInterestUSD(false);
+        address indexToken = market.indexToken();
+        uint256 longOI =
+            MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, indexToken, true);
+        uint256 shortOI =
+            MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, indexToken, false);
 
         uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 

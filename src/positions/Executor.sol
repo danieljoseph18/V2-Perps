@@ -6,6 +6,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
+import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {TradeHelper} from "./TradeHelper.sol";
@@ -19,6 +20,7 @@ contract Executor is RoleValidation {
     ITradeStorage public tradeStorage;
     ILiquidityVault public liquidityVault;
     IPriceOracle public priceOracle;
+    IDataOracle public dataOracle;
 
     error Executor_InvalidRequestKey();
     error Executor_CantDecreaseNonExistingPosition();
@@ -28,12 +30,14 @@ contract Executor is RoleValidation {
         address _tradeStorage,
         address _priceOracle,
         address _liquidityVault,
+        address _dataOracle,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         marketStorage = IMarketStorage(_marketStorage);
         tradeStorage = ITradeStorage(_tradeStorage);
         priceOracle = IPriceOracle(_priceOracle);
         liquidityVault = ILiquidityVault(_liquidityVault);
+        dataOracle = IDataOracle(_dataOracle);
     }
 
     function executeTradeOrders() external onlyKeeper {
@@ -68,7 +72,14 @@ contract Executor is RoleValidation {
             TradeHelper.checkLimitPrice(_signedBlockPrice, _positionRequest);
         }
 
-        int256 priceImpact = ImpactCalculator.calculatePriceImpact(market, _positionRequest, _signedBlockPrice);
+        int256 priceImpact = ImpactCalculator.calculatePriceImpact(
+            market,
+            address(marketStorage),
+            address(dataOracle),
+            address(priceOracle),
+            _positionRequest,
+            _signedBlockPrice
+        );
 
         uint256 price = ImpactCalculator.applyPriceImpact(_signedBlockPrice, priceImpact);
 
