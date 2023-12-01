@@ -27,4 +27,6 @@ library Roles {
     bytes32 public constant STATE_KEEPER = keccak256("STATE_KEEPER");
 
     bytes32 public constant MARKET_STORAGE = keccak256("MARKET_STORAGE");
+
+    bytes32 public constant FEE_ACCUMULATOR = keccak256("FEE_ACCUMULATOR");
 }

@@ -10,7 +10,7 @@ contract MockPriceOracle is IPriceOracle {
     mapping(address => uint256) public pricePrecisions;
     // token => block => price
     mapping(address => mapping(uint256 => uint256)) signedPrices;
-    uint256 public cachedPrice; // cached last price for quick lookups
+    mapping(address => uint256) public cachedPrices;
 
     function getPrice(address _token) external view returns (uint256) {
         return 1000e30;

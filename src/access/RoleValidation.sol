@@ -74,6 +74,11 @@ contract RoleValidation {
         _;
     }
 
+    modifier onlyFeeAccumulator() {
+        if (!roleStorage.hasRole(Roles.FEE_ACCUMULATOR, msg.sender)) revert RoleValidation_AccessDenied();
+        _;
+    }
+
     constructor(address _roleStorage) {
         roleStorage = RoleStorage(_roleStorage);
     }

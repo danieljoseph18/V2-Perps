@@ -50,18 +50,17 @@ contract RequestRouter {
         _;
     }
 
-    function createTradeRequest(
-        MarketStructs.PositionRequest memory _positionRequest,
-        bool _isLimit,
-        uint256 _executionFee,
-        bool _isIncrease
-    ) external payable validExecutionFee(_executionFee) {
+    function createTradeRequest(MarketStructs.PositionRequest memory _positionRequest, uint256 _executionFee)
+        external
+        payable
+        validExecutionFee(_executionFee)
+    {
         _sendExecutionFeeToStorage(_executionFee);
 
         // get the key for the market
         bytes32 marketKey = keccak256(abi.encodePacked(_positionRequest.indexToken));
 
-        if (_isIncrease) {
+        if (_positionRequest.isIncrease) {
             _validateAllocation(marketKey, _positionRequest.sizeDelta);
 
             uint256 wusdcAmount = _transferInCollateral(_positionRequest.collateralDelta);
@@ -70,8 +69,9 @@ contract RequestRouter {
         }
 
         (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
-        uint256 index = _isLimit ? limitLen : marketLen;
+        uint256 index = _positionRequest.isLimit ? limitLen : marketLen;
 
+        _positionRequest.user = msg.sender;
         _positionRequest.requestIndex = index;
         _positionRequest.requestBlock = block.number;
 
@@ -81,7 +81,7 @@ contract RequestRouter {
     // get position to close
     // get the current price
     // create decrease request for full position size
-    function createCloseRequest(bytes32 _positionKey, uint256 _acceptablePrice, bool _isLimit, uint256 _executionFee)
+    function createCloseRequest(bytes32 _positionKey, uint256 _orderPrice, bool _isLimit, uint256 _executionFee)
         external
         payable
         validExecutionFee(_executionFee)
@@ -102,8 +102,8 @@ contract RequestRouter {
             collateralDelta: _position.collateralAmount,
             sizeDelta: _position.positionSize,
             requestBlock: block.number,
-            acceptablePrice: _acceptablePrice,
-            priceImpact: 0,
+            orderPrice: _orderPrice,
+            maxSlippage: 0,
             isLong: _position.isLong,
             isIncrease: false
         });
@@ -153,13 +153,15 @@ contract RequestRouter {
     }
 
     function _wrapUsdc(uint256 _amount) internal returns (uint256) {
+        address usdc = WUSDC.USDC();
+        IERC20(usdc).approve(address(WUSDC), _amount);
         return WUSDC.deposit(_amount);
     }
 
     function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) internal view {
-        address market = IMarketStorage(marketStorage).getMarket(_marketKey).market;
-        uint256 totalOI = IMarket(market).getTotalOpenInterest();
-        uint256 maxOI = IMarketStorage(marketStorage).maxOpenInterests(_marketKey);
+        MarketStructs.Market memory market = marketStorage.getMarket(_marketKey);
+        uint256 totalOI = marketStorage.getTotalIndexOpenInterest(market.indexToken);
+        uint256 maxOI = marketStorage.maxOpenInterests(_marketKey);
         if (totalOI + _sizeDelta > maxOI) revert RequestRouter_PositionSizeTooLarge();
     }
 }

@@ -16,7 +16,7 @@ contract PriceOracle {
     mapping(address => uint256) public pricePrecisions;
     // token => block => price
     mapping(address => mapping(uint256 => uint256)) signedPrices;
-    uint256 public cachedPrice; // cached last price for quick lookups
+    mapping(address => uint256) public cachedPrices;
 
     function setWhitelist(address _token, address _priceFeed) external {
         // only callable by permissioned roles

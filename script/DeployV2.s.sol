@@ -58,7 +58,7 @@ contract DeployV2 is Script {
         contracts = Contracts(
             RoleStorage(address(0)),
             GlobalMarketConfig(address(0)),
-            LiquidityVault(address(0)),
+            LiquidityVault(payable(address(0))),
             MarketFactory(address(0)),
             MarketStorage(address(0)),
             MarketToken(address(0)),
@@ -166,6 +166,10 @@ contract DeployV2 is Script {
         contracts.roleStorage.grantRole(Roles.TRADE_STORAGE, address(contracts.tradeStorage));
         contracts.roleStorage.grantRole(Roles.ROUTER, address(contracts.requestRouter));
         contracts.roleStorage.grantRole(Roles.DEFAULT_ADMIN_ROLE, contracts.owner);
+        contracts.roleStorage.grantRole(Roles.STATE_KEEPER, contracts.owner);
+        contracts.roleStorage.grantRole(Roles.KEEPER, contracts.owner);
+        contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.tradeStorage));
+        contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.requestRouter));
 
         vm.stopBroadcast();
 

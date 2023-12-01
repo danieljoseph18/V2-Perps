@@ -27,6 +27,7 @@ interface ILiquidityVault {
     function accumulateFees(uint256 _amount) external;
     function transferPositionProfit(address _user, uint256 _amount) external;
     function initialise(IDataOracle _dataOracle, uint256 _liquidityFee) external;
+    function updateReservation(int256 _amount) external;
 
     // View Functions
     function getLiquidityTokenPrice() external view returns (uint256);

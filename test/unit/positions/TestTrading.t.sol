@@ -22,6 +22,8 @@ import {WUSDC} from "../../../src/token/WUSDC.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
+import {MarketStructs} from "../../../src/markets/MarketStructs.sol";
+import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 
 contract TestTrading is Test {
     RoleStorage roleStorage;
@@ -40,6 +42,7 @@ contract TestTrading is Test {
     TradeStorage tradeStorage;
     TradeVault tradeVault;
     WUSDC wusdc;
+    MarketToken indexToken;
 
     address public OWNER;
     address public USER = makeAddr("user");
@@ -70,20 +73,150 @@ contract TestTrading is Test {
         OWNER = contracts.owner;
     }
 
-    modifier mintUsdcAndAddLiquidity() {
+    modifier facilitateTrading() {
+        vm.deal(OWNER, LARGE_AMOUNT);
+        vm.deal(USER, LARGE_AMOUNT);
+        // add liquidity
         usdc.mint(OWNER, LARGE_AMOUNT);
         usdc.mint(USER, LARGE_AMOUNT);
         vm.startPrank(OWNER);
         usdc.approve(address(liquidityVault), LARGE_AMOUNT);
         liquidityVault.addLiquidity(DEPOSIT_AMOUNT);
-        vm.stopPrank();
-        console.log("Before:", liquidityVault.getAum());
-        console.log("Before:", liquidityVault.getLiquidityTokenPrice());
-        console.log("Before:", marketToken.totalSupply());
-        vm.startPrank(USER);
-        usdc.approve(address(liquidityVault), LARGE_AMOUNT);
-        liquidityVault.addLiquidity(DEPOSIT_AMOUNT);
+        // create a new index token to trade
+        indexToken = new MarketToken("Bitcoin", "BTC", address(roleStorage));
+        // create a new market and provide an allocation
+        marketFactory.createMarket(address(indexToken), makeAddr("priceFeed"));
+        uint256 allocation = LARGE_AMOUNT;
+        stateUpdater.updateState(address(indexToken), allocation, (allocation * 4) / 5);
         vm.stopPrank();
         _;
+    }
+
+    function testTradingHasBeenFacilitated() public facilitateTrading {
+        // check the market exists
+        MarketStructs.Market memory market = marketStorage.getMarketFromIndexToken(address(indexToken));
+        assertNotEq(market.market, address(0));
+        assertNotEq(market.marketKey, bytes32(0));
+        assertNotEq(market.indexToken, address(0));
+        // check the market has the correct allocation
+        uint256 alloc = marketStorage.marketAllocations(market.marketKey);
+        uint256 maxOi = marketStorage.maxOpenInterests(market.marketKey);
+        assertEq(alloc, DEPOSIT_AMOUNT / 2);
+        assertEq(maxOi, ((DEPOSIT_AMOUNT / 2) * 4) / 5);
+    }
+
+    function testTradeRequestsOpenAsExpected() public facilitateTrading {
+        // approve some currency
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), DEPOSIT_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        // try to create a trade request
+        MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e30,
+            0,
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
+        vm.stopPrank();
+        // check the trade request exists and has correct vals
+        bytes32 _positionKey = TradeHelper.generateKey(_request);
+        (,,, address user,,,,,,,) = tradeStorage.orders(false, _positionKey);
+        assertEq(user, USER);
+    }
+
+    function testTradeRequestsCanBeExecutedByKeepers() public facilitateTrading {
+        // create a trade request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), DEPOSIT_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        // try to create a trade request
+        MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e30,
+            0,
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
+        vm.stopPrank();
+        // attempt to execute
+        vm.startPrank(OWNER);
+        executor.executeTradeOrders();
+        vm.stopPrank();
+    }
+
+    function testExecutedTradesHaveTheCorrectParameters() public facilitateTrading {
+        // create a trade request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), DEPOSIT_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        // try to create a trade request
+        MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e30,
+            0,
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
+        vm.stopPrank();
+        // attempt to execute
+        vm.startPrank(OWNER);
+        bytes32 _positionKey = TradeHelper.generateKey(_request);
+        executor.executeTradeOrder(_positionKey, false);
+        vm.stopPrank();
+        // check parameters
+        /**
+         * 1. Check entry timestamp
+         * 2. Check signedBlockPrice
+         * 3. Check position is in storage
+         * 4. Check fees were transferred to liquidity vault
+         * 5. Check open interest updated
+         *
+         */
+        // (
+        //     ,
+        //     bytes32 market,
+        //     address positionIndexToken,
+        //     address user,
+        //     uint256 collat,
+        //     uint256 size,
+        //     bool isLong,
+        //     int256 realisedPnl,
+        //     ,
+        //     ,
+        //     MarketStructs.PnLParams memory pnlParams,
+        //     uint256 entryTimestamp
+        // ) = tradeStorage.openPositions(_positionKey);
+        // assertEq(market, marketStorage.getMarketFromIndexToken(address(indexToken)).marketKey);
+        // assertEq(positionIndexToken, address(indexToken));
+        // assertEq(user, USER);
+        // assertGt(collat, 0);
+        // assertGt(size, collat);
+        // assertEq(isLong, true);
+        // assertEq(realisedPnl, 0);
+        // assertEq(pnlParams.leverage, (size * 100) / collat);
+        // assertEq(pnlParams.weightedAvgEntryPrice, 1000e30);
+        // assertEq(entryTimestamp, block.timestamp);
     }
 }

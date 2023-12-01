@@ -8,6 +8,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 // library responsible for handling all price impact calculations
 library ImpactCalculator {
     error ImpactCalculator_ZeroParameters();
+    error ImpactCalculator_SlippageExceedsMax();
 
     function applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpact) external pure returns (uint256) {
         if (_signedBlockPrice == 0 || _priceImpact == 0) revert ImpactCalculator_ZeroParameters();
@@ -52,5 +53,10 @@ library ImpactCalculator {
         if (priceImpact > market.MAX_PRICE_IMPACT()) priceImpact = market.MAX_PRICE_IMPACT();
 
         return priceImpact / int256(sizeDeltaUSD);
+    }
+
+    function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) external pure {
+        uint256 slippage = 1e18 - ((_impactedPrice * 1e18) / _signedPrice);
+        if (slippage > _maxSlippage) revert ImpactCalculator_SlippageExceedsMax();
     }
 }

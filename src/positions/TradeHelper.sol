@@ -11,13 +11,13 @@ import {PricingCalculator} from "./PricingCalculator.sol";
 
 // Helper functions for trade related logic
 library TradeHelper {
-    uint256 public constant MIN_LEVERAGE = 1e18; // 1x
+    uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant MAX_LEVERAGE = 5000; // 50x
     uint256 public constant MAX_LIQUIDATION_FEE = 100e30; // 100 USD
     uint256 public constant MAX_TRADING_FEE = 0.01e18; // 1%
 
     error TradeHelper_LimitPriceNotMet();
-    error TradeHelper_PositionAlreadyExists();
+    error TradeHelper_RequestAlreadyExists();
     error TradeHelper_InvalidLeverage();
     error TradeHelper_PositionNotLiquidatable();
     error TradeHelper_InvalidCollateralReduction();
@@ -25,7 +25,7 @@ library TradeHelper {
     // Validate whether a request should execute or not
     function validateRequest(address _tradeStorage, bytes32 _key, bool _isLimit) external view returns (bool) {
         MarketStructs.PositionRequest memory request = ITradeStorage(_tradeStorage).orders(_isLimit, _key);
-        if (request.user != address(0)) revert TradeHelper_PositionAlreadyExists();
+        if (request.user != address(0)) revert TradeHelper_RequestAlreadyExists();
         return true;
     }
 
@@ -35,9 +35,9 @@ library TradeHelper {
 
     function checkLimitPrice(uint256 _price, MarketStructs.PositionRequest memory _positionRequest) external pure {
         if (_positionRequest.isLong) {
-            if (_price > _positionRequest.acceptablePrice) revert TradeHelper_LimitPriceNotMet();
+            if (_price > _positionRequest.orderPrice) revert TradeHelper_LimitPriceNotMet();
         } else {
-            if (_price < _positionRequest.acceptablePrice) revert TradeHelper_LimitPriceNotMet();
+            if (_price < _positionRequest.orderPrice) revert TradeHelper_LimitPriceNotMet();
         }
     }
 

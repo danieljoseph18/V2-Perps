@@ -68,12 +68,12 @@ contract Executor is RoleValidation {
             TradeHelper.checkLimitPrice(_signedBlockPrice, _positionRequest);
         }
 
-        _positionRequest.priceImpact =
-            ImpactCalculator.calculatePriceImpact(market, _positionRequest, _signedBlockPrice);
+        int256 priceImpact = ImpactCalculator.calculatePriceImpact(market, _positionRequest, _signedBlockPrice);
 
-        uint256 price = ImpactCalculator.applyPriceImpact(_signedBlockPrice, _positionRequest.priceImpact);
-        // check impacted price is acceptable within slippage
-        // #################################################
+        uint256 price = ImpactCalculator.applyPriceImpact(_signedBlockPrice, priceImpact);
+
+        ImpactCalculator.checkSlippage(price, _signedBlockPrice, _positionRequest.maxSlippage);
+
         int256 sizeDeltaUsd = _positionRequest.isIncrease
             ? int256(_positionRequest.sizeDelta * price)
             : int256(_positionRequest.sizeDelta * price) * -1;

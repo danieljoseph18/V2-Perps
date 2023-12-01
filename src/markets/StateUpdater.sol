@@ -31,10 +31,13 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
     /*
         Off-Chain computation done to:
         1. Allocate Liquidity from the LiquidityVault to a Market
-        2. Update the MaxOI of a Market
+        2. Update the MaxOI of a Market 
 
         Setting Values to 0 will skip updating them.
      */
+    /// @param _indexToken The index token of the market
+    /// @param _allocation The amount of liquidity to allocate to the market in WUSDC
+    /// @param _maxOI The maximum open interest of the market in index tokens
     function updateState(address _indexToken, uint256 _allocation, uint256 _maxOI)
         external
         nonReentrant

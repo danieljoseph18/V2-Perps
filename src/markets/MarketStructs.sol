@@ -16,8 +16,8 @@ library MarketStructs {
         uint256 collateralDelta;
         uint256 sizeDelta;
         uint256 requestBlock;
-        uint256 acceptablePrice;
-        int256 priceImpact;
+        uint256 orderPrice; // Price for limit order
+        uint256 maxSlippage; // 1e18 = 100% (0.03% default = 0.0003e18)
         bool isLong;
         bool isIncrease; // increase or decrease position
     }

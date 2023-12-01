@@ -89,7 +89,12 @@ contract MarketStorage is RoleValidation {
         return markets[_key];
     }
 
+    function getTotalIndexOpenInterest(address _indexToken) external view returns (uint256 _totalOI) {
+        bytes32 _key = keccak256(abi.encodePacked(_indexToken));
+        return indexTokenLongOpenInterest[_key] + indexTokenShortOpenInterest[_key];
+    }
     /// @dev Maximum amount of liquidity allocated to markets
+
     function updateState(bytes32 _marketKey, uint256 _newAllocation, uint256 _maxOI) external onlyStateUpdater {
         if (markets[_marketKey].market == address(0)) revert MarketStorage_NonExistentMarket();
         if (_newAllocation != 0) {

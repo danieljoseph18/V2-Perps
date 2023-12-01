@@ -58,6 +58,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         liquidityToken = IMarketToken(_liquidityToken);
     }
 
+    receive() external payable {}
+
     function initialise(address _dataOracle, uint256 _liquidityFee) external onlyAdmin {
         if (isInitialised) revert LiquidityVault_AlreadyInitialised();
         if (_dataOracle == address(0)) revert LiquidityVault_ZeroAddress();
@@ -103,7 +105,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         _removeLiquidity(_account, _liquidityTokenAmount);
     }
 
-    function accumulateFees(uint256 _amount) external onlyTradeStorage {
+    function accumulateFees(uint256 _amount) external onlyFeeAccumulator {
         accumulatedFees += _amount;
         emit FeesAccumulated(_amount);
     }
@@ -177,8 +179,6 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         uint256 wusdcAmount = _wrapUsdc(_amount);
         // Deduct Fees
         uint256 afterFeeAmount = _deductLiquidityFees(wusdcAmount);
-        // add full amount to the pool
-        poolAmounts += wusdcAmount;
         // mint market tokens
         uint256 price = getPrice(address(WUSDC));
 
@@ -193,6 +193,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         } else {
             mintAmount = (valueUsd * supply) / aum;
         }
+
+        // add full amount to the pool
+        poolAmounts += wusdcAmount;
 
         liquidityToken.mint(_account, mintAmount);
         // Fire event
@@ -211,7 +214,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         uint256 aum = getAumInWusdc();
         uint256 supply = liquidityToken.totalSupply();
 
-        uint256 tokenAmount = _liquidityTokenAmount * aum / supply;
+        uint256 tokenAmount = (_liquidityTokenAmount * aum) / supply;
 
         if (tokenAmount > poolAmounts) revert LiquidityVault_InsufficientFunds();
 

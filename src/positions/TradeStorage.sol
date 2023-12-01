@@ -34,7 +34,7 @@ contract TradeStorage is RoleValidation {
 
     mapping(bool _isLimit => mapping(bytes32 _orderKey => MarketStructs.PositionRequest)) public orders;
     mapping(bool _isLimit => bytes32[] _orderKeys) public orderKeys;
-
+    mapping(address => uint256) public tokenDecimals;
     // Track open positions
     mapping(bytes32 _positionKey => MarketStructs.Position) public openPositions;
     mapping(bytes32 _marketKey => mapping(bool _isLong => bytes32[] _positionKeys)) public openPositionKeys;
@@ -143,8 +143,12 @@ contract TradeStorage is RoleValidation {
             price = priceOracle.getCollateralPrice();
             _executeCollateralEdit(_executionParams.positionRequest, price, key);
         } else {
-            price = ImpactCalculator.applyPriceImpact(
-                _executionParams.signedBlockPrice, _executionParams.positionRequest.priceImpact
+            price = _executionParams.signedBlockPrice;
+            _reserveLiquidity(
+                _executionParams.positionRequest.sizeDelta,
+                price,
+                _executionParams.positionRequest.indexToken,
+                _executionParams.positionRequest.isIncrease
             );
             _executionParams.positionRequest.isIncrease
                 ? _executeIncreasePosition(_executionParams.positionRequest, price, key)
@@ -219,7 +223,7 @@ contract TradeStorage is RoleValidation {
 
     function getPositionFees(MarketStructs.Position memory _position) public view returns (uint256, uint256) {
         address market = TradeHelper.getMarket(address(marketStorage), _position.indexToken);
-        uint256 borrowFee = IMarket(market).getBorrowingFees(_position);
+        uint256 borrowFee = BorrowingCalculator.getBorrowingFees(market, _position);
         return (borrowFee, liquidationFeeUsd);
     }
 
@@ -525,5 +529,19 @@ contract TradeStorage is RoleValidation {
         openPositions[_positionKey].fundingParams.lastShortCumulativeFunding = shortCumulative;
 
         openPositions[_positionKey].fundingParams.lastFundingUpdate = block.timestamp;
+    }
+
+    function _reserveLiquidity(uint256 _sizeDelta, uint256 _price, address _indexToken, bool _isIncrease) internal {
+        // convert sizeDelta to USD
+        uint256 sizeDeltaUsd = (_sizeDelta * _price) / tokenDecimals[_indexToken];
+        // convert USD to WUSDC amount
+        uint256 wusdcPrice = priceOracle.getCollateralPrice();
+        uint256 wusdcAmount = (sizeDeltaUsd * tokenDecimals[address(WUSDC)]) / wusdcPrice;
+        // if increase, reserve WUSDC amount, else unreserve WUSDC amount
+        if (_isIncrease) {
+            liquidityVault.updateReservation(int256(wusdcAmount));
+        } else {
+            liquidityVault.updateReservation(-int256(wusdcAmount));
+        }
     }
 }
