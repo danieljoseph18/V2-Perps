@@ -13,12 +13,15 @@ import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {PricingCalculator} from "../positions/PricingCalculator.sol";
+import {MarketHelper} from "./MarketHelper.sol";
 
 /// @dev needs StateUpdater Role
 contract StateUpdater is RoleValidation, ReentrancyGuard {
     ILiquidityVault public liquidityVault;
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
+
+    error StateUpdater_AllocationExceedsAvailableLiquidity();
 
     constructor(address _liquidityVault, address _marketStorage, address _tradeStorage, address _roleStorage)
         RoleValidation(_roleStorage)
@@ -43,7 +46,9 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
         nonReentrant
         onlyStateKeeper
     {
-        bytes32 marketKey = marketStorage.getMarketFromIndexToken(_indexToken).marketKey;
+        uint256 totalAvailableLiquidity = liquidityVault.getAumInWusdc();
+        if (_allocation > totalAvailableLiquidity) revert StateUpdater_AllocationExceedsAvailableLiquidity();
+        bytes32 marketKey = MarketHelper.getMarketFromIndexToken(address(marketStorage), _indexToken).marketKey;
         marketStorage.updateState(marketKey, _allocation, _maxOI);
     }
 }

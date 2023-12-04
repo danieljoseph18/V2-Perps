@@ -4,6 +4,7 @@ pragma solidity 0.8.20;
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
 
 // library responsible for handling all price impact calculations
@@ -11,17 +12,14 @@ library ImpactCalculator {
     error ImpactCalculator_ZeroParameters();
     error ImpactCalculator_SlippageExceedsMax();
 
-    function applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpact) external pure returns (uint256) {
-        if (_signedBlockPrice == 0 || _priceImpact == 0) revert ImpactCalculator_ZeroParameters();
-        // multiply price impact by signed block price => e.g 0.05e18 * 1000e18 = 50e18 (5%)
-        int256 impactUSD = _priceImpact * int256(_signedBlockPrice);
-        // negative, subtract, positive add
-        uint256 impactedPrice = uint256(int256(_signedBlockPrice) + impactUSD);
-        // return new price
-        return impactedPrice;
+    function applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpactUsd) external pure returns (uint256) {
+        if (_signedBlockPrice == 0 || _priceImpactUsd == 0) revert ImpactCalculator_ZeroParameters();
+        return _priceImpactUsd >= 0
+            ? _signedBlockPrice + uint256(_priceImpactUsd)
+            : _signedBlockPrice - uint256(-_priceImpactUsd);
     }
 
-    // Returns Price impact as a decimal
+    // Returns Price impact in USD
     function calculatePriceImpact(
         address _market,
         address _marketStorage,
@@ -43,7 +41,8 @@ library ImpactCalculator {
 
         uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
-        uint256 sizeDeltaUSD = _positionRequest.sizeDelta * _signedBlockPrice;
+        uint256 sizeDeltaUSD =
+            (_positionRequest.sizeDelta * _signedBlockPrice) / (10 ** IDataOracle(_dataOracle).getDecimals(indexToken));
 
         if (_positionRequest.isIncrease) {
             _positionRequest.isLong ? longOI += sizeDeltaUSD : shortOI += sizeDeltaUSD;
@@ -58,9 +57,13 @@ library ImpactCalculator {
 
         int256 priceImpact = int256((skewBefore ** exponent) * factor) - int256((skewAfter ** exponent) * factor);
 
-        if (priceImpact > market.MAX_PRICE_IMPACT()) priceImpact = market.MAX_PRICE_IMPACT();
+        if (priceImpact > market.MAX_PRICE_IMPACT() && priceImpact > 0) {
+            priceImpact = market.MAX_PRICE_IMPACT();
+        } else if (priceImpact < -market.MAX_PRICE_IMPACT() && priceImpact < 0) {
+            priceImpact = -market.MAX_PRICE_IMPACT();
+        }
 
-        return priceImpact / int256(sizeDeltaUSD);
+        return priceImpact;
     }
 
     function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) external pure {

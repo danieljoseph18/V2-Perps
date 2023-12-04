@@ -11,6 +11,7 @@ import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 import {ImpactCalculator} from "./ImpactCalculator.sol";
+import {MarketHelper} from "../markets/MarketHelper.sol";
 
 /// @dev Needs Executor Role
 contract Executor is RoleValidation {
@@ -40,27 +41,28 @@ contract Executor is RoleValidation {
         dataOracle = IDataOracle(_dataOracle);
     }
 
-    function executeTradeOrders() external onlyKeeper {
+    function executeTradeOrders(address _feeReceiver) external onlyKeeper {
         (, bytes32[] memory marketOrders) = tradeStorage.getOrderKeys();
         uint256 len = marketOrders.length;
         for (uint256 i = 0; i < len; ++i) {
             bytes32 _key = marketOrders[i];
-            try this.executeTradeOrder(_key, false) {} catch {}
+            try this.executeTradeOrder(_key, _feeReceiver, false) {} catch {}
         }
     }
 
     /// @dev Only Keeper
-    function executeTradeOrder(bytes32 _key, bool _isLimit) public onlyKeeper {
-        _executeTradeOrder(_key, msg.sender, _isLimit);
+    function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) public onlyKeeper {
+        _executeTradeOrder(_key, _feeReceiver, _isLimit);
     }
 
     /// @dev needs work
-    function _executeTradeOrder(bytes32 _key, address _executor, bool _isLimit) internal {
+    function _executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) internal {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);
         if (_positionRequest.user == address(0)) revert Executor_InvalidRequestKey();
         // get the market and block to get the signed block price
-        address market = marketStorage.getMarketFromIndexToken(_positionRequest.indexToken).market;
+        address market =
+            MarketHelper.getMarketFromIndexToken(address(marketStorage), _positionRequest.indexToken).market;
         uint256 _block = _positionRequest.requestBlock;
         uint256 _signedBlockPrice = priceOracle.getSignedPrice(market, _block);
         if (_signedBlockPrice == 0) {
@@ -96,7 +98,7 @@ contract Executor is RoleValidation {
         }
         // execute the trade
         MarketStructs.Position memory _position =
-            tradeStorage.executeTrade(MarketStructs.ExecutionParams(_positionRequest, price, _executor));
+            tradeStorage.executeTrade(MarketStructs.ExecutionParams(_positionRequest, price, _feeReceiver));
 
         _updateOpenInterest(
             _position.market,

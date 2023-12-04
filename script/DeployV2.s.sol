@@ -70,7 +70,7 @@ contract DeployV2 is Script {
             Liquidator(address(0)),
             RequestRouter(address(0)),
             TradeStorage(address(0)),
-            TradeVault(address(0)),
+            TradeVault(payable(address(0))),
             WUSDC(address(0)),
             msg.sender
         );
@@ -90,7 +90,9 @@ contract DeployV2 is Script {
 
         contracts.marketStorage = new MarketStorage(address(contracts.liquidityVault), address(contracts.roleStorage));
 
-        contracts.dataOracle = new DataOracle(address(contracts.marketStorage), address(contracts.roleStorage));
+        contracts.dataOracle = new DataOracle(
+            address(contracts.marketStorage), address(contracts.priceOracle), address(contracts.roleStorage)
+        );
 
         contracts.tradeVault =
             new TradeVault(address(contracts.wusdc), address(contracts.liquidityVault), address(contracts.roleStorage));
@@ -101,6 +103,7 @@ contract DeployV2 is Script {
             address(contracts.tradeVault),
             address(contracts.wusdc),
             priceOracle,
+            address(contracts.dataOracle),
             address(contracts.roleStorage)
         );
 
@@ -110,6 +113,7 @@ contract DeployV2 is Script {
             address(contracts.tradeStorage),
             address(contracts.wusdc),
             address(priceOracle),
+            address(contracts.dataOracle),
             address(contracts.roleStorage)
         );
 
@@ -118,6 +122,7 @@ contract DeployV2 is Script {
             address(contracts.tradeStorage),
             priceOracle,
             address(contracts.liquidityVault),
+            address(contracts.dataOracle),
             address(contracts.roleStorage)
         );
 
@@ -141,10 +146,7 @@ contract DeployV2 is Script {
         );
 
         contracts.globalMarketConfig = new GlobalMarketConfig(
-            address(contracts.marketStorage),
-            address(contracts.liquidityVault),
-            address(contracts.tradeStorage),
-            address(contracts.roleStorage)
+            address(contracts.liquidityVault), address(contracts.tradeStorage), address(contracts.roleStorage)
         );
 
         /**

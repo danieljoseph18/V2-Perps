@@ -44,13 +44,17 @@ contract MarketFactory is RoleValidation {
         priceOracle = _priceOracle;
     }
 
-    function createMarket(address _indexToken, address _priceFeed, uint256 _tokenDecimals) external onlyAdmin {
+    function createMarket(address _indexToken, address _priceFeed, uint256 _tokenDecimals)
+        external
+        onlyAdmin
+        returns (address)
+    {
         // pool cant already exist
         bytes32 _marketKey = keccak256(abi.encodePacked(_indexToken));
         // Set Up Price Oracle
         IPriceOracle(priceOracle).updatePriceSource(_indexToken, _priceFeed);
         // Create new Market contract
-        Market _market = new Market(
+        Market market = new Market(
             _indexToken,
             address(marketStorage),
             liquidityVault,
@@ -61,12 +65,13 @@ contract MarketFactory is RoleValidation {
             address(roleStorage)
         );
         // Initialise With Default Values
-        Market(_market).initialise(0.0003e18, 1_000_000e18, 500e16, -500e16, 0.000000035e18, 1, false, 0.000001e18, 1);
+        Market(market).initialise(0.0003e18, 1_000_000e18, 500e16, -500e16, 0.000000035e18, 1, false, 0.000001e18, 1);
         // Store everything in MarketStorage
-        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, address(_market), _marketKey);
+        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, address(market), _marketKey);
         IMarketStorage(marketStorage).storeMarket(_marketInfo);
         IDataOracle(dataOracle).setDecimals(_indexToken, _tokenDecimals);
 
-        emit MarketCreated(_indexToken, address(_market));
+        emit MarketCreated(_indexToken, address(market));
+        return address(market);
     }
 }

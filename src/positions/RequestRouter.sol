@@ -11,6 +11,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeVault} from "./interfaces/ITradeVault.sol";
 import {ImpactCalculator} from "./ImpactCalculator.sol";
 import {TradeHelper} from "./TradeHelper.sol";
+import {MarketHelper} from "../markets/MarketHelper.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 
 /// @dev Needs Router role
@@ -55,7 +56,7 @@ contract RequestRouter {
         payable
         validExecutionFee(_executionFee)
     {
-        _sendExecutionFeeToStorage(_executionFee);
+        _sendExecutionFeeToVault(_executionFee);
 
         // get the key for the market
         bytes32 marketKey = keccak256(abi.encodePacked(_positionRequest.indexToken));
@@ -71,6 +72,8 @@ contract RequestRouter {
         (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
         uint256 index = _positionRequest.isLimit ? limitLen : marketLen;
 
+        _positionRequest.collateralDelta =
+            _adjustCollateralDecimals(_positionRequest.collateralDelta, _positionRequest.isIncrease);
         _positionRequest.user = msg.sender;
         _positionRequest.requestIndex = index;
         _positionRequest.requestBlock = block.number;
@@ -86,8 +89,8 @@ contract RequestRouter {
         payable
         validExecutionFee(_executionFee)
     {
-        // transfer execution fee to the liquidity vault
-        _sendExecutionFeeToStorage(_executionFee);
+        // transfer execution fee to the trade vault
+        _sendExecutionFeeToVault(_executionFee);
         // validate the request meets all safety parameters
         // open the request on the trade storage contract
         (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
@@ -115,8 +118,8 @@ contract RequestRouter {
         payable
         validExecutionFee(_executionFee)
     {
-        // transfer execution fee to the liquidity vault
-        _sendExecutionFeeToStorage(_executionFee);
+        // transfer execution fee to the trade vault
+        _sendExecutionFeeToVault(_executionFee);
         // perform safety checks => it exists, it's their position etc.
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
@@ -146,8 +149,8 @@ contract RequestRouter {
         WUSDC.transfer(address(tradeVault), collateralAmount);
     }
 
-    function _sendExecutionFeeToStorage(uint256 _executionFee) internal returns (bool) {
-        (bool success,) = address(liquidityVault).call{value: _executionFee}("");
+    function _sendExecutionFeeToVault(uint256 _executionFee) internal returns (bool) {
+        (bool success,) = address(tradeVault).call{value: _executionFee}("");
         if (!success) revert RequestRouter_ExecutionFeeTransferFailed();
         return true;
     }
@@ -159,9 +162,18 @@ contract RequestRouter {
     }
 
     function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) internal view {
-        MarketStructs.Market memory market = marketStorage.getMarket(_marketKey);
-        uint256 totalOI = marketStorage.getTotalIndexOpenInterest(market.indexToken);
+        MarketStructs.Market memory market = marketStorage.markets(_marketKey);
+        uint256 totalOI = MarketHelper.getTotalIndexOpenInterest(address(marketStorage), market.indexToken);
         uint256 maxOI = marketStorage.maxOpenInterests(_marketKey);
         if (totalOI + _sizeDelta > maxOI) revert RequestRouter_PositionSizeTooLarge();
+    }
+
+    /// @dev Adjust decimals from USDC -> WUSDC
+    function _adjustCollateralDecimals(uint256 _collateralDelta, bool _isIncrease) internal pure returns (uint256) {
+        if (_isIncrease) {
+            return _collateralDelta * 1e12;
+        } else {
+            return _collateralDelta / 1e12;
+        }
     }
 }

@@ -24,6 +24,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
 import {MarketStructs} from "../../../src/markets/MarketStructs.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
+import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
+import {ImpactCalculator} from "../../../src/positions/ImpactCalculator.sol";
 
 contract TestTrading is Test {
     RoleStorage roleStorage;
@@ -49,6 +51,7 @@ contract TestTrading is Test {
 
     uint256 public constant LARGE_AMOUNT = 1e30;
     uint256 public constant DEPOSIT_AMOUNT = 100_000_000_000000;
+    uint256 public constant INDEX_ALLOCATION = 1e24;
     uint256 public constant CONVERSION_RATE = 1e12;
 
     function setUp() public {
@@ -73,6 +76,8 @@ contract TestTrading is Test {
         OWNER = contracts.owner;
     }
 
+    receive() external payable {}
+
     modifier facilitateTrading() {
         vm.deal(OWNER, LARGE_AMOUNT);
         vm.deal(USER, LARGE_AMOUNT);
@@ -85,8 +90,8 @@ contract TestTrading is Test {
         // create a new index token to trade
         indexToken = new MarketToken("Bitcoin", "BTC", address(roleStorage));
         // create a new market and provide an allocation
-        marketFactory.createMarket(address(indexToken), makeAddr("priceFeed"));
-        uint256 allocation = LARGE_AMOUNT;
+        address _market = marketFactory.createMarket(address(indexToken), makeAddr("priceFeed"), 18);
+        uint256 allocation = INDEX_ALLOCATION;
         stateUpdater.updateState(address(indexToken), allocation, (allocation * 4) / 5);
         vm.stopPrank();
         _;
@@ -94,7 +99,8 @@ contract TestTrading is Test {
 
     function testTradingHasBeenFacilitated() public facilitateTrading {
         // check the market exists
-        MarketStructs.Market memory market = marketStorage.getMarketFromIndexToken(address(indexToken));
+        MarketStructs.Market memory market =
+            MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken));
         assertNotEq(market.market, address(0));
         assertNotEq(market.marketKey, bytes32(0));
         assertNotEq(market.indexToken, address(0));
@@ -147,7 +153,7 @@ contract TestTrading is Test {
             1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
             0,
             1000e30,
-            0,
+            0.1e18, // 10% slippage
             true,
             true
         );
@@ -155,8 +161,34 @@ contract TestTrading is Test {
         vm.stopPrank();
         // attempt to execute
         vm.startPrank(OWNER);
-        executor.executeTradeOrders();
+        executor.executeTradeOrders(OWNER);
         vm.stopPrank();
+    }
+
+    function testPriceImpactCalculation() public facilitateTrading {
+        MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e30,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        uint256 signedBlockPrice = 1000e30;
+        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+        int256 priceImpact = ImpactCalculator.calculatePriceImpact(
+            market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
+        );
+        if (priceImpact >= 0) {
+            console.log(uint256(priceImpact));
+        } else {
+            console.log(uint256(priceImpact * -1));
+        }
     }
 
     function testExecutedTradesHaveTheCorrectParameters() public facilitateTrading {
@@ -174,49 +206,78 @@ contract TestTrading is Test {
             1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
             0,
             1000e30,
-            0,
+            0.1e18, // 10% slippage
             true,
             true
         );
         requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
         vm.stopPrank();
+        assertEq(address(tradeVault).balance, executionFee);
         // attempt to execute
         vm.startPrank(OWNER);
         bytes32 _positionKey = TradeHelper.generateKey(_request);
-        executor.executeTradeOrder(_positionKey, false);
+        executor.executeTradeOrder(_positionKey, OWNER, false);
         vm.stopPrank();
-        // check parameters
-        /**
-         * 1. Check entry timestamp
-         * 2. Check signedBlockPrice
-         * 3. Check position is in storage
-         * 4. Check fees were transferred to liquidity vault
-         * 5. Check open interest updated
-         *
-         */
-        // (
-        //     ,
-        //     bytes32 market,
-        //     address positionIndexToken,
-        //     address user,
-        //     uint256 collat,
-        //     uint256 size,
-        //     bool isLong,
-        //     int256 realisedPnl,
-        //     ,
-        //     ,
-        //     MarketStructs.PnLParams memory pnlParams,
-        //     uint256 entryTimestamp
-        // ) = tradeStorage.openPositions(_positionKey);
-        // assertEq(market, marketStorage.getMarketFromIndexToken(address(indexToken)).marketKey);
-        // assertEq(positionIndexToken, address(indexToken));
-        // assertEq(user, USER);
-        // assertGt(collat, 0);
-        // assertGt(size, collat);
-        // assertEq(isLong, true);
-        // assertEq(realisedPnl, 0);
-        // assertEq(pnlParams.leverage, (size * 100) / collat);
-        // assertEq(pnlParams.weightedAvgEntryPrice, 1000e30);
-        // assertEq(entryTimestamp, block.timestamp);
+        (
+            ,
+            bytes32 market,
+            address positionIndexToken,
+            address user,
+            uint256 collat,
+            ,
+            bool isLong,
+            int256 realisedPnl,
+            ,
+            ,
+            MarketStructs.PnLParams memory pnlParams,
+            uint256 entryTimestamp
+        ) = tradeStorage.openPositions(_positionKey);
+        assertEq(market, MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).marketKey);
+        assertEq(positionIndexToken, address(indexToken));
+        assertEq(user, USER);
+        assertGt(collat, 0);
+        assertEq(isLong, true);
+        assertEq(realisedPnl, 0);
+        console.log(pnlParams.leverage);
+        assertGt(pnlParams.leverage, 1);
+        assertGt(pnlParams.weightedAvgEntryPrice, 0);
+        assertEq(entryTimestamp, block.timestamp);
     }
+
+    function testThePriceImpactOnALargeSizedTrade() public facilitateTrading {
+        // Create a really large trade request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        // try to create a trade request
+        MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            1000000e6, // 1 mil USDC
+            10000e18, // $1000 per token, should be = 10000000 USDC (10x leverage)
+            0,
+            1000e30,
+            5e18, // 50% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
+        vm.stopPrank();
+        // Run the calculate price impact function on the request
+        uint256 signedBlockPrice = 1000e30;
+        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+        int256 priceImpact = ImpactCalculator.calculatePriceImpact(
+            market, address(marketStorage), address(dataOracle), address(priceOracle), _request, signedBlockPrice
+        );
+        // log the output
+        if (priceImpact >= 0) {
+            console.log(uint256(priceImpact));
+        } else {
+            console.log(uint256(priceImpact * -1));
+        }
+    }
+
+    function testWeCanAddCollateralToAnExistingPosition() public facilitateTrading {}
 }

@@ -8,6 +8,8 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {FundingCalculator} from "./FundingCalculator.sol";
 import {BorrowingCalculator} from "./BorrowingCalculator.sol";
 import {PricingCalculator} from "./PricingCalculator.sol";
+import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
+import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
 // Helper functions for trade related logic
 library TradeHelper {
@@ -42,20 +44,36 @@ library TradeHelper {
     }
 
     // 1x = 100
-    function checkLeverage(uint256 _size, uint256 _collateral) external pure {
-        uint256 leverage = (_size * 100) / _collateral;
-        if (leverage < MIN_LEVERAGE || leverage > MAX_LEVERAGE) {
-            revert TradeHelper_InvalidLeverage();
-        }
+    function checkLeverage(
+        address _dataOracle,
+        address _priceOracle,
+        address _indexToken,
+        uint256 _signedPrice,
+        uint256 _size,
+        uint256 _collateral
+    ) external view {
+        uint256 leverage = calculateLeverage(_dataOracle, _priceOracle, _indexToken, _signedPrice, _size, _collateral);
+        if (leverage < MIN_LEVERAGE || leverage > MAX_LEVERAGE) revert TradeHelper_InvalidLeverage();
     }
 
-    function calculateLeverage(uint256 _size, uint256 _collateral) external pure returns (uint256) {
-        return (_size * 100) / _collateral;
+    function calculateLeverage(
+        address _dataOracle,
+        address _priceOracle,
+        address _indexToken,
+        uint256 _signedPrice,
+        uint256 _size,
+        uint256 _collateral
+    ) public view returns (uint256) {
+        uint256 sizeUsd = getTradeSizeUsd(_dataOracle, _indexToken, _size, _signedPrice);
+        uint256 collateralUsd = (_collateral * IPriceOracle(_priceOracle).getCollateralPrice()) / 1e18;
+        return (sizeUsd * 100) / collateralUsd;
     }
 
     function generateNewPosition(
         address _market,
         address _tradeStorage,
+        address _dataOracle,
+        address _priceOracle,
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _price
     ) external view returns (MarketStructs.Position memory) {
@@ -64,6 +82,14 @@ library TradeHelper {
         (uint256 longFunding, uint256 shortFunding, uint256 longBorrowFee, uint256 shortBorrowFee) =
             IMarket(_market).getMarketParameters();
         // make sure all Position and PositionRequest instantiations are in the correct order.
+        uint256 leverage = calculateLeverage(
+            _dataOracle,
+            _priceOracle,
+            _positionRequest.indexToken,
+            _price,
+            _positionRequest.sizeDelta,
+            _positionRequest.collateralDelta
+        );
         return MarketStructs.Position({
             index: ITradeStorage(_tradeStorage).getNextPositionIndex(
                 keccak256(abi.encodePacked(_positionRequest.indexToken)), _positionRequest.isLong
@@ -77,11 +103,7 @@ library TradeHelper {
             realisedPnl: 0,
             borrowParams: MarketStructs.BorrowParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: MarketStructs.FundingParams(0, 0, block.timestamp, longFunding, shortFunding),
-            pnlParams: MarketStructs.PnLParams(
-                _price,
-                _positionRequest.sizeDelta * _price,
-                (_positionRequest.sizeDelta * 100) / _positionRequest.collateralDelta
-                ),
+            pnlParams: MarketStructs.PnLParams(_price, _positionRequest.sizeDelta * _price, leverage),
             entryTimestamp: block.timestamp
         });
     }
@@ -92,8 +114,14 @@ library TradeHelper {
         return _sizeDelta / divisor; //e.g 1e18 / 0.01e18 = 100 => x / 100 = fee
     }
 
-    function getTradeSizeUsd(uint256 _sizeDelta, uint256 _signedPrice) external pure returns (uint256) {
-        return _sizeDelta * _signedPrice;
+    /// @dev Need to adjust for decimals
+    function getTradeSizeUsd(address _dataOracle, address _indexToken, uint256 _sizeDelta, uint256 _signedPrice)
+        public
+        view
+        returns (uint256)
+    {
+        uint256 decimals = IDataOracle(_dataOracle).getDecimals(_indexToken);
+        return (_sizeDelta * _signedPrice) / (10 ** decimals);
     }
 
     // Value Provided USD > Liquidation Fee + Fees + Losses USD
@@ -139,12 +167,13 @@ library TradeHelper {
     function checkCollateralReduction(
         MarketStructs.Position memory _position,
         uint256 _collateralDelta,
-        uint256 _collateralPriceUsd,
+        address _priceOracle,
         address _marketStorage
     ) external view returns (bool) {
         if (_position.collateralAmount <= _collateralDelta) return false;
         _position.collateralAmount -= _collateralDelta;
-        bool isValid = !checkIsLiquidatable(_position, _collateralPriceUsd, _marketStorage, _marketStorage);
+        uint256 collateralPrice = IPriceOracle(_priceOracle).getCollateralPrice();
+        bool isValid = !checkIsLiquidatable(_position, collateralPrice, _marketStorage, _marketStorage);
         return isValid;
     }
 
@@ -167,7 +196,7 @@ library TradeHelper {
 
     function getMarket(address _marketStorage, address _indexToken) public view returns (address) {
         bytes32 market = keccak256(abi.encodePacked(_indexToken));
-        return IMarketStorage(_marketStorage).getMarket(market).market;
+        return IMarketStorage(_marketStorage).markets(market).market;
     }
 
     function getMarketKey(address _indexToken) public pure returns (bytes32) {

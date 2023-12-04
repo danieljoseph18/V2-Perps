@@ -78,7 +78,7 @@ contract TestMarketFactory is Test {
     function testMarketFactoryLetsUsCreateNewMarkets() public {
         IERC20 indexToken = IERC20(makeAddr("indexToken"));
         address priceFeed = makeAddr("priceFeed");
-        marketFactory.createMarket(address(indexToken), priceFeed);
+        marketFactory.createMarket(address(indexToken), priceFeed, 18);
 
         // Get the market info
         bytes32 marketKey = keccak256(abi.encodePacked(address(indexToken)));

@@ -21,6 +21,7 @@ contract TradeVault is RoleValidation {
     event TransferOutTokens(bytes32 indexed _marketKey, address indexed _to, uint256 _collateralDelta, bool _isLong);
     event LossesTransferred(uint256 indexed _amount);
     event UpdateCollateralBalance(bytes32 indexed _marketKey, uint256 _amount, bool _isLong, bool _isIncrease);
+    event ExecutionFeeSent(address _executor, uint256 _fee);
 
     error TradeVault_InvalidToken();
     error TradeVault_IncorrectMarketKey();
@@ -28,11 +29,14 @@ contract TradeVault is RoleValidation {
     error TradeVault_ZeroBalanceTransfer();
     error TradeVault_InsufficientCollateral();
     error TradeVault_InsufficientCollateralToClaim();
+    error TradeVault_InsufficientBalance();
 
     constructor(address _wusdc, address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
         WUSDC = IWUSDC(_wusdc);
         liquidityVault = ILiquidityVault(_liquidityVault);
     }
+
+    receive() external payable {}
 
     function transferOutTokens(bytes32 _marketKey, address _to, uint256 _collateralDelta, bool _isLong)
         external
@@ -98,6 +102,12 @@ contract TradeVault is RoleValidation {
         _updateCollateralBalance(_marketKey, _claimed, _isLong, false);
         // transfer funding to the user
         WUSDC.safeTransfer(_user, _claimed);
+    }
+
+    function sendExecutionFee(address payable _executor, uint256 _executionFee) external onlyTradeStorage {
+        if (address(this).balance < _executionFee) revert TradeVault_InsufficientBalance();
+        _executor.transfer(_executionFee);
+        emit ExecutionFeeSent(_executor, _executionFee);
     }
 
     function _swapFundingAmount(bytes32 _marketKey, uint256 _amount, bool _isLong) internal {

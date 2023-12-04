@@ -15,4 +15,5 @@ interface ITradeVault {
     ) external;
     function swapFundingAmount(bytes32 _marketKey, uint256 _amount, bool _isLong) external;
     function claimFundingFees(bytes32 _marketKey, address _user, uint256 _claimed, bool _isLong) external;
+    function sendExecutionFee(address _executor, uint256 _executionFee) external;
 }

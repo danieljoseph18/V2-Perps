@@ -34,11 +34,14 @@ library PricingCalculator {
         int256 _sizeDeltaUsd,
         uint256 _price
     ) external pure returns (uint256) {
-        uint256 nextSISU = _sizeDeltaUsd > 0 ? _prevSISU + uint256(_sizeDeltaUsd) : _prevSISU - uint256(-_sizeDeltaUsd);
-        uint256 prevSum = _prevWAEP * _prevSISU;
-        int256 positionSum = _sizeDeltaUsd * int256(_price);
-        uint256 sum = positionSum > 0 ? prevSum + uint256(positionSum) : prevSum - uint256(positionSum);
-        return sum / nextSISU;
+        if (_prevWAEP == 0 && _prevSISU == 0) {
+            return uint256(_price);
+        } else {
+            return _sizeDeltaUsd > 0
+                ? (_prevWAEP * _prevSISU + uint256(_sizeDeltaUsd) * uint256(_price)) / (_prevSISU + uint256(_sizeDeltaUsd))
+                : (_prevWAEP * _prevSISU - uint256(-_sizeDeltaUsd) * uint256(_price))
+                    / (_prevSISU - uint256(-_sizeDeltaUsd));
+        }
     }
 
     /// @dev Positive for profit, negative for loss

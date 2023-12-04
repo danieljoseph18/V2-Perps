@@ -5,8 +5,6 @@ import {MarketStructs} from "../MarketStructs.sol";
 
 interface IMarketStorage {
     function storeMarket(MarketStructs.Market memory _market) external;
-    function getMarket(bytes32 _key) external view returns (MarketStructs.Market memory);
-    function getMarketFromIndexToken(address _indexToken) external view returns (MarketStructs.Market memory);
     function maxOpenInterests(bytes32 _marketKey) external view returns (uint256);
     function updateOpenInterest(
         bytes32 _marketKey,
@@ -23,7 +21,6 @@ interface IMarketStorage {
     function collatTokenShortOpenInterest(bytes32 _key) external view returns (uint256);
     function indexTokenLongOpenInterest(bytes32 _key) external view returns (uint256);
     function indexTokenShortOpenInterest(bytes32 _key) external view returns (uint256);
-    function getTotalIndexOpenInterest(address _indexToken) external view returns (uint256 _totalOI);
     function updateState(bytes32 _marketKey, uint256 _newAllocation, uint256 _maxOI) external;
     function setIsWhitelisted(address _token, bool _isWhitelisted) external;
 }

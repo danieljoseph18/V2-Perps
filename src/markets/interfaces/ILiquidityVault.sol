@@ -32,5 +32,6 @@ interface ILiquidityVault {
     // View Functions
     function getLiquidityTokenPrice() external view returns (uint256);
     function getAum() external view returns (uint256);
+    function getAumInWusdc() external view returns (uint256);
     function getPrice(address _token) external view returns (uint256);
 }

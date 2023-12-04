@@ -61,6 +61,6 @@ library MarketStructs {
     struct ExecutionParams {
         PositionRequest positionRequest;
         uint256 signedBlockPrice;
-        address executor;
+        address feeReceiver;
     }
 }
