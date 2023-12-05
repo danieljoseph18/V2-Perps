@@ -65,7 +65,7 @@ contract MarketFactory is RoleValidation {
             address(roleStorage)
         );
         // Initialise With Default Values
-        Market(market).initialise(0.0003e18, 1_000_000e18, 500e16, -500e16, 0.000000035e18, 1, false, 0.001e18, 2);
+        Market(market).initialise(0.0003e18, 1_000_000e18, 500e16, -500e16, 0.000000035e18, 1, false, 0.0000001e18, 2);
         // Store everything in MarketStorage
         MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, address(market), _marketKey);
         IMarketStorage(marketStorage).storeMarket(_marketInfo);

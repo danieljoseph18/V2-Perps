@@ -172,7 +172,7 @@ contract TestTrading is Test {
             address(indexToken),
             USER,
             100e6, // 100 USDC collateral
-            1e18, // $1000 per token, should be = 1000 USDC position size (10x leverage)
+            10e18, // $1000 per token, should be = 1000 USDC position size (10x leverage)
             0,
             1000e18, // price $1000
             0.1e18, // 10% slippage
@@ -181,11 +181,19 @@ contract TestTrading is Test {
         );
         uint256 signedBlockPrice = 1000e18;
         address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-        int256 priceImpact = ImpactCalculator.calculatePriceImpact(
+        (uint256 longOI, uint256 shortOI, uint256 sizeDeltaUsd) = ImpactCalculator.getOpenInterestAndSizeDelta(
+            address(marketStorage), address(dataOracle), address(priceOracle), market, request, signedBlockPrice
+        );
+        console.log("Long OI: ", longOI);
+        console.log("Short OI: ", shortOI);
+        console.log("Size Delta: ", sizeDeltaUsd);
+        uint256 priceImpact = ImpactCalculator.calculatePriceImpact(
             market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
         );
-        uint256 impactedPrice = ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpact);
-        console.log(impactedPrice);
+        console.log("Price Impact: ", priceImpact);
+        uint256 impactedPrice =
+            ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpact, request.isLong, request.isIncrease);
+        console.log("Impacted Price: ", impactedPrice);
         ImpactCalculator.checkSlippage(impactedPrice, signedBlockPrice, request.maxSlippage);
     }
 
@@ -248,7 +256,7 @@ contract TestTrading is Test {
         usdc.approve(address(requestRouter), LARGE_AMOUNT);
         uint256 executionFee = tradeStorage.minExecutionFee();
         // try to create a trade request
-        MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+        MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
             0,
             false,
             address(indexToken),
@@ -261,19 +269,18 @@ contract TestTrading is Test {
             true,
             true
         );
-        requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
+        requestRouter.createTradeRequest{value: executionFee}(request, executionFee);
         vm.stopPrank();
         // Run the calculate price impact function on the request
         uint256 signedBlockPrice = 1000e18;
         address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-        int256 priceImpact = ImpactCalculator.calculatePriceImpact(
-            market, address(marketStorage), address(dataOracle), address(priceOracle), _request, signedBlockPrice
+        uint256 priceImpact = ImpactCalculator.calculatePriceImpact(
+            market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
         );
-        if (priceImpact >= 0) {
-            console.log(uint256(priceImpact));
-        } else {
-            console.log(uint256(priceImpact * -1));
-        }
+        uint256 impactedPrice =
+            ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpact, request.isLong, request.isIncrease);
+        console.log(impactedPrice);
+        ImpactCalculator.checkSlippage(impactedPrice, signedBlockPrice, request.maxSlippage);
     }
 
     function testOpenInterestValues() public facilitateTrading {
@@ -440,6 +447,7 @@ contract TestTrading is Test {
         executor.executeTradeOrders(OWNER);
         // create close request
         bytes32 _positionKey = TradeHelper.generateKey(request);
+        console.log("WUSDC Bal: ", wusdc.balanceOf(address(tradeVault)));
         vm.prank(USER);
         requestRouter.createCloseRequest{value: executionFee}(_positionKey, 0, 0.1e18, false, executionFee);
         // execute close request

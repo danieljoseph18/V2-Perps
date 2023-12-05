@@ -28,7 +28,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     /// @dev Amount of liquidity in the pool
     uint256 public poolAmounts;
-    uint256 public reservedAmounts;
+    uint256 public totalReserved;
+    mapping(address => uint256) public reservedAmounts;
     mapping(address _handler => mapping(address _lp => bool _isHandler)) public isHandler;
 
     uint256 public accumulatedFees;
@@ -49,6 +50,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     error LiquidityVault_ZeroAddress();
     error LiquidityVault_InvalidHandler();
     error LiquidityVault_InsufficientFunds();
+    error LiquidityVault_InsufficientReserves();
     error LiquidityVault_AlreadyInitialised();
 
     // liquidity token = market token
@@ -122,14 +124,18 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     /// @dev Used to reserve / unreserve funds for open positions
-    function updateReservation(int256 _amount) external onlyTradeStorage {
+    function updateReservation(address _user, int256 _amount) external onlyTradeStorage {
         if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
+        uint256 amt;
         if (_amount > 0) {
-            reservedAmounts += uint256(_amount);
+            amt = uint256(_amount);
+            totalReserved += amt;
+            reservedAmounts[_user] += amt;
         } else {
-            uint256 amount = uint256(-_amount);
-            if (amount > reservedAmounts) revert LiquidityVault_InsufficientFunds();
-            reservedAmounts -= amount;
+            amt = uint256(-_amount);
+            if (reservedAmounts[_user] < amt) revert LiquidityVault_InsufficientReserves();
+            totalReserved -= amt;
+            reservedAmounts[_user] -= amt;
         }
     }
 

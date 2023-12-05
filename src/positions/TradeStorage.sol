@@ -71,6 +71,7 @@ contract TradeStorage is RoleValidation {
     error TradeStorage_AlreadyInitialised();
     error TradeStorage_LossExceedsPrinciple();
     error TradeStorage_InvalidPrice();
+    error TradeStorage_InvalidSizeDelta();
 
     /// Note Move all number initializations to an initialise function
     constructor(
@@ -144,6 +145,8 @@ contract TradeStorage is RoleValidation {
             _executeCollateralEdit(_executionParams.positionRequest, price, key);
         } else {
             _reserveLiquidity(
+                _executionParams.positionRequest.user,
+                key,
                 _executionParams.positionRequest.sizeDelta,
                 price,
                 _executionParams.positionRequest.indexToken,
@@ -349,25 +352,35 @@ contract TradeStorage is RoleValidation {
         // Decrease or close position
         _deletePositionRequest(_positionKey, _positionRequest.requestIndex, _positionRequest.isLimit);
         // Check the position exists
-        MarketStructs.Position storage _position = openPositions[_positionKey];
-        if (_position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
+        MarketStructs.Position storage position = openPositions[_positionKey];
+        if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
         // Calculate Leverage
         uint256 leverage = TradeHelper.calculateLeverage(
             address(dataOracle),
             address(priceOracle),
             _positionRequest.indexToken,
             _price,
-            _position.positionSize,
-            _position.collateralAmount
+            position.positionSize,
+            position.collateralAmount
         );
 
         // Process the fees for the decrease and return after fee amount
         uint256 afterFeeAmount = _processFees(_positionKey, _positionRequest);
         // SizeDelta = CollateralDelta * Leverage (Keeps Leverage Constant as Collateral is Removed)
-        uint256 sizeDelta = afterFeeAmount * leverage;
+        uint256 sizeDelta;
+        if (_positionRequest.collateralDelta == position.collateralAmount) {
+            sizeDelta = position.positionSize;
+        } else {
+            sizeDelta = (_positionRequest.collateralDelta * leverage) / 100;
+        }
         // Get PNL for SizeDelta
         int256 pnl = PricingCalculator.getDecreasePositionPnL(
-            sizeDelta, _position.pnlParams.weightedAvgEntryPrice, _price, _position.isLong
+            address(dataOracle),
+            position.indexToken,
+            sizeDelta,
+            position.pnlParams.weightedAvgEntryPrice,
+            _price,
+            position.isLong
         );
 
         _editPosition(_positionRequest.collateralDelta, sizeDelta, pnl, _price, false, _positionKey);
@@ -376,8 +389,8 @@ contract TradeStorage is RoleValidation {
 
         _handleTokenTransfers(_positionRequest, marketKey, pnl, afterFeeAmount);
 
-        if (_position.positionSize == 0) {
-            _deletePosition(_positionKey, marketKey, _position.isLong);
+        if (position.positionSize == 0) {
+            _deletePosition(_positionKey, marketKey, position.isLong);
         }
     }
 
@@ -468,14 +481,16 @@ contract TradeStorage is RoleValidation {
                 position.pnlParams.sigmaIndexSizeUSD -= uint256(-sizeDeltaUsd);
                 position.realisedPnl += _pnlDelta;
             }
-            position.pnlParams.leverage = TradeHelper.calculateLeverage(
-                address(dataOracle),
-                address(priceOracle),
-                position.indexToken,
-                _price,
-                position.positionSize,
-                position.collateralAmount
-            );
+            if (position.positionSize > 0) {
+                position.pnlParams.leverage = TradeHelper.calculateLeverage(
+                    address(dataOracle),
+                    address(priceOracle),
+                    position.indexToken,
+                    _price,
+                    position.positionSize,
+                    position.collateralAmount
+                );
+            }
         }
     }
 
@@ -580,19 +595,30 @@ contract TradeStorage is RoleValidation {
         openPositions[_positionKey].fundingParams.lastFundingUpdate = block.timestamp;
     }
 
-    function _reserveLiquidity(uint256 _sizeDelta, uint256 _price, address _indexToken, bool _isIncrease) internal {
-        uint256 decimalDiv = 10 ** dataOracle.getDecimals(_indexToken);
-        // convert sizeDelta to USD
-        uint256 sizeDeltaUsd = (_sizeDelta * _price) / decimalDiv;
-        // convert USD to WUSDC amount
-        uint256 wusdcPrice = priceOracle.getCollateralPrice();
-        // WUSDC has 18 decimals
-        uint256 wusdcAmount = (sizeDeltaUsd * 1e18) / wusdcPrice;
-        // if increase, reserve WUSDC amount, else unreserve WUSDC amount
+    function _reserveLiquidity(
+        address _user,
+        bytes32 _positionKey,
+        uint256 _sizeDelta,
+        uint256 _price,
+        address _indexToken,
+        bool _isIncrease
+    ) internal {
         if (_isIncrease) {
-            liquidityVault.updateReservation(int256(wusdcAmount));
+            // convert sizeDelta to USD
+            uint256 sizeDeltaUsd = TradeHelper.getTradeSizeUsd(address(dataOracle), _indexToken, _sizeDelta, _price);
+            // convert USD to WUSDC amount
+            uint256 wusdcPrice = priceOracle.getCollateralPrice();
+            // WUSDC has 18 decimals
+            uint256 wusdcAmount = (sizeDeltaUsd * 1e18) / wusdcPrice;
+            // if increase, reserve WUSDC amount
+            liquidityVault.updateReservation(_user, int256(wusdcAmount));
         } else {
-            liquidityVault.updateReservation(-int256(wusdcAmount));
+            // get amount reserved
+            uint256 reserved = liquidityVault.reservedAmounts(_user);
+            // get percentage of size being realised
+            uint256 realisedAmount = (_sizeDelta * reserved) / openPositions[_positionKey].positionSize;
+            // unreserve that amount
+            liquidityVault.updateReservation(_user, -int256(realisedAmount));
         }
     }
 }

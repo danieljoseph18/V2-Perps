@@ -15,6 +15,8 @@ interface ILiquidityVault {
     function accumulatedFees() external view returns (uint256);
     function liquidityFee() external view returns (uint256);
     function isHandler(address handler, address lp) external view returns (bool);
+    function reservedAmounts(address _user) external view returns (uint256);
+    function totalReserved() external view returns (uint256);
 
     // External Functions
     function setDataOracle(IDataOracle _dataOracle) external;
@@ -27,7 +29,7 @@ interface ILiquidityVault {
     function accumulateFees(uint256 _amount) external;
     function transferPositionProfit(address _user, uint256 _amount) external;
     function initialise(IDataOracle _dataOracle, uint256 _liquidityFee) external;
-    function updateReservation(int256 _amount) external;
+    function updateReservation(address _user, int256 _amount) external;
 
     // View Functions
     function getLiquidityTokenPrice() external view returns (uint256);

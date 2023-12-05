@@ -33,7 +33,10 @@ library BorrowingCalculator {
         uint256 borrowFee = _position.isLong
             ? IMarket(_market).longCumulativeBorrowFee() - _position.borrowParams.lastLongCumulativeBorrowFee
             : IMarket(_market).shortCumulativeBorrowFee() - _position.borrowParams.lastShortCumulativeBorrowFee;
-
-        feesOwed = _position.positionSize / (1e18 / borrowFee);
+        if (borrowFee == 0) {
+            feesOwed = 0;
+        } else {
+            feesOwed = _position.positionSize / (1e18 / borrowFee);
+        }
     }
 }

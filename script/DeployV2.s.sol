@@ -171,6 +171,7 @@ contract DeployV2 is Script {
         contracts.roleStorage.grantRole(Roles.STATE_KEEPER, contracts.owner);
         contracts.roleStorage.grantRole(Roles.KEEPER, contracts.owner);
         contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.tradeStorage));
+        contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.tradeVault));
         contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.requestRouter));
 
         vm.stopBroadcast();
