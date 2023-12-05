@@ -10,6 +10,7 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
+import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
 /// @dev Needs Vault Role
 contract LiquidityVault is RoleValidation, ReentrancyGuard {
@@ -19,11 +20,11 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     uint256 public constant STATE_UPDATE_INTERVAL = 5 seconds;
     uint256 public constant SCALING_FACTOR = 1e18;
-    uint256 public constant PRICE_PRECISION = 1e30;
 
     IWUSDC public immutable WUSDC;
     IMarketToken public immutable liquidityToken;
     IDataOracle public dataOracle;
+    IPriceOracle public priceOracle;
 
     /// @dev Amount of liquidity in the pool
     uint256 public poolAmounts;
@@ -60,10 +61,11 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     receive() external payable {}
 
-    function initialise(address _dataOracle, uint256 _liquidityFee) external onlyAdmin {
+    function initialise(address _dataOracle, address _priceOracle, uint256 _liquidityFee) external onlyAdmin {
         if (isInitialised) revert LiquidityVault_AlreadyInitialised();
         if (_dataOracle == address(0)) revert LiquidityVault_ZeroAddress();
         dataOracle = IDataOracle(_dataOracle);
+        priceOracle = IPriceOracle(_priceOracle);
         /// @dev Liquidity Fee needs 18 decimals => e.g 0.002e18 = 0.2% fee
         liquidityFee = _liquidityFee;
         isInitialised = true;
@@ -131,7 +133,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         }
     }
 
-    // $1 = 1e30
+    // $1 = 1e18
     function getLiquidityTokenPrice() public view returns (uint256) {
         // market token price = (worth of market pool in USD) / total supply
         uint256 aum = getAum();
@@ -159,10 +161,11 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     function getAumInWusdc() public view returns (uint256) {
-        return (getAum() * SCALING_FACTOR) / PRICE_PRECISION;
+        uint256 price = priceOracle.getCollateralPrice();
+        return (getAum() * price) / SCALING_FACTOR;
     }
 
-    // Price has 30 DPs
+    // Price has 18 DPs
     function getPrice(address _token) public view returns (uint256) {
         // perform safety checks
         return _getPrice(_token);
@@ -182,7 +185,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         // mint market tokens
         uint256 price = getPrice(address(WUSDC));
 
-        uint256 valueUsd = (afterFeeAmount * price) / PRICE_PRECISION;
+        uint256 valueUsd = (afterFeeAmount * price) / SCALING_FACTOR;
         uint256 aum = getAumInWusdc();
         uint256 supply = liquidityToken.totalSupply();
 
@@ -247,9 +250,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     function _getPrice(address _token) internal view returns (uint256) {
         if (_token == address(WUSDC) || _token == address(WUSDC.USDC())) {
-            return 1e30;
+            return 1e18;
         } else {
-            return 1000e30;
+            return 1000e18;
         }
     }
 

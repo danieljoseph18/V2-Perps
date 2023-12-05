@@ -23,7 +23,6 @@ contract Market is RoleValidation {
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
 
-    int256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
     uint256 public constant SCALING_FACTOR = 1e18;
 
     address public indexToken;
@@ -180,7 +179,7 @@ contract Market is RoleValidation {
         } else {
             _isLong ? longOI -= uint256(-_positionSizeUSD) : shortOI -= uint256(-_positionSizeUSD);
         }
-        int256 skew = int256(longOI) - int256(shortOI); // 500 USD skew = 500e30 (USD scaled by 30)
+        int256 skew = int256(longOI) - int256(shortOI); // 500 USD skew = 500e18 (USD scaled by 18)
 
         // Calculate time since last funding update
         uint256 timeElapsed = block.timestamp - lastFundingUpdateTime;

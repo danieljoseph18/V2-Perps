@@ -51,7 +51,7 @@ contract DataOracle is RoleValidation {
             );
     }
 
-    /// @dev To convert to usd, needs to be 1e30 DPs
+    /// @dev To convert to usd, needs to be 1e18 DPs
     function getCumulativeNetPnl() external view returns (int256 totalPnl) {
         for (uint256 i = 0; i < markets.length; i++) {
             totalPnl += getNetPnl(markets[i]);

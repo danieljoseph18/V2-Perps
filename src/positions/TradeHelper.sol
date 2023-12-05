@@ -15,7 +15,7 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 library TradeHelper {
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant MAX_LEVERAGE = 5000; // 50x
-    uint256 public constant MAX_LIQUIDATION_FEE = 100e30; // 100 USD
+    uint256 public constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
     uint256 public constant MAX_TRADING_FEE = 0.01e18; // 1%
 
     error TradeHelper_LimitPriceNotMet();
@@ -90,6 +90,7 @@ library TradeHelper {
             _positionRequest.sizeDelta,
             _positionRequest.collateralDelta
         );
+        uint256 sizeUsd = getTradeSizeUsd(_dataOracle, _positionRequest.indexToken, _positionRequest.sizeDelta, _price);
         return MarketStructs.Position({
             index: ITradeStorage(_tradeStorage).getNextPositionIndex(
                 keccak256(abi.encodePacked(_positionRequest.indexToken)), _positionRequest.isLong
@@ -103,7 +104,7 @@ library TradeHelper {
             realisedPnl: 0,
             borrowParams: MarketStructs.BorrowParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: MarketStructs.FundingParams(0, 0, block.timestamp, longFunding, shortFunding),
-            pnlParams: MarketStructs.PnLParams(_price, _positionRequest.sizeDelta * _price, leverage),
+            pnlParams: MarketStructs.PnLParams(_price, sizeUsd, leverage),
             entryTimestamp: block.timestamp
         });
     }

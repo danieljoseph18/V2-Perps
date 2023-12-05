@@ -101,7 +101,7 @@ contract TestMarketFactory is Test {
         assertEq(0.000000035e18, market.borrowingFactor());
         assertEq(1, market.borrowingExponent());
         assertEq(false, market.feeForSmallerSide());
-        assertEq(0.000001e18, market.priceImpactFactor());
-        assertEq(1, market.priceImpactExponent());
+        assertEq(0.001e18, market.priceImpactFactor());
+        assertEq(2, market.priceImpactExponent());
     }
 }

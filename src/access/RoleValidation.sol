@@ -79,6 +79,13 @@ contract RoleValidation {
         _;
     }
 
+    modifier onlyKeeperOrContract() {
+        if (!roleStorage.hasRole(Roles.KEEPER, msg.sender) && !(msg.sender == address(this))) {
+            revert RoleValidation_AccessDenied();
+        }
+        _;
+    }
+
     constructor(address _roleStorage) {
         roleStorage = RoleStorage(_roleStorage);
     }

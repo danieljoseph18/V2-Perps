@@ -436,16 +436,18 @@ contract TradeStorage is RoleValidation {
         MarketStructs.Position storage position = openPositions[_positionKey];
         if (_isIncrease) {
             position.collateralAmount += _collateralDelta;
-            position.positionSize += _sizeDelta;
-            uint256 sizeDeltaUsd =
-                TradeHelper.getTradeSizeUsd(address(dataOracle), position.indexToken, _sizeDelta, _price);
-            position.pnlParams.weightedAvgEntryPrice = PricingCalculator.calculateWeightedAverageEntryPrice(
-                position.pnlParams.weightedAvgEntryPrice,
-                position.pnlParams.sigmaIndexSizeUSD,
-                int256(sizeDeltaUsd),
-                _price
-            );
-            position.pnlParams.sigmaIndexSizeUSD += sizeDeltaUsd;
+            if (_sizeDelta > 0) {
+                position.positionSize += _sizeDelta;
+                uint256 sizeDeltaUsd =
+                    TradeHelper.getTradeSizeUsd(address(dataOracle), position.indexToken, _sizeDelta, _price);
+                position.pnlParams.weightedAvgEntryPrice = PricingCalculator.calculateWeightedAverageEntryPrice(
+                    position.pnlParams.weightedAvgEntryPrice,
+                    position.pnlParams.sigmaIndexSizeUSD,
+                    int256(sizeDeltaUsd),
+                    _price
+                );
+                position.pnlParams.sigmaIndexSizeUSD += sizeDeltaUsd;
+            }
             position.pnlParams.leverage = TradeHelper.calculateLeverage(
                 address(dataOracle),
                 address(priceOracle),
@@ -456,14 +458,16 @@ contract TradeStorage is RoleValidation {
             );
         } else {
             position.collateralAmount -= _collateralDelta;
-            position.positionSize -= _sizeDelta;
-            int256 sizeDeltaUsd =
-                -1 * int256(TradeHelper.getTradeSizeUsd(address(dataOracle), position.indexToken, _sizeDelta, _price));
-            position.pnlParams.weightedAvgEntryPrice = PricingCalculator.calculateWeightedAverageEntryPrice(
-                position.pnlParams.weightedAvgEntryPrice, position.pnlParams.sigmaIndexSizeUSD, sizeDeltaUsd, _price
-            );
-            position.pnlParams.sigmaIndexSizeUSD -= uint256(sizeDeltaUsd);
-            position.realisedPnl += _pnlDelta;
+            if (_sizeDelta > 0) {
+                position.positionSize -= _sizeDelta;
+                int256 sizeDeltaUsd = -1
+                    * int256(TradeHelper.getTradeSizeUsd(address(dataOracle), position.indexToken, _sizeDelta, _price));
+                position.pnlParams.weightedAvgEntryPrice = PricingCalculator.calculateWeightedAverageEntryPrice(
+                    position.pnlParams.weightedAvgEntryPrice, position.pnlParams.sigmaIndexSizeUSD, sizeDeltaUsd, _price
+                );
+                position.pnlParams.sigmaIndexSizeUSD -= uint256(-sizeDeltaUsd);
+                position.realisedPnl += _pnlDelta;
+            }
             position.pnlParams.leverage = TradeHelper.calculateLeverage(
                 address(dataOracle),
                 address(priceOracle),

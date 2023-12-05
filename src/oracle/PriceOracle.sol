@@ -10,7 +10,7 @@ contract PriceOracle {
     // pricing will be determined using Pyth and Chainlink as secondary
     // pricing should be upgradeable so we can improve pricing mechanism in future
     // Need max block the price is valid until
-    uint256 public constant PRICE_DECIMALS = 1e30;
+    uint256 public constant PRICE_DECIMALS = 18;
 
     mapping(address => bool) public whitelistedTokens;
     mapping(address => uint256) public pricePrecisions;
@@ -42,7 +42,7 @@ contract PriceOracle {
 
     // return price of USDC / WUSD
     function getCollateralPrice() external pure returns (uint256) {
-        return 1e30;
+        return 1e18;
     }
 
     function setSignedPrice(address _token, uint256 _block, uint256 _price) external {

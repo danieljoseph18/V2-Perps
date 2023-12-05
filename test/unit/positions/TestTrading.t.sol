@@ -49,7 +49,7 @@ contract TestTrading is Test {
     address public OWNER;
     address public USER = makeAddr("user");
 
-    uint256 public constant LARGE_AMOUNT = 1e30;
+    uint256 public constant LARGE_AMOUNT = 1e18;
     uint256 public constant DEPOSIT_AMOUNT = 100_000_000_000000;
     uint256 public constant INDEX_ALLOCATION = 1e24;
     uint256 public constant CONVERSION_RATE = 1e12;
@@ -107,8 +107,8 @@ contract TestTrading is Test {
         // check the market has the correct allocation
         uint256 alloc = marketStorage.marketAllocations(market.marketKey);
         uint256 maxOi = marketStorage.maxOpenInterests(market.marketKey);
-        assertEq(alloc, DEPOSIT_AMOUNT / 2);
-        assertEq(maxOi, ((DEPOSIT_AMOUNT / 2) * 4) / 5);
+        assertEq(alloc, INDEX_ALLOCATION);
+        assertEq(maxOi, (INDEX_ALLOCATION * 4) / 5);
     }
 
     function testTradeRequestsOpenAsExpected() public facilitateTrading {
@@ -125,7 +125,7 @@ contract TestTrading is Test {
             100e6, // 100 USDC
             1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
             0,
-            1000e30,
+            1000e18,
             0,
             true,
             true
@@ -152,7 +152,7 @@ contract TestTrading is Test {
             100e6, // 100 USDC
             1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
             0,
-            1000e30,
+            1000e18,
             0.1e18, // 10% slippage
             true,
             true
@@ -168,18 +168,18 @@ contract TestTrading is Test {
     function testPriceImpactCalculation() public facilitateTrading {
         MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
             0,
-            false,
+            false, // is limit order
             address(indexToken),
             USER,
-            100e6, // 100 USDC
-            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            100e6, // 100 USDC collateral
+            1e18, // $1000 per token, should be = 1000 USDC position size (10x leverage)
             0,
-            1000e30,
+            1000e18, // price $1000
             0.1e18, // 10% slippage
-            true,
-            true
+            true, // long
+            true // increase
         );
-        uint256 signedBlockPrice = 1000e30;
+        uint256 signedBlockPrice = 1000e18;
         address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
         int256 priceImpact = ImpactCalculator.calculatePriceImpact(
             market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
@@ -205,7 +205,7 @@ contract TestTrading is Test {
             100e6, // 100 USDC
             1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
             0,
-            1000e30,
+            1000e18,
             0.1e18, // 10% slippage
             true,
             true
@@ -255,10 +255,10 @@ contract TestTrading is Test {
             false,
             address(indexToken),
             USER,
-            1000000e6, // 1 mil USDC
-            10000e18, // $1000 per token, should be = 10000000 USDC (10x leverage)
+            10000000e6, // 1 mil USDC
+            100000e18, // $1000 per token, should be = 10000000 USDC (10x leverage)
             0,
-            1000e30,
+            1000e18,
             5e18, // 50% slippage
             true,
             true
@@ -266,12 +266,11 @@ contract TestTrading is Test {
         requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
         vm.stopPrank();
         // Run the calculate price impact function on the request
-        uint256 signedBlockPrice = 1000e30;
+        uint256 signedBlockPrice = 1000e18;
         address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
         int256 priceImpact = ImpactCalculator.calculatePriceImpact(
             market, address(marketStorage), address(dataOracle), address(priceOracle), _request, signedBlockPrice
         );
-        // log the output
         if (priceImpact >= 0) {
             console.log(uint256(priceImpact));
         } else {
@@ -279,5 +278,144 @@ contract TestTrading is Test {
         }
     }
 
-    function testWeCanAddCollateralToAnExistingPosition() public facilitateTrading {}
+    function testWeCanAddCollateralToAnExistingPosition() public facilitateTrading {
+        // create a trade request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
+        vm.stopPrank();
+        // execute the trade request
+        vm.startPrank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        vm.stopPrank();
+        // create a collateral edit request
+        vm.startPrank(USER);
+        MarketStructs.PositionRequest memory _collateralRequest = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            0, // 0 size delta
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(_collateralRequest, executionFee);
+        vm.stopPrank();
+        // execute the collateral edit request
+        vm.startPrank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        vm.stopPrank();
+        // // check values
+        bytes32 _positionKey = TradeHelper.generateKey(_request);
+        (,,,, uint256 collat,,,,,,,) = tradeStorage.openPositions(_positionKey);
+        assertGt(collat, 100e18);
+        console.log(collat);
+    }
+
+    function testWeCanIncreaseAnExistingPosition() public facilitateTrading {
+        // create a trade request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(request, executionFee);
+        vm.stopPrank();
+        // execute the trade request
+        vm.startPrank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        vm.stopPrank();
+        bytes32 _positionKey = TradeHelper.generateKey(request);
+        (,,,, uint256 collatBefore, uint256 sizeBefore,,,,,,) = tradeStorage.openPositions(_positionKey);
+        // create another trade request
+        vm.startPrank(USER);
+        MarketStructs.PositionRequest memory request2 = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(request2, executionFee);
+        vm.stopPrank();
+        // execute the other trade request
+        vm.startPrank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        vm.stopPrank();
+        // check the positions have stacked
+        (,,,, uint256 collatAfter, uint256 sizeAfter,,,,,,) = tradeStorage.openPositions(_positionKey);
+        // check values are as expected
+        assertGt(collatAfter, collatBefore);
+        assertGt(sizeAfter, sizeBefore);
+    }
+
+    function testWeCanFullyCloseOutAPosition() public facilitateTrading {
+        // create trade request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(request, executionFee);
+        vm.stopPrank();
+        // execute trade request
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        // create close request
+        bytes32 _positionKey = TradeHelper.generateKey(request);
+        vm.prank(USER);
+        requestRouter.createCloseRequest{value: executionFee}(_positionKey, 0, 0.1e18, false, executionFee);
+        // execute close request
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        // ensure trade is wiped from storage
+        (,,, address _user,,,,,,,,) = tradeStorage.openPositions(_positionKey);
+        assertEq(_user, address(0));
+    }
 }

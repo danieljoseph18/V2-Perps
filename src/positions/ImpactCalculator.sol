@@ -12,8 +12,11 @@ library ImpactCalculator {
     error ImpactCalculator_ZeroParameters();
     error ImpactCalculator_SlippageExceedsMax();
 
+    uint256 public constant IMPACT_SCALAR = 1e18;
+    uint256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
+
     function applyPriceImpact(uint256 _signedBlockPrice, int256 _priceImpactUsd) external pure returns (uint256) {
-        if (_signedBlockPrice == 0 || _priceImpactUsd == 0) revert ImpactCalculator_ZeroParameters();
+        if (_signedBlockPrice == 0) revert ImpactCalculator_ZeroParameters();
         return _priceImpactUsd >= 0
             ? _signedBlockPrice + uint256(_priceImpactUsd)
             : _signedBlockPrice - uint256(-_priceImpactUsd);
@@ -39,10 +42,12 @@ library ImpactCalculator {
         uint256 shortOI =
             MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, indexToken, false);
 
-        uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
+        uint256 skewBefore = longOI > shortOI ? (longOI - shortOI) / IMPACT_SCALAR : (shortOI - longOI) / IMPACT_SCALAR;
 
-        uint256 sizeDeltaUSD =
-            (_positionRequest.sizeDelta * _signedBlockPrice) / (10 ** IDataOracle(_dataOracle).getDecimals(indexToken));
+        uint256 sizeDeltaUSD = (
+            (_positionRequest.sizeDelta * _signedBlockPrice) / (10 ** IDataOracle(_dataOracle).getDecimals(indexToken))
+                / IMPACT_SCALAR
+        );
 
         if (_positionRequest.isIncrease) {
             _positionRequest.isLong ? longOI += sizeDeltaUSD : shortOI += sizeDeltaUSD;
@@ -50,17 +55,20 @@ library ImpactCalculator {
             _positionRequest.isLong ? longOI -= sizeDeltaUSD : shortOI -= sizeDeltaUSD;
         }
 
-        uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
+        uint256 skewAfter = longOI > shortOI ? (longOI - shortOI) / IMPACT_SCALAR : (shortOI - longOI) / IMPACT_SCALAR;
 
         uint256 exponent = market.priceImpactExponent();
         uint256 factor = market.priceImpactFactor();
 
-        int256 priceImpact = int256((skewBefore ** exponent) * factor) - int256((skewAfter ** exponent) * factor);
+        int256 priceImpact =
+            int256((skewBefore ** exponent) * factor) - int256((skewAfter ** exponent) * factor) * int256(IMPACT_SCALAR);
 
-        if (priceImpact > market.MAX_PRICE_IMPACT() && priceImpact > 0) {
-            priceImpact = market.MAX_PRICE_IMPACT();
-        } else if (priceImpact < -market.MAX_PRICE_IMPACT() && priceImpact < 0) {
-            priceImpact = -market.MAX_PRICE_IMPACT();
+        uint256 maxImpact = (_signedBlockPrice * MAX_PRICE_IMPACT) / IMPACT_SCALAR;
+
+        if (priceImpact > int256(maxImpact)) {
+            priceImpact = int256(maxImpact);
+        } else if (priceImpact < -int256(maxImpact)) {
+            priceImpact = -int256(maxImpact);
         }
 
         return priceImpact;

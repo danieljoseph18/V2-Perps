@@ -153,8 +153,8 @@ contract DeployV2 is Script {
          * ============ Set Up Contracts ============
          */
 
-        contracts.liquidityVault.initialise(address(contracts.dataOracle), 0.0003e18);
-        contracts.tradeStorage.initialise(5e30, 0.001e18, 0.001 ether);
+        contracts.liquidityVault.initialise(address(contracts.dataOracle), address(contracts.priceOracle), 0.0003e18);
+        contracts.tradeStorage.initialise(5e18, 0.001e18, 0.001 ether);
 
         // Set Up Roles
         contracts.roleStorage.grantRole(Roles.MARKET_MAKER, address(contracts.marketFactory));

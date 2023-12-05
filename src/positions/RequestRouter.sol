@@ -84,11 +84,13 @@ contract RequestRouter {
     // get position to close
     // get the current price
     // create decrease request for full position size
-    function createCloseRequest(bytes32 _positionKey, uint256 _orderPrice, bool _isLimit, uint256 _executionFee)
-        external
-        payable
-        validExecutionFee(_executionFee)
-    {
+    function createCloseRequest(
+        bytes32 _positionKey,
+        uint256 _orderPrice,
+        uint256 _maxSlippage,
+        bool _isLimit,
+        uint256 _executionFee
+    ) external payable validExecutionFee(_executionFee) {
         // transfer execution fee to the trade vault
         _sendExecutionFeeToVault(_executionFee);
         // validate the request meets all safety parameters
@@ -106,7 +108,7 @@ contract RequestRouter {
             sizeDelta: _position.positionSize,
             requestBlock: block.number,
             orderPrice: _orderPrice,
-            maxSlippage: 0,
+            maxSlippage: _maxSlippage,
             isLong: _position.isLong,
             isIncrease: false
         });

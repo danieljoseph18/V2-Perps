@@ -51,11 +51,10 @@ contract Executor is RoleValidation {
     }
 
     /// @dev Only Keeper
-    function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) public onlyKeeper {
+    function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) public onlyKeeperOrContract {
         _executeTradeOrder(_key, _feeReceiver, _isLimit);
     }
 
-    /// @dev needs work
     function _executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) internal {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);
@@ -88,8 +87,16 @@ contract Executor is RoleValidation {
         ImpactCalculator.checkSlippage(price, _signedBlockPrice, _positionRequest.maxSlippage);
 
         int256 sizeDeltaUsd = _positionRequest.isIncrease
-            ? int256(_positionRequest.sizeDelta * price)
-            : int256(_positionRequest.sizeDelta * price) * -1;
+            ? int256(
+                TradeHelper.getTradeSizeUsd(
+                    address(dataOracle), _positionRequest.indexToken, _positionRequest.sizeDelta, _signedBlockPrice
+                )
+            )
+            : int256(
+                TradeHelper.getTradeSizeUsd(
+                    address(dataOracle), _positionRequest.indexToken, _positionRequest.sizeDelta, _signedBlockPrice
+                )
+            ) * -1;
         // if decrease, check position exists and sizeDeltaUsd is less than the position's size
         if (!_positionRequest.isIncrease) {
             if (tradeStorage.openPositions(_key).positionSize < _positionRequest.sizeDelta) {
@@ -109,7 +116,9 @@ contract Executor is RoleValidation {
         );
         _updateFundingRate(market, sizeDeltaUsd, _positionRequest.isLong);
         _updateBorrowingRate(market, _positionRequest.isLong);
-        _updateTotalWAEP(market, price, sizeDeltaUsd, _positionRequest.isLong);
+        if (sizeDeltaUsd > 0) {
+            _updateTotalWAEP(market, price, sizeDeltaUsd, _positionRequest.isLong);
+        }
     }
 
     // when executing a trade, store it in MarketStorage

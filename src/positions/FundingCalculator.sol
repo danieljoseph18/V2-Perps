@@ -48,20 +48,27 @@ library FundingCalculator {
         view
         returns (uint256 feesEarned, uint256 feesOwed)
     {
-        // get cumulative funding fees since last update
         uint256 longAccumulatedFunding =
             IMarket(_market).longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
         uint256 shortAccumulatedFunding =
             IMarket(_market).shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
 
-        uint256 longDivisor = 1e18 / longAccumulatedFunding;
-        uint256 shortDivisor = 1e18 / shortAccumulatedFunding;
+        uint256 longFundingFees;
+        uint256 shortFundingFees;
 
-        uint256 longFundingFees = _position.positionSize / longDivisor;
-        uint256 shortFundingFees = _position.positionSize / shortDivisor;
-        // if long, add short fees to fees earned, if short, add long fees to fees earned
+        // Avoid division by zero
+        if (longAccumulatedFunding != 0) {
+            uint256 longDivisor = 1e18 / longAccumulatedFunding;
+            longFundingFees = _position.positionSize / longDivisor;
+        }
+
+        if (shortAccumulatedFunding != 0) {
+            uint256 shortDivisor = 1e18 / shortAccumulatedFunding;
+            shortFundingFees = _position.positionSize / shortDivisor;
+        }
+
+        // Calculate fees earned and owed
         feesEarned = _position.isLong ? shortFundingFees : longFundingFees;
-        // if short, add short fees to fees owed, if long, add long fees to fees owed
         feesOwed = _position.isLong ? longFundingFees : shortFundingFees;
     }
 }
