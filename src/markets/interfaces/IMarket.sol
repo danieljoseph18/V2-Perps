@@ -24,7 +24,7 @@ interface IMarket {
     function setBorrowingConfig(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide)
         external;
     function setPriceImpactConfig(uint256 _priceImpactFactor, uint256 _priceImpactExponent) external;
-    function updateFundingRate(int256 _positionSizeUSD, bool _isLong) external;
+    function updateFundingRate() external;
     function updateBorrowingRate(bool _isLong) external;
     function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external;
     function getMarketParameters() external view returns (uint256, uint256, uint256, uint256);

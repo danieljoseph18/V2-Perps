@@ -10,8 +10,6 @@ import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
-import {UD60x18, ud, unwrap} from "prb-math/UD60x18.sol";
-import {SD59x18, sd, unwrap} from "prb-math/SD59x18.sol";
 
 /*
     weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -25,12 +23,10 @@ library PricingCalculator {
 
     function calculatePnL(address _market, MarketStructs.Position memory _position) external view returns (int256) {
         uint256 indexPrice = IMarket(_market).getPrice(_position.indexToken);
-        int256 deltaPriceUsd = unwrap(sd(int256(indexPrice)).sub(sd(int256(_position.pnlParams.weightedAvgEntryPrice))));
-        uint256 scalar = unwrap(ud(_position.positionSize).div(ud(indexPrice)));
+        int256 deltaPriceUsd = int256(indexPrice) - int256(_position.pnlParams.weightedAvgEntryPrice);
+        uint256 scalar = _position.positionSize / indexPrice;
 
-        return _position.isLong
-            ? unwrap(sd(deltaPriceUsd).mul(sd(int256(scalar))))
-            : unwrap(sd(-deltaPriceUsd).mul(sd(int256(scalar))));
+        return _position.isLong ? deltaPriceUsd * int256(scalar) : -deltaPriceUsd * int256(scalar);
     }
 
     /// weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -44,17 +40,10 @@ library PricingCalculator {
         if (_prevWAEP == 0 && _prevSISU == 0) {
             return uint256(_price);
         } else {
-            if (_sizeDeltaUsd > 0) {
-                uint256 numerator =
-                    unwrap((ud(_prevWAEP).mul(ud(_prevSISU))).add(ud(uint256(_sizeDeltaUsd)).mul(ud(_price))));
-                uint256 denominator = unwrap(ud(_prevSISU).add(ud(uint256(_sizeDeltaUsd))));
-                return unwrap(ud(numerator).div(ud(denominator)));
-            } else {
-                uint256 numerator =
-                    unwrap((ud(_prevWAEP).mul(ud(_prevSISU))).sub(ud(uint256(-_sizeDeltaUsd)).mul(ud(_price))));
-                uint256 denominator = unwrap(ud(_prevSISU).sub(ud(uint256(-_sizeDeltaUsd))));
-                return unwrap(ud(numerator).div(ud(denominator)));
-            }
+            return _sizeDeltaUsd > 0
+                ? (_prevWAEP * _prevSISU + uint256(_sizeDeltaUsd) * uint256(_price)) / (_prevSISU + uint256(_sizeDeltaUsd))
+                : (_prevWAEP * _prevSISU - uint256(-_sizeDeltaUsd) * uint256(_price))
+                    / (_prevSISU - uint256(-_sizeDeltaUsd));
         }
     }
 
@@ -85,9 +74,9 @@ library PricingCalculator {
         bool _isLong
     ) external view returns (int256) {
         // only realise a percentage equivalent to the percentage of the position being closed
-        uint256 decimals = IDataOracle(_dataOracle).getDecimals(_indexToken);
-        uint256 entryValue = unwrap((ud(_sizeDelta).mul(ud(_positionWAEP))).div(ud(10).pow(ud(decimals))));
-        uint256 exitValue = unwrap((ud(_sizeDelta).mul(ud(_currentPrice))).div(ud(10).pow(ud(decimals))));
+        uint256 baseUnit = IDataOracle(_dataOracle).getBaseUnits(_indexToken);
+        uint256 entryValue = (_sizeDelta * _positionWAEP) / baseUnit;
+        uint256 exitValue = (_sizeDelta * _currentPrice) / baseUnit;
         // if long, > 0 is profit, < 0 is loss
         // if short, > 0 is loss, < 0 is profit
         if (_isLong) {

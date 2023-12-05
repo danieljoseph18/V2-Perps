@@ -6,7 +6,6 @@ import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
-import {UD60x18, ud, unwrap} from "prb-math/UD60x18.sol";
 
 // library responsible for handling all price impact calculations
 library ImpactCalculator {
@@ -77,7 +76,7 @@ library ImpactCalculator {
         shortOI = MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, indexToken, false);
 
         sizeDeltaUSD =
-            (_positionRequest.sizeDelta * _signedBlockPrice) / (10 ** IDataOracle(_dataOracle).getDecimals(indexToken));
+            (_positionRequest.sizeDelta * _signedBlockPrice) / (IDataOracle(_dataOracle).getBaseUnits(indexToken));
     }
 
     // Helper function to handle exponentiation
@@ -90,8 +89,8 @@ library ImpactCalculator {
         uint256 absAfter = _skewAfter / IMPACT_SCALAR;
 
         // Exponentiate and then apply factor
-        uint256 impactBefore = unwrap((ud(absBefore).pow(ud(_exponent))).mul(ud(_factor)));
-        uint256 impactAfter = unwrap((ud(absAfter).pow(ud(_exponent)).mul(ud(_factor))));
+        uint256 impactBefore = (absBefore ** _exponent) * _factor;
+        uint256 impactAfter = (absAfter ** _exponent) * _factor;
 
         return impactBefore > impactAfter ? impactBefore - impactAfter : impactAfter - impactBefore;
     }

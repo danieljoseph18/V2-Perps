@@ -106,17 +106,18 @@ contract Executor is RoleValidation {
             }
         }
         // execute the trade
-        MarketStructs.Position memory _position =
-            tradeStorage.executeTrade(MarketStructs.ExecutionParams(_positionRequest, price, _feeReceiver));
+        tradeStorage.executeTrade(MarketStructs.ExecutionParams(_positionRequest, price, _feeReceiver));
+
+        bytes32 marketKey = IMarket(market).getMarketKey();
 
         _updateOpenInterest(
-            _position.market,
+            marketKey,
             _positionRequest.collateralDelta,
             _positionRequest.sizeDelta,
             _positionRequest.isLong,
             _positionRequest.isIncrease
         );
-        _updateFundingRate(market, sizeDeltaUsd, _positionRequest.isLong);
+        _updateFundingRate(market);
         _updateBorrowingRate(market, _positionRequest.isLong);
         if (sizeDeltaUsd > 0) {
             _updateTotalWAEP(market, price, sizeDeltaUsd, _positionRequest.isLong);
@@ -138,8 +139,8 @@ contract Executor is RoleValidation {
     }
 
     // in every action that interacts with Market, call _updateFundingRate();
-    function _updateFundingRate(address _market, int256 _sizeDeltaUsd, bool _isLong) internal {
-        IMarket(_market).updateFundingRate(_sizeDeltaUsd, _isLong);
+    function _updateFundingRate(address _market) internal {
+        IMarket(_market).updateFundingRate();
     }
 
     function _updateBorrowingRate(address _market, bool _isLong) internal {

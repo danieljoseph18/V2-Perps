@@ -22,9 +22,9 @@ interface IDataOracle {
     // Function to get cumulative net PnL for all markets
     function getCumulativeNetPnl() external view returns (int256 totalPnl);
 
-    // Function to get decimals for a token
-    function getDecimals(address _token) external view returns (uint256);
+    // Function to get base units for a token
+    function getBaseUnits(address _token) external view returns (uint256);
 
-    // Function to set decimals for a token
-    function setDecimals(address _token, uint256 _decimals) external;
+    // Function to set base units for a token
+    function setBaseUnit(address _token, uint256 _baseUnit) external;
 }

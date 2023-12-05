@@ -44,7 +44,7 @@ contract MarketFactory is RoleValidation {
         priceOracle = _priceOracle;
     }
 
-    function createMarket(address _indexToken, address _priceFeed, uint256 _tokenDecimals)
+    function createMarket(address _indexToken, address _priceFeed, uint256 _baseUnit)
         external
         onlyAdmin
         returns (address)
@@ -69,7 +69,7 @@ contract MarketFactory is RoleValidation {
         // Store everything in MarketStorage
         MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, address(market), _marketKey);
         IMarketStorage(marketStorage).storeMarket(_marketInfo);
-        IDataOracle(dataOracle).setDecimals(_indexToken, _tokenDecimals);
+        IDataOracle(dataOracle).setBaseUnit(_indexToken, _baseUnit);
 
         emit MarketCreated(_indexToken, address(market));
         return address(market);

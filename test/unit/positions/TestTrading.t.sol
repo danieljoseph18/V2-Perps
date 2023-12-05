@@ -90,7 +90,7 @@ contract TestTrading is Test {
         // create a new index token to trade
         indexToken = new MarketToken("Bitcoin", "BTC", address(roleStorage));
         // create a new market and provide an allocation
-        address _market = marketFactory.createMarket(address(indexToken), makeAddr("priceFeed"), 18);
+        address _market = marketFactory.createMarket(address(indexToken), makeAddr("priceFeed"), 1e18);
         uint256 allocation = INDEX_ALLOCATION;
         stateUpdater.updateState(address(indexToken), allocation, (allocation * 4) / 5);
         vm.stopPrank();
@@ -448,6 +448,8 @@ contract TestTrading is Test {
         // create close request
         bytes32 _positionKey = TradeHelper.generateKey(request);
         console.log("WUSDC Bal: ", wusdc.balanceOf(address(tradeVault)));
+        (,,,, uint256 collatBefore,,,,,,,) = tradeStorage.openPositions(_positionKey);
+        assertEq(wusdc.balanceOf(address(tradeVault)), collatBefore);
         vm.prank(USER);
         requestRouter.createCloseRequest{value: executionFee}(_positionKey, 0, 0.1e18, false, executionFee);
         // execute close request

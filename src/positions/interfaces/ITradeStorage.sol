@@ -11,9 +11,7 @@ interface ITradeStorage {
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external;
 
-    function executeTrade(MarketStructs.ExecutionParams calldata _executionParams)
-        external
-        returns (MarketStructs.Position memory);
+    function executeTrade(MarketStructs.ExecutionParams calldata _executionParams) external;
 
     function executeDecreaseRequest(
         MarketStructs.PositionRequest calldata _decreaseRequest,

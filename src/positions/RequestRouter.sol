@@ -61,19 +61,22 @@ contract RequestRouter {
         // get the key for the market
         bytes32 marketKey = keccak256(abi.encodePacked(_positionRequest.indexToken));
 
+        uint256 afterFeeAmount;
         if (_positionRequest.isIncrease) {
             _validateAllocation(marketKey, _positionRequest.sizeDelta);
 
             uint256 wusdcAmount = _transferInCollateral(_positionRequest.collateralDelta);
 
-            _transferOutTokens(_positionRequest, wusdcAmount, marketKey);
+            afterFeeAmount = _transferOutTokens(_positionRequest, wusdcAmount, marketKey);
         }
 
         (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
         uint256 index = _positionRequest.isLimit ? limitLen : marketLen;
 
-        _positionRequest.collateralDelta =
-            _adjustCollateralDecimals(_positionRequest.collateralDelta, _positionRequest.isIncrease);
+        _positionRequest.collateralDelta = _positionRequest.isIncrease
+            ? afterFeeAmount
+            : _adjustCollateralDecimals(_positionRequest.collateralDelta, _positionRequest.isIncrease);
+
         _positionRequest.user = msg.sender;
         _positionRequest.requestIndex = index;
         _positionRequest.requestBlock = block.number;
@@ -136,7 +139,7 @@ contract RequestRouter {
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _wusdcAmount,
         bytes32 _marketKey
-    ) internal {
+    ) internal returns (uint256) {
         // deduct trading fee from amount
         uint256 fee = TradeHelper.calculateTradingFee(address(tradeStorage), _positionRequest.sizeDelta);
         // validate fee vs request => can fee be deducted from collateral and still remain above minimum?
@@ -144,11 +147,13 @@ contract RequestRouter {
         liquidityVault.accumulateFees(fee);
         WUSDC.transfer(address(liquidityVault), fee);
         // transfer the rest of the collateral to trade vault and updateCollateralBalance
-        uint256 collateralAmount = _wusdcAmount - fee;
+        uint256 afterFeeAmount = _wusdcAmount - fee;
         tradeVault.updateCollateralBalance(
-            _marketKey, collateralAmount, _positionRequest.isLong, _positionRequest.isIncrease
+            _marketKey, afterFeeAmount, _positionRequest.isLong, _positionRequest.isIncrease
         );
-        WUSDC.transfer(address(tradeVault), collateralAmount);
+        WUSDC.transfer(address(tradeVault), afterFeeAmount);
+
+        return afterFeeAmount;
     }
 
     function _sendExecutionFeeToVault(uint256 _executionFee) internal returns (bool) {

@@ -121,8 +121,8 @@ library TradeHelper {
         view
         returns (uint256)
     {
-        uint256 decimals = IDataOracle(_dataOracle).getDecimals(_indexToken);
-        return (_sizeDelta * _signedPrice) / (10 ** decimals);
+        uint256 baseUnit = IDataOracle(_dataOracle).getBaseUnits(_indexToken);
+        return (_sizeDelta * _signedPrice) / baseUnit;
     }
 
     // Value Provided USD > Liquidation Fee + Fees + Losses USD

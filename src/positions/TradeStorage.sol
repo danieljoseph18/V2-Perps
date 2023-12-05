@@ -132,11 +132,7 @@ contract TradeStorage is RoleValidation {
         emit OrderRequestCancelled(_positionKey);
     }
 
-    function executeTrade(MarketStructs.ExecutionParams memory _executionParams)
-        external
-        onlyExecutor
-        returns (MarketStructs.Position memory)
-    {
+    function executeTrade(MarketStructs.ExecutionParams memory _executionParams) external onlyExecutor {
         bytes32 key = TradeHelper.generateKey(_executionParams.positionRequest);
 
         uint256 price = _executionParams.signedBlockPrice;
@@ -160,8 +156,6 @@ contract TradeStorage is RoleValidation {
 
         // fire event to be picked up by backend and stored in DB
         emit TradeExecuted(_executionParams);
-        // return the edited position
-        return openPositions[key];
     }
 
     // only callable from liquidator contract

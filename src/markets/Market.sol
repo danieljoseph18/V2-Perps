@@ -166,19 +166,14 @@ contract Market is RoleValidation {
 
     /// @dev 1 USD = 1e18
     /// Note should be called for every position entry / exit
-    function updateFundingRate(int256 _positionSizeUSD, bool _isLong) external onlyExecutor {
+    function updateFundingRate() external onlyExecutor {
         uint256 longOI = MarketHelper.getIndexOpenInterestUSD(
             address(marketStorage), address(dataOracle), address(priceOracle), indexToken, true
         );
         uint256 shortOI = MarketHelper.getIndexOpenInterestUSD(
             address(marketStorage), address(dataOracle), address(priceOracle), indexToken, false
         );
-        // If Increase ... Else Decrease
-        if (_positionSizeUSD >= 0) {
-            _isLong ? longOI += uint256(_positionSizeUSD) : shortOI += uint256(_positionSizeUSD);
-        } else {
-            _isLong ? longOI -= uint256(-_positionSizeUSD) : shortOI -= uint256(-_positionSizeUSD);
-        }
+
         int256 skew = int256(longOI) - int256(shortOI); // 500 USD skew = 500e18 (USD scaled by 18)
 
         // Calculate time since last funding update

@@ -14,7 +14,7 @@ contract DataOracle is RoleValidation {
 
     MarketStructs.Market[] public markets;
     mapping(bytes32 => bool) public isMarket;
-    mapping(address => uint256) public tokenDecimals;
+    mapping(address => uint256) public baseUnits;
 
     constructor(address _marketStorage, address _priceOracle, address _roleStorage) RoleValidation(_roleStorage) {
         marketStorage = IMarketStorage(_marketStorage);
@@ -28,8 +28,9 @@ contract DataOracle is RoleValidation {
         }
     }
 
-    function setDecimals(address _token, uint256 _decimals) external onlyMarketMaker {
-        tokenDecimals[_token] = _decimals;
+    /// @dev e.g 1e18 = 18 decimal places
+    function setBaseUnit(address _token, uint256 _baseUnit) external onlyMarketMaker {
+        baseUnits[_token] = _baseUnit;
     }
 
     function clearMarkets() external onlyAdmin {
@@ -59,7 +60,7 @@ contract DataOracle is RoleValidation {
         return totalPnl;
     }
 
-    function getDecimals(address _token) external view returns (uint256) {
-        return tokenDecimals[_token];
+    function getBaseUnits(address _token) external view returns (uint256) {
+        return baseUnits[_token];
     }
 }

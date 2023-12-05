@@ -50,9 +50,9 @@ library MarketHelper {
         bool _isLong
     ) public view returns (uint256) {
         uint256 indexOI = getIndexOpenInterest(_marketStorage, _indexToken, _isLong);
-        uint256 indexDecimals = IDataOracle(_dataOracle).getDecimals(_indexToken);
+        uint256 baseUnit = IDataOracle(_dataOracle).getBaseUnits(_indexToken);
         uint256 indexPrice = IPriceOracle(_priceOracle).getPrice(_indexToken);
-        return (indexOI * indexPrice) / (10 ** indexDecimals);
+        return (indexOI * indexPrice) / baseUnit;
     }
 
     function getTotalIndexOpenInterestUSD(
@@ -113,8 +113,8 @@ library MarketHelper {
         uint256 totalWAEP = _isLong ? IMarket(_market).longTotalWAEP() : IMarket(_market).shortTotalWAEP();
         address indexToken = IMarket(_market).indexToken();
         uint256 indexOI = getIndexOpenInterest(_marketStorage, indexToken, _isLong);
-        uint256 indexDecimals = IDataOracle(_dataOracle).getDecimals(indexToken);
-        return (totalWAEP * indexOI) / (10 ** indexDecimals);
+        uint256 baseUnit = IDataOracle(_dataOracle).getBaseUnits(indexToken);
+        return (totalWAEP * indexOI) / baseUnit;
     }
 
     function getPoolBalance(address _marketStorage, bytes32 _marketKey) public view returns (uint256) {
