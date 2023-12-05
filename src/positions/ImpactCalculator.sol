@@ -22,7 +22,7 @@ library ImpactCalculator {
             : _signedBlockPrice - uint256(-_priceImpactUsd);
     }
 
-    // Returns Price impact in USD
+    // Returns Price impact Percentage
     function calculatePriceImpact(
         address _market,
         address _marketStorage,
@@ -42,11 +42,8 @@ library ImpactCalculator {
         uint256 shortOI =
             MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, indexToken, false);
 
-        uint256 skewBefore = longOI > shortOI ? (longOI - shortOI) / IMPACT_SCALAR : (shortOI - longOI) / IMPACT_SCALAR;
-
         uint256 sizeDeltaUSD = (
             (_positionRequest.sizeDelta * _signedBlockPrice) / (10 ** IDataOracle(_dataOracle).getDecimals(indexToken))
-                / IMPACT_SCALAR
         );
 
         if (_positionRequest.isIncrease) {
@@ -55,13 +52,15 @@ library ImpactCalculator {
             _positionRequest.isLong ? longOI -= sizeDeltaUSD : shortOI -= sizeDeltaUSD;
         }
 
-        uint256 skewAfter = longOI > shortOI ? (longOI - shortOI) / IMPACT_SCALAR : (shortOI - longOI) / IMPACT_SCALAR;
+        int256 skewBefore = int256(longOI) - int256(shortOI);
+        int256 skewAfter =
+            _positionRequest.isLong ? skewBefore + int256(sizeDeltaUSD) : skewBefore - int256(sizeDeltaUSD);
 
         uint256 exponent = market.priceImpactExponent();
         uint256 factor = market.priceImpactFactor();
 
-        int256 priceImpact =
-            int256((skewBefore ** exponent) * factor) - int256((skewAfter ** exponent) * factor) * int256(IMPACT_SCALAR);
+        // Adjusting exponentiation to maintain precision and prevent overflow
+        int256 priceImpact = calculateExponentiatedImpact(skewBefore, skewAfter, exponent, factor);
 
         uint256 maxImpact = (_signedBlockPrice * MAX_PRICE_IMPACT) / IMPACT_SCALAR;
 
@@ -72,6 +71,23 @@ library ImpactCalculator {
         }
 
         return priceImpact;
+    }
+
+    // Helper function to handle exponentiation
+    function calculateExponentiatedImpact(int256 _before, int256 _after, uint256 _exponent, uint256 _factor)
+        internal
+        pure
+        returns (int256)
+    {
+        // Convert to positive numbers for exponentiation
+        uint256 absBefore = uint256(_before < 0 ? -_before : _before);
+        uint256 absAfter = uint256(_after < 0 ? -_after : _after);
+
+        // Exponentiate and then apply factor
+        uint256 impactBefore = (absBefore ** _exponent) * _factor / IMPACT_SCALAR;
+        uint256 impactAfter = (absAfter ** _exponent) * _factor / IMPACT_SCALAR;
+
+        return int256(impactBefore) - int256(impactAfter);
     }
 
     function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) external pure {

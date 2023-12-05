@@ -184,11 +184,9 @@ contract TestTrading is Test {
         int256 priceImpact = ImpactCalculator.calculatePriceImpact(
             market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
         );
-        if (priceImpact >= 0) {
-            console.log(uint256(priceImpact));
-        } else {
-            console.log(uint256(priceImpact * -1));
-        }
+        uint256 impactedPrice = ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpact);
+        console.log(impactedPrice);
+        ImpactCalculator.checkSlippage(impactedPrice, signedBlockPrice, request.maxSlippage);
     }
 
     function testExecutedTradesHaveTheCorrectParameters() public facilitateTrading {
@@ -276,6 +274,39 @@ contract TestTrading is Test {
         } else {
             console.log(uint256(priceImpact * -1));
         }
+    }
+
+    function testOpenInterestValues() public facilitateTrading {
+        // Create a really large trade request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        // try to create a trade request
+        MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            1_000_000e6, // 1 mil USDC
+            10_000e18, // $1000 per token, should be = 10,000,000 USDC (10x leverage)
+            0,
+            1000e18,
+            5e18, // 50% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
+        vm.stopPrank();
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        uint256 longOI = MarketHelper.getIndexOpenInterestUSD(
+            address(marketStorage), address(dataOracle), address(priceOracle), address(indexToken), true
+        );
+        uint256 shortOI = MarketHelper.getIndexOpenInterestUSD(
+            address(marketStorage), address(dataOracle), address(priceOracle), address(indexToken), false
+        );
+        console.log("Long OI: ", longOI);
+        console.log("Short OI: ", shortOI);
     }
 
     function testWeCanAddCollateralToAnExistingPosition() public facilitateTrading {
