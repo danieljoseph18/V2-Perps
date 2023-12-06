@@ -73,9 +73,8 @@ contract RequestRouter {
         (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
         uint256 index = _positionRequest.isLimit ? limitLen : marketLen;
 
-        _positionRequest.collateralDelta = _positionRequest.isIncrease
-            ? afterFeeAmount
-            : _adjustCollateralDecimals(_positionRequest.collateralDelta, _positionRequest.isIncrease);
+        _positionRequest.collateralDelta =
+            _positionRequest.isIncrease ? afterFeeAmount : _adjustCollateralDecimals(_positionRequest.collateralDelta);
 
         _positionRequest.user = msg.sender;
         _positionRequest.requestIndex = index;
@@ -176,11 +175,7 @@ contract RequestRouter {
     }
 
     /// @dev Adjust decimals from USDC -> WUSDC
-    function _adjustCollateralDecimals(uint256 _collateralDelta, bool _isIncrease) internal pure returns (uint256) {
-        if (_isIncrease) {
-            return _collateralDelta * 1e12;
-        } else {
-            return _collateralDelta / 1e12;
-        }
+    function _adjustCollateralDecimals(uint256 _collateralDelta) internal pure returns (uint256) {
+        return _collateralDelta * 1e12;
     }
 }

@@ -26,6 +26,7 @@ import {MarketStructs} from "../../../src/markets/MarketStructs.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
 import {ImpactCalculator} from "../../../src/positions/ImpactCalculator.sol";
+import {BorrowingCalculator} from "../../../src/positions/BorrowingCalculator.sol";
 
 contract TestTrading is Test {
     RoleStorage roleStorage;
@@ -93,6 +94,48 @@ contract TestTrading is Test {
         address _market = marketFactory.createMarket(address(indexToken), makeAddr("priceFeed"), 1e18);
         uint256 allocation = INDEX_ALLOCATION;
         stateUpdater.updateState(address(indexToken), allocation, (allocation * 4) / 5);
+        vm.stopPrank();
+        _;
+    }
+
+    modifier facilitateTradingAndOpenTrade() {
+        vm.deal(OWNER, LARGE_AMOUNT);
+        vm.deal(USER, LARGE_AMOUNT);
+        // add liquidity
+        usdc.mint(OWNER, LARGE_AMOUNT);
+        usdc.mint(USER, LARGE_AMOUNT);
+        vm.startPrank(OWNER);
+        usdc.approve(address(liquidityVault), LARGE_AMOUNT);
+        liquidityVault.addLiquidity(DEPOSIT_AMOUNT);
+        // create a new index token to trade
+        indexToken = new MarketToken("Bitcoin", "BTC", address(roleStorage));
+        // create a new market and provide an allocation
+        address _market = marketFactory.createMarket(address(indexToken), makeAddr("priceFeed"), 1e18);
+        uint256 allocation = INDEX_ALLOCATION;
+        stateUpdater.updateState(address(indexToken), allocation, (allocation * 4) / 5);
+        vm.stopPrank();
+        // create a trade request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
+        vm.stopPrank();
+        // execute the trade request
+        vm.startPrank(OWNER);
+        executor.executeTradeOrders(OWNER);
         vm.stopPrank();
         _;
     }
@@ -458,5 +501,36 @@ contract TestTrading is Test {
         // ensure trade is wiped from storage
         (,,, address _user,,,,,,,,) = tradeStorage.openPositions(_positionKey);
         assertEq(_user, address(0));
+    }
+
+    function testWeCanPartiallyCloseOutAPosition() public facilitateTradingAndOpenTrade {
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        // create a partial close request
+        MarketStructs.PositionRequest memory decreaseRequest = MarketStructs.PositionRequest({
+            requestIndex: 0,
+            isLimit: false,
+            indexToken: address(indexToken),
+            user: USER,
+            collateralDelta: 50e6,
+            sizeDelta: 5e17,
+            requestBlock: 0,
+            orderPrice: 0,
+            maxSlippage: 0.1e18, // 10% slippage
+            isLong: true,
+            isIncrease: false
+        });
+        bytes32 _positionKey = TradeHelper.generateKey(decreaseRequest);
+        (,,,, uint256 collatBefore, uint256 sizeBefore,,,,,,) = tradeStorage.openPositions(_positionKey);
+        console.log("End Collat: ", collatBefore);
+        console.log("End Size: ", sizeBefore);
+        vm.prank(USER);
+        requestRouter.createTradeRequest{value: executionFee}(decreaseRequest, executionFee);
+        // execute the partial close request
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        // ensure the position has partially closed
+        (,,,, uint256 collatAfter, uint256 sizeAfter,,,,,,) = tradeStorage.openPositions(_positionKey);
+        console.log("End Collat: ", collatAfter);
+        console.log("End Size: ", sizeAfter);
     }
 }

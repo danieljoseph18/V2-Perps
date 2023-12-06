@@ -104,8 +104,9 @@ library ImpactCalculator {
     }
 
     function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) external pure {
-        uint256 impactDelta = (_impactedPrice * 1e18) / _signedPrice;
-        uint256 slippage = impactDelta > 1e18 ? impactDelta - 1e18 : 1e18 - impactDelta;
+        uint256 impactDelta =
+            _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
+        uint256 slippage = (impactDelta * IMPACT_SCALAR) / _signedPrice;
         if (slippage > _maxSlippage) revert ImpactCalculator_SlippageExceedsMax();
     }
 }
