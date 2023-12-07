@@ -533,4 +533,59 @@ contract TestTrading is Test {
         console.log("End Collat: ", collatAfter);
         console.log("End Size: ", sizeAfter);
     }
+
+    function testOpeningTwoPositionsAtOnceIsntProblematic() public facilitateTrading {
+        // create an open request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(request, executionFee);
+        vm.stopPrank();
+        // create another open request
+        vm.startPrank(OWNER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        MarketStructs.PositionRequest memory request2 = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            OWNER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(request2, executionFee);
+        vm.stopPrank();
+        // check indices are different
+        bytes32 positionKey = TradeHelper.generateKey(request);
+        bytes32 positionKey2 = TradeHelper.generateKey(request2);
+        bytes32 key1 = tradeStorage.orderKeys(false, 0);
+        bytes32 key2 = tradeStorage.orderKeys(false, 1);
+        assertEq(key1, positionKey);
+        assertEq(key2, positionKey2);
+        // fulfill both open requests in the same block
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        // check positions are separate
+        (,,, address user1,,,,,,,,) = tradeStorage.openPositions(positionKey);
+        (,,, address user2,,,,,,,,) = tradeStorage.openPositions(positionKey2);
+        assertEq(user1, USER);
+        assertEq(user2, OWNER);
+    }
 }

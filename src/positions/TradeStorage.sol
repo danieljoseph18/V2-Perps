@@ -36,6 +36,7 @@ contract TradeStorage is RoleValidation {
 
     mapping(bool _isLimit => mapping(bytes32 _orderKey => MarketStructs.PositionRequest)) public orders;
     mapping(bool _isLimit => bytes32[] _orderKeys) public orderKeys;
+    uint256 public orderKeysStartIndex;
     // Track open positions
     mapping(bytes32 _positionKey => MarketStructs.Position) public openPositions;
     mapping(bytes32 _marketKey => mapping(bool _isLong => bytes32[] _positionKeys)) public openPositionKeys;
@@ -86,6 +87,8 @@ contract TradeStorage is RoleValidation {
     error TradeStorage_LossExceedsPrinciple();
     error TradeStorage_InvalidPrice();
     error TradeStorage_InvalidSizeDelta();
+    error TradeStorage_IncorrectOrderIndex();
+    error TradeStorage_CallerIsNotPositionOwner();
 
     /// Note Move all number initializations to an initialise function
     constructor(
@@ -121,29 +124,16 @@ contract TradeStorage is RoleValidation {
     function createOrderRequest(MarketStructs.PositionRequest memory _positionRequest) external onlyRouter {
         bytes32 _positionKey = TradeHelper.generateKey(_positionRequest);
         TradeHelper.validateRequest(address(this), _positionKey, _positionRequest.isLimit);
-        _assignRequest(_positionKey, _positionRequest, _positionRequest.isLimit);
+        _assignRequest(_positionKey, _positionRequest);
         emit OrderRequestCreated(_positionKey, _positionRequest);
     }
 
     /// Note Caller must be request creator, or keeper (after period of time)
-    function cancelOrderRequest(bytes32 _positionKey, bool _isLimit) external onlyRouter {
+    function cancelOrderRequest(address _caller, bytes32 _positionKey, bool _isLimit) external onlyRouter {
         if (orders[_isLimit][_positionKey].user == address(0)) revert TradeStorage_OrderDoesNotExist();
-
-        uint256 index = orders[_isLimit][_positionKey].requestIndex;
-        uint256 lastIndex = orderKeys[_isLimit].length - 1;
-
+        if (orders[_isLimit][_positionKey].user != _caller) revert TradeStorage_CallerIsNotPositionOwner();
         // Delete the order
         delete orders[_isLimit][_positionKey];
-
-        // If the order to be deleted is not the last one, replace its slot with the last order's key
-        if (index != lastIndex) {
-            bytes32 lastKey = orderKeys[_isLimit][lastIndex];
-            orderKeys[_isLimit][index] = lastKey;
-            orders[_isLimit][lastKey].requestIndex = index; // Update the requestIndex of the order that was moved
-        }
-
-        // Remove the last key
-        orderKeys[_isLimit].pop();
         emit OrderRequestCancelled(_positionKey);
     }
 
@@ -498,16 +488,12 @@ contract TradeStorage is RoleValidation {
         emit PositionCreated(_positionKey, _position);
     }
 
-    function _assignRequest(bytes32 _positionKey, MarketStructs.PositionRequest memory _positionRequest, bool _isLimit)
-        internal
-    {
-        if (_isLimit) {
-            orders[true][_positionKey] = _positionRequest;
-            orderKeys[true].push(_positionKey);
-        } else {
-            orders[false][_positionKey] = _positionRequest;
-            orderKeys[false].push(_positionKey);
+    function _assignRequest(bytes32 _positionKey, MarketStructs.PositionRequest memory _positionRequest) internal {
+        if (_positionRequest.requestIndex != orderKeys[_positionRequest.isLimit].length) {
+            revert TradeStorage_IncorrectOrderIndex();
         }
+        orders[_positionRequest.isLimit][_positionKey] = _positionRequest;
+        orderKeys[_positionRequest.isLimit].push(_positionKey);
     }
 
     function _sendExecutionFee(address payable _executor, uint256 _executionFee) internal {

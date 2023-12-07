@@ -9,7 +9,7 @@ import {ILiquidityVault} from "../../markets/interfaces/ILiquidityVault.sol";
 interface ITradeStorage {
     function createOrderRequest(MarketStructs.PositionRequest calldata _positionRequest) external;
 
-    function cancelOrderRequest(bytes32 _key, bool _isLimit) external;
+    function cancelOrderRequest(address _caller, bytes32 _positionKey, bool _isLimit) external;
 
     function executeTrade(MarketStructs.ExecutionParams calldata _executionParams) external;
 

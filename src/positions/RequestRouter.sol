@@ -125,7 +125,7 @@ contract RequestRouter {
         // transfer execution fee to the trade vault
         _sendExecutionFeeToVault(_executionFee);
         // perform safety checks => it exists, it's their position etc.
-        ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
+        ITradeStorage(tradeStorage).cancelOrderRequest(msg.sender, _key, _isLimit);
     }
 
     function _transferInCollateral(uint256 _amountIn) internal returns (uint256) {
