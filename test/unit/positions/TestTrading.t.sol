@@ -588,4 +588,77 @@ contract TestTrading is Test {
         assertEq(user1, USER);
         assertEq(user2, OWNER);
     }
+
+    function testRequestFrontPointerWorksAsExpected() public facilitateTrading {
+        // open a long and a short request from user
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        MarketStructs.PositionRequest memory userLong = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(userLong, executionFee);
+        MarketStructs.PositionRequest memory userShort = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            false,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(userShort, executionFee);
+        vm.stopPrank();
+        // open a long and a short request from owner
+        vm.startPrank(OWNER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        MarketStructs.PositionRequest memory ownerLong = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(ownerLong, executionFee);
+        MarketStructs.PositionRequest memory ownerShort = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6, // 100 USDC
+            1e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            false,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(ownerShort, executionFee);
+        vm.stopPrank();
+        // execute all requests at once
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        // check the front pointer is correct
+        assertEq(tradeStorage.orderKeysStartIndex(), 4);
+    }
 }

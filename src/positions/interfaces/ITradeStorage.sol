@@ -9,7 +9,7 @@ import {ILiquidityVault} from "../../markets/interfaces/ILiquidityVault.sol";
 interface ITradeStorage {
     function createOrderRequest(MarketStructs.PositionRequest calldata _positionRequest) external;
 
-    function cancelOrderRequest(address _caller, bytes32 _positionKey, bool _isLimit) external;
+    function cancelOrderRequest(address _caller, bytes32 _positionKey, bool _isLimit) external returns (bool);
 
     function executeTrade(MarketStructs.ExecutionParams calldata _executionParams) external;
 
@@ -47,7 +47,11 @@ interface ITradeStorage {
     function accumulatedRewards(address _user) external view returns (uint256);
     function openPositions(bytes32 _key) external view returns (MarketStructs.Position memory);
     function openPositionKeys(bytes32 _key, bool _isLong) external view returns (bytes32[] memory);
+    function orderKeysStartIndex() external view returns (uint256);
     function orders(bool _isLimit, bytes32 _key) external view returns (MarketStructs.PositionRequest memory);
     function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong) external;
+    function updateOrderStartIndex() external;
+    function setOrderStartIndexValue(uint256 _value) external;
     function getNextPositionIndex(bytes32 _marketKey, bool _isLong) external view returns (uint256);
+    function getPendingMarketOrders() external view returns (bytes32[] memory);
 }

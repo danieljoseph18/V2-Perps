@@ -13,9 +13,10 @@ import {ImpactCalculator} from "./ImpactCalculator.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
+import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 
 /// @dev Needs Router role
-contract RequestRouter {
+contract RequestRouter is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.PositionRequest;
 
@@ -54,6 +55,7 @@ contract RequestRouter {
     function createTradeRequest(MarketStructs.PositionRequest memory _positionRequest, uint256 _executionFee)
         external
         payable
+        nonReentrant
         validExecutionFee(_executionFee)
     {
         _sendExecutionFeeToVault(_executionFee);
@@ -92,7 +94,7 @@ contract RequestRouter {
         uint256 _maxSlippage,
         bool _isLimit,
         uint256 _executionFee
-    ) external payable validExecutionFee(_executionFee) {
+    ) external payable nonReentrant validExecutionFee(_executionFee) {
         // transfer execution fee to the trade vault
         _sendExecutionFeeToVault(_executionFee);
         // validate the request meets all safety parameters
@@ -120,6 +122,7 @@ contract RequestRouter {
     function cancelOrderRequest(bytes32 _key, bool _isLimit, uint256 _executionFee)
         external
         payable
+        nonReentrant
         validExecutionFee(_executionFee)
     {
         // transfer execution fee to the trade vault

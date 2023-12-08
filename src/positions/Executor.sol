@@ -12,9 +12,10 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 import {ImpactCalculator} from "./ImpactCalculator.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
+import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 
 /// @dev Needs Executor Role
-contract Executor is RoleValidation {
+contract Executor is RoleValidation, ReentrancyGuard {
     error Executor_LimitNotHit();
 
     IMarketStorage public marketStorage;
@@ -42,23 +43,34 @@ contract Executor is RoleValidation {
     }
 
     function executeTradeOrders(address _feeReceiver) external onlyKeeper {
-        (, bytes32[] memory marketOrders) = tradeStorage.getOrderKeys();
+        // copy all order keys to memory
+        bytes32[] memory marketOrders = tradeStorage.getPendingMarketOrders();
         uint256 len = marketOrders.length;
         for (uint256 i = 0; i < len; ++i) {
             bytes32 _key = marketOrders[i];
-            try this.executeTradeOrder(_key, _feeReceiver, false) {} catch {}
+            try this.executeTradeOrder(_key, _feeReceiver, false) {}
+            catch {
+                try tradeStorage.cancelOrderRequest(_feeReceiver, _key, false) returns (bool _wasCancelled) {
+                    if (!_wasCancelled) break;
+                } catch {}
+            }
         }
+        tradeStorage.updateOrderStartIndex();
     }
 
     /// @dev Only Keeper
-    function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) public onlyKeeperOrContract {
+    function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit)
+        public
+        nonReentrant
+        onlyKeeperOrContract
+    {
         _executeTradeOrder(_key, _feeReceiver, _isLimit);
     }
 
-    function _executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) internal {
+    function _executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) internal returns (bool) {
         // get the position
         MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);
-        if (_positionRequest.user == address(0)) revert Executor_InvalidRequestKey();
+        if (_positionRequest.user == address(0)) return true;
         // get the market and block to get the signed block price
         address market =
             MarketHelper.getMarketFromIndexToken(address(marketStorage), _positionRequest.indexToken).market;
@@ -66,8 +78,8 @@ contract Executor is RoleValidation {
         uint256 _signedBlockPrice = priceOracle.getSignedPrice(market, _block);
         if (_signedBlockPrice == 0) {
             //cancel order and return
-            tradeStorage.cancelOrderRequest(_key, _isLimit);
-            return;
+            tradeStorage.cancelOrderRequest(_feeReceiver, _key, _isLimit);
+            return false;
         }
         if (_isLimit) {
             TradeHelper.checkLimitPrice(_signedBlockPrice, _positionRequest);
@@ -122,6 +134,7 @@ contract Executor is RoleValidation {
         if (sizeDeltaUsd > 0) {
             _updateTotalWAEP(market, price, sizeDeltaUsd, _positionRequest.isLong);
         }
+        return true;
     }
 
     // when executing a trade, store it in MarketStorage

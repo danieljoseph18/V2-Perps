@@ -50,6 +50,15 @@ contract GlobalMarketConfig is RoleValidation {
     }
 
     /**
+     * ========================= Trade Config =========================
+     */
+
+    /// @dev Used if excessive build up of array keys prevents loop execution
+    function setOrderStartIndexValue(uint256 _value) external onlyModerator {
+        tradeStorage.setOrderStartIndexValue(_value);
+    }
+
+    /**
      * ========================= Fees =========================
      */
 

@@ -72,6 +72,7 @@ contract TradeStorage is RoleValidation {
     event BorrowingFeesProcessed(address _user, uint256 _borrowingFee);
     event BorrowingParamsUpdated(bytes32 _positionKey, MarketStructs.BorrowParams _borrowingParams);
     event LiquidityReserved(address _user, bytes32 _positionKey, uint256 _amount, bool _isIncrease);
+    event TradeStorage_StartIndexUpdated(uint256 _startIndex);
 
     error TradeStorage_InsufficientBalance();
     error TradeStorage_OrderDoesNotExist();
@@ -89,6 +90,7 @@ contract TradeStorage is RoleValidation {
     error TradeStorage_InvalidSizeDelta();
     error TradeStorage_IncorrectOrderIndex();
     error TradeStorage_CallerIsNotPositionOwner();
+    error TradeStorage_OrderAlreadyExecuted();
 
     /// Note Move all number initializations to an initialise function
     constructor(
@@ -129,15 +131,26 @@ contract TradeStorage is RoleValidation {
     }
 
     /// Note Caller must be request creator, or keeper (after period of time)
-    function cancelOrderRequest(address _caller, bytes32 _positionKey, bool _isLimit) external onlyRouter {
+    function cancelOrderRequest(address _caller, bytes32 _positionKey, bool _isLimit)
+        external
+        onlyRouter
+        returns (bool)
+    {
         if (orders[_isLimit][_positionKey].user == address(0)) revert TradeStorage_OrderDoesNotExist();
         if (orders[_isLimit][_positionKey].user != _caller) revert TradeStorage_CallerIsNotPositionOwner();
         // Delete the order
         delete orders[_isLimit][_positionKey];
         emit OrderRequestCancelled(_positionKey);
+        return true;
     }
 
     function executeTrade(MarketStructs.ExecutionParams memory _executionParams) external onlyExecutor {
+        if (
+            orderKeys[_executionParams.positionRequest.isLimit][_executionParams.positionRequest.requestIndex]
+                == bytes32(0)
+        ) {
+            revert TradeStorage_OrderAlreadyExecuted();
+        }
         bytes32 key = TradeHelper.generateKey(_executionParams.positionRequest);
 
         uint256 price = _executionParams.signedBlockPrice;
@@ -214,12 +227,30 @@ contract TradeStorage is RoleValidation {
         emit FundingFeesClaimed(position.user, claimable);
     }
 
+    function updateOrderStartIndex() external onlyExecutor {
+        orderKeysStartIndex = orderKeys[false].length;
+        emit TradeStorage_StartIndexUpdated(orderKeysStartIndex);
+    }
+
+    function setOrderStartIndexValue(uint256 _value) external onlyConfigurator {
+        orderKeysStartIndex = _value;
+    }
+
     function getNextPositionIndex(bytes32 _marketKey, bool _isLong) external view returns (uint256) {
         return openPositionKeys[_marketKey][_isLong].length;
     }
 
     function getOrderKeys() external view returns (bytes32[] memory, bytes32[] memory) {
         return (orderKeys[true], orderKeys[false]);
+    }
+
+    function getPendingMarketOrders() external view returns (bytes32[] memory) {
+        uint256 totalOrders = orderKeys[false].length - orderKeysStartIndex;
+        bytes32[] memory pendingOrders = new bytes32[](totalOrders);
+        for (uint256 i = 0; i < totalOrders; i++) {
+            pendingOrders[i] = orderKeys[false][orderKeysStartIndex + i];
+        }
+        return pendingOrders;
     }
 
     function getPositionFees(MarketStructs.Position memory _position) public view returns (uint256, uint256) {
@@ -407,8 +438,11 @@ contract TradeStorage is RoleValidation {
     // deletes a position request from storage
     function _deletePositionRequest(bytes32 _positionKey, uint256 _requestIndex, bool _isLimit) internal {
         delete orders[_isLimit][_positionKey];
-        orderKeys[_isLimit][_requestIndex] = orderKeys[_isLimit][orderKeys[_isLimit].length - 1];
-        orderKeys[_isLimit].pop();
+        if (_isLimit) {
+            delete orderKeys[_isLimit][_requestIndex];
+        } else {
+            delete orderKeys[_isLimit][_requestIndex];
+        }
         emit DeletePositionRequest(_positionKey, _requestIndex, _isLimit);
     }
 
