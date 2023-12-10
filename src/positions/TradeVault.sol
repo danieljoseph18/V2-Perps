@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
+import {TradeHelper} from "./TradeHelper.sol";
 
 /// @dev Needs Vault Role
 contract TradeVault is RoleValidation {
@@ -72,6 +73,8 @@ contract TradeVault is RoleValidation {
     }
 
     function liquidatePositionCollateral(
+        address _liquidator,
+        uint256 _liqFee,
         bytes32 _marketKey,
         uint256 _totalCollateral,
         uint256 _fundingOwed,
@@ -79,14 +82,18 @@ contract TradeVault is RoleValidation {
     ) external onlyTradeStorage {
         // funding
         _swapFundingAmount(_marketKey, _fundingOwed, _isLong);
-        // remaining = borrowing + losses => send all to Liq Vault
-        uint256 remainingCollateral = _totalCollateral - _fundingOwed;
-        if (_isLong) {
-            longCollateral[_marketKey] -= remainingCollateral;
-        } else {
-            shortCollateral[_marketKey] -= remainingCollateral;
+
+        WUSDC.safeTransfer(_liquidator, _liqFee);
+
+        uint256 remainingCollateral = _totalCollateral - _fundingOwed - _liqFee;
+        if (remainingCollateral > 0) {
+            if (_isLong) {
+                longCollateral[_marketKey] -= remainingCollateral;
+            } else {
+                shortCollateral[_marketKey] -= remainingCollateral;
+            }
+            _sendTokensToLiquidityVault(remainingCollateral);
         }
-        _sendTokensToLiquidityVault(remainingCollateral);
     }
 
     function claimFundingFees(bytes32 _marketKey, address _user, uint256 _claimed, bool _isLong)

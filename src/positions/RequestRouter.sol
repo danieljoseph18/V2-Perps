@@ -119,15 +119,7 @@ contract RequestRouter is ReentrancyGuard {
         tradeStorage.createOrderRequest(_positionRequest);
     }
 
-    function cancelOrderRequest(bytes32 _key, bool _isLimit, uint256 _executionFee)
-        external
-        payable
-        nonReentrant
-        validExecutionFee(_executionFee)
-    {
-        // transfer execution fee to the trade vault
-        _sendExecutionFeeToVault(_executionFee);
-        // perform safety checks => it exists, it's their position etc.
+    function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
         ITradeStorage(tradeStorage).cancelOrderRequest(msg.sender, _key, _isLimit);
     }
 

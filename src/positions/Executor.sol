@@ -25,7 +25,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
     IDataOracle public dataOracle;
 
     error Executor_InvalidRequestKey();
-    error Executor_CantDecreaseNonExistingPosition();
+    error Executor_InvalidDecrease();
 
     constructor(
         address _marketStorage,
@@ -43,7 +43,6 @@ contract Executor is RoleValidation, ReentrancyGuard {
     }
 
     function executeTradeOrders(address _feeReceiver) external onlyKeeper {
-        // copy all order keys to memory
         bytes32[] memory marketOrders = tradeStorage.getPendingMarketOrders();
         uint256 len = marketOrders.length;
         for (uint256 i = 0; i < len; ++i) {
@@ -68,99 +67,101 @@ contract Executor is RoleValidation, ReentrancyGuard {
     }
 
     function _executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) internal returns (bool) {
-        // get the position
-        MarketStructs.PositionRequest memory _positionRequest = tradeStorage.orders(_isLimit, _key);
-        if (_positionRequest.user == address(0)) return true;
-        // get the market and block to get the signed block price
-        address market =
-            MarketHelper.getMarketFromIndexToken(address(marketStorage), _positionRequest.indexToken).market;
-        uint256 _block = _positionRequest.requestBlock;
-        uint256 _signedBlockPrice = priceOracle.getSignedPrice(market, _block);
-        if (_signedBlockPrice == 0) {
-            //cancel order and return
+        MarketStructs.PositionRequest memory positionRequest = tradeStorage.orders(_isLimit, _key);
+        if (positionRequest.user == address(0)) {
+            return true;
+        }
+
+        address market = _getMarketFromIndexToken(positionRequest.indexToken);
+        uint256 signedBlockPrice = priceOracle.getSignedPrice(market, positionRequest.requestBlock);
+        if (signedBlockPrice == 0) {
             tradeStorage.cancelOrderRequest(_feeReceiver, _key, _isLimit);
             return false;
         }
-        if (_isLimit) {
-            TradeHelper.checkLimitPrice(_signedBlockPrice, _positionRequest);
+
+        if (_isLimit && !_isValidLimitOrder(signedBlockPrice, positionRequest)) {
+            tradeStorage.cancelOrderRequest(_feeReceiver, _key, _isLimit);
+            return false;
         }
 
-        uint256 priceImpact = ImpactCalculator.calculatePriceImpact(
-            market,
+        uint256 price = ImpactCalculator.executePriceImpact(
+            _getMarketFromIndexToken(positionRequest.indexToken),
             address(marketStorage),
             address(dataOracle),
             address(priceOracle),
-            _positionRequest,
-            _signedBlockPrice
+            positionRequest,
+            signedBlockPrice
         );
 
-        uint256 price = ImpactCalculator.applyPriceImpact(
-            _signedBlockPrice, priceImpact, _positionRequest.isLong, _positionRequest.isIncrease
-        );
+        int256 sizeDeltaUsd = _calculateSizeDeltaUsd(positionRequest, signedBlockPrice);
 
-        ImpactCalculator.checkSlippage(price, _signedBlockPrice, _positionRequest.maxSlippage);
-
-        int256 sizeDeltaUsd = _positionRequest.isIncrease
-            ? int256(
-                TradeHelper.getTradeSizeUsd(
-                    address(dataOracle), _positionRequest.indexToken, _positionRequest.sizeDelta, _signedBlockPrice
-                )
-            )
-            : int256(
-                TradeHelper.getTradeSizeUsd(
-                    address(dataOracle), _positionRequest.indexToken, _positionRequest.sizeDelta, _signedBlockPrice
-                )
-            ) * -1;
-        // if decrease, check position exists and sizeDeltaUsd is less than the position's size
-        if (!_positionRequest.isIncrease) {
-            if (tradeStorage.openPositions(_key).positionSize < _positionRequest.sizeDelta) {
-                revert Executor_CantDecreaseNonExistingPosition();
-            }
+        if (!_isValidPositionRequest(positionRequest, _key)) {
+            revert Executor_InvalidDecrease();
         }
-        // execute the trade
-        tradeStorage.executeTrade(MarketStructs.ExecutionParams(_positionRequest, price, _feeReceiver));
 
-        bytes32 marketKey = IMarket(market).getMarketKey();
+        tradeStorage.executeTrade(MarketStructs.ExecutionParams(positionRequest, price, _feeReceiver));
+        _updateMarketState(market, positionRequest, price, sizeDeltaUsd);
 
-        _updateOpenInterest(
-            marketKey,
-            _positionRequest.collateralDelta,
-            _positionRequest.sizeDelta,
-            _positionRequest.isLong,
-            _positionRequest.isIncrease
+        return true;
+    }
+
+    // Additional helper functions used in _executeTradeOrder
+    function _getMarketFromIndexToken(address indexToken) internal view returns (address) {
+        return MarketHelper.getMarketFromIndexToken(address(marketStorage), indexToken).market;
+    }
+
+    function _isValidLimitOrder(uint256 signedBlockPrice, MarketStructs.PositionRequest memory positionRequest)
+        internal
+        pure
+        returns (bool)
+    {
+        try TradeHelper.checkLimitPrice(signedBlockPrice, positionRequest) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function _calculateSizeDeltaUsd(MarketStructs.PositionRequest memory positionRequest, uint256 signedBlockPrice)
+        internal
+        view
+        returns (int256)
+    {
+        uint256 sizeDeltaUsd = TradeHelper.getTradeSizeUsd(
+            address(dataOracle), positionRequest.indexToken, positionRequest.sizeDelta, signedBlockPrice
         );
-        _updateFundingRate(market);
-        _updateBorrowingRate(market, _positionRequest.isLong);
-        if (sizeDeltaUsd > 0) {
-            _updateTotalWAEP(market, price, sizeDeltaUsd, _positionRequest.isLong);
+        return positionRequest.isIncrease ? int256(sizeDeltaUsd) : -int256(sizeDeltaUsd);
+    }
+
+    function _isValidPositionRequest(MarketStructs.PositionRequest memory positionRequest, bytes32 key)
+        internal
+        view
+        returns (bool)
+    {
+        if (!positionRequest.isIncrease) {
+            return tradeStorage.openPositions(key).positionSize >= positionRequest.sizeDelta;
         }
         return true;
     }
 
-    // when executing a trade, store it in MarketStorage
-    // update the open interest in MarketStorage
-    // if decrease, subtract size delta from open interest
-    // Note Only updates the open interest values in storage
-    function _updateOpenInterest(
-        bytes32 _marketKey,
-        uint256 _collateralDelta,
-        uint256 _sizeDelta,
-        bool _isLong,
-        bool _isIncrease
+    function _updateMarketState(
+        address market,
+        MarketStructs.PositionRequest memory positionRequest,
+        uint256 price,
+        int256 sizeDeltaUsd
     ) internal {
-        IMarketStorage(marketStorage).updateOpenInterest(_marketKey, _collateralDelta, _sizeDelta, _isLong, _isIncrease);
-    }
-
-    // in every action that interacts with Market, call _updateFundingRate();
-    function _updateFundingRate(address _market) internal {
-        IMarket(_market).updateFundingRate();
-    }
-
-    function _updateBorrowingRate(address _market, bool _isLong) internal {
-        IMarket(_market).updateBorrowingRate(_isLong);
-    }
-
-    function _updateTotalWAEP(address _market, uint256 _pricePaid, int256 _sizeDeltaUsd, bool _isLong) internal {
-        IMarket(_market).updateTotalWAEP(_pricePaid, _sizeDeltaUsd, _isLong);
+        bytes32 marketKey = IMarket(market).getMarketKey();
+        IMarketStorage(marketStorage).updateOpenInterest(
+            marketKey,
+            positionRequest.collateralDelta,
+            positionRequest.sizeDelta,
+            positionRequest.isLong,
+            positionRequest.isIncrease
+        );
+        IMarket(market).updateFundingRate();
+        IMarket(market).updateBorrowingRate(positionRequest.isLong);
+        if (sizeDeltaUsd > 0) {
+            IMarket(market).updateTotalWAEP(price, sizeDeltaUsd, positionRequest.isLong);
+        }
     }
 }

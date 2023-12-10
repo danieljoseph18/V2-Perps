@@ -109,8 +109,6 @@ contract DeployV2 is Script {
 
         contracts.marketFactory = new MarketFactory(
             address(contracts.marketStorage),
-            address(contracts.liquidityVault),
-            address(contracts.tradeStorage),
             address(contracts.wusdc),
             address(priceOracle),
             address(contracts.dataOracle),

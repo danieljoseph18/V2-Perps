@@ -33,13 +33,11 @@ contract MarketStorage is RoleValidation {
         bool _isLong,
         bool _isAddition
     );
-    event OverCollateralizationRatioUpdated(uint256 _percentage);
     event MarketStateUpdated(bytes32 indexed _marketKey, uint256 indexed _newAllocation, uint256 _maxOI);
 
     error MarketStorage_MarketAlreadyExists();
     error MarketStorage_NonExistentMarket();
 
-    /// Note move init number to initialise function
     constructor(address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
         liquidityVault = ILiquidityVault(_liquidityVault);
     }
@@ -60,6 +58,7 @@ contract MarketStorage is RoleValidation {
         bool _isLong,
         bool _shouldAdd
     ) external onlyExecutor {
+        if (markets[_marketKey].market == address(0)) revert MarketStorage_NonExistentMarket();
         if (_shouldAdd) {
             if (_isLong) {
                 collatTokenLongOpenInterest[_marketKey] += _collateralTokenAmount;

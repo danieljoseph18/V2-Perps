@@ -15,8 +15,25 @@ library ImpactCalculator {
     uint256 public constant IMPACT_SCALAR = 1e18;
     uint256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
 
+    function executePriceImpact(
+        address _market,
+        address _marketStorage,
+        address _dataOracle,
+        address _priceOracle,
+        MarketStructs.PositionRequest memory _positionRequest,
+        uint256 _signedBlockPrice
+    ) external view returns (uint256) {
+        uint256 priceImpact = calculatePriceImpact(
+            _market, _marketStorage, _dataOracle, _priceOracle, _positionRequest, _signedBlockPrice
+        );
+        uint256 impactedPrice =
+            applyPriceImpact(_signedBlockPrice, priceImpact, _positionRequest.isLong, _positionRequest.isIncrease);
+        checkSlippage(impactedPrice, _signedBlockPrice, _positionRequest.maxSlippage);
+        return impactedPrice;
+    }
+
     function applyPriceImpact(uint256 _signedBlockPrice, uint256 _priceImpactUsd, bool _isLong, bool _isIncrease)
-        external
+        public
         pure
         returns (uint256)
     {
@@ -36,7 +53,7 @@ library ImpactCalculator {
         address _priceOracle,
         MarketStructs.PositionRequest memory _positionRequest,
         uint256 _signedBlockPrice
-    ) external view returns (uint256) {
+    ) public view returns (uint256) {
         if (_signedBlockPrice == 0 || _market == address(0) || _positionRequest.user == address(0)) {
             revert ImpactCalculator_ZeroParameters();
         }
@@ -55,12 +72,19 @@ library ImpactCalculator {
         }
         uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
-        uint256 priceImpact = calculateExponentiatedImpact(
+        uint256 priceImpact = _calculateExponentiatedImpact(
             skewBefore, skewAfter, market.priceImpactExponent(), market.priceImpactFactor()
         );
 
         uint256 maxImpact = (_signedBlockPrice * MAX_PRICE_IMPACT) / IMPACT_SCALAR;
-        return adjustPriceImpactWithinLimits(priceImpact, maxImpact);
+        return _adjustPriceImpactWithinLimits(priceImpact, maxImpact);
+    }
+
+    function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) public pure {
+        uint256 impactDelta =
+            _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
+        uint256 slippage = (impactDelta * IMPACT_SCALAR) / _signedPrice;
+        if (slippage > _maxSlippage) revert ImpactCalculator_SlippageExceedsMax();
     }
 
     function getOpenInterestAndSizeDelta(
@@ -80,7 +104,7 @@ library ImpactCalculator {
     }
 
     // Helper function to handle exponentiation
-    function calculateExponentiatedImpact(uint256 _skewBefore, uint256 _skewAfter, uint256 _exponent, uint256 _factor)
+    function _calculateExponentiatedImpact(uint256 _skewBefore, uint256 _skewAfter, uint256 _exponent, uint256 _factor)
         internal
         pure
         returns (uint256)
@@ -95,18 +119,11 @@ library ImpactCalculator {
         return impactBefore > impactAfter ? impactBefore - impactAfter : impactAfter - impactBefore;
     }
 
-    function adjustPriceImpactWithinLimits(uint256 _priceImpact, uint256 _maxImpact) internal pure returns (uint256) {
+    function _adjustPriceImpactWithinLimits(uint256 _priceImpact, uint256 _maxImpact) internal pure returns (uint256) {
         if (_priceImpact > _maxImpact) {
             return _maxImpact;
         } else {
             return _priceImpact;
         }
-    }
-
-    function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) external pure {
-        uint256 impactDelta =
-            _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
-        uint256 slippage = (impactDelta * IMPACT_SCALAR) / _signedPrice;
-        if (slippage > _maxSlippage) revert ImpactCalculator_SlippageExceedsMax();
     }
 }

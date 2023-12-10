@@ -8,9 +8,7 @@ pragma solidity 0.8.20;
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {Market} from "./Market.sol";
 import {MarketStructs} from "./MarketStructs.sol";
-import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
@@ -21,25 +19,15 @@ contract MarketFactory is RoleValidation {
 
     address public marketStorage;
     address public dataOracle;
-    address public liquidityVault;
-    address public tradeStorage;
     address public priceOracle;
 
     event MarketCreated(address indexed indexToken, address indexed market);
 
-    constructor(
-        address _marketStorage,
-        address _liquidityVault,
-        address _tradeStorage,
-        address _wusdc,
-        address _priceOracle,
-        address _dataOracle,
-        address _roleStorage
-    ) RoleValidation(_roleStorage) {
+    constructor(address _marketStorage, address _wusdc, address _priceOracle, address _dataOracle, address _roleStorage)
+        RoleValidation(_roleStorage)
+    {
         marketStorage = _marketStorage;
         dataOracle = _dataOracle;
-        liquidityVault = _liquidityVault;
-        tradeStorage = _tradeStorage;
         WUSDC = _wusdc;
         priceOracle = _priceOracle;
     }
@@ -55,14 +43,7 @@ contract MarketFactory is RoleValidation {
         IPriceOracle(priceOracle).updatePriceSource(_indexToken, _priceFeed);
         // Create new Market contract
         Market market = new Market(
-            _indexToken,
-            address(marketStorage),
-            liquidityVault,
-            tradeStorage,
-            priceOracle,
-            address(dataOracle),
-            WUSDC,
-            address(roleStorage)
+            _indexToken, address(marketStorage), priceOracle, address(dataOracle), WUSDC, address(roleStorage)
         );
         // Initialise With Default Values
         Market(market).initialise(0.0003e18, 1_000_000e18, 500e16, -500e16, 0.000000035e18, 1, false, 0.0000001e18, 2);

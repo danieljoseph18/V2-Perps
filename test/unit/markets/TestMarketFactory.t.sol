@@ -89,8 +89,6 @@ contract TestMarketFactory is Test {
         Market market = Market(marketAddress);
         assertEq(address(indexToken), market.indexToken());
         assertEq(address(marketStorage), address(market.marketStorage()));
-        assertEq(address(liquidityVault), address(market.liquidityVault()));
-        assertEq(address(tradeStorage), address(market.tradeStorage()));
         assertEq(address(priceOracle), address(market.priceOracle()));
         assertEq(address(wusdc), address(market.WUSDC()));
         assertEq(address(roleStorage), address(market.roleStorage()));

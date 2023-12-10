@@ -6,9 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IMarketToken} from "./interfaces/IMarketToken.sol";
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {MarketStructs} from "./MarketStructs.sol";
-import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {FundingCalculator} from "../positions/FundingCalculator.sol";
 import {BorrowingCalculator} from "../positions/BorrowingCalculator.sol";
 import {PricingCalculator} from "../positions/PricingCalculator.sol";
@@ -26,9 +24,7 @@ contract Market is RoleValidation {
     uint256 public constant SCALING_FACTOR = 1e18;
 
     address public indexToken;
-    ILiquidityVault public liquidityVault;
     IMarketStorage public marketStorage;
-    ITradeStorage public tradeStorage;
     IPriceOracle public priceOracle;
     IDataOracle public dataOracle;
     IWUSDC public immutable WUSDC;
@@ -79,8 +75,6 @@ contract Market is RoleValidation {
     constructor(
         address _indexToken,
         address _marketStorage,
-        address _liquidityVault,
-        address _tradeStorage,
         address _priceOracle,
         address _dataOracle,
         address _wusdc,
@@ -88,8 +82,6 @@ contract Market is RoleValidation {
     ) RoleValidation(_roleStorage) {
         indexToken = _indexToken;
         marketStorage = IMarketStorage(_marketStorage);
-        liquidityVault = ILiquidityVault(_liquidityVault);
-        tradeStorage = ITradeStorage(_tradeStorage);
         priceOracle = IPriceOracle(_priceOracle);
         dataOracle = IDataOracle(_dataOracle);
         WUSDC = IWUSDC(_wusdc);
@@ -153,16 +145,6 @@ contract Market is RoleValidation {
         priceImpactExponent = _priceImpactExponent;
         emit PriceImpactConfigUpdated(_priceImpactFactor, _priceImpactExponent);
     }
-
-    /**
-     * function getIndexOpenInterestUSD(
-     *     address _marketStorage,
-     *     address _dataOracle,
-     *     address _priceOracle,
-     *     address _indexToken,
-     *     bool _isLong
-     * )
-     */
 
     /// @dev 1 USD = 1e18
     /// Note should be called for every position entry / exit

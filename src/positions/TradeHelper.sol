@@ -134,7 +134,7 @@ library TradeHelper {
     ) public view returns (bool) {
         address market = getMarket(_marketStorage, _position.indexToken);
         // get the total value provided in USD
-        uint256 collateralValueUsd = _position.collateralAmount * _collateralPriceUsd;
+        uint256 collateralValueUsd = (_position.collateralAmount * _collateralPriceUsd) / 1e18;
         // get the liquidation fee in USD
         uint256 liquidationFeeUsd = ITradeStorage(_tradeStorage).liquidationFeeUsd();
         // get the total fees owed (funding + borrowing) in USD => funding should be net
@@ -149,6 +149,14 @@ library TradeHelper {
         } else {
             return false;
         }
+    }
+
+    function calculateLiquidationFee(address _priceOracle, uint256 _liquidationFeeUsd)
+        external
+        pure
+        returns (uint256)
+    {
+        return (_liquidationFeeUsd * 1e18) / (IPriceOracle(_priceOracle).getCollateralPrice());
     }
 
     function checkMinCollateral(
