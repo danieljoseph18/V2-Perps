@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.20;
+pragma solidity 0.8.21;
 
 import {Test, console} from "forge-std/Test.sol";
 import {DeployV2} from "../../../script/DeployV2.s.sol";
@@ -92,10 +92,10 @@ contract TestMarketFactory is Test {
         assertEq(address(priceOracle), address(market.priceOracle()));
         assertEq(address(wusdc), address(market.WUSDC()));
         assertEq(address(roleStorage), address(market.roleStorage()));
-        assertEq(0.0003e18, market.maxFundingVelocity());
+        assertEq(0.00000035e18, market.maxFundingVelocity());
         assertEq(1_000_000e18, market.skewScale());
-        assertEq(500e16, market.maxFundingRate());
-        assertEq(-500e16, market.minFundingRate());
+        assertEq(0.0000000035e18, market.maxFundingRate());
+        assertEq(-0.0000000035e18, market.minFundingRate());
         assertEq(0.000000035e18, market.borrowingFactor());
         assertEq(1, market.borrowingExponent());
         assertEq(false, market.feeForSmallerSide());

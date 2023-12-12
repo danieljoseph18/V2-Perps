@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.20;
+pragma solidity 0.8.21;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -83,7 +83,6 @@ contract TradeStorage is RoleValidation {
     error TradeStorage_LossExceedsPrinciple();
     error TradeStorage_InvalidPrice();
     error TradeStorage_IncorrectOrderIndex();
-    error TradeStorage_CallerIsNotPositionOwner();
     error TradeStorage_OrderAlreadyExecuted();
 
     /// Note Move all number initializations to an initialise function
@@ -124,15 +123,8 @@ contract TradeStorage is RoleValidation {
         emit OrderRequestCreated(_positionKey, _positionRequest);
     }
 
-    /// Note Caller must be request creator, or keeper (after period of time)
-    function cancelOrderRequest(address _caller, bytes32 _positionKey, bool _isLimit)
-        external
-        onlyRouter
-        returns (bool)
-    {
+    function cancelOrderRequest(bytes32 _positionKey, bool _isLimit) external onlyRouterOrExecutor returns (bool) {
         if (orders[_isLimit][_positionKey].user == address(0)) revert TradeStorage_OrderDoesNotExist();
-        if (orders[_isLimit][_positionKey].user != _caller) revert TradeStorage_CallerIsNotPositionOwner();
-        // Delete the order
         delete orders[_isLimit][_positionKey];
         emit OrderRequestCancelled(_positionKey);
         return true;
@@ -320,6 +312,7 @@ contract TradeStorage is RoleValidation {
         if (position.user != address(0)) {
             uint256 newCollateralAmount = position.collateralAmount + _positionRequest.collateralDelta;
             uint256 sizeDelta = (newCollateralAmount * position.positionSize) / position.collateralAmount;
+            _updateFundingParameters(_positionKey, _positionRequest.indexToken);
             _editPosition(_positionRequest.collateralDelta, sizeDelta, 0, _price, true, _positionKey);
         } else {
             _createNewPosition(_positionRequest, _positionKey, _price);
@@ -339,6 +332,8 @@ contract TradeStorage is RoleValidation {
 
         MarketStructs.Position storage position = openPositions[_positionKey];
         if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
+
+        _updateFundingParameters(_positionKey, _positionRequest.indexToken);
 
         uint256 afterFeeAmount = _processFees(_positionKey, _positionRequest);
         uint256 sizeDelta;
@@ -574,11 +569,10 @@ contract TradeStorage is RoleValidation {
     function _updateFundingParameters(bytes32 _positionKey, address _indexToken) internal {
         address market = TradeHelper.getMarket(address(marketStorage), _indexToken);
 
-        (uint256 earned, uint256 owed) =
-            FundingCalculator.getFeesSinceLastPositionUpdate(market, openPositions[_positionKey]);
-
-        openPositions[_positionKey].fundingParams.feesEarned += earned;
-        openPositions[_positionKey].fundingParams.feesOwed += owed;
+        openPositions[_positionKey].fundingParams.feesEarned =
+            FundingCalculator.getTotalPositionFeeEarned(market, openPositions[_positionKey]);
+        openPositions[_positionKey].fundingParams.feesOwed =
+            FundingCalculator.getTotalPositionFeeOwed(market, openPositions[_positionKey]);
 
         uint256 longCumulative = IMarket(market).longCumulativeFundingFees();
         uint256 shortCumulative = IMarket(market).shortCumulativeFundingFees();

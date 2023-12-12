@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.20;
+pragma solidity 0.8.21;
 
 import {RoleStorage} from "./RoleStorage.sol";
 import {Roles} from "./Roles.sol";
@@ -81,6 +81,13 @@ contract RoleValidation {
 
     modifier onlyKeeperOrContract() {
         if (!roleStorage.hasRole(Roles.KEEPER, msg.sender) && !(msg.sender == address(this))) {
+            revert RoleValidation_AccessDenied();
+        }
+        _;
+    }
+
+    modifier onlyRouterOrExecutor() {
+        if (!roleStorage.hasRole(Roles.ROUTER, msg.sender) && !roleStorage.hasRole(Roles.EXECUTOR, msg.sender)) {
             revert RoleValidation_AccessDenied();
         }
         _;

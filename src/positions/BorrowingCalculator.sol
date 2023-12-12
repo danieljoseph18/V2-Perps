@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.20;
+pragma solidity 0.8.21;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -12,10 +12,7 @@ library BorrowingCalculator {
         view
         returns (uint256)
     {
-        // get % deduction of position size
-        uint256 divisor = _position.collateralAmount / _collateralDelta;
-        // divide total borrowing fees by % deduction
-        return getBorrowingFees(_market, _position) / divisor;
+        return (getBorrowingFees(_market, _position) * _collateralDelta) / _position.collateralAmount;
     }
     /// @dev Gets Total Fees Owed By a Position
 
@@ -36,7 +33,7 @@ library BorrowingCalculator {
         if (borrowFee == 0) {
             feesOwed = 0;
         } else {
-            feesOwed = _position.positionSize / (1e18 / borrowFee);
+            feesOwed = (_position.positionSize * borrowFee) / 1e18;
         }
     }
 }

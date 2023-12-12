@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.20;
+pragma solidity 0.8.21;
 
 import {Test, console} from "forge-std/Test.sol";
 import {DeployV2} from "../../../script/DeployV2.s.sol";
@@ -27,6 +27,7 @@ import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
 import {ImpactCalculator} from "../../../src/positions/ImpactCalculator.sol";
 import {BorrowingCalculator} from "../../../src/positions/BorrowingCalculator.sol";
+import {ITradeStorage} from "../../../src/positions/interfaces/ITradeStorage.sol";
 
 contract TestTrading is Test {
     RoleStorage roleStorage;
@@ -267,30 +268,19 @@ contract TestTrading is Test {
         bytes32 _positionKey = TradeHelper.generateKey(_request);
         executor.executeTradeOrder(_positionKey, OWNER, false);
         vm.stopPrank();
-        (
-            ,
-            bytes32 market,
-            address positionIndexToken,
-            address user,
-            uint256 collat,
-            ,
-            bool isLong,
-            int256 realisedPnl,
-            ,
-            ,
-            MarketStructs.PnLParams memory pnlParams,
-            uint256 entryTimestamp
-        ) = tradeStorage.openPositions(_positionKey);
-        assertEq(market, MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).marketKey);
-        assertEq(positionIndexToken, address(indexToken));
-        assertEq(user, USER);
-        assertGt(collat, 0);
-        assertEq(isLong, true);
-        assertEq(realisedPnl, 0);
-        console.log(pnlParams.leverage);
-        assertGt(pnlParams.leverage, 1);
-        assertGt(pnlParams.weightedAvgEntryPrice, 0);
-        assertEq(entryTimestamp, block.timestamp);
+        MarketStructs.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+        assertEq(
+            position.market, MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).marketKey
+        );
+        assertEq(position.indexToken, address(indexToken));
+        assertEq(position.user, USER);
+        assertGt(position.collateralAmount, 0);
+        assertEq(position.isLong, true);
+        assertEq(position.realisedPnl, 0);
+        console.log(position.pnlParams.leverage);
+        assertGt(position.pnlParams.leverage, 1);
+        assertGt(position.pnlParams.weightedAvgEntryPrice, 0);
+        assertEq(position.entryTimestamp, block.timestamp);
     }
 
     function testThePriceImpactOnALargeSizedTrade() public facilitateTrading {
@@ -364,7 +354,7 @@ contract TestTrading is Test {
         vm.startPrank(USER);
         usdc.approve(address(requestRouter), LARGE_AMOUNT);
         uint256 executionFee = tradeStorage.minExecutionFee();
-        MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+        MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
             0,
             false,
             address(indexToken),
@@ -377,7 +367,7 @@ contract TestTrading is Test {
             true,
             true
         );
-        requestRouter.createTradeRequest{value: executionFee}(_request, executionFee);
+        requestRouter.createTradeRequest{value: executionFee}(request, executionFee);
         vm.stopPrank();
         // execute the trade request
         vm.startPrank(OWNER);
@@ -385,7 +375,7 @@ contract TestTrading is Test {
         vm.stopPrank();
         // create a collateral edit request
         vm.startPrank(USER);
-        MarketStructs.PositionRequest memory _collateralRequest = MarketStructs.PositionRequest(
+        MarketStructs.PositionRequest memory collateralRequest = MarketStructs.PositionRequest(
             0,
             false,
             address(indexToken),
@@ -398,17 +388,17 @@ contract TestTrading is Test {
             true,
             true
         );
-        requestRouter.createTradeRequest{value: executionFee}(_collateralRequest, executionFee);
+        requestRouter.createTradeRequest{value: executionFee}(collateralRequest, executionFee);
         vm.stopPrank();
         // execute the collateral edit request
         vm.startPrank(OWNER);
         executor.executeTradeOrders(OWNER);
         vm.stopPrank();
         // // check values
-        bytes32 _positionKey = TradeHelper.generateKey(_request);
-        (,,,, uint256 collat,,,,,,,) = tradeStorage.openPositions(_positionKey);
-        assertGt(collat, 100e18);
-        console.log(collat);
+        bytes32 _positionKey = TradeHelper.generateKey(request);
+        MarketStructs.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+        assertGt(position.collateralAmount, 100e18);
+        console.log(position.collateralAmount);
     }
 
     function testWeCanIncreaseAnExistingPosition() public facilitateTrading {
@@ -436,7 +426,7 @@ contract TestTrading is Test {
         executor.executeTradeOrders(OWNER);
         vm.stopPrank();
         bytes32 _positionKey = TradeHelper.generateKey(request);
-        (,,,, uint256 collatBefore, uint256 sizeBefore,,,,,,) = tradeStorage.openPositions(_positionKey);
+        MarketStructs.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
         // create another trade request
         vm.startPrank(USER);
         MarketStructs.PositionRequest memory request2 = MarketStructs.PositionRequest(
@@ -459,10 +449,10 @@ contract TestTrading is Test {
         executor.executeTradeOrders(OWNER);
         vm.stopPrank();
         // check the positions have stacked
-        (,,,, uint256 collatAfter, uint256 sizeAfter,,,,,,) = tradeStorage.openPositions(_positionKey);
+        MarketStructs.Position memory positionAfter = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
         // check values are as expected
-        assertGt(collatAfter, collatBefore);
-        assertGt(sizeAfter, sizeBefore);
+        assertGt(positionAfter.collateralAmount, position.collateralAmount);
+        assertGt(positionAfter.positionSize, position.positionSize);
     }
 
     function testWeCanFullyCloseOutAPosition() public facilitateTrading {
@@ -491,16 +481,16 @@ contract TestTrading is Test {
         // create close request
         bytes32 _positionKey = TradeHelper.generateKey(request);
         console.log("WUSDC Bal: ", wusdc.balanceOf(address(tradeVault)));
-        (,,,, uint256 collatBefore,,,,,,,) = tradeStorage.openPositions(_positionKey);
-        assertEq(wusdc.balanceOf(address(tradeVault)), collatBefore);
+        MarketStructs.Position memory positionBefore = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+        assertEq(wusdc.balanceOf(address(tradeVault)), positionBefore.collateralAmount);
         vm.prank(USER);
         requestRouter.createCloseRequest{value: executionFee}(_positionKey, 0, 0.1e18, false, executionFee);
         // execute close request
         vm.prank(OWNER);
         executor.executeTradeOrders(OWNER);
         // ensure trade is wiped from storage
-        (,,, address _user,,,,,,,,) = tradeStorage.openPositions(_positionKey);
-        assertEq(_user, address(0));
+        MarketStructs.Position memory positionAfter = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+        assertEq(positionAfter.user, address(0));
     }
 
     function testWeCanPartiallyCloseOutAPosition() public facilitateTradingAndOpenTrade {
@@ -520,18 +510,18 @@ contract TestTrading is Test {
             isIncrease: false
         });
         bytes32 _positionKey = TradeHelper.generateKey(decreaseRequest);
-        (,,,, uint256 collatBefore, uint256 sizeBefore,,,,,,) = tradeStorage.openPositions(_positionKey);
-        console.log("End Collat: ", collatBefore);
-        console.log("End Size: ", sizeBefore);
+        MarketStructs.Position memory positionBefore = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+        console.log("Before Collat: ", positionBefore.collateralAmount);
+        console.log("Before Size: ", positionBefore.positionSize);
         vm.prank(USER);
         requestRouter.createTradeRequest{value: executionFee}(decreaseRequest, executionFee);
         // execute the partial close request
         vm.prank(OWNER);
         executor.executeTradeOrders(OWNER);
         // ensure the position has partially closed
-        (,,,, uint256 collatAfter, uint256 sizeAfter,,,,,,) = tradeStorage.openPositions(_positionKey);
-        console.log("End Collat: ", collatAfter);
-        console.log("End Size: ", sizeAfter);
+        MarketStructs.Position memory positionAfter = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+        console.log("End Collat: ", positionAfter.collateralAmount);
+        console.log("End Size: ", positionAfter.positionSize);
     }
 
     function testOpeningTwoPositionsAtOnceIsntProblematic() public facilitateTrading {
@@ -583,10 +573,10 @@ contract TestTrading is Test {
         vm.prank(OWNER);
         executor.executeTradeOrders(OWNER);
         // check positions are separate
-        (,,, address user1,,,,,,,,) = tradeStorage.openPositions(positionKey);
-        (,,, address user2,,,,,,,,) = tradeStorage.openPositions(positionKey2);
-        assertEq(user1, USER);
-        assertEq(user2, OWNER);
+        MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
+        MarketStructs.Position memory ownerPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey2);
+        assertEq(userPosition.user, USER);
+        assertEq(ownerPosition.user, OWNER);
     }
 
     function testRequestFrontPointerWorksAsExpected() public facilitateTrading {

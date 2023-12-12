@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.20;
+pragma solidity 0.8.21;
 
 // Create new Market.sol contracts, with MarketToken.sol's associated
 // Store them in MarketStorage.sol with associated information
@@ -46,7 +46,9 @@ contract MarketFactory is RoleValidation {
             _indexToken, address(marketStorage), priceOracle, address(dataOracle), WUSDC, address(roleStorage)
         );
         // Initialise With Default Values
-        Market(market).initialise(0.0003e18, 1_000_000e18, 500e16, -500e16, 0.000000035e18, 1, false, 0.0000001e18, 2);
+        Market(market).initialise(
+            0.00000035e18, 1_000_000e18, 0.0000000035e18, -0.0000000035e18, 0.000000035e18, 1, false, 0.0000001e18, 2
+        );
         // Store everything in MarketStorage
         MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, address(market), _marketKey);
         IMarketStorage(marketStorage).storeMarket(_marketInfo);

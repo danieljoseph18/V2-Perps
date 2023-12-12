@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.20;
+pragma solidity 0.8.21;
 
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -49,7 +49,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
             bytes32 _key = marketOrders[i];
             try this.executeTradeOrder(_key, _feeReceiver, false) {}
             catch {
-                try tradeStorage.cancelOrderRequest(_feeReceiver, _key, false) returns (bool _wasCancelled) {
+                try tradeStorage.cancelOrderRequest(_key, false) returns (bool _wasCancelled) {
                     if (!_wasCancelled) break;
                 } catch {}
             }
@@ -62,8 +62,9 @@ contract Executor is RoleValidation, ReentrancyGuard {
         public
         nonReentrant
         onlyKeeperOrContract
+        returns (bool _wasExecuted)
     {
-        _executeTradeOrder(_key, _feeReceiver, _isLimit);
+        return _executeTradeOrder(_key, _feeReceiver, _isLimit);
     }
 
     function _executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) internal returns (bool) {
@@ -75,22 +76,17 @@ contract Executor is RoleValidation, ReentrancyGuard {
         address market = _getMarketFromIndexToken(positionRequest.indexToken);
         uint256 signedBlockPrice = priceOracle.getSignedPrice(market, positionRequest.requestBlock);
         if (signedBlockPrice == 0) {
-            tradeStorage.cancelOrderRequest(_feeReceiver, _key, _isLimit);
+            tradeStorage.cancelOrderRequest(_key, _isLimit);
             return false;
         }
 
         if (_isLimit && !_isValidLimitOrder(signedBlockPrice, positionRequest)) {
-            tradeStorage.cancelOrderRequest(_feeReceiver, _key, _isLimit);
+            tradeStorage.cancelOrderRequest(_key, _isLimit);
             return false;
         }
 
         uint256 price = ImpactCalculator.executePriceImpact(
-            _getMarketFromIndexToken(positionRequest.indexToken),
-            address(marketStorage),
-            address(dataOracle),
-            address(priceOracle),
-            positionRequest,
-            signedBlockPrice
+            market, address(marketStorage), address(dataOracle), address(priceOracle), positionRequest, signedBlockPrice
         );
 
         int256 sizeDeltaUsd = _calculateSizeDeltaUsd(positionRequest, signedBlockPrice);
@@ -99,8 +95,9 @@ contract Executor is RoleValidation, ReentrancyGuard {
             revert Executor_InvalidDecrease();
         }
 
-        tradeStorage.executeTrade(MarketStructs.ExecutionParams(positionRequest, price, _feeReceiver));
         _updateMarketState(market, positionRequest, price, sizeDeltaUsd);
+
+        tradeStorage.executeTrade(MarketStructs.ExecutionParams(positionRequest, price, _feeReceiver));
 
         return true;
     }

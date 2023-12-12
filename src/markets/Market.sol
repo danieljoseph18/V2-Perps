@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.20;
+pragma solidity 0.8.21;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -14,9 +14,10 @@ import {MarketHelper} from "./MarketHelper.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
+import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
-contract Market is RoleValidation {
+contract Market is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
@@ -36,6 +37,7 @@ contract Market is RoleValidation {
     // positive rate = longs pay shorts, negative rate = shorts pay longs
     int256 public fundingRate; // RATE PER SECOND Stored as a fixed-point number 1 = 1e18
     int256 public fundingRateVelocity; // VELOCITY PER SECOND
+    // Determines sensitivity to market skew -> Higher Value = Less Sensitive
     uint256 public skewScale;
     uint256 public maxFundingVelocity;
     int256 public maxFundingRate;
@@ -64,7 +66,12 @@ contract Market is RoleValidation {
     event MarketFundingConfigUpdated(
         uint256 _maxFundingVelocity, uint256 _skewScale, int256 _maxFundingRate, int256 _minFundingRate
     );
-    event FundingRateUpdated(int256 _fundingRate, int256 _fundingRateVelocity);
+    event FundingConfigUpdated(
+        int256 _fundingRate,
+        int256 _fundingRateVelocity,
+        uint256 _longCumulativeFundingFees,
+        uint256 _shortCumulativeFundingFees
+    );
     event BorrowingConfigUpdated(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide);
     event BorrowingRateUpdated(bool _isLong, uint256 _borrowingRate);
     event TotalWAEPUpdated(uint256 _longTotalWAEP, uint256 _shortTotalWAEP);
@@ -91,15 +98,15 @@ contract Market is RoleValidation {
     /// @dev Can only be called by MarketFactory
     /// @dev Must be Called before contract is interacted with
     function initialise(
-        uint256 _maxFundingVelocity, // 0.0003e18 = 0.03%
-        uint256 _skewScale, // 1_000_000e18 Skew scale in USDC (1_000_000)
-        int256 _maxFundingRate, // 500e16  5% represented as fixed-point
-        int256 _minFundingRate, // -500e16
-        uint256 _borrowingFactor, // 0.000000035e18 = 0.0000035% per second
-        uint256 _borrowingExponent, // Not 18 decimals => 1:1
-        bool _feeForSmallerSide, // Flag for skipping borrowing fee for the smaller side
-        uint256 _priceImpactFactor, // 0.000001e18 = 0.0001%
-        uint256 _priceImpactExponent // Not 18 decimals => 1:1
+        uint256 _maxFundingVelocity, //
+        uint256 _skewScale,
+        int256 _maxFundingRate, // Currently 0.0000000035e18
+        int256 _minFundingRate, // Currently -0.0000000035e18
+        uint256 _borrowingFactor, // Currently 0.000000035e18 = 0.0000035% per second
+        uint256 _borrowingExponent, // Currently 1
+        bool _feeForSmallerSide, // Flag for skipping borrowing fee for the smaller side (false)
+        uint256 _priceImpactFactor, // Currently 0.000001e18 = 0.0001%
+        uint256 _priceImpactExponent // Currently 2
     ) external onlyMarketMaker {
         if (isInitialised) revert Market_AlreadyInitialised();
         maxFundingVelocity = _maxFundingVelocity;
@@ -146,9 +153,9 @@ contract Market is RoleValidation {
         emit PriceImpactConfigUpdated(_priceImpactFactor, _priceImpactExponent);
     }
 
-    /// @dev 1 USD = 1e18
-    /// Note should be called for every position entry / exit
-    function updateFundingRate() external onlyExecutor {
+    /// @dev Called for every position entry / exit
+    /// Rate can be lagging if lack of updates to positions
+    function updateFundingRate() external nonReentrant {
         uint256 longOI = MarketHelper.getIndexOpenInterestUSD(
             address(marketStorage), address(dataOracle), address(priceOracle), indexToken, true
         );
@@ -162,11 +169,7 @@ contract Market is RoleValidation {
         uint256 timeElapsed = block.timestamp - lastFundingUpdateTime;
 
         // Update Cumulative Fees
-        if (fundingRate > 0) {
-            longCumulativeFundingFees += uint256(fundingRate) * timeElapsed; // if funding rate has 18 decimals, rate per token = rate
-        } else if (fundingRate < 0) {
-            shortCumulativeFundingFees += (uint256(-fundingRate) * timeElapsed);
-        }
+        (longCumulativeFundingFees, shortCumulativeFundingFees) = FundingCalculator.getFundingFees(address(this));
 
         // Add the previous velocity to the funding rate
         int256 deltaRate = fundingRateVelocity * int256(timeElapsed);
@@ -184,7 +187,9 @@ contract Market is RoleValidation {
 
         fundingRateVelocity = velocity;
         lastFundingUpdateTime = block.timestamp;
-        emit FundingRateUpdated(fundingRate, fundingRateVelocity);
+        emit FundingConfigUpdated(
+            fundingRate, fundingRateVelocity, longCumulativeFundingFees, shortCumulativeFundingFees
+        );
     }
 
     // Function to calculate borrowing fees per second
@@ -193,7 +198,7 @@ contract Market is RoleValidation {
         borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
      */
     /// @dev Call every time OI is updated (trade open / close)
-    function updateBorrowingRate(bool _isLong) external onlyExecutor {
+    function updateBorrowingRate(bool _isLong) external nonReentrant {
         uint256 openInterest = MarketHelper.getIndexOpenInterestUSD(
             address(marketStorage), address(dataOracle), address(priceOracle), indexToken, true
         ); // OI USD

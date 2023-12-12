@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.20;
+pragma solidity 0.8.21;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
@@ -30,6 +30,7 @@ contract RequestRouter is ReentrancyGuard {
     error RequestRouter_IncorrectFee();
     error RequestRouter_ExecutionFeeTransferFailed();
     error RequestRouter_PositionSizeTooLarge();
+    error RequestRouter_CallerIsNotPositionOwner();
 
     constructor(
         address _tradeStorage,
@@ -120,7 +121,8 @@ contract RequestRouter is ReentrancyGuard {
     }
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
-        ITradeStorage(tradeStorage).cancelOrderRequest(msg.sender, _key, _isLimit);
+        if (msg.sender != tradeStorage.orders(_isLimit, _key).user) revert RequestRouter_CallerIsNotPositionOwner();
+        ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
 
     function _transferInCollateral(uint256 _amountIn) internal returns (uint256) {
