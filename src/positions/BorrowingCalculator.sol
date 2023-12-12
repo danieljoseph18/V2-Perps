@@ -6,7 +6,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 
 // library responsible for handling all borrowing calculations
 library BorrowingCalculator {
-    /// @dev Gets the Total Fee For a Position Change
+    /// @dev Gets the Total Fee To Charge For a Position Change
     function calculateBorrowingFee(address _market, MarketStructs.Position memory _position, uint256 _collateralDelta)
         external
         view
@@ -14,13 +14,14 @@ library BorrowingCalculator {
     {
         return (getBorrowingFees(_market, _position) * _collateralDelta) / _position.collateralAmount;
     }
-    /// @dev Gets Total Fees Owed By a Position
 
+    /// @dev Gets Total Fees Owed By a Position
     function getBorrowingFees(address _market, MarketStructs.Position memory _position) public view returns (uint256) {
         uint256 feeSinceUpdate = getFeesSinceLastPositionUpdate(_market, _position);
         return feeSinceUpdate + _position.borrowParams.feesOwed;
     }
 
+    /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
     function getFeesSinceLastPositionUpdate(address _market, MarketStructs.Position memory _position)
         public
         view

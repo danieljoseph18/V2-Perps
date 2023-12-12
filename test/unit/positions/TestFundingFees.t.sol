@@ -147,9 +147,7 @@ contract TestFunding is Test {
         console.log("Funding Fee Total Short: ", funding2);
         bytes32 userPositionKey = TradeHelper.generateKey(userRequest);
         MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userPositionKey);
-        console.log("User Fees Owed: ", FundingCalculator.getTotalPositionFeeOwed(market, userPosition));
-        funding1 = FundingCalculator.getTotalPositionFeeEarned(market, userPosition);
-        funding2 = FundingCalculator.getTotalPositionFeeOwed(market, userPosition);
+        (funding1, funding2) = FundingCalculator.getTotalPositionFees(market, userPosition);
         console.log("User Fees Earned Since Last Update: ", funding1);
         console.log("User Fees Owed Since Last Update: ", funding2);
     }
@@ -199,9 +197,7 @@ contract TestFunding is Test {
         console.log("Funding Fee Total Short: ", funding2);
         bytes32 userPositionKey = TradeHelper.generateKey(userRequest);
         MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userPositionKey);
-        console.log("User Fees Owed: ", FundingCalculator.getTotalPositionFeeOwed(market, userPosition));
-        funding1 = FundingCalculator.getTotalPositionFeeEarned(market, userPosition);
-        funding2 = FundingCalculator.getTotalPositionFeeOwed(market, userPosition);
+        (funding1, funding2) = FundingCalculator.getTotalPositionFees(market, userPosition);
         console.log("User Fees Earned Since Last Update: ", funding1);
         console.log("User Fees Owed Since Last Update: ", funding2);
         // call update funding rate
@@ -213,9 +209,7 @@ contract TestFunding is Test {
         console.log("Funding Fee Total Long After: ", funding1);
         console.log("Funding Fee Total Short After: ", funding2);
         userPosition = ITradeStorage(address(tradeStorage)).openPositions(userPositionKey);
-        console.log("User Fees Owed After: ", FundingCalculator.getTotalPositionFeeOwed(market, userPosition));
-        funding1 = FundingCalculator.getTotalPositionFeeEarned(market, userPosition);
-        funding2 = FundingCalculator.getTotalPositionFeeOwed(market, userPosition);
+        (funding1, funding2) = FundingCalculator.getTotalPositionFees(market, userPosition);
         console.log("User Fees Earned Since Last Update After: ", funding1);
         console.log("User Fees Owed Since Last Update After: ", funding2);
     }
@@ -251,13 +245,13 @@ contract TestFunding is Test {
             ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
         address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
         // check funding fees
-        uint256 feesOwed = FundingCalculator.getTotalPositionFeeOwed(market, userPosition);
+        (uint256 feesOwed,) = FundingCalculator.getTotalPositionFees(market, userPosition);
         console.log("Funding Fee Owed Before Update: ", feesOwed);
         // call update funding rate
         Market(market).updateFundingRate();
         // check the funding rate
-        uint256 feesAfter = FundingCalculator.getTotalPositionFeeOwed(market, userPosition);
-        console.log("Funding Fee Owed After Update: ", feesAfter);
+        (uint256 feesOwedAfter,) = FundingCalculator.getTotalPositionFees(market, userPosition);
+        console.log("Funding Fee Owed After Update: ", feesOwedAfter);
     }
 
     function testFundingFeesAreEarnedByCounterparties() public facilitateTrading {
@@ -309,15 +303,14 @@ contract TestFunding is Test {
             ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(ownerRequest));
         address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
         // check funding fees
-        uint256 feesOwed = FundingCalculator.getTotalPositionFeeOwed(market, ownerPosition);
+        (uint256 feesOwed, uint256 feesEarned) = FundingCalculator.getTotalPositionFees(market, ownerPosition);
         assertEq(feesOwed, 0);
-        uint256 feesEarned = FundingCalculator.getTotalPositionFeeEarned(market, ownerPosition);
         assertGt(feesEarned, 0);
         console.log("Fees Owed: ", feesOwed);
         console.log("Fees Earned: ", feesEarned);
     }
 
-    function testFundingFeesAccumulateOnBothSidesWithSignFlip() public facilitateTrading {
+    function testFundingFeesSignFlipAndBoundaryCross() public facilitateTrading {
         // open a trade from user skewing OI long
         vm.startPrank(USER);
         usdc.approve(address(requestRouter), LARGE_AMOUNT);
@@ -371,11 +364,166 @@ contract TestFunding is Test {
             ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
         address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
         // check funding fees
-        uint256 feesOwed = FundingCalculator.getTotalPositionFeeOwed(market, userPosition);
+        (uint256 feesOwed, uint256 feesEarned) = FundingCalculator.getTotalPositionFees(market, userPosition);
         assertGt(feesOwed, 0);
-        uint256 feesEarned = FundingCalculator.getTotalPositionFeeEarned(market, userPosition);
         assertGt(feesEarned, 0);
         console.log("Fees Owed: ", feesOwed);
         console.log("Fees Earned: ", feesEarned);
+    }
+
+    function testFundingFeesOnRegularSignFlip() public facilitateTrading {
+        // create user position request
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6,
+            1e18,
+            0,
+            1000e18,
+            0.5e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(userRequest, executionFee);
+        vm.stopPrank();
+        // execute request
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        // pass some time
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+        // create larger owner request on other side
+        vm.startPrank(OWNER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        MarketStructs.PositionRequest memory ownerRequest = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            OWNER,
+            200e6,
+            2e18,
+            0,
+            1000e18,
+            0.5e18, // 10% slippage
+            false,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(ownerRequest, executionFee);
+        // execute trade
+        executor.executeTradeOrders(OWNER);
+        vm.stopPrank();
+        // pass some time
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+        // check fees
+        MarketStructs.Position memory userPosition =
+            ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
+        address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+        // check funding fees
+        (uint256 feesOwed, uint256 feesEarned) = FundingCalculator.getTotalPositionFees(market, userPosition);
+        console.log("Fees Owed: ", feesOwed);
+        console.log("Fees Earned: ", feesEarned);
+    }
+
+    function testFundingFeesOnFlipWithinBounds() public facilitateTrading {
+        // open huge long and short positions
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            1_000_000e6,
+            10_000e18,
+            0,
+            1000e18,
+            0.5e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(userRequest, executionFee);
+        MarketStructs.PositionRequest memory userRequest2 = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            1_000_000e6,
+            10_000e18,
+            0,
+            1000e18,
+            0.5e18, // 10% slippage
+            false,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(userRequest2, executionFee);
+        vm.stopPrank();
+        // execute trades
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        // open a small long
+        vm.startPrank(OWNER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        MarketStructs.PositionRequest memory ownerRequest = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            OWNER,
+            200e6,
+            2e18,
+            0,
+            1000e18,
+            0.5e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(ownerRequest, executionFee);
+        // execute trade
+        executor.executeTradeOrders(OWNER);
+        vm.stopPrank();
+        // pass some time
+        vm.warp(block.timestamp + 20);
+        vm.roll(block.number + 1);
+        // open a slightly larger short
+        vm.startPrank(OWNER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        MarketStructs.PositionRequest memory ownerRequest2 = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            OWNER,
+            300e6,
+            3e18,
+            0,
+            1000e18,
+            0.5e18, // 10% slippage
+            false,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(ownerRequest2, executionFee);
+        // execute trade
+        executor.executeTradeOrders(OWNER);
+        vm.stopPrank();
+        // pass some time
+        vm.warp(block.timestamp + 25);
+        vm.roll(block.number + 1);
+        // check fees on small long
+        MarketStructs.Position memory ownerPosition =
+            ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(ownerRequest));
+        address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+        // check funding fees
+        (uint256 feesEarned, uint256 feesOwed) = FundingCalculator.getTotalPositionFees(market, ownerPosition);
+        console.log("Fees Owed: ", feesOwed);
+        console.log("Fees Earned: ", feesEarned);
+        (uint256 feesForDurationShort, uint256 feesForDurationLong) =
+            FundingCalculator.getFeesSinceLastUpdate(market, true);
+        console.log("Fees For Duration Long: ", feesForDurationLong); // should be 0
+        console.log("Fees For Duration Short: ", feesForDurationShort);
     }
 }

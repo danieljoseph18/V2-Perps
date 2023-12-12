@@ -171,7 +171,7 @@ contract TradeStorage is RoleValidation {
         TradeHelper.checkIsLiquidatable(position, _collateralPrice, address(this), address(marketStorage));
         // get the position fees
         address market = TradeHelper.getMarket(address(marketStorage), position.indexToken);
-        uint256 fundingFee = FundingCalculator.getTotalPositionFeeOwed(market, position);
+        (uint256 fundingFee,) = FundingCalculator.getTotalPositionFees(market, position);
 
         bytes32 marketKey = position.market;
 
@@ -569,10 +569,8 @@ contract TradeStorage is RoleValidation {
     function _updateFundingParameters(bytes32 _positionKey, address _indexToken) internal {
         address market = TradeHelper.getMarket(address(marketStorage), _indexToken);
 
-        openPositions[_positionKey].fundingParams.feesEarned =
-            FundingCalculator.getTotalPositionFeeEarned(market, openPositions[_positionKey]);
-        openPositions[_positionKey].fundingParams.feesOwed =
-            FundingCalculator.getTotalPositionFeeOwed(market, openPositions[_positionKey]);
+        (openPositions[_positionKey].fundingParams.feesEarned, openPositions[_positionKey].fundingParams.feesOwed) =
+            FundingCalculator.getTotalPositionFees(market, openPositions[_positionKey]);
 
         uint256 longCumulative = IMarket(market).longCumulativeFundingFees();
         uint256 shortCumulative = IMarket(market).shortCumulativeFundingFees();

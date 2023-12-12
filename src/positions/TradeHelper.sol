@@ -197,7 +197,7 @@ library TradeHelper {
 
         uint256 borrowingFeesUsd = valueUsd / borrowingDivisor;
 
-        uint256 fundingFeeOwed = FundingCalculator.getTotalPositionFeeOwed(_market, _position);
+        (uint256 fundingFeeOwed,) = FundingCalculator.getTotalPositionFees(_market, _position);
         uint256 fundingValueUsd = fundingFeeOwed * _price;
 
         return borrowingFeesUsd + fundingValueUsd;
