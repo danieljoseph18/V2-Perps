@@ -9,6 +9,8 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
 // Helper functions for market related logic
 library MarketHelper {
+    uint256 public constant PRICE_DECIMALS = 1e18;
+
     function getMarket(address _marketStorage, bytes32 _key) external view returns (MarketStructs.Market memory) {
         return IMarketStorage(_marketStorage).markets(_key);
     }
@@ -93,7 +95,7 @@ library MarketHelper {
     ) public view returns (uint256) {
         uint256 collateralOI = getCollateralOpenInterest(_marketStorage, _collateralToken, _isLong);
         uint256 collateralPrice = IPriceOracle(_priceOracle).getPrice(_collateralToken);
-        return (collateralOI * collateralPrice) / 1e18;
+        return (collateralOI * collateralPrice) / PRICE_DECIMALS;
     }
 
     function getTotalCollateralOpenInterestUSD(address _marketStorage, address _priceOracle, address _collateralToken)
@@ -126,6 +128,7 @@ library MarketHelper {
         view
         returns (uint256)
     {
-        return getPoolBalance(_marketStorage, _marketKey) * IPriceOracle(_priceOracle).getPrice(_usdc);
+        return
+            (getPoolBalance(_marketStorage, _marketKey) * IPriceOracle(_priceOracle).getPrice(_usdc)) / PRICE_DECIMALS;
     }
 }

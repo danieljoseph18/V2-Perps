@@ -526,4 +526,55 @@ contract TestFunding is Test {
         console.log("Fees For Duration Long: ", feesForDurationLong); // should be 0
         console.log("Fees For Duration Short: ", feesForDurationShort);
     }
+
+    // test funding fees are claimable
+
+    // test funding fees are not claimable if the position is liquidated
+
+    // test funding fees are paid on position close
+    function testFundingFeesArePaidOnPositionClose() public facilitateTrading {
+        // open a trade
+        vm.startPrank(USER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        uint256 executionFee = tradeStorage.minExecutionFee();
+        MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            USER,
+            100e6,
+            1e18,
+            0,
+            1000e18,
+            0.5e18, // 10% slippage
+            true,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(userRequest, executionFee);
+        vm.stopPrank();
+        // execute request
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        // pass some time
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+        // check funding fees owed
+        bytes32 userKey = TradeHelper.generateKey(userRequest);
+        MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userKey);
+        address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+        (uint256 feesEarned, uint256 feesOwed) = FundingCalculator.getTotalPositionFees(market, userPosition);
+        assertGt(feesOwed, 0);
+        assertEq(feesEarned, 0);
+        console.log("Fees Owed: ", feesOwed);
+        console.log("Fees Earned: ", feesEarned);
+        // close the position
+        vm.prank(USER);
+        requestRouter.createCloseRequest{value: executionFee}(userKey, 1000e18, 0.5e18, false, executionFee);
+        bytes32 marketKey = TradeHelper.getMarketKey(address(indexToken));
+        vm.prank(OWNER);
+        executor.executeTradeOrders(OWNER);
+        // check funding fees paid = funding fees owed
+        uint256 shortCollatAfter = tradeVault.shortCollateral(marketKey);
+        assertEq(shortCollatAfter, feesOwed);
+    }
 }

@@ -23,6 +23,14 @@ contract TradeVault is RoleValidation {
     event LossesTransferred(uint256 indexed _amount);
     event UpdateCollateralBalance(bytes32 indexed _marketKey, uint256 _amount, bool _isLong, bool _isIncrease);
     event ExecutionFeeSent(address _executor, uint256 _fee);
+    event PositionCollateralLiquidated(
+        address indexed _liquidator,
+        uint256 _liqFee,
+        bytes32 indexed _marketKey,
+        uint256 _totalCollateral,
+        uint256 _fundingOwed,
+        bool _isLong
+    );
 
     error TradeVault_InvalidToken();
     error TradeVault_IncorrectMarketKey();
@@ -94,6 +102,7 @@ contract TradeVault is RoleValidation {
             }
             _sendTokensToLiquidityVault(remainingCollateral);
         }
+        emit PositionCollateralLiquidated(_liquidator, _liqFee, _marketKey, _totalCollateral, _fundingOwed, _isLong);
     }
 
     function claimFundingFees(bytes32 _marketKey, address _user, uint256 _claimed, bool _isLong)

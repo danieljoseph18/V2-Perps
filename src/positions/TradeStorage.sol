@@ -264,6 +264,7 @@ contract TradeStorage is RoleValidation {
         if (_price == 0) revert TradeStorage_InvalidPrice();
         _deletePositionRequest(_positionKey, _positionRequest.requestIndex, _positionRequest.isLimit);
         _updateFundingParameters(_positionKey, _positionRequest.indexToken);
+        _updateBorrowingParameters(_positionKey, _positionRequest.indexToken);
 
         TradeHelper.checkLeverage(
             address(dataOracle),
@@ -313,6 +314,7 @@ contract TradeStorage is RoleValidation {
             uint256 newCollateralAmount = position.collateralAmount + _positionRequest.collateralDelta;
             uint256 sizeDelta = (newCollateralAmount * position.positionSize) / position.collateralAmount;
             _updateFundingParameters(_positionKey, _positionRequest.indexToken);
+            _updateBorrowingParameters(_positionKey, _positionRequest.indexToken);
             _editPosition(_positionRequest.collateralDelta, sizeDelta, 0, _price, true, _positionKey);
         } else {
             _createNewPosition(_positionRequest, _positionKey, _price);
@@ -334,6 +336,7 @@ contract TradeStorage is RoleValidation {
         if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
 
         _updateFundingParameters(_positionKey, _positionRequest.indexToken);
+        _updateBorrowingParameters(_positionKey, _positionRequest.indexToken);
 
         uint256 afterFeeAmount = _processFees(_positionKey, _positionRequest);
         uint256 sizeDelta;
@@ -515,7 +518,6 @@ contract TradeStorage is RoleValidation {
         uint256 fundingFee = _subtractFundingFee(openPositions[_positionKey], _positionRequest.collateralDelta);
         uint256 borrowFee = _subtractBorrowingFee(openPositions[_positionKey], _positionRequest.collateralDelta);
         if (borrowFee > 0) {
-            _updateBorrowingParameters(_positionKey, borrowFee, _positionRequest.indexToken);
             tradeVault.transferToLiquidityVault(borrowFee);
         }
 
@@ -539,8 +541,8 @@ contract TradeStorage is RoleValidation {
         } else {
             tradeVault.swapFundingAmount(marketKey, feesOwed, false);
         }
-        bytes32 _positionKey = keccak256(abi.encodePacked(_position.indexToken, _position.user, _position.isLong));
-        openPositions[_positionKey].fundingParams.feesOwed = 0;
+        bytes32 positionKey = keccak256(abi.encodePacked(_position.indexToken, _position.user, _position.isLong));
+        openPositions[positionKey].fundingParams.feesOwed = 0;
 
         emit FundingFeeProcessed(_position.user, feesOwed);
         return feesOwed;
@@ -552,17 +554,19 @@ contract TradeStorage is RoleValidation {
     {
         address market = TradeHelper.getMarket(address(marketStorage), _position.indexToken);
         uint256 borrowFee = BorrowingCalculator.calculateBorrowingFee(market, _position, _collateralDelta);
+        bytes32 positionKey = keccak256(abi.encodePacked(_position.indexToken, _position.user, _position.isLong));
+        openPositions[positionKey].borrowParams.feesOwed -= borrowFee;
         emit BorrowingFeesProcessed(_position.user, borrowFee);
         return borrowFee;
     }
 
-    function _updateBorrowingParameters(bytes32 _positionKey, uint256 _feesRealised, address _indexToken) internal {
+    function _updateBorrowingParameters(bytes32 _positionKey, address _indexToken) internal {
         MarketStructs.Position storage position = openPositions[_positionKey];
         address market = TradeHelper.getMarket(address(marketStorage), _indexToken);
-        position.borrowParams.feesOwed -= _feesRealised;
-        position.borrowParams.lastBorrowUpdate = block.timestamp;
+        position.borrowParams.feesOwed = BorrowingCalculator.getBorrowingFees(market, position);
         position.borrowParams.lastLongCumulativeBorrowFee = IMarket(market).longCumulativeBorrowFee();
         position.borrowParams.lastShortCumulativeBorrowFee = IMarket(market).shortCumulativeBorrowFee();
+        position.borrowParams.lastBorrowUpdate = block.timestamp;
         emit BorrowingParamsUpdated(_positionKey, position.borrowParams);
     }
 

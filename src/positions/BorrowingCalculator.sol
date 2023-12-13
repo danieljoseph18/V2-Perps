@@ -31,10 +31,19 @@ library BorrowingCalculator {
         uint256 borrowFee = _position.isLong
             ? IMarket(_market).longCumulativeBorrowFee() - _position.borrowParams.lastLongCumulativeBorrowFee
             : IMarket(_market).shortCumulativeBorrowFee() - _position.borrowParams.lastShortCumulativeBorrowFee;
+        borrowFee += _calculatePendingFees(_market, _position.isLong);
         if (borrowFee == 0) {
             feesOwed = 0;
         } else {
             feesOwed = (_position.positionSize * borrowFee) / 1e18;
         }
+    }
+
+    function _calculatePendingFees(address _market, bool _isLong) internal view returns (uint256) {
+        uint256 borrowRate = _isLong ? IMarket(_market).longBorrowingRate() : IMarket(_market).shortBorrowingRate();
+        if (borrowRate == 0) return 0;
+        uint256 timeElapsed = block.timestamp - IMarket(_market).lastBorrowUpdateTime();
+        if (timeElapsed == 0) return 0;
+        return borrowRate * timeElapsed;
     }
 }
