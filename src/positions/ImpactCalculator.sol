@@ -12,7 +12,7 @@ library ImpactCalculator {
     error ImpactCalculator_ZeroParameters();
     error ImpactCalculator_SlippageExceedsMax();
 
-    uint256 public constant IMPACT_SCALAR = 1e18;
+    uint256 public constant SCALAR = 1e18;
     uint256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
 
     function executePriceImpact(
@@ -76,14 +76,14 @@ library ImpactCalculator {
             skewBefore, skewAfter, market.priceImpactExponent(), market.priceImpactFactor()
         );
 
-        uint256 maxImpact = (_signedBlockPrice * MAX_PRICE_IMPACT) / IMPACT_SCALAR;
+        uint256 maxImpact = (_signedBlockPrice * MAX_PRICE_IMPACT) / SCALAR;
         return _adjustPriceImpactWithinLimits(priceImpact, maxImpact);
     }
 
     function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) public pure {
         uint256 impactDelta =
             _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
-        uint256 slippage = (impactDelta * IMPACT_SCALAR) / _signedPrice;
+        uint256 slippage = (impactDelta * SCALAR) / _signedPrice;
         if (slippage > _maxSlippage) revert ImpactCalculator_SlippageExceedsMax();
     }
 
@@ -109,8 +109,8 @@ library ImpactCalculator {
         pure
         returns (uint256)
     {
-        uint256 absBefore = _skewBefore / IMPACT_SCALAR;
-        uint256 absAfter = _skewAfter / IMPACT_SCALAR;
+        uint256 absBefore = _skewBefore / SCALAR;
+        uint256 absAfter = _skewAfter / SCALAR;
 
         // Exponentiate and then apply factor
         uint256 impactBefore = (absBefore ** _exponent) * _factor;

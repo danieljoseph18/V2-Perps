@@ -6,11 +6,13 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 
 /// @dev Note, need to handle the case where velocity crosses 0 (pos -> neg or neg -> pos)
 library FundingCalculator {
+    uint256 public constant PRECISION = 1e18;
+
     /// @dev Calculate the funding rate velocity.
     function calculateFundingRateVelocity(address _market, int256 _skew) external view returns (int256) {
-        uint256 c = (IMarket(_market).maxFundingVelocity() * 1e18) / IMarket(_market).skewScale();
+        uint256 c = (IMarket(_market).maxFundingVelocity() * PRECISION) / IMarket(_market).skewScale();
         int256 skew = _skew;
-        return (int256(c) * skew) / 1e18;
+        return (int256(c) * skew) / int256(PRECISION);
     }
 
     /// @dev Get the total funding fees accumulated for long and short sides since the last update.
@@ -19,6 +21,7 @@ library FundingCalculator {
         return _getAccumulatedFunding(market);
     }
 
+    /// @dev Returns fees earned and fees owed in tokens
     function getTotalPositionFees(address _market, MarketStructs.Position memory _position)
         external
         view
@@ -35,7 +38,7 @@ library FundingCalculator {
         (uint256 feesEarned, uint256 feesOwed) = getFeesSinceLastUpdate(_market, _position.isLong);
         return (
             feesEarned + _position.fundingParams.feesEarned
-                + ((accumulatedFundingEarned * _position.positionSize) / 1e18),
+                + ((accumulatedFundingEarned * _position.positionSize) / PRECISION),
             feesOwed + _position.fundingParams.feesOwed + ((accumulatedFundingOwed * _position.positionSize) / 1e18)
         );
     }

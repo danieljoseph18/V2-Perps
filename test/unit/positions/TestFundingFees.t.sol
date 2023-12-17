@@ -303,7 +303,7 @@ contract TestFunding is Test {
             ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(ownerRequest));
         address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
         // check funding fees
-        (uint256 feesOwed, uint256 feesEarned) = FundingCalculator.getTotalPositionFees(market, ownerPosition);
+        (uint256 feesEarned, uint256 feesOwed) = FundingCalculator.getTotalPositionFees(market, ownerPosition);
         assertEq(feesOwed, 0);
         assertGt(feesEarned, 0);
         console.log("Fees Owed: ", feesOwed);
@@ -364,11 +364,11 @@ contract TestFunding is Test {
             ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
         address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
         // check funding fees
-        (uint256 feesOwed, uint256 feesEarned) = FundingCalculator.getTotalPositionFees(market, userPosition);
-        assertGt(feesOwed, 0);
+        (uint256 feesEarned, uint256 feesOwed) = FundingCalculator.getTotalPositionFees(market, userPosition);
         assertGt(feesEarned, 0);
-        console.log("Fees Owed: ", feesOwed);
+        assertGt(feesOwed, 0);
         console.log("Fees Earned: ", feesEarned);
+        console.log("Fees Owed: ", feesOwed);
     }
 
     function testFundingFeesOnRegularSignFlip() public facilitateTrading {

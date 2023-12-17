@@ -124,7 +124,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
         view
         returns (int256)
     {
-        uint256 sizeDeltaUsd = TradeHelper.getTradeSizeUsd(
+        uint256 sizeDeltaUsd = TradeHelper.getTradeValueUsd(
             address(dataOracle), positionRequest.indexToken, positionRequest.sizeDelta, signedBlockPrice
         );
         return positionRequest.isIncrease ? int256(sizeDeltaUsd) : -int256(sizeDeltaUsd);

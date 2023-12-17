@@ -28,7 +28,6 @@ interface IMarket {
     function updateBorrowingRate(bool _isLong) external;
     function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external;
     function getMarketParameters() external view returns (uint256, uint256, uint256, uint256);
-    function getPrice(address _token) external view returns (uint256);
     function getMarketKey() external view returns (bytes32);
     function longCumulativeFundingFees() external view returns (uint256);
     function shortCumulativeFundingFees() external view returns (uint256);

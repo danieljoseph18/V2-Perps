@@ -18,15 +18,18 @@ import {MarketHelper} from "../markets/MarketHelper.sol";
 
 library PricingCalculator {
     uint256 public constant PRICE_PRECISION = 1e18;
-    // if long, entry - position = pnl, if short, position - entry = pnl
-    /// PNL = (Current price of index tokens - Weighted average entry price) * (Total position size / Current price of index tokens)
 
-    function calculatePnL(address _market, MarketStructs.Position memory _position) external view returns (int256) {
-        uint256 indexPrice = IMarket(_market).getPrice(_position.indexToken);
-        int256 deltaPriceUsd = int256(indexPrice) - int256(_position.pnlParams.weightedAvgEntryPrice);
-        uint256 scalar = _position.positionSize / indexPrice;
-
-        return _position.isLong ? deltaPriceUsd * int256(scalar) : -deltaPriceUsd * int256(scalar);
+    /// @dev returns PNL in USD
+    function calculatePnL(address _priceOracle, address _dataOracle, MarketStructs.Position memory _position)
+        external
+        view
+        returns (int256)
+    {
+        uint256 indexPrice = IPriceOracle(_priceOracle).getPrice(_position.indexToken);
+        uint256 baseUnits = IDataOracle(_dataOracle).getBaseUnits(_position.indexToken);
+        uint256 entryValue = (_position.positionSize * _position.pnlParams.weightedAvgEntryPrice) / baseUnits;
+        uint256 currentValue = (_position.positionSize * indexPrice) / baseUnits;
+        return _position.isLong ? int256(currentValue) - int256(entryValue) : int256(entryValue) - int256(currentValue);
     }
 
     /// weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -47,7 +50,7 @@ library PricingCalculator {
         }
     }
 
-    /// @dev Positive for profit, negative for loss
+    /// @dev Positive for profit, negative for loss. Returns PNL in USD
     function getNetPnL(address _market, address _marketStorage, address _dataOracle, address _priceOracle, bool _isLong)
         external
         view
@@ -64,7 +67,7 @@ library PricingCalculator {
 
     /// RealisedPNL=(Current price − Weighted average entry price)×(Realised position size/Current price)
     /// int256 pnl = int256(amountToRealise * currentTokenPrice) - int256(amountToRealise * userPos.entryPriceWeighted);
-    /// Note If decreasing a position and realizing PNL, it's crucial to adjust the WAEP
+    /// @dev Returns fractional PNL in USD
     function getDecreasePositionPnL(
         address _dataOracle,
         address _indexToken,

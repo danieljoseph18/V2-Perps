@@ -6,7 +6,9 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 
 // library responsible for handling all borrowing calculations
 library BorrowingCalculator {
-    /// @dev Gets the Total Fee To Charge For a Position Change
+    uint256 public constant PRECISION = 1e18;
+
+    /// @dev Gets the Total Fee To Charge For a Position Change in Tokens
     function calculateBorrowingFee(address _market, MarketStructs.Position memory _position, uint256 _collateralDelta)
         external
         view
@@ -15,13 +17,14 @@ library BorrowingCalculator {
         return (getBorrowingFees(_market, _position) * _collateralDelta) / _position.collateralAmount;
     }
 
-    /// @dev Gets Total Fees Owed By a Position
+    /// @dev Gets Total Fees Owed By a Position in Tokens
     function getBorrowingFees(address _market, MarketStructs.Position memory _position) public view returns (uint256) {
         uint256 feeSinceUpdate = getFeesSinceLastPositionUpdate(_market, _position);
         return feeSinceUpdate + _position.borrowParams.feesOwed;
     }
 
     /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
+    /// @dev Units: Fees in Tokens (% of fees applied to position size)
     function getFeesSinceLastPositionUpdate(address _market, MarketStructs.Position memory _position)
         public
         view
@@ -35,10 +38,11 @@ library BorrowingCalculator {
         if (borrowFee == 0) {
             feesOwed = 0;
         } else {
-            feesOwed = (_position.positionSize * borrowFee) / 1e18;
+            feesOwed = (_position.positionSize * borrowFee) / PRECISION;
         }
     }
 
+    /// @dev Units: Fees as a percentage (e.g 0.03e18 = 3%)
     function _calculatePendingFees(address _market, bool _isLong) internal view returns (uint256) {
         uint256 borrowRate = _isLong ? IMarket(_market).longBorrowingRate() : IMarket(_market).shortBorrowingRate();
         if (borrowRate == 0) return 0;

@@ -28,6 +28,7 @@ import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
 import {ImpactCalculator} from "../../../src/positions/ImpactCalculator.sol";
 import {BorrowingCalculator} from "../../../src/positions/BorrowingCalculator.sol";
 import {FundingCalculator} from "../../../src/positions/FundingCalculator.sol";
+import {PricingCalculator} from "../../../src/positions/PricingCalculator.sol";
 import {ITradeStorage} from "../../../src/positions/interfaces/ITradeStorage.sol";
 
 contract TestPriceImpact is Test {
@@ -100,95 +101,30 @@ contract TestPriceImpact is Test {
         _;
     }
 
-    // test higher impact is charged on larger trades
-    function testHigherPriceImpactIsChargedOnLargeTrades() public facilitateTrading {
-        vm.startPrank(USER);
-        usdc.approve(address(requestRouter), LARGE_AMOUNT);
-        MarketStructs.PositionRequest memory userRequestLarge = MarketStructs.PositionRequest(
+    // test pnl calculations on constructed positions
+    function testPnlCalculations() public facilitateTrading {
+        bytes32 market = keccak256(abi.encodePacked(address(indexToken)));
+        MarketStructs.Position memory position = MarketStructs.Position(
             0,
-            false,
+            market,
             address(indexToken),
             USER,
-            1_000_000e6,
-            10_000e18,
-            0,
-            1000e18,
-            0.5e18, // 10% slippage
-            true,
-            true
-        );
-        vm.stopPrank();
-        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-        uint256 impact = ImpactCalculator.calculatePriceImpact(
-            market, address(marketStorage), address(dataOracle), address(priceOracle), userRequestLarge, 1000e18
-        );
-        console.log("Large Impact: ", impact);
-        MarketStructs.PositionRequest memory userRequestSmall = MarketStructs.PositionRequest(
-            0,
-            false,
-            address(indexToken),
-            USER,
-            100e6,
+            100e18,
             1e18,
-            0,
-            1000e18,
-            0.5e18, // 10% slippage
             true,
-            true
+            0,
+            MarketStructs.BorrowParams(0, 0, 0, 0),
+            MarketStructs.FundingParams(0, 0, 0, 0, 0),
+            MarketStructs.PnLParams(700e18, 1000e18, 1000),
+            0
         );
-        uint256 smallImpact = ImpactCalculator.calculatePriceImpact(
-            market, address(marketStorage), address(dataOracle), address(priceOracle), userRequestSmall, 1000e18
-        );
-        console.log("Small Impact: ", smallImpact);
-        assertGt(impact, smallImpact);
+        int256 pnl = PricingCalculator.calculatePnL(address(priceOracle), address(dataOracle), position);
+        console.log("pnl: ", uint256(pnl));
     }
+    // test net pnl calculations for entire markets
 
-    // test reasonable impact on smaller trades
-    function testReasonableImpactOnSmallerTrades() public facilitateTrading {
-        MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
-            0,
-            false,
-            address(indexToken),
-            USER,
-            100e6,
-            1e18,
-            0,
-            1000e18,
-            0.003e18, // 0.3% slippage
-            true,
-            true
-        );
-        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-        uint256 impactedPrice = ImpactCalculator.executePriceImpact(
-            market, address(marketStorage), address(dataOracle), address(priceOracle), userRequest, 1000e18
-        );
-        console.log("Impacted Price: ", impactedPrice);
-    }
-
-    function testLargeImpactOnLargeTrades() public facilitateTrading {
-        MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
-            0,
-            false,
-            address(indexToken),
-            USER,
-            1_000_000e6,
-            10_000e18,
-            0,
-            1000e18,
-            0.5e18, // 10% slippage
-            true,
-            true
-        );
-        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-        uint256 impactedPrice = ImpactCalculator.executePriceImpact(
-            market, address(marketStorage), address(dataOracle), address(priceOracle), userRequest, 1000e18
-        );
-        console.log("Impacted Price: ", impactedPrice);
-    }
-
-    // test impact is 0 on trades that don't change the position
-    function testImpactIsZeroOnTradesThatDontChangeThePosition() public facilitateTrading {
-        // create a trade request
+    function testNetPnlCalculationForEntireMarkets() public facilitateTrading {
+        // open a few longs and shorts with varying impact to vary price
         vm.startPrank(USER);
         usdc.approve(address(requestRouter), LARGE_AMOUNT);
         uint256 executionFee = tradeStorage.minExecutionFee();
@@ -206,50 +142,69 @@ contract TestPriceImpact is Test {
             true
         );
         requestRouter.createTradeRequest{value: executionFee}(request, executionFee);
-        vm.stopPrank();
-        // execute the trade request
-        vm.startPrank(OWNER);
-        executor.executeTradeOrders(OWNER);
-        vm.stopPrank();
-        // create a collateral edit request
-        MarketStructs.PositionRequest memory collateralRequest = MarketStructs.PositionRequest(
+        MarketStructs.PositionRequest memory request2 = MarketStructs.PositionRequest(
             0,
             false,
             address(indexToken),
             USER,
-            100e6, // 100 USDC
-            0, // 0 size delta
+            500e6, // 100 USDC
+            5e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            false,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(request2, executionFee);
+        vm.stopPrank();
+        vm.startPrank(OWNER);
+        usdc.approve(address(requestRouter), LARGE_AMOUNT);
+        MarketStructs.PositionRequest memory request3 = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            OWNER,
+            400e6, // 100 USDC
+            4e18, // $1000 per token, should be = 1000 USDC (10x leverage)
             0,
             1000e18,
             0.1e18, // 10% slippage
             true,
             true
         );
-        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-        uint256 impactedPrice = ImpactCalculator.executePriceImpact(
-            market, address(marketStorage), address(dataOracle), address(priceOracle), collateralRequest, 1000e18
+        requestRouter.createTradeRequest{value: executionFee}(request3, executionFee);
+        MarketStructs.PositionRequest memory request4 = MarketStructs.PositionRequest(
+            0,
+            false,
+            address(indexToken),
+            OWNER,
+            2000e6, // 100 USDC
+            20e18, // $1000 per token, should be = 1000 USDC (10x leverage)
+            0,
+            1000e18,
+            0.1e18, // 10% slippage
+            false,
+            true
         );
-        console.log("Impacted Price: ", impactedPrice);
-        assertEq(impactedPrice, 1000e18);
+        requestRouter.createTradeRequest{value: executionFee}(request4, executionFee);
+        executor.executeTradeOrders(OWNER);
+        vm.stopPrank();
+        // check the net pnl
+        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+        int256 netPnl = PricingCalculator.getNetPnL(
+            market, address(marketStorage), address(dataOracle), address(priceOracle), false
+        );
+        bool isNegative = netPnl < 0;
+        if (isNegative) {
+            console.log("Negative PNL: ", uint256(-netPnl));
+        } else {
+            console.log("Positive PNL: ", uint256(netPnl));
+        }
     }
+    // test weighted average entry price calculations
 
-    function testCheckSlippageAccuratelyDeterminesPriceSlippage() public facilitateTrading {
-        uint256 impactedPrice = 500e18; // slippage 50%
-        uint256 signedPrice = 1000e18;
-        ImpactCalculator.checkSlippage(impactedPrice, signedPrice, 0.55e18); // 55%
-        ImpactCalculator.checkSlippage(impactedPrice, signedPrice, 0.5e18); // 50%
-        vm.expectRevert();
-        ImpactCalculator.checkSlippage(impactedPrice, signedPrice, 0.499e18); // 49.9%
-        vm.expectRevert();
-        ImpactCalculator.checkSlippage(impactedPrice, signedPrice, 0.1e18); // 10%
-    }
-
-    function testApplyPriceImpactCorrectlyAppliesImpactToPrices() public facilitateTrading {
-        uint256 signedBlockPrice = 1000e18;
-        uint256 priceImpactUsd = 700e18;
-        uint256 impactedPrice = ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpactUsd, true, true);
-        assertEq(impactedPrice, 1700e18);
-        impactedPrice = ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpactUsd, true, false);
-        assertEq(impactedPrice, 300e18);
+    function testWeightedAvgEntryCalc() public facilitateTrading {
+        uint256 waep = PricingCalculator.calculateWeightedAverageEntryPrice(1000e18, 1000e18, 5000e18, 1250e18);
+        assertEq(1.208333333333333333333e21, waep); // expected $1208.33
     }
 }

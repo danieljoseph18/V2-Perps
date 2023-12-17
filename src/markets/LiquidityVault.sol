@@ -257,6 +257,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     function _getPrice(address _token) internal view returns (uint256) {
         if (_token == address(WUSDC) || _token == address(WUSDC.USDC())) {
             return 1e18;
+            /// @dev Fix upon oracle implementation
         } else {
             return 1000e18;
         }

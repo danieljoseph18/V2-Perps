@@ -29,7 +29,7 @@ contract PriceOracle {
     }
 
     // Stable price should cap at 1 USD
-    // price should have 30
+    // price should have 18 decimals
     function getPrice(address _token) external view returns (uint256) {
         // require token is whitelisted
         // return price of token

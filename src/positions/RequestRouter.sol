@@ -26,6 +26,8 @@ contract RequestRouter is ReentrancyGuard {
     ITradeVault public tradeVault;
     IWUSDC public immutable WUSDC;
 
+    uint256 public constant DECIMAL_ADJUSTMENT = 1e12;
+
     error RequestRouter_ExecutionFeeTooLow();
     error RequestRouter_IncorrectFee();
     error RequestRouter_ExecutionFeeTransferFailed();
@@ -173,6 +175,6 @@ contract RequestRouter is ReentrancyGuard {
 
     /// @dev Adjust decimals from USDC -> WUSDC
     function _adjustCollateralDecimals(uint256 _collateralDelta) internal pure returns (uint256) {
-        return _collateralDelta * 1e12;
+        return _collateralDelta * DECIMAL_ADJUSTMENT;
     }
 }

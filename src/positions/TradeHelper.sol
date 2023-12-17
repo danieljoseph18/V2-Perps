@@ -17,6 +17,7 @@ library TradeHelper {
     uint256 public constant MAX_LEVERAGE = 5000; // 50x
     uint256 public constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
     uint256 public constant MAX_TRADING_FEE = 0.01e18; // 1%
+    uint256 public constant PRECISION = 1e18;
 
     error TradeHelper_LimitPriceNotMet();
     error TradeHelper_RequestAlreadyExists();
@@ -64,8 +65,8 @@ library TradeHelper {
         uint256 _size,
         uint256 _collateral
     ) public view returns (uint256) {
-        uint256 sizeUsd = getTradeSizeUsd(_dataOracle, _indexToken, _size, _signedPrice);
-        uint256 collateralUsd = (_collateral * IPriceOracle(_priceOracle).getCollateralPrice()) / 1e18;
+        uint256 sizeUsd = getTradeValueUsd(_dataOracle, _indexToken, _size, _signedPrice);
+        uint256 collateralUsd = (_collateral * IPriceOracle(_priceOracle).getCollateralPrice()) / PRECISION;
         return (sizeUsd * 100) / collateralUsd;
     }
 
@@ -90,12 +91,11 @@ library TradeHelper {
             _positionRequest.sizeDelta,
             _positionRequest.collateralDelta
         );
-        uint256 sizeUsd = getTradeSizeUsd(_dataOracle, _positionRequest.indexToken, _positionRequest.sizeDelta, _price);
+        uint256 sizeUsd = getTradeValueUsd(_dataOracle, _positionRequest.indexToken, _positionRequest.sizeDelta, _price);
+        bytes32 marketKey = getMarketKey(_positionRequest.indexToken);
         return MarketStructs.Position({
-            index: ITradeStorage(_tradeStorage).getNextPositionIndex(
-                keccak256(abi.encodePacked(_positionRequest.indexToken)), _positionRequest.isLong
-                ),
-            market: keccak256(abi.encodePacked(_positionRequest.indexToken)),
+            index: ITradeStorage(_tradeStorage).getNextPositionIndex(marketKey, _positionRequest.isLong),
+            market: marketKey,
             indexToken: _positionRequest.indexToken,
             user: _positionRequest.user,
             collateralAmount: _positionRequest.collateralDelta,
@@ -111,12 +111,11 @@ library TradeHelper {
 
     function calculateTradingFee(address _tradeStorage, uint256 _sizeDelta) external view returns (uint256) {
         uint256 tradingFee = ITradeStorage(_tradeStorage).tradingFee();
-        uint256 divisor = 1e18 / tradingFee;
-        return _sizeDelta / divisor; //e.g 1e18 / 0.01e18 = 100 => x / 100 = fee
+        return (_sizeDelta * tradingFee) / PRECISION; // e.g 100 * 0.01e18 / 1e18 = 1
     }
 
     /// @dev Need to adjust for decimals
-    function getTradeSizeUsd(address _dataOracle, address _indexToken, uint256 _sizeDelta, uint256 _signedPrice)
+    function getTradeValueUsd(address _dataOracle, address _indexToken, uint256 _sizeDelta, uint256 _signedPrice)
         public
         view
         returns (uint256)
@@ -130,18 +129,19 @@ library TradeHelper {
         MarketStructs.Position memory _position,
         uint256 _collateralPriceUsd,
         address _tradeStorage,
-        address _marketStorage
+        address _marketStorage,
+        address _priceOracle,
+        address _dataOracle
     ) public view returns (bool) {
-        address market = getMarket(_marketStorage, _position.indexToken);
         // get the total value provided in USD
-        uint256 collateralValueUsd = (_position.collateralAmount * _collateralPriceUsd) / 1e18;
+        uint256 collateralValueUsd = (_position.collateralAmount * _collateralPriceUsd) / PRECISION;
         // get the liquidation fee in USD
         uint256 liquidationFeeUsd = ITradeStorage(_tradeStorage).liquidationFeeUsd();
         // get the total fees owed (funding + borrowing) in USD => funding should be net
         // If fees earned > fees owed, should just be 0 => Let's extrapolate this out to FUnding Calculator
         uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _collateralPriceUsd, _marketStorage);
         // get the total losses in USD
-        int256 pnl = PricingCalculator.calculatePnL(market, _position);
+        int256 pnl = PricingCalculator.calculatePnL(_priceOracle, _dataOracle, _position);
         int256 reminance = int256(collateralValueUsd) - int256(liquidationFeeUsd) - int256(totalFeesOwedUsd) + pnl;
         // check if value provided > liquidation fee + fees + losses
         if (reminance <= 0) {
@@ -156,7 +156,7 @@ library TradeHelper {
         pure
         returns (uint256)
     {
-        return (_liquidationFeeUsd * 1e18) / (IPriceOracle(_priceOracle).getCollateralPrice());
+        return (_liquidationFeeUsd * PRECISION) / (IPriceOracle(_priceOracle).getCollateralPrice());
     }
 
     function checkMinCollateral(
@@ -177,12 +177,14 @@ library TradeHelper {
         MarketStructs.Position memory _position,
         uint256 _collateralDelta,
         address _priceOracle,
+        address _dataOracle,
         address _marketStorage
     ) external view returns (bool) {
         if (_position.collateralAmount <= _collateralDelta) return false;
         _position.collateralAmount -= _collateralDelta;
         uint256 collateralPrice = IPriceOracle(_priceOracle).getCollateralPrice();
-        bool isValid = !checkIsLiquidatable(_position, collateralPrice, _marketStorage, _marketStorage);
+        bool isValid =
+            !checkIsLiquidatable(_position, collateralPrice, _marketStorage, _marketStorage, _priceOracle, _dataOracle);
         return isValid;
     }
 
@@ -191,14 +193,13 @@ library TradeHelper {
         view
         returns (uint256)
     {
-        uint256 valueUsd = _position.positionSize * _price;
+        uint256 positionValueUsd = (_position.positionSize * _price) / PRECISION;
         uint256 borrowingFees = BorrowingCalculator.getBorrowingFees(_market, _position);
-        uint256 borrowingDivisor = 1e18 / borrowingFees;
 
-        uint256 borrowingFeesUsd = valueUsd / borrowingDivisor;
+        uint256 borrowingFeesUsd = (positionValueUsd * borrowingFees) / PRECISION;
 
-        (uint256 fundingFeeOwed,) = FundingCalculator.getTotalPositionFees(_market, _position);
-        uint256 fundingValueUsd = fundingFeeOwed * _price;
+        (, uint256 fundingFeeOwed) = FundingCalculator.getTotalPositionFees(_market, _position);
+        uint256 fundingValueUsd = (fundingFeeOwed * _price) / PRECISION;
 
         return borrowingFeesUsd + fundingValueUsd;
     }

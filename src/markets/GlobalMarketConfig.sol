@@ -17,6 +17,18 @@ contract GlobalMarketConfig is RoleValidation {
     }
 
     /**
+     * ========================= Oracle =========================
+     */
+
+    function setDataOracle(address _dataOracle) external onlyModerator {
+        // set data oracle across all contracts to a new contract address
+    }
+
+    function setPriceOracle(address _priceOracle) external onlyModerator {
+        // set price oracle across all contracts to a new contract address
+    }
+
+    /**
      * ========================= Market Config =========================
      */
 
