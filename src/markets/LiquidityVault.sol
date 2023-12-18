@@ -52,10 +52,12 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     uint256 public liquidityFee;
     bool private isInitialised;
 
-    event LiquidityFeeUpdated(uint256 liquidityFee);
-    event HandlerSet(address handler, bool isHandler);
-    event LiquidityAdded(address indexed token, uint256 amount, uint256 mintAmount);
-    event LiquidityWithdrawn(address account, address tokenOut, uint256 liquidityTokenAmount, uint256 amountOut);
+    event LiquidityFeeUpdated(uint256 indexed liquidityFee);
+    event HandlerSet(address indexed handler, bool indexed isHandler);
+    event LiquidityAdded(address indexed token, uint256 indexed amount, uint256 indexed mintAmount);
+    event LiquidityWithdrawn(
+        address indexed account, address indexed tokenOut, uint256 indexed liquidityTokenAmount, uint256 amountOut
+    );
     event FeesAccumulated(uint256 indexed _amount);
     event ProfitTransferred(address indexed _user, uint256 indexed _amount);
     event StateUpdated(int256 indexed _netPnL, uint256 indexed _netOI);
@@ -156,7 +158,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     // $1 = 1e18
-    function getLiquidityTokenPrice() public view returns (uint256) {
+    function getLiquidityTokenPrice() external view returns (uint256) {
         // market token price = (worth of market pool in USD) / total supply
         uint256 aum = getAum();
         uint256 supply = IERC20(address(liquidityToken)).totalSupply();
@@ -258,7 +260,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
     function _wrapUsdc(uint256 _amount) internal returns (uint256) {
         address usdc = WUSDC.USDC();
-        IERC20(usdc).approve(address(WUSDC), _amount);
+        IERC20(usdc).safeIncreaseAllowance(address(WUSDC), _amount);
         return WUSDC.deposit(_amount);
     }
 

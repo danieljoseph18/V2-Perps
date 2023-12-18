@@ -66,29 +66,39 @@ contract TradeStorage is RoleValidation {
     uint256 public tradingFee;
     uint256 public minExecutionFee;
 
-    event OrderRequestCreated(bytes32 _orderKey, MarketStructs.PositionRequest _positionRequest);
-    event OrderRequestCancelled(bytes32 _orderKey);
-    event TradeExecuted(MarketStructs.ExecutionParams _executionParams);
-    event DecreaseTokenTransfer(address _user, uint256 _principle, int256 _pnl);
-    event LiquidatePosition(bytes32 _positionKey, address _liquidator, uint256 _amountLiquidated, bool _isLong);
-    event FeesProcessed(bytes32 _positionKey, uint256 _fundingFee, uint256 _borrowFee);
-    event FundingFeesClaimed(address _user, uint256 _fundingFees);
-    event TradeStorageInitialised(uint256 _liquidationFee, uint256 _tradingFee, uint256 _minExecutionFee);
-    event TradingFeesSet(uint256 _liquidationFee, uint256 _tradingFee);
-    event CollateralEdited(bytes32 _positionKey, uint256 _collateralDelta, bool _isIncrease);
-    event IncreasePosition(bytes32 _positionKey, uint256 _collateralDelta, uint256 _sizeDelta);
-    event DecreasePosition(bytes32 _positionKey, uint256 _collateralDelta, uint256 _sizeDelta);
-    event DeletePositionRequest(bytes32 _positionKey, uint256 _requestIndex, bool _isLimit);
-    event EditPosition(
-        bytes32 _positionKey, uint256 _collateralDelta, uint256 _sizeDelta, int256 _pnlDelta, bool _isIncrease
+    event OrderRequestCreated(bytes32 indexed _orderKey, MarketStructs.PositionRequest indexed _positionRequest);
+    event OrderRequestCancelled(bytes32 indexed _orderKey);
+    event TradeExecuted(MarketStructs.ExecutionParams indexed _executionParams);
+    event DecreaseTokenTransfer(address indexed _user, uint256 indexed _principle, int256 indexed _pnl);
+    event LiquidatePosition(
+        bytes32 indexed _positionKey, address indexed _liquidator, uint256 indexed _amountLiquidated, bool _isLong
     );
-    event PositionCreated(bytes32 _positionKey, MarketStructs.Position _position);
-    event FundingFeeProcessed(address _user, uint256 _fundingFee);
-    event FundingParamsUpdated(bytes32 _positionKey, MarketStructs.FundingParams _fundingParams);
-    event BorrowingFeesProcessed(address _user, uint256 _borrowingFee);
-    event BorrowingParamsUpdated(bytes32 _positionKey, MarketStructs.BorrowParams _borrowingParams);
-    event LiquidityReserved(address _user, bytes32 _positionKey, uint256 _amount, bool _isIncrease);
-    event TradeStorage_StartIndexUpdated(uint256 _startIndex);
+    event FeesProcessed(bytes32 indexed _positionKey, uint256 indexed _fundingFee, uint256 indexed _borrowFee);
+    event FundingFeesClaimed(address _user, uint256 _fundingFees);
+    event TradeStorageInitialised(
+        uint256 indexed _liquidationFee, uint256 indexed _tradingFee, uint256 indexed _minExecutionFee
+    );
+    event TradingFeesSet(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
+    event CollateralEdited(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, bool indexed _isIncrease);
+    event IncreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
+    event DecreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
+    event DeletePositionRequest(bytes32 indexed _positionKey, uint256 indexed _requestIndex, bool indexed _isLimit);
+    event EditPosition(
+        bytes32 indexed _positionKey,
+        uint256 indexed _collateralDelta,
+        uint256 indexed _sizeDelta,
+        int256 _pnlDelta,
+        bool _isIncrease
+    );
+    event PositionCreated(bytes32 indexed _positionKey, MarketStructs.Position indexed _position);
+    event FundingFeeProcessed(address indexed _user, uint256 indexed _fundingFee);
+    event FundingParamsUpdated(bytes32 indexed _positionKey, MarketStructs.FundingParams indexed _fundingParams);
+    event BorrowingFeesProcessed(address indexed _user, uint256 indexed _borrowingFee);
+    event BorrowingParamsUpdated(bytes32 indexed _positionKey, MarketStructs.BorrowParams indexed _borrowingParams);
+    event LiquidityReserved(
+        address _user, bytes32 indexed _positionKey, uint256 indexed _amount, bool indexed _isIncrease
+    );
+    event TradeStorage_StartIndexUpdated(uint256 indexed _startIndex);
 
     error TradeStorage_OrderDoesNotExist();
     error TradeStorage_PositionDoesNotExist();
@@ -263,13 +273,13 @@ contract TradeStorage is RoleValidation {
         return pendingOrders;
     }
 
-    function getPositionFees(MarketStructs.Position memory _position) public view returns (uint256, uint256) {
+    function getPositionFees(MarketStructs.Position memory _position) external view returns (uint256, uint256) {
         address market = TradeHelper.getMarket(address(marketStorage), _position.indexToken);
         uint256 borrowFee = BorrowingCalculator.getBorrowingFees(market, _position);
         return (borrowFee, liquidationFeeUsd);
     }
 
-    function getRequestQueueLengths() public view returns (uint256, uint256) {
+    function getRequestQueueLengths() external view returns (uint256, uint256) {
         return (orderKeys[false].length, orderKeys[true].length);
     }
 

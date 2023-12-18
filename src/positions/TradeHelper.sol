@@ -31,6 +31,7 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 library TradeHelper {
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant MAX_LEVERAGE = 5000; // 50x
+    uint256 public constant LEVERAGE_PRECISION = 100;
     uint256 public constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
     uint256 public constant MAX_TRADING_FEE = 0.01e18; // 1%
     uint256 public constant PRECISION = 1e18;
@@ -83,7 +84,7 @@ library TradeHelper {
     ) public view returns (uint256) {
         uint256 sizeUsd = getTradeValueUsd(_dataOracle, _indexToken, _size, _signedPrice);
         uint256 collateralUsd = (_collateral * IPriceOracle(_priceOracle).getCollateralPrice()) / PRECISION;
-        return (sizeUsd * 100) / collateralUsd;
+        return (sizeUsd * LEVERAGE_PRECISION) / collateralUsd;
     }
 
     function generateNewPosition(
@@ -220,7 +221,7 @@ library TradeHelper {
         return borrowingFeesUsd + fundingValueUsd;
     }
 
-    function getMarket(address _marketStorage, address _indexToken) public view returns (address) {
+    function getMarket(address _marketStorage, address _indexToken) external view returns (address) {
         bytes32 market = keccak256(abi.encodePacked(_indexToken));
         return IMarketStorage(_marketStorage).markets(market).market;
     }

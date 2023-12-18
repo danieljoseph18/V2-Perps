@@ -75,7 +75,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
     /// @dev Only Keeper
     function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit)
-        public
+        external
         nonReentrant
         onlyKeeperOrContract
         returns (bool _wasExecuted)

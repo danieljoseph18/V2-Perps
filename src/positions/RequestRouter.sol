@@ -34,6 +34,7 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 /// @dev Needs Router role
 contract RequestRouter is ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using SafeERC20 for IWUSDC;
     using MarketStructs for MarketStructs.PositionRequest;
 
     ITradeStorage public tradeStorage;
@@ -159,13 +160,13 @@ contract RequestRouter is ReentrancyGuard {
         // validate fee vs request => can fee be deducted from collateral and still remain above minimum?
         // transfer fee to liquidity vault and increase accumulated fees
         liquidityVault.accumulateFees(fee);
-        WUSDC.transfer(address(liquidityVault), fee);
+        WUSDC.safeTransfer(address(liquidityVault), fee);
         // transfer the rest of the collateral to trade vault and updateCollateralBalance
         uint256 afterFeeAmount = _wusdcAmount - fee;
         tradeVault.updateCollateralBalance(
             _marketKey, afterFeeAmount, _positionRequest.isLong, _positionRequest.isIncrease
         );
-        WUSDC.transfer(address(tradeVault), afterFeeAmount);
+        WUSDC.safeTransfer(address(tradeVault), afterFeeAmount);
 
         return afterFeeAmount;
     }
@@ -178,7 +179,7 @@ contract RequestRouter is ReentrancyGuard {
 
     function _wrapUsdc(uint256 _amount) internal returns (uint256) {
         address usdc = WUSDC.USDC();
-        IERC20(usdc).approve(address(WUSDC), _amount);
+        IERC20(usdc).safeIncreaseAllowance(address(WUSDC), _amount);
         return WUSDC.deposit(_amount);
     }
 

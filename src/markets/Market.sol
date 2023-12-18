@@ -80,18 +80,20 @@ contract Market is ReentrancyGuard, RoleValidation {
     uint256 public shortSizeSumUSD; // Used to calculate WAEP
 
     event MarketFundingConfigUpdated(
-        uint256 _maxFundingVelocity, uint256 _skewScale, int256 _maxFundingRate, int256 _minFundingRate
+        uint256 indexed _maxFundingVelocity, uint256 indexed _skewScale, int256 _maxFundingRate, int256 _minFundingRate
     );
     event FundingConfigUpdated(
-        int256 _fundingRate,
-        int256 _fundingRateVelocity,
+        int256 indexed _fundingRate,
+        int256 indexed _fundingRateVelocity,
         uint256 _longCumulativeFundingFees,
         uint256 _shortCumulativeFundingFees
     );
-    event BorrowingConfigUpdated(uint256 _borrowingFactor, uint256 _borrowingExponent, bool _feeForSmallerSide);
-    event BorrowingRateUpdated(bool _isLong, uint256 _borrowingRate);
-    event TotalWAEPUpdated(uint256 _longTotalWAEP, uint256 _shortTotalWAEP);
-    event PriceImpactConfigUpdated(uint256 _priceImpactFactor, uint256 _priceImpactExponent);
+    event BorrowingConfigUpdated(
+        uint256 indexed _borrowingFactor, uint256 indexed _borrowingExponent, bool indexed _feeForSmallerSide
+    );
+    event BorrowingRateUpdated(bool indexed _isLong, uint256 indexed _borrowingRate);
+    event TotalWAEPUpdated(uint256 indexed _longTotalWAEP, uint256 indexed _shortTotalWAEP);
+    event PriceImpactConfigUpdated(uint256 indexed _priceImpactFactor, uint256 indexed _priceImpactExponent);
 
     error Market_AlreadyInitialised();
 

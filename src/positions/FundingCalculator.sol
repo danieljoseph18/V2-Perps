@@ -55,7 +55,8 @@ library FundingCalculator {
         return (
             feesEarned + _position.fundingParams.feesEarned
                 + ((accumulatedFundingEarned * _position.positionSize) / PRECISION),
-            feesOwed + _position.fundingParams.feesOwed + ((accumulatedFundingOwed * _position.positionSize) / 1e18)
+            feesOwed + _position.fundingParams.feesOwed
+                + ((accumulatedFundingOwed * _position.positionSize) / PRECISION)
         );
     }
 

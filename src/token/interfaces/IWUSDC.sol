@@ -8,13 +8,13 @@ interface IWUSDC is IERC20 {
     /// @param user The address of the user making the deposit
     /// @param usdcAmount The amount of USDC being deposited
     /// @param wusdcAmount The amount of WUSDC minted to the user
-    event Deposit(address indexed user, uint256 usdcAmount, uint256 wusdcAmount);
+    event Deposit(address indexed user, uint256 indexed usdcAmount, uint256 indexed wusdcAmount);
 
     /// @dev This event is emitted when a withdrawal is made
     /// @param user The address of the user making the withdrawal
     /// @param wusdcAmount The amount of WUSDC being withdrawn
     /// @param usdcAmount The amount of USDC transferred to the user
-    event Withdraw(address indexed user, uint256 wusdcAmount, uint256 usdcAmount);
+    event Withdraw(address indexed user, uint256 indexed wusdcAmount, uint256 indexed usdcAmount);
 
     /// @dev Function to deposit USDC and mint WUSDC
     /// @param _usdcAmount The amount of USDC to deposit

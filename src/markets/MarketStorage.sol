@@ -44,12 +44,12 @@ contract MarketStorage is RoleValidation {
 
     event OpenInterestUpdated(
         bytes32 indexed _marketKey,
-        uint256 _collateralTokenAmount,
-        uint256 _indexTokenAmount,
+        uint256 indexed _collateralTokenAmount,
+        uint256 indexed _indexTokenAmount,
         bool _isLong,
         bool _isAddition
     );
-    event MarketStateUpdated(bytes32 indexed _marketKey, uint256 indexed _newAllocation, uint256 _maxOI);
+    event MarketStateUpdated(bytes32 indexed _marketKey, uint256 indexed _newAllocation, uint256 indexed _maxOI);
 
     error MarketStorage_MarketAlreadyExists();
     error MarketStorage_NonExistentMarket();

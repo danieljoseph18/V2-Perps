@@ -52,7 +52,7 @@ library MarketHelper {
     }
 
     function getTotalIndexOpenInterest(address _marketStorage, address _indexToken)
-        public
+        external
         view
         returns (uint256 _totalOI)
     {
@@ -95,7 +95,7 @@ library MarketHelper {
     }
 
     function getTotalCollateralOpenInterest(address _marketStorage, address _collateralToken)
-        public
+        external
         view
         returns (uint256)
     {
@@ -124,7 +124,7 @@ library MarketHelper {
     }
 
     function getTotalEntryValue(address _market, address _marketStorage, address _dataOracle, bool _isLong)
-        public
+        external
         view
         returns (uint256)
     {
