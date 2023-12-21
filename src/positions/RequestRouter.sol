@@ -176,8 +176,8 @@ contract RequestRouter is ReentrancyGuard {
     }
 
     function _wrapUsdc(uint256 _amount) internal returns (uint256) {
-        address usdc = WUSDC.USDC();
-        IERC20(usdc).safeIncreaseAllowance(address(WUSDC), _amount);
+        IERC20 usdc = WUSDC.USDC();
+        usdc.safeIncreaseAllowance(address(WUSDC), _amount);
         return WUSDC.deposit(_amount);
     }
 

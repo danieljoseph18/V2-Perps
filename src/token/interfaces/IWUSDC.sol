@@ -28,5 +28,5 @@ interface IWUSDC is IERC20 {
 
     /// @dev Getter for the USDC token address
     /// @return The address of the USDC token contract
-    function USDC() external view returns (address);
+    function USDC() external view returns (IERC20);
 }
