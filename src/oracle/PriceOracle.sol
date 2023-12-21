@@ -15,7 +15,7 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.21;
+pragma solidity 0.8.22;
 
 // Do we need to allow DEX pricing to price PRINT?
 //https://sips.synthetix.io/sips/sip-285/

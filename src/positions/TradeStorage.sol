@@ -15,7 +15,7 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.21;
+pragma solidity 0.8.22;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -53,6 +53,7 @@ contract TradeStorage is RoleValidation {
     uint256 public constant PRECISION = 1e18;
 
     mapping(bool _isLimit => mapping(bytes32 _orderKey => MarketStructs.PositionRequest)) public orders;
+    // q - can we use a double map here to save on gas??
     mapping(bool _isLimit => bytes32[] _orderKeys) public orderKeys;
     uint256 public orderKeysStartIndex;
     // Track open positions

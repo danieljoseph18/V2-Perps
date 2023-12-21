@@ -15,7 +15,7 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.21;
+pragma solidity 0.8.22;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -76,7 +76,6 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     error LiquidityVault_LiquidityFeeOutOfBounds();
     error LiquidityVault_InsufficientLiquidity();
     error LiquidityVault_CallerIsAContract();
-    error LiquidityVault_RequiresApproval();
 
     // liquidity token = market token
     constructor(address _wusdc, address _liquidityToken, address _roleStorage) RoleValidation(_roleStorage) {
@@ -182,6 +181,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
             totalReserved -= amt;
             reservedAmounts[_user] -= amt;
         }
+        // Invariant Check
+        assert(totalReserved <= poolAmounts);
     }
 
     // $1 = 1e18
@@ -214,26 +215,35 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
         if (_account == address(0)) revert LiquidityVault_ZeroAddress();
 
+        uint256 initialPoolAmount = poolAmounts;
+        uint256 initialAccumulatedFees = accumulatedFees;
+
         // Transfer From User to Contract
         USDC.safeTransferFrom(msg.sender, address(this), _amount);
+
         // Wrap Stablecoin
         uint256 wusdcAmount = _wrapUsdc(_amount);
+
         // Deduct Fees
         uint256 afterFeeAmount = _deductLiquidityFees(wusdcAmount);
+
         // mint market tokens
         uint256 price = priceOracle.getCollateralPrice();
-
         uint256 valueUsd = (afterFeeAmount * price) / SCALING_FACTOR;
-
         uint256 lpTokenPrice = getLiquidityTokenPrice();
-
         uint256 mintAmount = lpTokenPrice == 0 ? valueUsd : (valueUsd * SCALING_FACTOR) / lpTokenPrice;
 
         poolAmounts += afterFeeAmount;
-
         liquidityToken.mint(_account, mintAmount);
+
         // Fire event
         emit LiquidityAdded(_account, afterFeeAmount, mintAmount);
+
+        // Check Invariants
+        uint256 feeAmount = wusdcAmount - afterFeeAmount;
+        assert(poolAmounts == initialPoolAmount + afterFeeAmount); // Pool amount correctly increased
+        assert(accumulatedFees == initialAccumulatedFees + feeAmount); // Fees correctly accumulated
+        assert(wusdcAmount == afterFeeAmount + feeAmount); // Total wrapped amount accounted for
     }
 
     /// @dev Gas Inefficient -> Revisit
@@ -241,11 +251,11 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         if (_liquidityTokenAmount == 0) revert LiquidityVault_InvalidTokenAmount();
         if (_account == address(0)) revert LiquidityVault_ZeroAddress();
 
-        // burn the user's liquidity tokens
-        try liquidityToken.burn(msg.sender, _liquidityTokenAmount) {}
-        catch {
-            revert LiquidityVault_RequiresApproval();
-        }
+        uint256 initialPoolAmount = poolAmounts;
+        uint256 initialAccumulatedFees = accumulatedFees;
+
+        // Transfer LP Tokens from User to Contract
+        liquidityToken.safeTransferFrom(_account, address(this), _liquidityTokenAmount);
 
         // remove liquidity from the market
         uint256 lpTokenValueUsd = (_liquidityTokenAmount * getLiquidityTokenPrice()) / SCALING_FACTOR;
@@ -258,6 +268,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         if (tokenAmount > availableLiquidity) revert LiquidityVault_InsufficientFunds();
 
         poolAmounts -= tokenAmount;
+
+        liquidityToken.burn(address(this), _liquidityTokenAmount);
         // Deduct Fees
         uint256 afterFeeAmount = _deductLiquidityFees(tokenAmount);
         // Unwrap
@@ -266,6 +278,11 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         USDC.safeTransfer(_account, tokenOutAmount);
         // Fire event
         emit LiquidityWithdrawn(_account, address(WUSDC), _liquidityTokenAmount, afterFeeAmount);
+        // Check Invariants
+        uint256 feeAmount = tokenAmount - afterFeeAmount;
+        assert(poolAmounts == initialPoolAmount - tokenAmount); // Pool amount correctly decreased
+        assert(accumulatedFees == initialAccumulatedFees + feeAmount); // Fees correctly accumulated
+        assert(tokenAmount == afterFeeAmount + feeAmount); // Total wrapped amount accounted for
     }
 
     function _wrapUsdc(uint256 _amount) internal returns (uint256) {

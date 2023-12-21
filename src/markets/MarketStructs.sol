@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.21;
+pragma solidity 0.8.22;
+// q - can we use smaller data types anywhere to save on gas
 
 library MarketStructs {
     struct Market {
@@ -8,6 +9,7 @@ library MarketStructs {
         bytes32 marketKey; // Note Use where applicable to save on gas
     }
 
+    // q - can we pack bools to save on gas
     struct PositionRequest {
         uint256 requestIndex;
         bool isLimit;

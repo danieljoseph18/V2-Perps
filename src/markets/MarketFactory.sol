@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.21;
+pragma solidity 0.8.22;
 
 // Create new Market.sol contracts, with MarketToken.sol's associated
 // Store them in MarketStorage.sol with associated information

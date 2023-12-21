@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.21;
+pragma solidity 0.8.22;
 
 import {Test, console} from "forge-std/Test.sol";
 import {DeployV2} from "../../../script/DeployV2.s.sol";
@@ -97,11 +97,12 @@ contract TestLiquidityVault is Test {
     //     Value a: 0
     //     Value b: 0
 
-    function testLiqVaultAddLiquidityWorks() public mintUsdc {
+    function testLiqVaultAddLiquidityWorksRegular() public mintUsdc {
         vm.startPrank(OWNER);
         usdc.approve(address(liquidityVault), LARGE_AMOUNT);
         liquidityVault.addLiquidity(100e6);
-        assertEq(liquidityVault.poolAmounts(), 100e6 * CONVERSION_RATE);
+        uint256 fee = 100e18 * liquidityVault.liquidityFee() / 1e18;
+        assertEq(liquidityVault.poolAmounts(), (100e6 * CONVERSION_RATE) - fee);
         assertEq(usdc.balanceOf(OWNER), LARGE_AMOUNT - 100e6);
         assertGt(marketToken.balanceOf(OWNER), 0);
         assertGt(liquidityVault.accumulatedFees(), 0);
@@ -116,7 +117,7 @@ contract TestLiquidityVault is Test {
         console.log(liquidityVault.getLiquidityTokenPrice());
     }
 
-    function testLiqVaultRemoveLiquidityWorks() public mintUsdc {
+    function testLiqVaultRemoveLiquidityWorksRegular() public mintUsdc {
         vm.startPrank(OWNER);
         usdc.approve(address(liquidityVault), LARGE_AMOUNT);
         liquidityVault.addLiquidity(100e6);
@@ -178,7 +179,7 @@ contract TestLiquidityVault is Test {
         liquidityVault.removeLiquidityForAccount(OWNER, 100e6);
     }
 
-    function testArbitraryFromExploitFails() public {
+    function testArbitraryFromExploitFailsOnAddition() public {
         // give alice 1000 usdc
         address alice = makeAddr("alice");
         address bob = makeAddr("bob");
@@ -190,5 +191,27 @@ contract TestLiquidityVault is Test {
         vm.prank(bob);
         vm.expectRevert();
         liquidityVault.addLiquidityForAccount(alice, 1000e6);
+    }
+
+    function testArbitraryTransferFromExploitOnRemoval() public {
+        // give alice 1000 usdc
+        address alice = makeAddr("alice");
+        address bob = makeAddr("bob");
+        usdc.mint(alice, 1000e6);
+        // approve the contract
+        vm.startPrank(alice);
+        usdc.approve(address(liquidityVault), 1000e6);
+        // add liquidity
+        liquidityVault.addLiquidity(1000e6);
+        vm.warp(block.timestamp + 10);
+        vm.roll(block.number + 1);
+        uint256 lpTokenBalance = marketToken.balanceOf(alice);
+        // approve the contract ready to remove liquidity
+        marketToken.approve(address(liquidityVault), type(uint256).max);
+        vm.stopPrank();
+        // try to remove liquidity from bob
+        vm.prank(bob);
+        vm.expectRevert();
+        liquidityVault.removeLiquidityForAccount(alice, lpTokenBalance);
     }
 }
