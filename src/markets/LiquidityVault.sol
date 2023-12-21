@@ -176,7 +176,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     /// Markets need to remain liquid to pay out potential profits
     function getAum() public view returns (uint256 aum) {
         // pool amount * price / decimals
-        uint256 liquidity = (poolAmounts * getPrice(address(WUSDC.USDC()))) / SCALING_FACTOR;
+        uint256 price = getPrice(address(WUSDC.USDC()));
+        uint256 liquidity = (poolAmounts * price) / SCALING_FACTOR;
         aum = liquidity;
         // subtract pnl and reserved amounts => should only reflect available liquidity
         int256 pendingPnL = dataOracle.getCumulativeNetPnl();
@@ -243,7 +244,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
         uint256 tokenAmount = (_liquidityTokenAmount * aum) / supply;
 
-        if (tokenAmount > poolAmounts) revert LiquidityVault_InsufficientFunds();
+        uint256 availableLiquidity = poolAmounts - totalReserved;
+
+        if (tokenAmount > availableLiquidity) revert LiquidityVault_InsufficientFunds();
 
         poolAmounts -= tokenAmount;
 
@@ -268,6 +271,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         return WUSDC.withdraw(_amount);
     }
 
+    /// @dev Protects against arbitrary from address in transferFrom
     function _validateHandler(address _sender, address _handler) internal view {
         if (!isHandler[_sender][_handler]) revert LiquidityVault_InvalidHandler();
     }

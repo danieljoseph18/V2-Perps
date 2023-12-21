@@ -46,7 +46,6 @@ contract RequestRouter is ReentrancyGuard {
     uint256 public constant DECIMAL_ADJUSTMENT = 1e12;
 
     error RequestRouter_ExecutionFeeTooLow();
-    error RequestRouter_IncorrectFee();
     error RequestRouter_ExecutionFeeTransferFailed();
     error RequestRouter_PositionSizeTooLarge();
     error RequestRouter_CallerIsNotPositionOwner();
@@ -68,7 +67,6 @@ contract RequestRouter is ReentrancyGuard {
     modifier validExecutionFee(uint256 _executionFee) {
         uint256 minExecutionFee = tradeStorage.minExecutionFee();
         if (msg.value < minExecutionFee) revert RequestRouter_ExecutionFeeTooLow();
-        if (msg.value != _executionFee) revert RequestRouter_IncorrectFee();
         _;
     }
 

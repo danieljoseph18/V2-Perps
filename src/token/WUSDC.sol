@@ -29,6 +29,8 @@ contract WUSDC is ERC20, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     error WUSDC_ZeroAddress();
+    error WUSDC_MintFailed();
+    error WUSDC_InsufficientBalance();
 
     IERC20 public immutable USDC;
 
@@ -52,7 +54,11 @@ contract WUSDC is ERC20, ReentrancyGuard {
         uint256 wusdcAmount = _usdcAmount * DECIMALS_DIFFERENCE;
 
         // Mint the user the equivalent of WUSDC
+        uint256 balBefore = balanceOf(msg.sender);
+
         _mint(msg.sender, wusdcAmount);
+
+        if (balanceOf(msg.sender) != balBefore + wusdcAmount) revert WUSDC_MintFailed();
 
         emit Deposit(msg.sender, _usdcAmount, wusdcAmount);
 
@@ -61,6 +67,7 @@ contract WUSDC is ERC20, ReentrancyGuard {
 
     /// @dev Needs to account for Token Decimals (from 18 dec => 6)
     function withdraw(uint256 _wusdcAmount) external nonReentrant returns (uint256) {
+        if (balanceOf(msg.sender) < _wusdcAmount) revert WUSDC_InsufficientBalance();
         // Burn WUSDC first to protect against reentrancy
         _burn(msg.sender, _wusdcAmount);
 

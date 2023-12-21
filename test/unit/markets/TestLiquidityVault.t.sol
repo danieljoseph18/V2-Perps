@@ -177,4 +177,18 @@ contract TestLiquidityVault is Test {
         vm.expectRevert();
         liquidityVault.removeLiquidityForAccount(OWNER, 100e6);
     }
+
+    function testArbitraryFromExploitFails() public {
+        // give alice 1000 usdc
+        address alice = makeAddr("alice");
+        address bob = makeAddr("bob");
+        usdc.mint(alice, 1000e6);
+        // approve the contract
+        vm.prank(alice);
+        usdc.approve(address(liquidityVault), 1000e6);
+        // try to addliquidity from bob
+        vm.prank(bob);
+        vm.expectRevert();
+        liquidityVault.addLiquidityForAccount(alice, 1000e6);
+    }
 }
