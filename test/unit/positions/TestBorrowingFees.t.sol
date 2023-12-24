@@ -100,6 +100,19 @@ contract TestBorrowing is Test {
         vm.stopPrank();
         _;
     }
+    /**
+     * struct Trade {
+     *     address indexToken;
+     *     uint256 collateralDelta;
+     *     uint256 sizeDelta;
+     *     uint256 orderPrice;
+     *     uint256 maxSlippage;
+     *     uint256 executionFee;
+     *     bool isLong;
+     *     bool isLimit;
+     *     bool isIncrease;
+     * }
+     */
 
     // test borrowing fees are charged correctly on a regular position
     function testBorrowingFeeCalculation() public facilitateTrading {
@@ -107,34 +120,30 @@ contract TestBorrowing is Test {
         vm.startPrank(USER);
         usdc.approve(address(requestRouter), LARGE_AMOUNT);
         uint256 executionFee = tradeStorage.minExecutionFee();
-        MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
-            0,
-            false,
+        MarketStructs.Trade memory userRequest = MarketStructs.Trade(
             address(indexToken),
-            USER,
             200e6,
             2e18,
-            0,
             1000e18,
             0.5e18, // 50% slippage
+            executionFee,
+            true,
+            false,
+            true
+        );
+        requestRouter.createTradeRequest{value: executionFee}(userRequest);
+        MarketStructs.Trade memory userRequest2 = MarketStructs.Trade(
+            address(indexToken),
+            100e6,
+            1e18,
+            1000e18,
+            0.5e18, // 50% slippage
+            executionFee,
+            false,
             true,
             true
         );
-        requestRouter.createTradeRequest{value: executionFee}(userRequest, executionFee);
-        MarketStructs.PositionRequest memory userRequest2 = MarketStructs.PositionRequest(
-            0,
-            false,
-            address(indexToken),
-            USER,
-            100e6,
-            1e18,
-            0,
-            1000e18,
-            0.5e18, // 50% slippage
-            false,
-            true
-        );
-        requestRouter.createTradeRequest{value: executionFee}(userRequest2, executionFee);
+        requestRouter.createTradeRequest{value: executionFee}(userRequest2);
         vm.stopPrank();
         // execute the requests
         vm.prank(OWNER);
@@ -142,10 +151,10 @@ contract TestBorrowing is Test {
         // pass some time
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
-        bytes32 positionKey1 = TradeHelper.generateKey(userRequest);
+        bytes32 positionKey1 = keccak256(abi.encode(userRequest.indexToken, USER, userRequest.isLong));
         MarketStructs.Position memory userPositionLong =
             ITradeStorage(address(tradeStorage)).openPositions(positionKey1);
-        bytes32 positionKey2 = TradeHelper.generateKey(userRequest2);
+        bytes32 positionKey2 = keccak256(abi.encode(userRequest2.indexToken, USER, userRequest2.isLong));
         MarketStructs.Position memory userPositionShort =
             ITradeStorage(address(tradeStorage)).openPositions(positionKey2);
         // check the borrowing fee on the long and short
@@ -162,20 +171,18 @@ contract TestBorrowing is Test {
         vm.startPrank(USER);
         usdc.approve(address(requestRouter), LARGE_AMOUNT);
         uint256 executionFee = tradeStorage.minExecutionFee();
-        MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
-            0,
-            false,
+        MarketStructs.Trade memory userRequest = MarketStructs.Trade(
             address(indexToken),
-            USER,
             200e6,
             2e18,
-            0,
             1000e18,
             0.5e18, // 50% slippage
+            executionFee,
             true,
+            false,
             true
         );
-        requestRouter.createTradeRequest{value: executionFee}(userRequest, executionFee);
+        requestRouter.createTradeRequest{value: executionFee}(userRequest);
         vm.stopPrank();
         // execute trade
         vm.prank(OWNER);
@@ -184,14 +191,25 @@ contract TestBorrowing is Test {
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
         // check fees greater than 0
-        bytes32 positionKey = TradeHelper.generateKey(userRequest);
+        bytes32 positionKey = keccak256(abi.encode(userRequest.indexToken, USER, userRequest.isLong));
         MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
         address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
         uint256 borrowingFee = BorrowingCalculator.getBorrowingFees(market, userPosition);
         assertGt(borrowingFee, 0);
         // close trade
+        MarketStructs.Trade memory closeRequest = MarketStructs.Trade(
+            address(indexToken),
+            200e6,
+            2e18,
+            1000e18,
+            0.5e18, // 50% slippage
+            executionFee,
+            true,
+            false,
+            false
+        );
         vm.prank(USER);
-        requestRouter.createCloseRequest{value: executionFee}(positionKey, 1000e18, 0.5e18, false, executionFee);
+        requestRouter.createTradeRequest{value: executionFee}(closeRequest);
         uint256 accumulatedFeesBefore = liquidityVault.accumulatedFees();
         vm.prank(OWNER);
         executor.executeTradeOrders(OWNER);
@@ -206,20 +224,18 @@ contract TestBorrowing is Test {
         vm.startPrank(USER);
         usdc.approve(address(requestRouter), LARGE_AMOUNT);
         uint256 executionFee = tradeStorage.minExecutionFee();
-        MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
-            0,
-            false,
+        MarketStructs.Trade memory userRequest = MarketStructs.Trade(
             address(indexToken),
-            USER,
             200e6,
             2e18,
-            0,
             1000e18,
             0.5e18, // 50% slippage
+            executionFee,
             true,
+            false,
             true
         );
-        requestRouter.createTradeRequest{value: executionFee}(userRequest, executionFee);
+        requestRouter.createTradeRequest{value: executionFee}(userRequest);
         vm.stopPrank();
         // execute trade
         vm.prank(OWNER);

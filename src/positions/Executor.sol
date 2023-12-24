@@ -42,6 +42,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
     error Executor_InvalidRequestKey();
     error Executor_InvalidDecrease();
+    error Executor_InvalidExecutionPrice();
 
     constructor(
         address _marketStorage,
@@ -60,14 +61,17 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
     function executeTradeOrders(address _feeReceiver) external onlyKeeper {
         bytes32[] memory marketOrders = tradeStorage.getPendingMarketOrders();
-        uint256 len = marketOrders.length;
-        for (uint256 i = 0; i < len; ++i) {
+        uint32 len = uint32(marketOrders.length);
+        for (uint256 i = 0; i < len;) {
             bytes32 _key = marketOrders[i];
             try this.executeTradeOrder(_key, _feeReceiver, false) {}
             catch {
                 try tradeStorage.cancelOrderRequest(_key, false) returns (bool _wasCancelled) {
                     if (!_wasCancelled) break;
                 } catch {}
+            }
+            unchecked {
+                ++i;
             }
         }
         tradeStorage.updateOrderStartIndex();
@@ -78,61 +82,31 @@ contract Executor is RoleValidation, ReentrancyGuard {
         external
         nonReentrant
         onlyKeeperOrContract
-        returns (bool _wasExecuted)
+        returns (bool wasExecuted)
     {
-        return _executeTradeOrder(_key, _feeReceiver, _isLimit);
-    }
-
-    function _executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit) internal returns (bool) {
         MarketStructs.PositionRequest memory positionRequest = tradeStorage.orders(_isLimit, _key);
-        if (positionRequest.user == address(0)) {
-            return true;
-        }
-
-        address market = _getMarketFromIndexToken(positionRequest.indexToken);
+        if (positionRequest.user == address(0)) revert Executor_InvalidRequestKey();
+        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), positionRequest.indexToken).market;
         uint256 signedBlockPrice = priceOracle.getSignedPrice(market, positionRequest.requestBlock);
-        if (signedBlockPrice == 0) {
-            tradeStorage.cancelOrderRequest(_key, _isLimit);
-            return false;
-        }
-
-        if (_isLimit && !_isValidLimitOrder(signedBlockPrice, positionRequest)) {
-            tradeStorage.cancelOrderRequest(_key, _isLimit);
-            return false;
-        }
+        if (signedBlockPrice == 0) revert Executor_InvalidExecutionPrice();
+        if (_isLimit) TradeHelper.checkLimitPrice(signedBlockPrice, positionRequest);
 
         uint256 price = ImpactCalculator.executePriceImpact(
             market, address(marketStorage), address(dataOracle), address(priceOracle), positionRequest, signedBlockPrice
         );
-
         int256 sizeDeltaUsd = _calculateSizeDeltaUsd(positionRequest, signedBlockPrice);
 
-        if (!_isValidPositionRequest(positionRequest, _key)) {
-            revert Executor_InvalidDecrease();
+        if (!positionRequest.isIncrease) {
+            if (tradeStorage.openPositions(_key).positionSize < positionRequest.sizeDelta) {
+                revert Executor_InvalidDecrease();
+            }
         }
 
         _updateMarketState(market, positionRequest, price, sizeDeltaUsd);
 
         tradeStorage.executeTrade(MarketStructs.ExecutionParams(positionRequest, price, _feeReceiver));
 
-        return true;
-    }
-
-    // Additional helper functions used in _executeTradeOrder
-    function _getMarketFromIndexToken(address indexToken) internal view returns (address) {
-        return MarketHelper.getMarketFromIndexToken(address(marketStorage), indexToken).market;
-    }
-
-    function _isValidLimitOrder(uint256 signedBlockPrice, MarketStructs.PositionRequest memory positionRequest)
-        internal
-        pure
-        returns (bool)
-    {
-        try TradeHelper.checkLimitPrice(signedBlockPrice, positionRequest) {
-            return true;
-        } catch {
-            return false;
-        }
+        wasExecuted = true;
     }
 
     function _calculateSizeDeltaUsd(MarketStructs.PositionRequest memory positionRequest, uint256 signedBlockPrice)
@@ -144,17 +118,6 @@ contract Executor is RoleValidation, ReentrancyGuard {
             address(dataOracle), positionRequest.indexToken, positionRequest.sizeDelta, signedBlockPrice
         );
         return positionRequest.isIncrease ? int256(sizeDeltaUsd) : -int256(sizeDeltaUsd);
-    }
-
-    function _isValidPositionRequest(MarketStructs.PositionRequest memory positionRequest, bytes32 key)
-        internal
-        view
-        returns (bool)
-    {
-        if (!positionRequest.isIncrease) {
-            return tradeStorage.openPositions(key).positionSize >= positionRequest.sizeDelta;
-        }
-        return true;
     }
 
     function _updateMarketState(
@@ -173,7 +136,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
         );
         IMarket(market).updateFundingRate();
         IMarket(market).updateBorrowingRate(positionRequest.isLong);
-        if (sizeDeltaUsd > 0) {
+        if (sizeDeltaUsd != 0) {
             IMarket(market).updateTotalWAEP(price, sizeDeltaUsd, positionRequest.isLong);
         }
     }

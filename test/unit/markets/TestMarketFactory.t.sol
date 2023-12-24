@@ -81,7 +81,7 @@ contract TestMarketFactory is Test {
         marketFactory.createMarket(address(indexToken), priceFeed, 1e18);
 
         // Get the market info
-        bytes32 marketKey = keccak256(abi.encodePacked(address(indexToken)));
+        bytes32 marketKey = keccak256(abi.encode(address(indexToken)));
         (, address marketAddress,) = marketStorage.markets(marketKey);
         assertNotEq(address(0), marketAddress);
 

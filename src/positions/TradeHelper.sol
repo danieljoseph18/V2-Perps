@@ -50,7 +50,7 @@ library TradeHelper {
     }
 
     function generateKey(MarketStructs.PositionRequest memory _positionRequest) external pure returns (bytes32) {
-        return keccak256(abi.encodePacked(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
+        return keccak256(abi.encode(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
     }
 
     function checkLimitPrice(uint256 _price, MarketStructs.PositionRequest memory _positionRequest) external pure {
@@ -85,6 +85,30 @@ library TradeHelper {
         uint256 sizeUsd = getTradeValueUsd(_dataOracle, _indexToken, _size, _signedPrice);
         uint256 collateralUsd = (_collateral * IPriceOracle(_priceOracle).getCollateralPrice()) / PRECISION;
         return (sizeUsd * LEVERAGE_PRECISION) / collateralUsd;
+    }
+
+    function createPositionRequest(
+        address _tradeStorage,
+        MarketStructs.Trade calldata _trade,
+        address _user,
+        uint256 _collateralAmount
+    ) external view returns (MarketStructs.PositionRequest memory positionRequest) {
+        (uint256 marketLen, uint256 limitLen) = ITradeStorage(_tradeStorage).getRequestQueueLengths();
+        uint256 index = _trade.isLimit ? limitLen : marketLen;
+
+        positionRequest = MarketStructs.PositionRequest({
+            requestIndex: index,
+            indexToken: _trade.indexToken,
+            user: _user,
+            collateralDelta: _collateralAmount,
+            sizeDelta: _trade.sizeDelta,
+            requestBlock: block.number,
+            orderPrice: _trade.orderPrice,
+            maxSlippage: _trade.maxSlippage,
+            isLimit: _trade.isLimit,
+            isLong: _trade.isLong,
+            isIncrease: _trade.isIncrease
+        });
     }
 
     function generateNewPosition(
@@ -124,11 +148,6 @@ library TradeHelper {
             pnlParams: MarketStructs.PnLParams(_price, sizeUsd, leverage),
             entryTimestamp: block.timestamp
         });
-    }
-
-    function calculateTradingFee(address _tradeStorage, uint256 _sizeDelta) external view returns (uint256) {
-        uint256 tradingFee = ITradeStorage(_tradeStorage).tradingFee();
-        return (_sizeDelta * tradingFee) / PRECISION; // e.g 100 * 0.01e18 / 1e18 = 1
     }
 
     /// @dev Need to adjust for decimals
@@ -222,11 +241,11 @@ library TradeHelper {
     }
 
     function getMarket(address _marketStorage, address _indexToken) external view returns (address) {
-        bytes32 market = keccak256(abi.encodePacked(_indexToken));
+        bytes32 market = keccak256(abi.encode(_indexToken));
         return IMarketStorage(_marketStorage).markets(market).market;
     }
 
     function getMarketKey(address _indexToken) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(_indexToken));
+        return keccak256(abi.encode(_indexToken));
     }
 }

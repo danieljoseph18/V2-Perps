@@ -103,7 +103,7 @@ contract TestPriceImpact is Test {
 
     // test pnl calculations on constructed positions
     function testPnlCalculations() public facilitateTrading {
-        bytes32 market = keccak256(abi.encodePacked(address(indexToken)));
+        bytes32 market = keccak256(abi.encode(address(indexToken)));
         MarketStructs.Position memory position = MarketStructs.Position(
             0,
             market,

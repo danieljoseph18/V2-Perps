@@ -48,12 +48,12 @@ library PricingCalculator {
         return _position.isLong ? int256(currentValue) - int256(entryValue) : int256(entryValue) - int256(currentValue);
     }
 
-    /// weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
+    /// weightedAverageEntryPrice = Σ(indexSizeUSD * entryPrice) / Σ(IndexSizesUSD)
     /// @dev Calculates the Next WAEP after a delta in a position
     function calculateWeightedAverageEntryPrice(
-        uint256 _prevWAEP,
-        uint256 _prevSISU,
-        int256 _sizeDeltaUsd,
+        uint256 _prevWAEP, // PREV WEIGHTED AVG ENTRY PRICE
+        uint256 _prevSISU, // Σ INDEX SIZE USD
+        int256 _sizeDeltaUsd, // Δ SIZE
         uint256 _price
     ) external pure returns (uint256) {
         if (_prevWAEP == 0 && _prevSISU == 0) {

@@ -1,7 +1,18 @@
-// contract for updating the state of the liquidity vault
-// it should calculate the net pnl and net open interest then update the state
-// function is separated from the liquidity vault to enable scalability
-// when markets get too many, the contract could break as loops would exceed block gas limit
+//  ,----,------------------------------,------.
+//   | ## |                              |    - |
+//   | ## |                              |    - |
+//   |    |------------------------------|    - |
+//   |    ||............................||      |
+//   |    ||,-                        -.||      |
+//   |    ||___                      ___||    ##|
+//   |    ||---`--------------------'---||      |
+//   `--mb'|_|______________________==__|`------'
+
+//    ____  ____  ___ _   _ _____ _____ ____
+//   |  _ \|  _ \|_ _| \ | |_   _|___ /|  _ \
+//   | |_) | |_) || ||  \| | | |   |_ \| |_) |
+//   |  __/|  _ < | || |\  | | |  ___) |  _ <
+//   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.22;

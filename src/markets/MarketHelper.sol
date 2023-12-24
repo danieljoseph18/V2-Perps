@@ -36,7 +36,7 @@ library MarketHelper {
         view
         returns (MarketStructs.Market memory)
     {
-        bytes32 _key = keccak256(abi.encodePacked(_indexToken));
+        bytes32 _key = keccak256(abi.encode(_indexToken));
         return IMarketStorage(_marketStorage).markets(_key);
     }
 
@@ -45,7 +45,7 @@ library MarketHelper {
         view
         returns (uint256)
     {
-        bytes32 _key = keccak256(abi.encodePacked(_indexToken));
+        bytes32 _key = keccak256(abi.encode(_indexToken));
         return _isLong
             ? IMarketStorage(_marketStorage).indexTokenLongOpenInterest(_key)
             : IMarketStorage(_marketStorage).indexTokenShortOpenInterest(_key);
@@ -88,7 +88,7 @@ library MarketHelper {
         view
         returns (uint256)
     {
-        bytes32 _key = keccak256(abi.encodePacked(_collateralToken));
+        bytes32 _key = keccak256(abi.encode(_collateralToken));
         return _isLong
             ? IMarketStorage(_marketStorage).collatTokenLongOpenInterest(_key)
             : IMarketStorage(_marketStorage).collatTokenShortOpenInterest(_key);

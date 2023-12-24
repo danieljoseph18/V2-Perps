@@ -17,9 +17,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.22;
 
-// Contract stores all data for markets
-// need to store the markets themselves
-// need to be able to fetch a list of all markets
 import {MarketStructs} from "./MarketStructs.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
@@ -30,11 +27,11 @@ contract MarketStorage is RoleValidation {
     using MarketStructs for MarketStructs.Market;
     using MarketStructs for MarketStructs.Position;
 
-    ILiquidityVault public liquidityVault;
+    ILiquidityVault liquidityVault;
 
     mapping(bytes32 _marketKey => MarketStructs.Market) public markets;
     mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
-    mapping(bytes32 _marketKey => uint256 _maxOI) public maxOpenInterests;
+    mapping(bytes32 _marketKey => uint256 _maxOI) public maxOpenInterests; // Max OI in Index Tokens
     mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenLongOpenInterest; // OI of collat token long
     mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenShortOpenInterest;
     mapping(bytes32 _marketKey => uint256 _openInterest) public indexTokenLongOpenInterest; // OI of index token long
@@ -61,7 +58,6 @@ contract MarketStorage is RoleValidation {
     /// @dev Only MarketFactory
     function storeMarket(MarketStructs.Market memory _market) external onlyMarketMaker {
         if (markets[_market.marketKey].market != address(0)) revert MarketStorage_MarketAlreadyExists();
-        // Store the market in the contract's storage
         marketKeys.push(_market.marketKey);
         markets[_market.marketKey] = _market;
     }
@@ -96,7 +92,7 @@ contract MarketStorage is RoleValidation {
     }
 
     /// @dev Maximum amount of liquidity allocated to markets
-
+    /// @param _maxOI Max Open Interest in Index Tokens
     function updateState(bytes32 _marketKey, uint256 _newAllocation, uint256 _maxOI) external onlyStateUpdater {
         if (markets[_marketKey].market == address(0)) revert MarketStorage_NonExistentMarket();
         if (_newAllocation != 0) {

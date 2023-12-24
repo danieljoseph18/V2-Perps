@@ -1,3 +1,19 @@
+//  ,----,------------------------------,------.
+//   | ## |                              |    - |
+//   | ## |                              |    - |
+//   |    |------------------------------|    - |
+//   |    ||............................||      |
+//   |    ||,-                        -.||      |
+//   |    ||___                      ___||    ##|
+//   |    ||---`--------------------'---||      |
+//   `--mb'|_|______________________==__|`------'
+
+//    ____  ____  ___ _   _ _____ _____ ____
+//   |  _ \|  _ \|_ _| \ | |_   _|___ /|  _ \
+//   | |_) | |_) || ||  \| | | |   |_ \| |_) |
+//   |  __/|  _ < | || |\  | | |  ___) |  _ <
+//   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
+
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.22;
 
@@ -32,13 +48,14 @@ contract MarketFactory is RoleValidation {
         priceOracle = _priceOracle;
     }
 
+    /// @param _baseUnit 1 single unit of token -> 1e18 = 18 decimal places
     function createMarket(address _indexToken, address _priceFeed, uint256 _baseUnit)
         external
         onlyAdmin
-        returns (address)
+        returns (address marketAddress)
     {
         // pool cant already exist
-        bytes32 _marketKey = keccak256(abi.encodePacked(_indexToken));
+        bytes32 _marketKey = keccak256(abi.encode(_indexToken));
         // Set Up Price Oracle
         IPriceOracle(priceOracle).updatePriceSource(_indexToken, _priceFeed);
         // Create new Market contract
@@ -50,11 +67,11 @@ contract MarketFactory is RoleValidation {
             0.00000035e18, 1_000_000e18, 0.0000000035e18, -0.0000000035e18, 0.000000035e18, 1, false, 0.0000001e18, 2
         );
         // Store everything in MarketStorage
-        MarketStructs.Market memory _marketInfo = MarketStructs.Market(_indexToken, address(market), _marketKey);
-        IMarketStorage(marketStorage).storeMarket(_marketInfo);
+        MarketStructs.Market memory marketInfo = MarketStructs.Market(_indexToken, address(market), _marketKey);
+        IMarketStorage(marketStorage).storeMarket(marketInfo);
         IDataOracle(dataOracle).setBaseUnit(_indexToken, _baseUnit);
 
         emit MarketCreated(_indexToken, address(market));
-        return address(market);
+        marketAddress = address(market);
     }
 }

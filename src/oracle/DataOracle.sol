@@ -28,9 +28,11 @@ contract DataOracle is RoleValidation {
     IMarketStorage public marketStorage;
     address public priceOracle;
 
-    MarketStructs.Market[] public markets;
+    mapping(uint256 _index => MarketStructs.Market) public markets;
     mapping(bytes32 => bool) public isMarket;
-    mapping(address => uint256) public baseUnits;
+    mapping(address => uint256) private baseUnits;
+
+    uint256 private marketEndIndex;
 
     constructor(address _marketStorage, address _priceOracle, address _roleStorage) RoleValidation(_roleStorage) {
         marketStorage = IMarketStorage(_marketStorage);
@@ -38,10 +40,15 @@ contract DataOracle is RoleValidation {
     }
 
     function setMarkets(MarketStructs.Market[] memory _markets) external onlyAdmin {
-        for (uint256 i = 0; i < _markets.length; i++) {
-            markets.push(_markets[i]);
+        uint32 len = uint32(_markets.length);
+        for (uint256 i = 0; i < len;) {
+            markets[i] = _markets[i];
             isMarket[_markets[i].marketKey] = true;
+            unchecked {
+                ++i;
+            }
         }
+        marketEndIndex = len - 1;
     }
 
     /// @dev e.g 1e18 = 18 decimal places
@@ -49,14 +56,22 @@ contract DataOracle is RoleValidation {
         baseUnits[_token] = _baseUnit;
     }
 
-    function clearMarkets() external onlyAdmin {
-        for (uint256 i = 0; i < markets.length; i++) {
-            isMarket[markets[i].marketKey] = false;
-        }
-        delete markets;
+    function clearBaseUnit(address _token) external onlyMarketMaker {
+        delete baseUnits[_token];
     }
 
-    // function getNetPnL(address _market, address _marketStorage, address _dataOracle, address _priceOracle, bool _isLong)
+    /// @dev Do While loop more efficient than For loop
+    function clearMarkets() external onlyAdmin {
+        uint256 i = 0;
+        do {
+            isMarket[markets[i].marketKey] = false;
+            delete markets[i];
+            unchecked {
+                ++i;
+            }
+        } while (i <= marketEndIndex);
+        marketEndIndex = 0;
+    }
 
     function getNetPnl(MarketStructs.Market memory _market) public view returns (int256) {
         if (!isMarket[_market.marketKey]) revert DataOracle_InvalidMarket();
@@ -70,10 +85,13 @@ contract DataOracle is RoleValidation {
 
     /// @dev To convert to usd, needs to be 1e18 DPs
     function getCumulativeNetPnl() external view returns (int256 totalPnl) {
-        for (uint256 i = 0; i < markets.length; i++) {
+        uint256 i = 0;
+        do {
             totalPnl += getNetPnl(markets[i]);
-        }
-        return totalPnl;
+            unchecked {
+                ++i;
+            }
+        } while (i <= marketEndIndex);
     }
 
     function getBaseUnits(address _token) external view returns (uint256) {

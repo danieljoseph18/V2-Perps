@@ -22,19 +22,29 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 
 /// @dev Note, need to handle the case where velocity crosses 0 (pos -> neg or neg -> pos)
 library FundingCalculator {
-    uint256 public constant PRECISION = 1e18;
+    uint256 constant PRECISION = 1e18;
 
     /// @dev Calculate the funding rate velocity.
-    function calculateFundingRateVelocity(address _market, int256 _skew) external view returns (int256) {
+    function calculateFundingRateVelocity(address _market, int256 _skew) external view returns (int256 velocity) {
         uint256 c = (IMarket(_market).maxFundingVelocity() * PRECISION) / IMarket(_market).skewScale();
         int256 skew = _skew;
-        return (int256(c) * skew) / int256(PRECISION);
+        velocity = (int256(c) * skew) / int256(PRECISION);
     }
 
-    /// @dev Get the total funding fees accumulated for long and short sides since the last update.
-    function getFundingFees(address _market) external view returns (uint256, uint256) {
+    /// @dev Get the total funding fees accumulated for each side
+    function getFundingFees(address _market) external view returns (uint256 longFunding, uint256 shortFunding) {
         IMarket market = IMarket(_market);
-        return _getAccumulatedFunding(market);
+
+        (uint256 longFundingSinceUpdate, uint256 shortFundingSinceUpdate) = _calculateAdjustedFunding(
+            address(market),
+            market.fundingRate(),
+            market.fundingRateVelocity(),
+            market.maxFundingRate(),
+            market.minFundingRate()
+        );
+
+        longFunding = market.longCumulativeFundingFees() + longFundingSinceUpdate;
+        shortFunding = market.shortCumulativeFundingFees() + shortFundingSinceUpdate;
     }
 
     /// @dev Returns fees earned and fees owed in tokens
@@ -43,15 +53,21 @@ library FundingCalculator {
         view
         returns (uint256 earned, uint256 owed)
     {
-        // Funding Accumulated (Earned)
-        uint256 accumulatedFundingEarned = _position.isLong
-            ? IMarket(_market).shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding
-            : IMarket(_market).longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
-        // Funding Accumulated (Owed)
-        uint256 accumulatedFundingOwed = _position.isLong
-            ? IMarket(_market).longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding
-            : IMarket(_market).shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
-        (uint256 feesEarned, uint256 feesOwed) = getFeesSinceLastUpdate(_market, _position.isLong);
+        uint256 shortFees =
+            IMarket(_market).shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
+        uint256 longFees =
+            IMarket(_market).longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
+
+        uint256 accumulatedFundingEarned;
+        uint256 accumulatedFundingOwed;
+        if (_position.isLong) {
+            accumulatedFundingEarned = shortFees;
+            accumulatedFundingOwed = longFees;
+        } else {
+            accumulatedFundingEarned = longFees;
+            accumulatedFundingOwed = shortFees;
+        }
+        (uint256 feesEarned, uint256 feesOwed) = getFeesSinceLastMarketUpdate(_market, _position.isLong);
         return (
             feesEarned + _position.fundingParams.feesEarned
                 + ((accumulatedFundingEarned * _position.positionSize) / PRECISION),
@@ -69,8 +85,8 @@ library FundingCalculator {
         return fundingRate + (fundingRateVelocity * int256(timeElapsed));
     }
 
-    /// @dev Get the funding fees earned and owed by a position since its last update.
-    function getFeesSinceLastUpdate(address _market, bool _isLong)
+    /// @dev Get the funding fees earned and owed since the last market update
+    function getFeesSinceLastMarketUpdate(address _market, bool _isLong)
         public
         view
         returns (uint256 feesEarned, uint256 feesOwed)
@@ -85,8 +101,13 @@ library FundingCalculator {
             market.minFundingRate()
         );
 
-        feesEarned = _isLong ? shortFees : longFees;
-        feesOwed = _isLong ? longFees : shortFees;
+        if (_isLong) {
+            feesEarned = shortFees;
+            feesOwed = longFees;
+        } else {
+            feesEarned = longFees;
+            feesOwed = shortFees;
+        }
     }
 
     /// @dev Adjusts the total funding calculation when max or min limits are reached, or when the sign flips.
@@ -98,6 +119,9 @@ library FundingCalculator {
         int256 _minFundingRate
     ) internal view returns (uint256 longFees, uint256 shortFees) {
         uint256 timeElapsed = block.timestamp - IMarket(_market).lastFundingUpdateTime();
+        if (timeElapsed == 0) {
+            return (0, 0);
+        }
         // Calculate final funding rate after time elapsed
         int256 finalFundingRate = _fundingRate + (_fundingRateVelocity * int256(timeElapsed));
         bool flipsSign = (_fundingRate >= 0 && finalFundingRate < 0) || (_fundingRate < 0 && finalFundingRate >= 0);
@@ -194,23 +218,5 @@ library FundingCalculator {
         int256 sum = int256(_timeElapsed) * (startRate + endRate) / 2;
 
         return sum > 0 ? uint256(sum) : uint256(-sum);
-    }
-
-    /// @dev Helper function to calculate accumulated funding for long and short sides.
-    function _getAccumulatedFunding(IMarket _market)
-        internal
-        view
-        returns (uint256 longFunding, uint256 shortFunding)
-    {
-        int256 fundingRate = _market.fundingRate();
-        int256 fundingRateVelocity = _market.fundingRateVelocity();
-
-        // Calculate total funding using arithmetic series sum formula
-        (uint256 longFundingSinceUpdate, uint256 shortFundingSinceUpdate) = _calculateAdjustedFunding(
-            address(_market), fundingRate, fundingRateVelocity, _market.maxFundingRate(), _market.minFundingRate()
-        );
-
-        longFunding = _market.longCumulativeFundingFees() + longFundingSinceUpdate;
-        shortFunding = _market.shortCumulativeFundingFees() + shortFundingSinceUpdate;
     }
 }

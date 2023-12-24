@@ -579,7 +579,7 @@ contract TradeStorage is RoleValidation {
         } else {
             tradeVault.swapFundingAmount(marketKey, feesOwed, false);
         }
-        bytes32 positionKey = keccak256(abi.encodePacked(_position.indexToken, _position.user, _position.isLong));
+        bytes32 positionKey = keccak256(abi.encode(_position.indexToken, _position.user, _position.isLong));
         openPositions[positionKey].fundingParams.feesOwed = 0;
 
         emit FundingFeeProcessed(_position.user, feesOwed);
@@ -594,7 +594,7 @@ contract TradeStorage is RoleValidation {
     ) internal returns (uint256 _fee) {
         address market = TradeHelper.getMarket(address(marketStorage), _position.indexToken);
         uint256 borrowFee = BorrowingCalculator.calculateBorrowingFee(market, _position, _collateralDelta);
-        bytes32 positionKey = keccak256(abi.encodePacked(_position.indexToken, _position.user, _position.isLong));
+        bytes32 positionKey = keccak256(abi.encode(_position.indexToken, _position.user, _position.isLong));
         openPositions[positionKey].borrowParams.feesOwed -= borrowFee;
         // convert borrow fee from index tokens to collateral tokens to subtract from collateral:
         uint256 borrowFeeUsd =

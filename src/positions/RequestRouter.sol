@@ -37,18 +37,26 @@ contract RequestRouter is ReentrancyGuard {
     using SafeERC20 for IWUSDC;
     using MarketStructs for MarketStructs.PositionRequest;
 
-    ITradeStorage public tradeStorage;
-    ILiquidityVault public liquidityVault;
-    IMarketStorage public marketStorage;
-    ITradeVault public tradeVault;
-    IWUSDC public immutable WUSDC;
+    ITradeStorage tradeStorage;
+    ILiquidityVault liquidityVault;
+    IMarketStorage marketStorage;
+    ITradeVault tradeVault;
+    IWUSDC immutable WUSDC;
 
-    uint256 public constant DECIMAL_ADJUSTMENT = 1e12;
+    uint256 constant PRECISION = 1e18;
+    uint256 constant COLLATERAL_MULTIPLIER = 1e12;
+    uint256 constant MIN_SLIPPAGE = 0.0003e18; // 0.03%
+    uint256 constant MAX_SLIPPAGE = 0.99e18; // 99%
 
     error RequestRouter_ExecutionFeeTooLow();
     error RequestRouter_ExecutionFeeTransferFailed();
     error RequestRouter_PositionSizeTooLarge();
     error RequestRouter_CallerIsNotPositionOwner();
+    error RequestRouter_ExecutionFeeDoesNotMatch();
+    error RequestRouter_RequestDoesNotExist();
+    error RequestRouter_InvalidIndexToken();
+    error RequestRouter_InvalidSlippage();
+    error RequestRouter_PositionDoesNotExist();
 
     constructor(
         address _tradeStorage,
@@ -64,132 +72,73 @@ contract RequestRouter is ReentrancyGuard {
         WUSDC = IWUSDC(_wusdc);
     }
 
-    modifier validExecutionFee(uint256 _executionFee) {
-        uint256 minExecutionFee = tradeStorage.minExecutionFee();
-        if (msg.value < minExecutionFee) revert RequestRouter_ExecutionFeeTooLow();
+    modifier validExecutionFee() {
+        if (msg.value < tradeStorage.minExecutionFee()) revert RequestRouter_ExecutionFeeTooLow();
         _;
     }
 
-    function createTradeRequest(MarketStructs.PositionRequest memory _positionRequest, uint256 _executionFee)
-        external
-        payable
-        nonReentrant
-        validExecutionFee(_executionFee)
-    {
-        _sendExecutionFeeToVault(_executionFee);
-
-        // get the key for the market
-        bytes32 marketKey = keccak256(abi.encodePacked(_positionRequest.indexToken));
-
-        uint256 afterFeeAmount;
-        if (_positionRequest.isIncrease) {
-            _validateAllocation(marketKey, _positionRequest.sizeDelta);
-
-            uint256 wusdcAmount = _transferInCollateral(_positionRequest.collateralDelta);
-
-            afterFeeAmount = _transferOutTokens(_positionRequest, wusdcAmount, marketKey);
+    function createTradeRequest(MarketStructs.Trade calldata _trade) external payable nonReentrant validExecutionFee {
+        if (msg.value != _trade.executionFee) revert RequestRouter_ExecutionFeeDoesNotMatch();
+        _sendExecutionFeeToVault(_trade.executionFee);
+        bytes32 marketKey = keccak256(abi.encode(_trade.indexToken));
+        if (marketStorage.markets(marketKey).market == address(0)) {
+            revert RequestRouter_InvalidIndexToken();
+        }
+        if (_trade.maxSlippage < MIN_SLIPPAGE || _trade.maxSlippage > MAX_SLIPPAGE) {
+            revert RequestRouter_InvalidSlippage();
         }
 
-        (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
-        uint256 index = _positionRequest.isLimit ? limitLen : marketLen;
+        uint256 collateralDelta;
+        if (_trade.isIncrease) {
+            _validateAllocation(marketKey, _trade.sizeDelta);
+            // Converts USDC to WUSDC and Transfers Tokens to the Vault
+            collateralDelta = _handleTokenTransfers(_trade.collateralDelta, marketKey, _trade.isLong, true);
+        } else {
+            // Convert USDC amount to WUSDC
+            collateralDelta = _trade.collateralDelta * COLLATERAL_MULTIPLIER;
+            bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
+            MarketStructs.Position memory position = tradeStorage.openPositions(positionKey);
+            // Check their existing position collateral is > collateralDelta
+            assert(position.collateralAmount >= collateralDelta);
+            // Check their existing position size is > sizeDelta
+            assert(position.positionSize >= _trade.sizeDelta);
+        }
 
-        _positionRequest.collateralDelta =
-            _positionRequest.isIncrease ? afterFeeAmount : _adjustCollateralDecimals(_positionRequest.collateralDelta);
+        MarketStructs.PositionRequest memory positionRequest =
+            TradeHelper.createPositionRequest(address(tradeStorage), _trade, msg.sender, collateralDelta);
 
-        _positionRequest.user = msg.sender;
-        _positionRequest.requestIndex = index;
-        _positionRequest.requestBlock = block.number;
-
-        tradeStorage.createOrderRequest(_positionRequest);
-    }
-
-    // get position to close
-    // get the current price
-    // create decrease request for full position size
-    function createCloseRequest(
-        bytes32 _positionKey,
-        uint256 _orderPrice,
-        uint256 _maxSlippage,
-        bool _isLimit,
-        uint256 _executionFee
-    ) external payable nonReentrant validExecutionFee(_executionFee) {
-        // transfer execution fee to the trade vault
-        _sendExecutionFeeToVault(_executionFee);
-        // validate the request meets all safety parameters
-        // open the request on the trade storage contract
-        (uint256 marketLen, uint256 limitLen) = tradeStorage.getRequestQueueLengths();
-
-        uint256 index = _isLimit ? limitLen : marketLen;
-        MarketStructs.Position memory _position = tradeStorage.openPositions(_positionKey);
-        MarketStructs.PositionRequest memory _positionRequest = MarketStructs.PositionRequest({
-            requestIndex: index,
-            isLimit: _isLimit,
-            indexToken: _position.indexToken,
-            user: _position.user,
-            collateralDelta: _position.collateralAmount,
-            sizeDelta: _position.positionSize,
-            requestBlock: block.number,
-            orderPrice: _orderPrice,
-            maxSlippage: _maxSlippage,
-            isLong: _position.isLong,
-            isIncrease: false
-        });
-        tradeStorage.createOrderRequest(_positionRequest);
+        tradeStorage.createOrderRequest(positionRequest);
     }
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
-        if (msg.sender != tradeStorage.orders(_isLimit, _key).user) revert RequestRouter_CallerIsNotPositionOwner();
+        MarketStructs.PositionRequest memory request = tradeStorage.orders(_isLimit, _key);
+        if (request.user == address(0)) revert RequestRouter_RequestDoesNotExist();
+        if (msg.sender != request.user) revert RequestRouter_CallerIsNotPositionOwner();
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
 
-    function _transferInCollateral(uint256 _amountIn) internal returns (uint256) {
-        IERC20(WUSDC.USDC()).safeTransferFrom(msg.sender, address(this), _amountIn);
-        return _wrapUsdc(_amountIn);
+    function _handleTokenTransfers(uint256 _usdcAmountIn, bytes32 _marketKey, bool _isLong, bool _isIncrease)
+        private
+        returns (uint256 amountOut)
+    {
+        IERC20 usdc = WUSDC.USDC();
+        usdc.safeTransferFrom(msg.sender, address(this), _usdcAmountIn);
+        usdc.safeIncreaseAllowance(address(WUSDC), _usdcAmountIn);
+        amountOut = WUSDC.deposit(_usdcAmountIn);
+        tradeVault.updateCollateralBalance(_marketKey, amountOut, _isLong, _isIncrease);
+        WUSDC.safeTransfer(address(tradeVault), amountOut);
     }
 
-    // Note: User must approve full collateral amount for transfer
-    function _transferOutTokens(
-        MarketStructs.PositionRequest memory _positionRequest,
-        uint256 _wusdcAmount,
-        bytes32 _marketKey
-    ) internal returns (uint256) {
-        // deduct trading fee from amount
-        uint256 fee = TradeHelper.calculateTradingFee(address(tradeStorage), _positionRequest.sizeDelta);
-        // validate fee vs request => can fee be deducted from collateral and still remain above minimum?
-        // transfer fee to liquidity vault and increase accumulated fees
-        liquidityVault.accumulateFees(fee);
-        WUSDC.safeTransfer(address(liquidityVault), fee);
-        // transfer the rest of the collateral to trade vault and updateCollateralBalance
-        uint256 afterFeeAmount = _wusdcAmount - fee;
-        tradeVault.updateCollateralBalance(
-            _marketKey, afterFeeAmount, _positionRequest.isLong, _positionRequest.isIncrease
-        );
-        WUSDC.safeTransfer(address(tradeVault), afterFeeAmount);
-
-        return afterFeeAmount;
-    }
-
-    function _sendExecutionFeeToVault(uint256 _executionFee) internal returns (bool) {
+    function _sendExecutionFeeToVault(uint256 _executionFee) private {
         (bool success,) = address(tradeVault).call{value: _executionFee}("");
         if (!success) revert RequestRouter_ExecutionFeeTransferFailed();
-        return true;
     }
 
-    function _wrapUsdc(uint256 _amount) internal returns (uint256) {
-        IERC20 usdc = WUSDC.USDC();
-        usdc.safeIncreaseAllowance(address(WUSDC), _amount);
-        return WUSDC.deposit(_amount);
-    }
-
-    function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) internal view {
+    function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) private view {
         MarketStructs.Market memory market = marketStorage.markets(_marketKey);
         uint256 totalOI = MarketHelper.getTotalIndexOpenInterest(address(marketStorage), market.indexToken);
-        uint256 maxOI = marketStorage.maxOpenInterests(_marketKey);
-        if (totalOI + _sizeDelta > maxOI) revert RequestRouter_PositionSizeTooLarge();
-    }
-
-    /// @dev Adjust decimals from USDC -> WUSDC
-    function _adjustCollateralDecimals(uint256 _collateralDelta) internal pure returns (uint256) {
-        return _collateralDelta * DECIMAL_ADJUSTMENT;
+        if (totalOI + _sizeDelta > marketStorage.maxOpenInterests(_marketKey)) {
+            revert RequestRouter_PositionSizeTooLarge();
+        }
     }
 }

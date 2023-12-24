@@ -1,3 +1,19 @@
+//  ,----,------------------------------,------.
+//   | ## |                              |    - |
+//   | ## |                              |    - |
+//   |    |------------------------------|    - |
+//   |    ||............................||      |
+//   |    ||,-                        -.||      |
+//   |    ||___                      ___||    ##|
+//   |    ||---`--------------------'---||      |
+//   `--mb'|_|______________________==__|`------'
+
+//    ____  ____  ___ _   _ _____ _____ ____
+//   |  _ \|  _ \|_ _| \ | |_   _|___ /|  _ \
+//   | |_) | |_) || ||  \| | | |   |_ \| |_) |
+//   |  __/|  _ < | || |\  | | |  ___) |  _ <
+//   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
+
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.22;
 // q - can we use smaller data types anywhere to save on gas
@@ -9,10 +25,20 @@ library MarketStructs {
         bytes32 marketKey; // Note Use where applicable to save on gas
     }
 
-    // q - can we pack bools to save on gas
+    struct Trade {
+        address indexToken;
+        uint256 collateralDelta;
+        uint256 sizeDelta;
+        uint256 orderPrice;
+        uint256 maxSlippage;
+        uint256 executionFee;
+        bool isLong;
+        bool isLimit;
+        bool isIncrease;
+    }
+
     struct PositionRequest {
         uint256 requestIndex;
-        bool isLimit;
         address indexToken; // used to derive which market
         address user;
         uint256 collateralDelta;
@@ -20,6 +46,7 @@ library MarketStructs {
         uint256 requestBlock;
         uint256 orderPrice; // Price for limit order
         uint256 maxSlippage; // 1e18 = 100% (0.03% default = 0.0003e18)
+        bool isLimit;
         bool isLong;
         bool isIncrease; // increase or decrease position
     }

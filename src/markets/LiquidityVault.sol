@@ -186,14 +186,14 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     // $1 = 1e18
-    function getLiquidityTokenPrice() public view returns (uint256) {
+    function getLiquidityTokenPrice() public view returns (uint256 lpTokenPrice) {
         // market token price = (worth of market pool in USD) / total supply
         uint256 aum = getAum();
         uint256 supply = IERC20(address(liquidityToken)).totalSupply();
-        if (supply == 0 || aum == 0) {
-            return 0;
+        if (aum == 0 || supply == 0) {
+            lpTokenPrice = 0;
         } else {
-            return (aum * SCALING_FACTOR) / supply;
+            lpTokenPrice = (aum * SCALING_FACTOR) / supply;
         }
     }
 
@@ -207,7 +207,6 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         if (pendingPnL > 0) {
             aum -= uint256(pendingPnL);
         }
-        return aum;
     }
 
     /// @dev Gas Inefficient -> Revisit
@@ -217,29 +216,19 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
         uint256 initialPoolAmount = poolAmounts;
         uint256 initialAccumulatedFees = accumulatedFees;
-
-        // Transfer From User to Contract
         USDC.safeTransferFrom(msg.sender, address(this), _amount);
 
-        // Wrap Stablecoin
         uint256 wusdcAmount = _wrapUsdc(_amount);
-
-        // Deduct Fees
         uint256 afterFeeAmount = _deductLiquidityFees(wusdcAmount);
-
-        // mint market tokens
         uint256 price = priceOracle.getCollateralPrice();
         uint256 valueUsd = (afterFeeAmount * price) / SCALING_FACTOR;
         uint256 lpTokenPrice = getLiquidityTokenPrice();
         uint256 mintAmount = lpTokenPrice == 0 ? valueUsd : (valueUsd * SCALING_FACTOR) / lpTokenPrice;
-
         poolAmounts += afterFeeAmount;
-        liquidityToken.mint(_account, mintAmount);
 
-        // Fire event
+        liquidityToken.mint(_account, mintAmount);
         emit LiquidityAdded(_account, afterFeeAmount, mintAmount);
 
-        // Check Invariants
         uint256 feeAmount = wusdcAmount - afterFeeAmount;
         assert(poolAmounts == initialPoolAmount + afterFeeAmount); // Pool amount correctly increased
         assert(accumulatedFees == initialAccumulatedFees + feeAmount); // Fees correctly accumulated
@@ -253,45 +242,35 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
 
         uint256 initialPoolAmount = poolAmounts;
         uint256 initialAccumulatedFees = accumulatedFees;
-
-        // Transfer LP Tokens from User to Contract
         liquidityToken.safeTransferFrom(_account, address(this), _liquidityTokenAmount);
-
-        // remove liquidity from the market
         uint256 lpTokenValueUsd = (_liquidityTokenAmount * getLiquidityTokenPrice()) / SCALING_FACTOR;
-
         uint256 tokenAmount = (lpTokenValueUsd * SCALING_FACTOR) / priceOracle.getCollateralPrice();
-
-        // Ensures markets stay liquid
         uint256 availableLiquidity = poolAmounts - totalReserved;
 
+        // Ensures markets stay liquid
         if (tokenAmount > availableLiquidity) revert LiquidityVault_InsufficientFunds();
 
         poolAmounts -= tokenAmount;
-
         liquidityToken.burn(address(this), _liquidityTokenAmount);
-        // Deduct Fees
         uint256 afterFeeAmount = _deductLiquidityFees(tokenAmount);
-        // Unwrap
         uint256 tokenOutAmount = _unwrapUsdc(afterFeeAmount);
-        // Transfer Stablecoin to User
+
         USDC.safeTransfer(_account, tokenOutAmount);
-        // Fire event
         emit LiquidityWithdrawn(_account, address(WUSDC), _liquidityTokenAmount, afterFeeAmount);
-        // Check Invariants
+
         uint256 feeAmount = tokenAmount - afterFeeAmount;
         assert(poolAmounts == initialPoolAmount - tokenAmount); // Pool amount correctly decreased
         assert(accumulatedFees == initialAccumulatedFees + feeAmount); // Fees correctly accumulated
         assert(tokenAmount == afterFeeAmount + feeAmount); // Total wrapped amount accounted for
     }
 
-    function _wrapUsdc(uint256 _amount) internal returns (uint256) {
+    function _wrapUsdc(uint256 _amount) internal returns (uint256 wusdcAmount) {
         USDC.safeIncreaseAllowance(address(WUSDC), _amount);
-        return WUSDC.deposit(_amount);
+        wusdcAmount = WUSDC.deposit(_amount);
     }
 
-    function _unwrapUsdc(uint256 _amount) internal returns (uint256) {
-        return WUSDC.withdraw(_amount);
+    function _unwrapUsdc(uint256 _amount) internal returns (uint256 usdcAmount) {
+        usdcAmount = WUSDC.withdraw(_amount);
     }
 
     /// @dev Protects against arbitrary from address in transferFrom
@@ -300,9 +279,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     // Returns % amount after fee deduction
-    function _deductLiquidityFees(uint256 _amount) internal returns (uint256) {
+    function _deductLiquidityFees(uint256 _amount) internal returns (uint256 afterFeeAmount) {
         uint256 liqFee = (_amount * liquidityFee) / SCALING_FACTOR;
         accumulatedFees += liqFee;
-        return _amount - liqFee;
+        afterFeeAmount = _amount - liqFee;
     }
 }
