@@ -31,14 +31,12 @@ library MarketStructs {
         uint256 sizeDelta;
         uint256 orderPrice;
         uint256 maxSlippage;
-        uint256 executionFee;
         bool isLong;
         bool isLimit;
         bool isIncrease;
     }
 
-    struct PositionRequest {
-        uint256 requestIndex;
+    struct Request {
         address indexToken; // used to derive which market
         address user;
         uint256 collateralDelta;
@@ -69,11 +67,9 @@ library MarketStructs {
     struct PnLParams {
         uint256 weightedAvgEntryPrice;
         uint256 sigmaIndexSizeUSD; // Sum of all increases and decreases in index size USD
-        uint256 leverage;
     }
 
     struct Position {
-        uint256 index; // position in array
         bytes32 market; // can get index token from market ?
         address indexToken; // collateralToken is only WUSDC
         address user;
@@ -88,7 +84,7 @@ library MarketStructs {
     }
 
     struct ExecutionParams {
-        PositionRequest positionRequest;
+        Request request;
         uint256 signedBlockPrice;
         address feeReceiver;
     }

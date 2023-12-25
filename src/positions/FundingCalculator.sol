@@ -68,12 +68,10 @@ library FundingCalculator {
             accumulatedFundingOwed = shortFees;
         }
         (uint256 feesEarned, uint256 feesOwed) = getFeesSinceLastMarketUpdate(_market, _position.isLong);
-        return (
-            feesEarned + _position.fundingParams.feesEarned
-                + ((accumulatedFundingEarned * _position.positionSize) / PRECISION),
-            feesOwed + _position.fundingParams.feesOwed
-                + ((accumulatedFundingOwed * _position.positionSize) / PRECISION)
-        );
+        earned = feesEarned + _position.fundingParams.feesEarned
+            + ((accumulatedFundingEarned * _position.positionSize) / PRECISION);
+        owed = feesOwed + _position.fundingParams.feesOwed
+            + ((accumulatedFundingOwed * _position.positionSize) / PRECISION);
     }
 
     function getCurrentFundingRate(address _market) external view returns (int256) {

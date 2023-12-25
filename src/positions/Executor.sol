@@ -84,60 +84,55 @@ contract Executor is RoleValidation, ReentrancyGuard {
         onlyKeeperOrContract
         returns (bool wasExecuted)
     {
-        MarketStructs.PositionRequest memory positionRequest = tradeStorage.orders(_isLimit, _key);
-        if (positionRequest.user == address(0)) revert Executor_InvalidRequestKey();
-        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), positionRequest.indexToken).market;
-        uint256 signedBlockPrice = priceOracle.getSignedPrice(market, positionRequest.requestBlock);
+        MarketStructs.Request memory request = tradeStorage.orders(_isLimit, _key);
+        if (request.user == address(0)) revert Executor_InvalidRequestKey();
+        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), request.indexToken).market;
+        uint256 signedBlockPrice = priceOracle.getSignedPrice(market, request.requestBlock);
         if (signedBlockPrice == 0) revert Executor_InvalidExecutionPrice();
-        if (_isLimit) TradeHelper.checkLimitPrice(signedBlockPrice, positionRequest);
+        if (_isLimit) TradeHelper.checkLimitPrice(signedBlockPrice, request);
 
         uint256 price = ImpactCalculator.executePriceImpact(
-            market, address(marketStorage), address(dataOracle), address(priceOracle), positionRequest, signedBlockPrice
+            market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
         );
-        int256 sizeDeltaUsd = _calculateSizeDeltaUsd(positionRequest, signedBlockPrice);
+        int256 sizeDeltaUsd = _calculateSizeDeltaUsd(request, signedBlockPrice);
 
-        if (!positionRequest.isIncrease) {
-            if (tradeStorage.openPositions(_key).positionSize < positionRequest.sizeDelta) {
+        if (!request.isIncrease) {
+            if (tradeStorage.openPositions(_key).positionSize < request.sizeDelta) {
                 revert Executor_InvalidDecrease();
             }
         }
 
-        _updateMarketState(market, positionRequest, price, sizeDeltaUsd);
+        _updateMarketState(market, request, price, sizeDeltaUsd);
 
-        tradeStorage.executeTrade(MarketStructs.ExecutionParams(positionRequest, price, _feeReceiver));
+        tradeStorage.executeTrade(MarketStructs.ExecutionParams(request, price, _feeReceiver));
 
         wasExecuted = true;
     }
 
-    function _calculateSizeDeltaUsd(MarketStructs.PositionRequest memory positionRequest, uint256 signedBlockPrice)
+    function _calculateSizeDeltaUsd(MarketStructs.Request memory request, uint256 signedBlockPrice)
         internal
         view
         returns (int256)
     {
-        uint256 sizeDeltaUsd = TradeHelper.getTradeValueUsd(
-            address(dataOracle), positionRequest.indexToken, positionRequest.sizeDelta, signedBlockPrice
-        );
-        return positionRequest.isIncrease ? int256(sizeDeltaUsd) : -int256(sizeDeltaUsd);
+        uint256 sizeDeltaUsd =
+            TradeHelper.getTradeValueUsd(address(dataOracle), request.indexToken, request.sizeDelta, signedBlockPrice);
+        return request.isIncrease ? int256(sizeDeltaUsd) : -int256(sizeDeltaUsd);
     }
 
     function _updateMarketState(
         address market,
-        MarketStructs.PositionRequest memory positionRequest,
+        MarketStructs.Request memory request,
         uint256 price,
         int256 sizeDeltaUsd
     ) internal {
         bytes32 marketKey = IMarket(market).getMarketKey();
         IMarketStorage(marketStorage).updateOpenInterest(
-            marketKey,
-            positionRequest.collateralDelta,
-            positionRequest.sizeDelta,
-            positionRequest.isLong,
-            positionRequest.isIncrease
+            marketKey, request.collateralDelta, request.sizeDelta, request.isLong, request.isIncrease
         );
         IMarket(market).updateFundingRate();
-        IMarket(market).updateBorrowingRate(positionRequest.isLong);
+        IMarket(market).updateBorrowingRate(request.isLong);
         if (sizeDeltaUsd != 0) {
-            IMarket(market).updateTotalWAEP(price, sizeDeltaUsd, positionRequest.isLong);
+            IMarket(market).updateTotalWAEP(price, sizeDeltaUsd, request.isLong);
         }
     }
 }

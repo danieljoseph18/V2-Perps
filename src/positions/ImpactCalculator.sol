@@ -36,27 +36,26 @@ library ImpactCalculator {
         address _marketStorage,
         address _dataOracle,
         address _priceOracle,
-        MarketStructs.PositionRequest memory _positionRequest,
+        MarketStructs.Request memory _request,
         uint256 _signedBlockPrice
     ) external view returns (uint256 impactedPrice) {
         if (_signedBlockPrice == 0) revert ImpactCalculator_ZeroParameters();
-        uint256 priceImpact = calculatePriceImpact(
-            _market, _marketStorage, _dataOracle, _priceOracle, _positionRequest, _signedBlockPrice
-        );
-        if (_positionRequest.isLong) {
-            if (_positionRequest.isIncrease) {
+        uint256 priceImpact =
+            calculatePriceImpact(_market, _marketStorage, _dataOracle, _priceOracle, _request, _signedBlockPrice);
+        if (_request.isLong) {
+            if (_request.isIncrease) {
                 impactedPrice = _signedBlockPrice + priceImpact;
             } else {
                 impactedPrice = _signedBlockPrice - priceImpact;
             }
         } else {
-            if (_positionRequest.isIncrease) {
+            if (_request.isIncrease) {
                 impactedPrice = _signedBlockPrice - priceImpact;
             } else {
                 impactedPrice = _signedBlockPrice + priceImpact;
             }
         }
-        checkSlippage(impactedPrice, _signedBlockPrice, _positionRequest.maxSlippage);
+        checkSlippage(impactedPrice, _signedBlockPrice, _request.maxSlippage);
     }
 
     // Returns Price impact in USD
@@ -65,10 +64,10 @@ library ImpactCalculator {
         address _marketStorage,
         address _dataOracle,
         address _priceOracle,
-        MarketStructs.PositionRequest memory _positionRequest,
+        MarketStructs.Request memory _request,
         uint256 _signedBlockPrice
     ) public view returns (uint256) {
-        if (_signedBlockPrice == 0 || _market == address(0) || _positionRequest.user == address(0)) {
+        if (_signedBlockPrice == 0 || _market == address(0) || _request.user == address(0)) {
             revert ImpactCalculator_ZeroParameters();
         }
 
@@ -80,13 +79,13 @@ library ImpactCalculator {
             MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, market.indexToken(), false);
         address indexToken = IMarket(_market).indexToken();
         uint256 sizeDeltaUSD =
-            (_positionRequest.sizeDelta * _signedBlockPrice) / (IDataOracle(_dataOracle).getBaseUnits(indexToken));
+            (_request.sizeDelta * _signedBlockPrice) / (IDataOracle(_dataOracle).getBaseUnits(indexToken));
 
         uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
-        if (_positionRequest.isIncrease) {
-            _positionRequest.isLong ? longOI += sizeDeltaUSD : shortOI += sizeDeltaUSD;
+        if (_request.isIncrease) {
+            _request.isLong ? longOI += sizeDeltaUSD : shortOI += sizeDeltaUSD;
         } else {
-            _positionRequest.isLong ? longOI -= sizeDeltaUSD : shortOI -= sizeDeltaUSD;
+            _request.isLong ? longOI -= sizeDeltaUSD : shortOI -= sizeDeltaUSD;
         }
         uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 

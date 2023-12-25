@@ -62,7 +62,10 @@ contract TradeVault is RoleValidation {
         liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
-    receive() external payable {}
+    receive() external payable {
+        // get the amount received
+        // any extra should be claimable by contract owner
+    }
 
     function transferOutTokens(bytes32 _marketKey, address _to, uint256 _collateralDelta, bool _isLong)
         external

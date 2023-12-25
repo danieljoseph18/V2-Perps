@@ -35,7 +35,6 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 contract RequestRouter is ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWUSDC;
-    using MarketStructs for MarketStructs.PositionRequest;
 
     ITradeStorage tradeStorage;
     ILiquidityVault liquidityVault;
@@ -48,7 +47,7 @@ contract RequestRouter is ReentrancyGuard {
     uint256 constant MIN_SLIPPAGE = 0.0003e18; // 0.03%
     uint256 constant MAX_SLIPPAGE = 0.99e18; // 99%
 
-    error RequestRouter_ExecutionFeeTooLow();
+    error RequestRouter_InvalidExecutionFee();
     error RequestRouter_ExecutionFeeTransferFailed();
     error RequestRouter_PositionSizeTooLarge();
     error RequestRouter_CallerIsNotPositionOwner();
@@ -57,6 +56,7 @@ contract RequestRouter is ReentrancyGuard {
     error RequestRouter_InvalidIndexToken();
     error RequestRouter_InvalidSlippage();
     error RequestRouter_PositionDoesNotExist();
+    error RequestRouter_CollateralDeltaIsZero();
 
     constructor(
         address _tradeStorage,
@@ -73,13 +73,12 @@ contract RequestRouter is ReentrancyGuard {
     }
 
     modifier validExecutionFee() {
-        if (msg.value < tradeStorage.minExecutionFee()) revert RequestRouter_ExecutionFeeTooLow();
+        if (msg.value != tradeStorage.executionFee()) revert RequestRouter_InvalidExecutionFee();
         _;
     }
 
     function createTradeRequest(MarketStructs.Trade calldata _trade) external payable nonReentrant validExecutionFee {
-        if (msg.value != _trade.executionFee) revert RequestRouter_ExecutionFeeDoesNotMatch();
-        _sendExecutionFeeToVault(_trade.executionFee);
+        _sendExecutionFeeToVault();
         bytes32 marketKey = keccak256(abi.encode(_trade.indexToken));
         if (marketStorage.markets(marketKey).market == address(0)) {
             revert RequestRouter_InvalidIndexToken();
@@ -87,6 +86,7 @@ contract RequestRouter is ReentrancyGuard {
         if (_trade.maxSlippage < MIN_SLIPPAGE || _trade.maxSlippage > MAX_SLIPPAGE) {
             revert RequestRouter_InvalidSlippage();
         }
+        if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
 
         uint256 collateralDelta;
         if (_trade.isIncrease) {
@@ -104,14 +104,13 @@ contract RequestRouter is ReentrancyGuard {
             assert(position.positionSize >= _trade.sizeDelta);
         }
 
-        MarketStructs.PositionRequest memory positionRequest =
-            TradeHelper.createPositionRequest(address(tradeStorage), _trade, msg.sender, collateralDelta);
+        MarketStructs.Request memory request = TradeHelper.createRequest(_trade, msg.sender, collateralDelta);
 
-        tradeStorage.createOrderRequest(positionRequest);
+        tradeStorage.createOrderRequest(request);
     }
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
-        MarketStructs.PositionRequest memory request = tradeStorage.orders(_isLimit, _key);
+        MarketStructs.Request memory request = tradeStorage.orders(_isLimit, _key);
         if (request.user == address(0)) revert RequestRouter_RequestDoesNotExist();
         if (msg.sender != request.user) revert RequestRouter_CallerIsNotPositionOwner();
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
@@ -129,8 +128,9 @@ contract RequestRouter is ReentrancyGuard {
         WUSDC.safeTransfer(address(tradeVault), amountOut);
     }
 
-    function _sendExecutionFeeToVault(uint256 _executionFee) private {
-        (bool success,) = address(tradeVault).call{value: _executionFee}("");
+    function _sendExecutionFeeToVault() private {
+        uint256 executionFee = tradeStorage.executionFee();
+        (bool success,) = address(tradeVault).call{value: executionFee}("");
         if (!success) revert RequestRouter_ExecutionFeeTransferFailed();
     }
 

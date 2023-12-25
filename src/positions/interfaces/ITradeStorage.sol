@@ -7,14 +7,14 @@ import {IMarketStorage} from "../../markets/interfaces/IMarketStorage.sol";
 import {ILiquidityVault} from "../../markets/interfaces/ILiquidityVault.sol";
 
 interface ITradeStorage {
-    function createOrderRequest(MarketStructs.PositionRequest calldata _positionRequest) external;
+    function createOrderRequest(MarketStructs.Request calldata _request) external;
 
     function cancelOrderRequest(bytes32 _positionKey, bool _isLimit) external returns (bool);
 
     function executeTrade(MarketStructs.ExecutionParams calldata _executionParams) external;
 
     function executeDecreaseRequest(
-        MarketStructs.PositionRequest calldata _decreaseRequest,
+        MarketStructs.Request calldata _decreaseRequest,
         uint256 _signedBlockPrice,
         address _executor,
         int256 _priceImpact
@@ -37,7 +37,7 @@ interface ITradeStorage {
     function marketStorage() external view returns (IMarketStorage);
     function liquidationFeeUsd() external view returns (uint256);
     function tradingFee() external view returns (uint256);
-    function minExecutionFee() external view returns (uint256);
+    function executionFee() external view returns (uint256);
     function minCollateralUsd() external view returns (uint256);
     function liquidityVault() external view returns (ILiquidityVault);
     function claimFundingFees(bytes32 _positionKey) external;
@@ -48,7 +48,7 @@ interface ITradeStorage {
     function openPositions(bytes32 _key) external view returns (MarketStructs.Position memory);
     function openPositionKeys(bytes32 _key, bool _isLong) external view returns (bytes32[] memory);
     function orderKeysStartIndex() external view returns (uint256);
-    function orders(bool _isLimit, bytes32 _key) external view returns (MarketStructs.PositionRequest memory);
+    function orders(bool _isLimit, bytes32 _key) external view returns (MarketStructs.Request memory);
     function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong) external;
     function updateOrderStartIndex() external;
     function setOrderStartIndexValue(uint256 _value) external;

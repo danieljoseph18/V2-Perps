@@ -44,20 +44,20 @@ library TradeHelper {
 
     // Validate whether a request should execute or not
     function validateRequest(address _tradeStorage, bytes32 _key, bool _isLimit) external view returns (bool) {
-        MarketStructs.PositionRequest memory request = ITradeStorage(_tradeStorage).orders(_isLimit, _key);
+        MarketStructs.Request memory request = ITradeStorage(_tradeStorage).orders(_isLimit, _key);
         if (request.user != address(0)) revert TradeHelper_RequestAlreadyExists();
         return true;
     }
 
-    function generateKey(MarketStructs.PositionRequest memory _positionRequest) external pure returns (bytes32) {
-        return keccak256(abi.encode(_positionRequest.indexToken, _positionRequest.user, _positionRequest.isLong));
+    function generateKey(MarketStructs.Request memory _request) external pure returns (bytes32) {
+        return keccak256(abi.encode(_request.indexToken, _request.user, _request.isLong));
     }
 
-    function checkLimitPrice(uint256 _price, MarketStructs.PositionRequest memory _positionRequest) external pure {
-        if (_positionRequest.isLong) {
-            if (_price > _positionRequest.orderPrice) revert TradeHelper_LimitPriceNotMet();
+    function checkLimitPrice(uint256 _price, MarketStructs.Request memory _request) external pure {
+        if (_request.isLong) {
+            if (_price > _request.orderPrice) revert TradeHelper_LimitPriceNotMet();
         } else {
-            if (_price < _positionRequest.orderPrice) revert TradeHelper_LimitPriceNotMet();
+            if (_price < _request.orderPrice) revert TradeHelper_LimitPriceNotMet();
         }
     }
 
@@ -70,34 +70,18 @@ library TradeHelper {
         uint256 _size,
         uint256 _collateral
     ) external view {
-        uint256 leverage = calculateLeverage(_dataOracle, _priceOracle, _indexToken, _signedPrice, _size, _collateral);
+        uint256 sizeUsd = getTradeValueUsd(_dataOracle, _indexToken, _size, _signedPrice);
+        uint256 collateralUsd = (_collateral * IPriceOracle(_priceOracle).getCollateralPrice()) / PRECISION;
+        uint256 leverage = (sizeUsd * LEVERAGE_PRECISION) / collateralUsd;
         if (leverage < MIN_LEVERAGE || leverage > MAX_LEVERAGE) revert TradeHelper_InvalidLeverage();
     }
 
-    function calculateLeverage(
-        address _dataOracle,
-        address _priceOracle,
-        address _indexToken,
-        uint256 _signedPrice,
-        uint256 _size,
-        uint256 _collateral
-    ) public view returns (uint256) {
-        uint256 sizeUsd = getTradeValueUsd(_dataOracle, _indexToken, _size, _signedPrice);
-        uint256 collateralUsd = (_collateral * IPriceOracle(_priceOracle).getCollateralPrice()) / PRECISION;
-        return (sizeUsd * LEVERAGE_PRECISION) / collateralUsd;
-    }
-
-    function createPositionRequest(
-        address _tradeStorage,
-        MarketStructs.Trade calldata _trade,
-        address _user,
-        uint256 _collateralAmount
-    ) external view returns (MarketStructs.PositionRequest memory positionRequest) {
-        (uint256 marketLen, uint256 limitLen) = ITradeStorage(_tradeStorage).getRequestQueueLengths();
-        uint256 index = _trade.isLimit ? limitLen : marketLen;
-
-        positionRequest = MarketStructs.PositionRequest({
-            requestIndex: index,
+    function createRequest(MarketStructs.Trade calldata _trade, address _user, uint256 _collateralAmount)
+        external
+        view
+        returns (MarketStructs.Request memory request)
+    {
+        request = MarketStructs.Request({
             indexToken: _trade.indexToken,
             user: _user,
             collateralDelta: _collateralAmount,
@@ -113,39 +97,27 @@ library TradeHelper {
 
     function generateNewPosition(
         address _market,
-        address _tradeStorage,
         address _dataOracle,
-        address _priceOracle,
-        MarketStructs.PositionRequest memory _positionRequest,
+        MarketStructs.Request memory _request,
         uint256 _price
     ) external view returns (MarketStructs.Position memory) {
         // create a new position
         // calculate all input variables
         (uint256 longFunding, uint256 shortFunding, uint256 longBorrowFee, uint256 shortBorrowFee) =
             IMarket(_market).getMarketParameters();
-        // make sure all Position and PositionRequest instantiations are in the correct order.
-        uint256 leverage = calculateLeverage(
-            _dataOracle,
-            _priceOracle,
-            _positionRequest.indexToken,
-            _price,
-            _positionRequest.sizeDelta,
-            _positionRequest.collateralDelta
-        );
-        uint256 sizeUsd = getTradeValueUsd(_dataOracle, _positionRequest.indexToken, _positionRequest.sizeDelta, _price);
-        bytes32 marketKey = getMarketKey(_positionRequest.indexToken);
+        uint256 sizeUsd = getTradeValueUsd(_dataOracle, _request.indexToken, _request.sizeDelta, _price);
+        bytes32 marketKey = getMarketKey(_request.indexToken);
         return MarketStructs.Position({
-            index: ITradeStorage(_tradeStorage).getNextPositionIndex(marketKey, _positionRequest.isLong),
             market: marketKey,
-            indexToken: _positionRequest.indexToken,
-            user: _positionRequest.user,
-            collateralAmount: _positionRequest.collateralDelta,
-            positionSize: _positionRequest.sizeDelta,
-            isLong: _positionRequest.isLong,
+            indexToken: _request.indexToken,
+            user: _request.user,
+            collateralAmount: _request.collateralDelta,
+            positionSize: _request.sizeDelta,
+            isLong: _request.isLong,
             realisedPnl: 0,
             borrowParams: MarketStructs.BorrowParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: MarketStructs.FundingParams(0, 0, block.timestamp, longFunding, shortFunding),
-            pnlParams: MarketStructs.PnLParams(_price, sizeUsd, leverage),
+            pnlParams: MarketStructs.PnLParams(_price, sizeUsd),
             entryTimestamp: block.timestamp
         });
     }
@@ -196,12 +168,12 @@ library TradeHelper {
     }
 
     function checkMinCollateral(
-        MarketStructs.PositionRequest memory _positionRequest,
+        MarketStructs.Request memory _request,
         uint256 _collateralPriceUsd,
         address _tradeStorage
     ) external view returns (bool) {
         uint256 minCollateralUsd = ITradeStorage(_tradeStorage).minCollateralUsd();
-        uint256 requestCollateralUsd = _positionRequest.collateralDelta * _collateralPriceUsd;
+        uint256 requestCollateralUsd = _request.collateralDelta * _collateralPriceUsd;
         if (requestCollateralUsd < minCollateralUsd) {
             return false;
         } else {
@@ -215,13 +187,11 @@ library TradeHelper {
         address _priceOracle,
         address _dataOracle,
         address _marketStorage
-    ) external view returns (bool) {
-        if (_position.collateralAmount <= _collateralDelta) return false;
+    ) external view {
+        if (_position.collateralAmount <= _collateralDelta) revert TradeHelper_InvalidCollateralReduction();
         _position.collateralAmount -= _collateralDelta;
         uint256 collateralPrice = IPriceOracle(_priceOracle).getCollateralPrice();
-        bool isValid =
-            !checkIsLiquidatable(_position, collateralPrice, _marketStorage, _marketStorage, _priceOracle, _dataOracle);
-        return isValid;
+        checkIsLiquidatable(_position, collateralPrice, _marketStorage, _marketStorage, _priceOracle, _dataOracle);
     }
 
     function getTotalFeesOwedUsd(MarketStructs.Position memory _position, uint256 _price, address _market)
