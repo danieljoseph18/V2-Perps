@@ -132,33 +132,6 @@ library TradeHelper {
         return (_sizeDelta * _signedPrice) / baseUnit;
     }
 
-    // Value Provided USD > Liquidation Fee + Fees + Losses USD
-    function checkIsLiquidatable(
-        MarketStructs.Position memory _position,
-        uint256 _collateralPriceUsd,
-        address _tradeStorage,
-        address _marketStorage,
-        address _priceOracle,
-        address _dataOracle
-    ) public view returns (bool) {
-        // get the total value provided in USD
-        uint256 collateralValueUsd = (_position.collateralAmount * _collateralPriceUsd) / PRECISION;
-        // get the liquidation fee in USD
-        uint256 liquidationFeeUsd = ITradeStorage(_tradeStorage).liquidationFeeUsd();
-        // get the total fees owed (funding + borrowing) in USD => funding should be net
-        // If fees earned > fees owed, should just be 0 => Let's extrapolate this out to FUnding Calculator
-        uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _collateralPriceUsd, _marketStorage);
-        // get the total losses in USD
-        int256 pnl = PricingCalculator.calculatePnL(_priceOracle, _dataOracle, _position);
-        int256 reminance = int256(collateralValueUsd) - int256(liquidationFeeUsd) - int256(totalFeesOwedUsd) + pnl;
-        // check if value provided > liquidation fee + fees + losses
-        if (reminance <= 0) {
-            return true;
-        } else {
-            return false;
-        }
-    }
-
     function calculateLiquidationFee(address _priceOracle, uint256 _liquidationFeeUsd)
         external
         pure
@@ -179,19 +152,6 @@ library TradeHelper {
         } else {
             return true;
         }
-    }
-
-    function checkCollateralReduction(
-        MarketStructs.Position memory _position,
-        uint256 _collateralDelta,
-        address _priceOracle,
-        address _dataOracle,
-        address _marketStorage
-    ) external view {
-        if (_position.collateralAmount <= _collateralDelta) revert TradeHelper_InvalidCollateralReduction();
-        _position.collateralAmount -= _collateralDelta;
-        uint256 collateralPrice = IPriceOracle(_priceOracle).getCollateralPrice();
-        checkIsLiquidatable(_position, collateralPrice, _marketStorage, _marketStorage, _priceOracle, _dataOracle);
     }
 
     function getTotalFeesOwedUsd(MarketStructs.Position memory _position, uint256 _price, address _market)

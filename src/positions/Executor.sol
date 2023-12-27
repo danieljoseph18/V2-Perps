@@ -33,6 +33,7 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 /// @dev Needs Executor Role
 contract Executor is RoleValidation, ReentrancyGuard {
     error Executor_LimitNotHit();
+    error Executor_InvalidIncrease();
 
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
@@ -43,6 +44,14 @@ contract Executor is RoleValidation, ReentrancyGuard {
     error Executor_InvalidRequestKey();
     error Executor_InvalidDecrease();
     error Executor_InvalidExecutionPrice();
+
+    enum RequestType {
+        COLLATERAL_INCREASE,
+        COLLATERAL_DECREASE,
+        NEW_POSITION,
+        POSITION_INCREASE,
+        POSITION_DECREASE
+    }
 
     constructor(
         address _marketStorage,
@@ -78,7 +87,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
     }
 
     /// @dev Only Keeper
-    function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit)
+    function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit, RequestType _requestType)
         external
         nonReentrant
         onlyKeeperOrContract
@@ -104,6 +113,19 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
         _updateMarketState(market, request, price, sizeDeltaUsd);
 
+        if (_requestType == RequestType.COLLATERAL_INCREASE) {
+            tradeStorage.executeCollateralIncrease(request, price, _feeReceiver);
+        } else if (_requestType == RequestType.COLLATERAL_DECREASE) {
+            tradeStorage.executeCollateralDecrease(request, price, _feeReceiver);
+        } else if (_requestType == RequestType.NEW_POSITION) {
+            tradeStorage.createNewPosition(request, price, _feeReceiver);
+        } else if (_requestType == RequestType.POSITION_INCREASE) {
+            tradeStorage.increaseExistingPosition(request, price, _feeReceiver);
+        } else if (_requestType == RequestType.POSITION_DECREASE) {
+            tradeStorage.decreaseExistingPosition(request, price, _feeReceiver);
+        } else {
+            revert Executor_InvalidRequestKey();
+        }
         tradeStorage.executeTrade(MarketStructs.ExecutionParams(request, price, _feeReceiver));
 
         wasExecuted = true;

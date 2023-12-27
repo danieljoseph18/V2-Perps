@@ -64,6 +64,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     event FeesAccumulated(uint256 indexed _amount);
     event ProfitTransferred(address indexed _user, uint256 indexed _amount);
     event StateUpdated(int256 indexed _netPnL, uint256 indexed _netOI);
+    event LiquidityReserved(address indexed _user, uint256 indexed _amount, bool indexed _isIncrease);
 
     error LiquidityVault_InvalidTokenAmount();
     error LiquidityVault_InvalidToken();
@@ -183,6 +184,7 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         }
         // Invariant Check
         assert(totalReserved <= poolAmounts);
+        emit LiquidityReserved(_user, amt, _amount > 0);
     }
 
     // $1 = 1e18
