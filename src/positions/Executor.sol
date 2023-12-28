@@ -15,7 +15,7 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -45,6 +45,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
     error Executor_InvalidRequestKey();
     error Executor_InvalidDecrease();
     error Executor_InvalidExecutionPrice();
+    error Executor_InvalidRequestType();
 
     constructor(
         address _marketStorage,
@@ -81,7 +82,6 @@ contract Executor is RoleValidation, ReentrancyGuard {
         external
         nonReentrant
         onlyKeeperOrContract
-        returns (bool wasExecuted)
     {
         MarketStructs.Request memory request = tradeStorage.orders(_key);
         if (request.user == address(0)) revert Executor_InvalidRequestKey();
@@ -99,25 +99,19 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
         _updateMarketState(market, request, price, sizeDeltaUsd);
 
-        MarketStructs.Position memory position = tradeStorage.openPositions(_key);
-
-        if (position.user == address(0)) {
+        if (request.requestType == MarketStructs.RequestType.CREATE_POSITION) {
             tradeStorage.createNewPosition(MarketStructs.ExecutionParams(request, price, _feeReceiver));
-        } else if (request.sizeDelta == 0) {
-            if (request.isIncrease) {
-                tradeStorage.executeCollateralIncrease(MarketStructs.ExecutionParams(request, price, _feeReceiver));
-            } else {
-                tradeStorage.executeCollateralDecrease(MarketStructs.ExecutionParams(request, price, _feeReceiver));
-            }
+        } else if (request.requestType == MarketStructs.RequestType.POSITION_DECREASE) {
+            tradeStorage.decreaseExistingPosition(MarketStructs.ExecutionParams(request, price, _feeReceiver));
+        } else if (request.requestType == MarketStructs.RequestType.POSITION_INCREASE) {
+            tradeStorage.increaseExistingPosition(MarketStructs.ExecutionParams(request, price, _feeReceiver));
+        } else if (request.requestType == MarketStructs.RequestType.COLLATERAL_DECREASE) {
+            tradeStorage.executeCollateralDecrease(MarketStructs.ExecutionParams(request, price, _feeReceiver));
+        } else if (request.requestType == MarketStructs.RequestType.COLLATERAL_INCREASE) {
+            tradeStorage.executeCollateralIncrease(MarketStructs.ExecutionParams(request, price, _feeReceiver));
         } else {
-            if (request.isIncrease) {
-                tradeStorage.increaseExistingPosition(MarketStructs.ExecutionParams(request, price, _feeReceiver));
-            } else {
-                tradeStorage.decreaseExistingPosition(MarketStructs.ExecutionParams(request, price, _feeReceiver));
-            }
+            revert Executor_InvalidRequestType();
         }
-
-        wasExecuted = true;
     }
 
     function _calculateSizeDeltaUsd(MarketStructs.Request memory request, uint256 signedBlockPrice)

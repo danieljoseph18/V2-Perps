@@ -15,10 +15,18 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 // q - can we use smaller data types anywhere to save on gas
 
 library MarketStructs {
+    enum RequestType {
+        COLLATERAL_INCREASE,
+        COLLATERAL_DECREASE,
+        POSITION_INCREASE,
+        POSITION_DECREASE,
+        CREATE_POSITION
+    }
+
     struct Market {
         address indexToken;
         address market;
@@ -47,6 +55,7 @@ library MarketStructs {
         bool isLimit;
         bool isLong;
         bool isIncrease; // increase or decrease position
+        RequestType requestType;
     }
 
     struct BorrowParams {
@@ -85,7 +94,7 @@ library MarketStructs {
 
     struct ExecutionParams {
         Request request;
-        uint256 signedBlockPrice;
+        uint256 price;
         address feeReceiver;
     }
 }

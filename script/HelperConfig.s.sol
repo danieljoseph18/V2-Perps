@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 
 import {Script} from "forge-std/Script.sol";
-import {MockUSDC} from "../src/mocks/MockUSDC.sol";
-import {MockPriceOracle} from "../src/mocks/MockPriceOracle.sol";
+import {MockUSDC} from "../test/mocks/MockUSDC.sol";
+import {MockPriceOracle} from "../test/mocks/MockPriceOracle.sol";
 
 contract HelperConfig is Script {
     NetworkConfig public activeNetworkConfig;

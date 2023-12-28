@@ -15,7 +15,7 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
@@ -58,6 +58,10 @@ contract RequestRouter is ReentrancyGuard {
     error RequestRouter_PositionDoesNotExist();
     error RequestRouter_CollateralDeltaIsZero();
     error RequestRouter_CallerIsContract();
+    error RequestRouter_DecreaseNonExistentPosition();
+    error RequestRouter_SizeDeltaIsZero();
+    error RequestRouter_SizeDeltaExceedsPositionSize();
+    error RequestRouter_CollateralDeltaExceedsCollateralAmount();
 
     constructor(
         address _tradeStorage,
@@ -79,35 +83,33 @@ contract RequestRouter is ReentrancyGuard {
     }
 
     function createTradeRequest(MarketStructs.Trade calldata _trade) external payable nonReentrant validExecutionFee {
-        _sendExecutionFeeToVault();
-        bytes32 marketKey = keccak256(abi.encode(_trade.indexToken));
-        if (marketStorage.markets(marketKey).market == address(0)) {
-            revert RequestRouter_InvalidIndexToken();
-        }
         if (msg.sender.code.length > 0) revert RequestRouter_CallerIsContract();
         if (_trade.maxSlippage < MIN_SLIPPAGE || _trade.maxSlippage > MAX_SLIPPAGE) {
             revert RequestRouter_InvalidSlippage();
         }
         if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
 
+        bytes32 marketKey = keccak256(abi.encode(_trade.indexToken));
+        MarketStructs.Market memory market = marketStorage.markets(marketKey);
+        if (address(market.market) == address(0)) {
+            revert RequestRouter_InvalidIndexToken();
+        }
+
+        bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
+        MarketStructs.Position memory position = tradeStorage.openPositions(positionKey);
+
         uint256 collateralDelta;
         if (_trade.isIncrease) {
             _validateAllocation(marketKey, _trade.sizeDelta);
-            // Converts USDC to WUSDC and Transfers Tokens to the Vault
             collateralDelta = _handleTokenTransfers(_trade.collateralDelta, marketKey, _trade.isLong, true);
         } else {
-            // Convert USDC amount to WUSDC
             collateralDelta = _trade.collateralDelta * COLLATERAL_MULTIPLIER;
-            bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
-            MarketStructs.Position memory position = tradeStorage.openPositions(positionKey);
-            // Check their existing position collateral is > collateralDelta
-            assert(position.collateralAmount >= collateralDelta);
-            // Check their existing position size is > sizeDelta
-            assert(position.positionSize >= _trade.sizeDelta);
         }
 
-        MarketStructs.Request memory request = TradeHelper.createRequest(_trade, msg.sender, collateralDelta);
-
+        MarketStructs.RequestType requestType = _calculateRequestType(_trade, position);
+        _sendExecutionFeeToVault();
+        MarketStructs.Request memory request =
+            TradeHelper.createRequest(_trade, msg.sender, collateralDelta, requestType);
         tradeStorage.createOrderRequest(request);
     }
 
@@ -116,6 +118,44 @@ contract RequestRouter is ReentrancyGuard {
         if (request.user == address(0)) revert RequestRouter_RequestDoesNotExist();
         if (msg.sender != request.user) revert RequestRouter_CallerIsNotPositionOwner();
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
+    }
+
+    function _calculateRequestType(MarketStructs.Trade calldata _trade, MarketStructs.Position memory _position)
+        private
+        pure
+        returns (MarketStructs.RequestType requestType)
+    {
+        if (_position.user == address(0)) {
+            if (!_trade.isIncrease) revert RequestRouter_DecreaseNonExistentPosition();
+            if (_trade.sizeDelta == 0) revert RequestRouter_SizeDeltaIsZero();
+            if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
+            requestType = MarketStructs.RequestType.CREATE_POSITION;
+        } else if (_trade.sizeDelta == 0) {
+            if (_trade.isIncrease) {
+                if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
+                requestType = MarketStructs.RequestType.COLLATERAL_INCREASE;
+            } else {
+                if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
+                if (_position.collateralAmount < _trade.collateralDelta) {
+                    revert RequestRouter_CollateralDeltaExceedsCollateralAmount();
+                }
+                requestType = MarketStructs.RequestType.COLLATERAL_DECREASE;
+            }
+        } else {
+            if (_trade.isIncrease) {
+                if (_trade.sizeDelta == 0) revert RequestRouter_SizeDeltaIsZero();
+                if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
+                requestType = MarketStructs.RequestType.POSITION_INCREASE;
+            } else {
+                if (_trade.sizeDelta == 0) revert RequestRouter_SizeDeltaIsZero();
+                if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
+                if (_position.positionSize < _trade.sizeDelta) revert RequestRouter_SizeDeltaExceedsPositionSize();
+                if (_position.collateralAmount < _trade.collateralDelta) {
+                    revert RequestRouter_CollateralDeltaExceedsCollateralAmount();
+                }
+                requestType = MarketStructs.RequestType.POSITION_DECREASE;
+            }
+        }
     }
 
     function _handleTokenTransfers(uint256 _usdcAmountIn, bytes32 _marketKey, bool _isLong, bool _isIncrease)

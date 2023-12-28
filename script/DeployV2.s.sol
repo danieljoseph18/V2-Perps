@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 
 import {Script} from "forge-std/Script.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
@@ -10,8 +10,8 @@ import {MarketFactory} from "../src/markets/MarketFactory.sol";
 import {MarketStorage} from "../src/markets/MarketStorage.sol";
 import {MarketToken} from "../src/markets/MarketToken.sol";
 import {StateUpdater} from "../src/markets/StateUpdater.sol";
-import {IMockPriceOracle} from "../src/mocks/interfaces/IMockPriceOracle.sol";
-import {IMockUSDC} from "../src/mocks/interfaces/IMockUSDC.sol";
+import {IMockPriceOracle} from "../test/mocks/interfaces/IMockPriceOracle.sol";
+import {IMockUSDC} from "../test/mocks/interfaces/IMockUSDC.sol";
 import {DataOracle} from "../src/oracle/DataOracle.sol";
 import {Executor} from "../src/positions/Executor.sol";
 import {Liquidator} from "../src/positions/Liquidator.sol";
@@ -125,7 +125,10 @@ contract DeployV2 is Script {
         );
 
         contracts.liquidator = new Liquidator(
-            address(contracts.tradeStorage), address(contracts.marketStorage), address(contracts.roleStorage)
+            address(contracts.tradeStorage),
+            address(contracts.marketStorage),
+            address(contracts.priceOracle),
+            address(contracts.roleStorage)
         );
 
         contracts.requestRouter = new RequestRouter(

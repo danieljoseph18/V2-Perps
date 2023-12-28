@@ -15,7 +15,7 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 
 import {IMarket} from "./interfaces/IMarket.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
@@ -75,15 +75,6 @@ contract GlobalMarketConfig is RoleValidation {
     {
         require(_market != address(0), "Market does not exist");
         IMarket(_market).setPriceImpactConfig(_priceImpactFactor, _priceImpactExponent);
-    }
-
-    /**
-     * ========================= Trade Config =========================
-     */
-
-    /// @dev Used if excessive build up of array keys prevents loop execution
-    function setOrderStartIndexValue(uint256 _value) external onlyModerator {
-        tradeStorage.setOrderStartIndexValue(_value);
     }
 
     /**

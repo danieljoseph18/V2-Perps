@@ -15,7 +15,7 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 
 import {MarketStructs} from "../markets/MarketStructs.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
@@ -76,11 +76,12 @@ library TradeHelper {
         if (leverage < MIN_LEVERAGE || leverage > MAX_LEVERAGE) revert TradeHelper_InvalidLeverage();
     }
 
-    function createRequest(MarketStructs.Trade calldata _trade, address _user, uint256 _collateralAmount)
-        external
-        view
-        returns (MarketStructs.Request memory request)
-    {
+    function createRequest(
+        MarketStructs.Trade calldata _trade,
+        address _user,
+        uint256 _collateralAmount,
+        MarketStructs.RequestType _requestType
+    ) external view returns (MarketStructs.Request memory request) {
         request = MarketStructs.Request({
             indexToken: _trade.indexToken,
             user: _user,
@@ -91,7 +92,8 @@ library TradeHelper {
             maxSlippage: _trade.maxSlippage,
             isLimit: _trade.isLimit,
             isLong: _trade.isLong,
-            isIncrease: _trade.isIncrease
+            isIncrease: _trade.isIncrease,
+            requestType: _requestType
         });
     }
 

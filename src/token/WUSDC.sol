@@ -15,7 +15,7 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -37,7 +37,6 @@ contract WUSDC is ERC20, ReentrancyGuard {
     event Deposit(address indexed user, uint256 indexed usdcAmount, uint256 indexed wusdcAmount);
     event Withdraw(address indexed user, uint256 indexed wusdcAmount, uint256 indexed usdcAmount);
 
-    // We assume USDC has 6 decimals
     uint256 private constant DECIMALS_DIFFERENCE = 1e12;
 
     constructor(address _usdc) ERC20("Wrapped USDC", "WUSDC") {
@@ -65,7 +64,7 @@ contract WUSDC is ERC20, ReentrancyGuard {
         return wusdcAmount;
     }
 
-    /// @dev Needs to account for Token Decimals (from 18 dec => 6)
+    /// @dev Accounts for Token Decimals (from 18 dec => 6)
     function withdraw(uint256 _wusdcAmount) external nonReentrant returns (uint256) {
         if (balanceOf(msg.sender) < _wusdcAmount) revert WUSDC_InsufficientBalance();
         // Burn WUSDC first to protect against reentrancy

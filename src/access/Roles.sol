@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 
 library Roles {
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;

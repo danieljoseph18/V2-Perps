@@ -15,17 +15,20 @@
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.22;
+pragma solidity 0.8.23;
 
 // Do we need to allow DEX pricing to price PRINT?
 //https://sips.synthetix.io/sips/sip-285/
 contract PriceOracle {
+    error PriceOracle_InvalidToken();
+    error PriceOracle_PriceNotSigned();
     // source of pricing for all tokens
     // need list of whitelisted tokens (long, short and index for all markets)
     // passing the address of a token will fetch price
     // pricing will be determined using Pyth and Chainlink as secondary
     // pricing should be upgradeable so we can improve pricing mechanism in future
     // Need max block the price is valid until
+
     uint256 public constant PRICE_DECIMALS = 18;
 
     mapping(address => bool) public whitelistedTokens;
@@ -51,9 +54,12 @@ contract PriceOracle {
         // return price of token
     }
 
-    function getSignedPrice(address _token, uint256 _block) external view returns (uint256) {
+    function getSignedPrice(address _token, uint256 _block) external view returns (uint256 price) {
         // require token is whitelisted
+        if (!whitelistedTokens[_token]) revert PriceOracle_InvalidToken();
         // return price of token at block
+        price = signedPrices[_token][_block];
+        if (price == 0) revert PriceOracle_PriceNotSigned();
     }
 
     function requestSignedPrice(address _indexToken, uint256 _block) external {
