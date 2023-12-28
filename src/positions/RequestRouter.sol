@@ -57,6 +57,7 @@ contract RequestRouter is ReentrancyGuard {
     error RequestRouter_InvalidSlippage();
     error RequestRouter_PositionDoesNotExist();
     error RequestRouter_CollateralDeltaIsZero();
+    error RequestRouter_CallerIsContract();
 
     constructor(
         address _tradeStorage,
@@ -83,6 +84,7 @@ contract RequestRouter is ReentrancyGuard {
         if (marketStorage.markets(marketKey).market == address(0)) {
             revert RequestRouter_InvalidIndexToken();
         }
+        if (msg.sender.code.length > 0) revert RequestRouter_CallerIsContract();
         if (_trade.maxSlippage < MIN_SLIPPAGE || _trade.maxSlippage > MAX_SLIPPAGE) {
             revert RequestRouter_InvalidSlippage();
         }
@@ -110,7 +112,7 @@ contract RequestRouter is ReentrancyGuard {
     }
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
-        MarketStructs.Request memory request = tradeStorage.orders(_isLimit, _key);
+        MarketStructs.Request memory request = tradeStorage.orders(_key);
         if (request.user == address(0)) revert RequestRouter_RequestDoesNotExist();
         if (msg.sender != request.user) revert RequestRouter_CallerIsNotPositionOwner();
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);

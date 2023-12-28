@@ -18,4 +18,8 @@ interface ITradeStorage {
     function getOpenPositionKeys(bytes32 _marketKey, bool _isLong) external view returns (bytes32[] memory);
     function getOrderKeys(bool _isLimit) external view returns (bytes32[] memory orderKeys);
     function getRequestQueueLengths() external view returns (uint256 marketLen, uint256 limitLen);
+    function orders(bytes32 _key) external view returns (MarketStructs.Request memory);
+    function openPositions(bytes32 _key) external view returns (MarketStructs.Position memory);
+    function minCollateralUsd() external view returns (uint256);
+    function executionFee() external view returns (uint256);
 }

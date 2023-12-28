@@ -34,6 +34,7 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 contract Executor is RoleValidation, ReentrancyGuard {
     error Executor_LimitNotHit();
     error Executor_InvalidIncrease();
+    error Executor_ZeroAddress();
 
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
@@ -44,14 +45,6 @@ contract Executor is RoleValidation, ReentrancyGuard {
     error Executor_InvalidRequestKey();
     error Executor_InvalidDecrease();
     error Executor_InvalidExecutionPrice();
-
-    enum RequestType {
-        COLLATERAL_INCREASE,
-        COLLATERAL_DECREASE,
-        NEW_POSITION,
-        POSITION_INCREASE,
-        POSITION_DECREASE
-    }
 
     constructor(
         address _marketStorage,
@@ -69,64 +62,60 @@ contract Executor is RoleValidation, ReentrancyGuard {
     }
 
     function executeTradeOrders(address _feeReceiver) external onlyKeeper {
-        bytes32[] memory marketOrders = tradeStorage.getPendingMarketOrders();
+        bytes32[] memory marketOrders = tradeStorage.getOrderKeys(false);
         uint32 len = uint32(marketOrders.length);
         for (uint256 i = 0; i < len;) {
             bytes32 _key = marketOrders[i];
             try this.executeTradeOrder(_key, _feeReceiver, false) {}
             catch {
-                try tradeStorage.cancelOrderRequest(_key, false) returns (bool _wasCancelled) {
-                    if (!_wasCancelled) break;
-                } catch {}
+                try tradeStorage.cancelOrderRequest(_key, false) {} catch {}
             }
             unchecked {
                 ++i;
             }
         }
-        tradeStorage.updateOrderStartIndex();
     }
 
     /// @dev Only Keeper
-    function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit, RequestType _requestType)
+    function executeTradeOrder(bytes32 _key, address _feeReceiver, bool _isLimit)
         external
         nonReentrant
         onlyKeeperOrContract
         returns (bool wasExecuted)
     {
-        MarketStructs.Request memory request = tradeStorage.orders(_isLimit, _key);
+        MarketStructs.Request memory request = tradeStorage.orders(_key);
         if (request.user == address(0)) revert Executor_InvalidRequestKey();
-        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), request.indexToken).market;
-        uint256 signedBlockPrice = priceOracle.getSignedPrice(market, request.requestBlock);
+        if (_feeReceiver == address(0)) revert Executor_ZeroAddress();
+        // Fetch and validate price
+        uint256 signedBlockPrice = priceOracle.getSignedPrice(request.indexToken, request.requestBlock);
         if (signedBlockPrice == 0) revert Executor_InvalidExecutionPrice();
         if (_isLimit) TradeHelper.checkLimitPrice(signedBlockPrice, request);
 
+        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), request.indexToken).market;
         uint256 price = ImpactCalculator.executePriceImpact(
             market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
         );
         int256 sizeDeltaUsd = _calculateSizeDeltaUsd(request, signedBlockPrice);
 
-        if (!request.isIncrease) {
-            if (tradeStorage.openPositions(_key).positionSize < request.sizeDelta) {
-                revert Executor_InvalidDecrease();
-            }
-        }
-
         _updateMarketState(market, request, price, sizeDeltaUsd);
 
-        if (_requestType == RequestType.COLLATERAL_INCREASE) {
-            tradeStorage.executeCollateralIncrease(request, price, _feeReceiver);
-        } else if (_requestType == RequestType.COLLATERAL_DECREASE) {
-            tradeStorage.executeCollateralDecrease(request, price, _feeReceiver);
-        } else if (_requestType == RequestType.NEW_POSITION) {
-            tradeStorage.createNewPosition(request, price, _feeReceiver);
-        } else if (_requestType == RequestType.POSITION_INCREASE) {
-            tradeStorage.increaseExistingPosition(request, price, _feeReceiver);
-        } else if (_requestType == RequestType.POSITION_DECREASE) {
-            tradeStorage.decreaseExistingPosition(request, price, _feeReceiver);
+        MarketStructs.Position memory position = tradeStorage.openPositions(_key);
+
+        if (position.user == address(0)) {
+            tradeStorage.createNewPosition(MarketStructs.ExecutionParams(request, price, _feeReceiver));
+        } else if (request.sizeDelta == 0) {
+            if (request.isIncrease) {
+                tradeStorage.executeCollateralIncrease(MarketStructs.ExecutionParams(request, price, _feeReceiver));
+            } else {
+                tradeStorage.executeCollateralDecrease(MarketStructs.ExecutionParams(request, price, _feeReceiver));
+            }
         } else {
-            revert Executor_InvalidRequestKey();
+            if (request.isIncrease) {
+                tradeStorage.increaseExistingPosition(MarketStructs.ExecutionParams(request, price, _feeReceiver));
+            } else {
+                tradeStorage.decreaseExistingPosition(MarketStructs.ExecutionParams(request, price, _feeReceiver));
+            }
         }
-        tradeStorage.executeTrade(MarketStructs.ExecutionParams(request, price, _feeReceiver));
 
         wasExecuted = true;
     }

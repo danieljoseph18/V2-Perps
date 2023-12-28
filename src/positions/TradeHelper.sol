@@ -43,8 +43,8 @@ library TradeHelper {
     error TradeHelper_InvalidCollateralReduction();
 
     // Validate whether a request should execute or not
-    function validateRequest(address _tradeStorage, bytes32 _key, bool _isLimit) external view returns (bool) {
-        MarketStructs.Request memory request = ITradeStorage(_tradeStorage).orders(_isLimit, _key);
+    function validateRequest(address _tradeStorage, bytes32 _key) external view returns (bool) {
+        MarketStructs.Request memory request = ITradeStorage(_tradeStorage).orders(_key);
         if (request.user != address(0)) revert TradeHelper_RequestAlreadyExists();
         return true;
     }

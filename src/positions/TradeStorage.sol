@@ -156,6 +156,8 @@ contract TradeStorage is RoleValidation {
             revert TradeStorage_RequestAlreadyExists();
         }
 
+        priceOracle.requestSignedPrice(_request.indexToken, block.timestamp);
+
         orderSet.add(orderKey);
         orders[orderKey] = _request;
 

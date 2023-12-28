@@ -56,6 +56,11 @@ contract PriceOracle {
         // return price of token at block
     }
 
+    function requestSignedPrice(address _indexToken, uint256 _block) external {
+        // only callable by permissioned roles
+        // request price for all whitelisted tokens at block
+    }
+
     // return price of USDC / WUSD
     function getCollateralPrice() external pure returns (uint256) {
         return 1e18;
