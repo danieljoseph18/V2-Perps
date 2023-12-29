@@ -328,6 +328,7 @@ contract TradeStorage is RoleValidation {
         ) revert TradeStorage_PositionIsNotLiquidatable();
         // get the position fees
         address market = marketStorage.markets(position.market).market;
+        /// @dev WRONG UNITS
         (, uint256 fundingFee) = FundingCalculator.getTotalPositionFees(market, position);
 
         // delete the position from storage
@@ -513,7 +514,18 @@ contract TradeStorage is RoleValidation {
     function _processFeesAndTransfer(bytes32 _positionKey, MarketStructs.ExecutionParams calldata _params, int256 pnl)
         internal
     {
-        uint256 afterFeeAmount = _processFees(_positionKey, _params.request, _params.price);
+        uint256 collateralPrice = priceOracle.getCollateralPrice();
+        uint256 fundingFee = _subtractFundingFee(
+            _positionKey, openPositions[_positionKey], _params.request.collateralDelta, _params.price, collateralPrice
+        );
+        uint256 borrowFee = _subtractBorrowingFee(
+            _positionKey, openPositions[_positionKey], _params.request.collateralDelta, _params.price, collateralPrice
+        );
+        if (borrowFee > 0) {
+            tradeVault.transferToLiquidityVault(borrowFee);
+        }
+
+        uint256 afterFeeAmount = _params.request.collateralDelta - fundingFee - borrowFee;
         _handleTokenTransfers(
             _params.request, TradeHelper.getMarketKey(_params.request.indexToken), pnl, afterFeeAmount
         );
@@ -540,57 +552,44 @@ contract TradeStorage is RoleValidation {
         }
     }
 
-    function _processFees(bytes32 _positionKey, MarketStructs.Request memory _request, uint256 _signedBlockPrice)
-        internal
-        returns (uint256 _afterFeeAmount)
-    {
-        uint256 fundingFee = _subtractFundingFee(openPositions[_positionKey], _request.collateralDelta);
-        uint256 borrowFee =
-            _subtractBorrowingFee(openPositions[_positionKey], _request.collateralDelta, _signedBlockPrice);
-        if (borrowFee > 0) {
-            tradeVault.transferToLiquidityVault(borrowFee);
-        }
+    function _subtractFundingFee(
+        bytes32 _positionKey,
+        MarketStructs.Position memory _position,
+        uint256 _collateralDelta,
+        uint256 _signedPrice,
+        uint256 _collateralPrice
+    ) internal returns (uint256 collateralFeesOwed) {
+        uint256 baseUnits = dataOracle.getBaseUnits(_position.indexToken);
+        uint256 feesOwedUsd = (_position.fundingParams.feesOwed * _signedPrice) / baseUnits;
+        collateralFeesOwed = (feesOwedUsd * PRECISION) / _collateralPrice;
 
-        emit FeesProcessed(_positionKey, fundingFee, borrowFee);
-
-        return _request.collateralDelta - fundingFee - borrowFee;
-    }
-
-    function _subtractFundingFee(MarketStructs.Position memory _position, uint256 _collateralDelta)
-        internal
-        returns (uint256)
-    {
-        uint256 feesOwed = _position.fundingParams.feesOwed;
-
-        if (feesOwed > _collateralDelta) revert TradeStorage_FeeExceedsCollateralDelta();
+        if (collateralFeesOwed > _collateralDelta) revert TradeStorage_FeeExceedsCollateralDelta();
 
         bytes32 marketKey = TradeHelper.getMarketKey(_position.indexToken);
 
-        tradeVault.swapFundingAmount(marketKey, feesOwed, _position.isLong);
+        tradeVault.swapFundingAmount(marketKey, collateralFeesOwed, _position.isLong);
 
-        bytes32 positionKey = keccak256(abi.encode(_position.indexToken, _position.user, _position.isLong));
-        openPositions[positionKey].fundingParams.feesOwed = 0;
+        openPositions[_positionKey].fundingParams.feesOwed = 0;
 
-        emit FundingFeeProcessed(_position.user, feesOwed);
-        return feesOwed;
+        emit FundingFeeProcessed(_position.user, collateralFeesOwed);
     }
 
     /// @dev Returns borrow fee in collateral tokens (original value is in index tokens)
     function _subtractBorrowingFee(
+        bytes32 _positionKey,
         MarketStructs.Position memory _position,
         uint256 _collateralDelta,
-        uint256 _signedPrice
-    ) internal returns (uint256 _fee) {
+        uint256 _signedPrice,
+        uint256 _collateralPrice
+    ) internal returns (uint256 collateralFeesOwed) {
         address market = TradeHelper.getMarket(address(marketStorage), _position.indexToken);
         uint256 borrowFee = BorrowingCalculator.calculateBorrowingFee(market, _position, _collateralDelta);
-        bytes32 positionKey = keccak256(abi.encode(_position.indexToken, _position.user, _position.isLong));
-        openPositions[positionKey].borrowParams.feesOwed -= borrowFee;
+        openPositions[_positionKey].borrowParams.feesOwed -= borrowFee;
         // convert borrow fee from index tokens to collateral tokens to subtract from collateral:
         uint256 borrowFeeUsd =
             TradeHelper.getTradeValueUsd(address(dataOracle), _position.indexToken, borrowFee, _signedPrice);
-        uint256 collateralFee = (borrowFeeUsd * PRECISION) / priceOracle.getCollateralPrice();
+        collateralFeesOwed = (borrowFeeUsd * PRECISION) / _collateralPrice;
         emit BorrowingFeesProcessed(_position.user, borrowFee);
-        return collateralFee;
     }
 
     function _updateFeeParameters(bytes32 _positionKey, address _indexToken) internal {
