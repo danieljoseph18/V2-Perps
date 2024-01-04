@@ -18,9 +18,9 @@
 pragma solidity 0.8.23;
 
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {PricingCalculator} from "../positions/PricingCalculator.sol";
+import {Pricing} from "../libraries/Pricing.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
-import {MarketStructs} from "../markets/MarketStructs.sol";
+import {Types} from "../libraries/Types.sol";
 
 contract DataOracle is RoleValidation {
     error DataOracle_InvalidMarket();
@@ -28,7 +28,7 @@ contract DataOracle is RoleValidation {
     IMarketStorage public marketStorage;
     address public priceOracle;
 
-    mapping(uint256 _index => MarketStructs.Market) public markets;
+    mapping(uint256 _index => Types.Market) public markets;
     mapping(bytes32 => bool) public isMarket;
     mapping(address => uint256) private baseUnits;
 
@@ -39,7 +39,7 @@ contract DataOracle is RoleValidation {
         priceOracle = _priceOracle;
     }
 
-    function setMarkets(MarketStructs.Market[] memory _markets) external onlyAdmin {
+    function setMarkets(Types.Market[] memory _markets) external onlyAdmin {
         uint32 len = uint32(_markets.length);
         for (uint256 i = 0; i < len;) {
             markets[i] = _markets[i];
@@ -73,14 +73,10 @@ contract DataOracle is RoleValidation {
         marketEndIndex = 0;
     }
 
-    function getNetPnl(MarketStructs.Market memory _market) public view returns (int256) {
+    function getNetPnl(Types.Market memory _market) public view returns (int256) {
         if (!isMarket[_market.marketKey]) revert DataOracle_InvalidMarket();
-        return PricingCalculator.getNetPnL(
-            _market.market, address(marketStorage), address(this), address(priceOracle), true
-        )
-            + PricingCalculator.getNetPnL(
-                _market.market, address(marketStorage), address(this), address(priceOracle), false
-            );
+        return Pricing.getNetPnL(_market.market, address(marketStorage), address(this), address(priceOracle), true)
+            + Pricing.getNetPnL(_market.market, address(marketStorage), address(this), address(priceOracle), false);
     }
 
     /// @dev To convert to usd, needs to be 1e18 DPs

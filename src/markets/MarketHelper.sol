@@ -17,36 +17,32 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "./MarketStructs.sol";
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
+import {Types} from "../libraries/Types.sol";
 
 // Helper functions for market related logic
 library MarketHelper {
     uint256 public constant PRICE_DECIMALS = 1e18;
 
-    function getMarket(address _marketStorage, bytes32 _key) external view returns (MarketStructs.Market memory) {
-        return IMarketStorage(_marketStorage).markets(_key);
-    }
-
     function getMarketFromIndexToken(address _marketStorage, address _indexToken)
         external
         view
-        returns (MarketStructs.Market memory)
+        returns (Types.Market memory market)
     {
         bytes32 _key = keccak256(abi.encode(_indexToken));
-        return IMarketStorage(_marketStorage).markets(_key);
+        market = IMarketStorage(_marketStorage).markets(_key);
     }
 
     function getIndexOpenInterest(address _marketStorage, address _indexToken, bool _isLong)
         public
         view
-        returns (uint256)
+        returns (uint256 indexOI)
     {
         bytes32 _key = keccak256(abi.encode(_indexToken));
-        return _isLong
+        indexOI = _isLong
             ? IMarketStorage(_marketStorage).indexTokenLongOpenInterest(_key)
             : IMarketStorage(_marketStorage).indexTokenShortOpenInterest(_key);
     }
@@ -54,9 +50,9 @@ library MarketHelper {
     function getTotalIndexOpenInterest(address _marketStorage, address _indexToken)
         external
         view
-        returns (uint256 _totalOI)
+        returns (uint256 totalOI)
     {
-        return getIndexOpenInterest(_marketStorage, _indexToken, true)
+        totalOI = getIndexOpenInterest(_marketStorage, _indexToken, true)
             + getIndexOpenInterest(_marketStorage, _indexToken, false);
     }
 
@@ -66,11 +62,11 @@ library MarketHelper {
         address _priceOracle,
         address _indexToken,
         bool _isLong
-    ) public view returns (uint256) {
+    ) public view returns (uint256 indexOIUsd) {
         uint256 indexOI = getIndexOpenInterest(_marketStorage, _indexToken, _isLong);
         uint256 baseUnit = IDataOracle(_dataOracle).getBaseUnits(_indexToken);
         uint256 indexPrice = IPriceOracle(_priceOracle).getPrice(_indexToken);
-        return (indexOI * indexPrice) / baseUnit;
+        indexOIUsd = (indexOI * indexPrice) / baseUnit;
     }
 
     function getTotalIndexOpenInterestUSD(
@@ -78,73 +74,33 @@ library MarketHelper {
         address _dataOracle,
         address _priceOracle,
         address _indexToken
-    ) external view returns (uint256) {
-        return getIndexOpenInterestUSD(_marketStorage, _dataOracle, _indexToken, _priceOracle, true)
+    ) external view returns (uint256 totalIndexOIUsd) {
+        totalIndexOIUsd = getIndexOpenInterestUSD(_marketStorage, _dataOracle, _indexToken, _priceOracle, true)
             + getIndexOpenInterestUSD(_marketStorage, _dataOracle, _indexToken, _priceOracle, false);
     }
 
-    function getCollateralOpenInterest(address _marketStorage, address _collateralToken, bool _isLong)
-        public
-        view
-        returns (uint256)
-    {
-        bytes32 _key = keccak256(abi.encode(_collateralToken));
-        return _isLong
-            ? IMarketStorage(_marketStorage).collatTokenLongOpenInterest(_key)
-            : IMarketStorage(_marketStorage).collatTokenShortOpenInterest(_key);
-    }
-
-    function getTotalCollateralOpenInterest(address _marketStorage, address _collateralToken)
+    function getTotalEntryValueUsd(address _market, address _marketStorage, address _dataOracle, bool _isLong)
         external
         view
-        returns (uint256)
-    {
-        return getCollateralOpenInterest(_marketStorage, _collateralToken, true)
-            + getCollateralOpenInterest(_marketStorage, _collateralToken, false);
-    }
-
-    function getCollateralOpenInterestUSD(
-        address _marketStorage,
-        address _priceOracle,
-        address _collateralToken,
-        bool _isLong
-    ) public view returns (uint256) {
-        uint256 collateralOI = getCollateralOpenInterest(_marketStorage, _collateralToken, _isLong);
-        uint256 collateralPrice = IPriceOracle(_priceOracle).getPrice(_collateralToken);
-        return (collateralOI * collateralPrice) / PRICE_DECIMALS;
-    }
-
-    function getTotalCollateralOpenInterestUSD(address _marketStorage, address _priceOracle, address _collateralToken)
-        external
-        view
-        returns (uint256)
-    {
-        return getCollateralOpenInterestUSD(_marketStorage, _collateralToken, _priceOracle, true)
-            + getCollateralOpenInterestUSD(_marketStorage, _collateralToken, _priceOracle, false);
-    }
-
-    function getTotalEntryValue(address _market, address _marketStorage, address _dataOracle, bool _isLong)
-        external
-        view
-        returns (uint256)
+        returns (uint256 entryValueUsd)
     {
         uint256 totalWAEP = _isLong ? IMarket(_market).longTotalWAEP() : IMarket(_market).shortTotalWAEP();
         address indexToken = IMarket(_market).indexToken();
         uint256 indexOI = getIndexOpenInterest(_marketStorage, indexToken, _isLong);
-        uint256 baseUnit = IDataOracle(_dataOracle).getBaseUnits(indexToken);
-        return (totalWAEP * indexOI) / baseUnit;
+
+        entryValueUsd = (totalWAEP * indexOI) / IDataOracle(_dataOracle).getBaseUnits(indexToken);
     }
 
     function getPoolBalance(address _marketStorage, bytes32 _marketKey) public view returns (uint256) {
         return IMarketStorage(_marketStorage).marketAllocations(_marketKey);
     }
 
-    function getPoolBalanceUSD(address _marketStorage, bytes32 _marketKey, address _priceOracle, address _usdc)
+    function getPoolBalanceUSD(address _marketStorage, bytes32 _marketKey, address _priceOracle)
         external
         view
         returns (uint256)
     {
-        return
-            (getPoolBalance(_marketStorage, _marketKey) * IPriceOracle(_priceOracle).getPrice(_usdc)) / PRICE_DECIMALS;
+        return (getPoolBalance(_marketStorage, _marketKey) * IPriceOracle(_priceOracle).getCollateralPrice())
+            / PRICE_DECIMALS;
     }
 }

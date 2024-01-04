@@ -17,13 +17,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "../markets/MarketStructs.sol";
+import {Types} from "../libraries/Types.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {FundingCalculator} from "./FundingCalculator.sol";
-import {BorrowingCalculator} from "./BorrowingCalculator.sol";
-import {PricingCalculator} from "./PricingCalculator.sol";
+import {Funding} from "../libraries/Funding.sol";
+import {Borrowing} from "../libraries/Borrowing.sol";
+import {Pricing} from "../libraries/Pricing.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
@@ -44,20 +44,20 @@ library TradeHelper {
 
     // Validate whether a request should execute or not
     function validateRequest(address _tradeStorage, bytes32 _key) external view returns (bool) {
-        MarketStructs.Request memory request = ITradeStorage(_tradeStorage).orders(_key);
+        Types.Request memory request = ITradeStorage(_tradeStorage).orders(_key);
         if (request.user != address(0)) revert TradeHelper_RequestAlreadyExists();
         return true;
     }
 
-    function generateKey(MarketStructs.Request memory _request) external pure returns (bytes32) {
+    function generateKey(Types.Request memory _request) external pure returns (bytes32) {
         return keccak256(abi.encode(_request.indexToken, _request.user, _request.isLong));
     }
 
-    function checkLimitPrice(uint256 _price, MarketStructs.Request memory _request) external pure {
+    function checkLimitPrice(uint256 _price, Types.Request memory _request) external pure {
         if (_request.isLong) {
-            if (_price > _request.orderPrice) revert TradeHelper_LimitPriceNotMet();
+            if (_price >= _request.orderPrice) revert TradeHelper_LimitPriceNotMet();
         } else {
-            if (_price < _request.orderPrice) revert TradeHelper_LimitPriceNotMet();
+            if (_price <= _request.orderPrice) revert TradeHelper_LimitPriceNotMet();
         }
     }
 
@@ -77,12 +77,12 @@ library TradeHelper {
     }
 
     function createRequest(
-        MarketStructs.Trade calldata _trade,
+        Types.Trade calldata _trade,
         address _user,
         uint256 _collateralAmount,
-        MarketStructs.RequestType _requestType
-    ) external view returns (MarketStructs.Request memory request) {
-        request = MarketStructs.Request({
+        Types.RequestType _requestType
+    ) external view returns (Types.Request memory request) {
+        request = Types.Request({
             indexToken: _trade.indexToken,
             user: _user,
             collateralDelta: _collateralAmount,
@@ -97,19 +97,18 @@ library TradeHelper {
         });
     }
 
-    function generateNewPosition(
-        address _market,
-        address _dataOracle,
-        MarketStructs.Request memory _request,
-        uint256 _price
-    ) external view returns (MarketStructs.Position memory) {
+    function generateNewPosition(address _market, address _dataOracle, Types.Request memory _request, uint256 _price)
+        external
+        view
+        returns (Types.Position memory)
+    {
         // create a new position
         // calculate all input variables
         (uint256 longFunding, uint256 shortFunding, uint256 longBorrowFee, uint256 shortBorrowFee) =
             IMarket(_market).getMarketParameters();
         uint256 sizeUsd = getTradeValueUsd(_dataOracle, _request.indexToken, _request.sizeDelta, _price);
         bytes32 marketKey = getMarketKey(_request.indexToken);
-        return MarketStructs.Position({
+        return Types.Position({
             market: marketKey,
             indexToken: _request.indexToken,
             user: _request.user,
@@ -117,9 +116,9 @@ library TradeHelper {
             positionSize: _request.sizeDelta,
             isLong: _request.isLong,
             realisedPnl: 0,
-            borrowParams: MarketStructs.BorrowParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
-            fundingParams: MarketStructs.FundingParams(0, 0, block.timestamp, longFunding, shortFunding),
-            pnlParams: MarketStructs.PnLParams(_price, sizeUsd),
+            borrow: Types.Borrow(0, block.timestamp, longBorrowFee, shortBorrowFee),
+            funding: Types.Funding(0, 0, block.timestamp, longFunding, shortFunding),
+            pnl: Types.PnL(_price, sizeUsd),
             entryTimestamp: block.timestamp
         });
     }
@@ -142,11 +141,11 @@ library TradeHelper {
         return (_liquidationFeeUsd * PRECISION) / (IPriceOracle(_priceOracle).getCollateralPrice());
     }
 
-    function checkMinCollateral(
-        MarketStructs.Request memory _request,
-        uint256 _collateralPriceUsd,
-        address _tradeStorage
-    ) external view returns (bool) {
+    function checkMinCollateral(Types.Request memory _request, uint256 _collateralPriceUsd, address _tradeStorage)
+        external
+        view
+        returns (bool)
+    {
         uint256 minCollateralUsd = ITradeStorage(_tradeStorage).minCollateralUsd();
         uint256 requestCollateralUsd = _request.collateralDelta * _collateralPriceUsd;
         if (requestCollateralUsd < minCollateralUsd) {
@@ -156,18 +155,28 @@ library TradeHelper {
         }
     }
 
-    function getTotalFeesOwedUsd(MarketStructs.Position memory _position, uint256 _price, address _market)
+    function convertIndexAmountToCollateral(
+        address _priceOracle,
+        uint256 _indexAmount,
+        uint256 _indexPrice,
+        uint256 _baseUnit
+    ) external pure returns (uint256) {
+        uint256 indexUsd = (_indexAmount * _indexPrice) / _baseUnit;
+        return (indexUsd * PRECISION) / IPriceOracle(_priceOracle).getCollateralPrice();
+    }
+
+    function getTotalFeesOwedUsd(address _dataOracle, Types.Position memory _position, uint256 _price, address _market)
         public
         view
         returns (uint256)
     {
-        uint256 positionValueUsd = (_position.positionSize * _price) / PRECISION;
-        uint256 borrowingFees = BorrowingCalculator.getBorrowingFees(_market, _position);
+        uint256 baseUnits = IDataOracle(_dataOracle).getBaseUnits(_position.indexToken);
 
-        uint256 borrowingFeesUsd = (positionValueUsd * borrowingFees) / PRECISION;
+        uint256 borrowingFees = Borrowing.getTotalPositionFeesOwed(_market, _position);
+        uint256 borrowingFeesUsd = _convertIndexAmountToUsd(borrowingFees, _price, baseUnits);
 
-        (, uint256 fundingFeeOwed) = FundingCalculator.getTotalPositionFees(_market, _position);
-        uint256 fundingValueUsd = (fundingFeeOwed * _price) / PRECISION;
+        (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_market, _position);
+        uint256 fundingValueUsd = _convertIndexAmountToUsd(fundingFeeOwed, _price, baseUnits);
 
         return borrowingFeesUsd + fundingValueUsd;
     }
@@ -179,5 +188,13 @@ library TradeHelper {
 
     function getMarketKey(address _indexToken) public pure returns (bytes32) {
         return keccak256(abi.encode(_indexToken));
+    }
+
+    function _convertIndexAmountToUsd(uint256 _indexAmount, uint256 _price, uint256 _baseUnits)
+        internal
+        pure
+        returns (uint256 indexUsd)
+    {
+        indexUsd = (_indexAmount * _price) / _baseUnits;
     }
 }

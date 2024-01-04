@@ -114,7 +114,7 @@ contract TestLiquidityVault is Test {
         usdc.approve(address(liquidityVault), LARGE_AMOUNT);
         liquidityVault.addLiquidity(100e6);
         vm.stopPrank();
-        console.log(liquidityVault.getLiquidityTokenPrice());
+        console.log(liquidityVault.getLiquidityTokenPrice(1e18));
     }
 
     function testLiqVaultRemoveLiquidityWorksRegular() public mintUsdc {

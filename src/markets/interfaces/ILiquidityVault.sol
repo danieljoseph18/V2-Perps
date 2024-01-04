@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "../MarketStructs.sol";
 import {IDataOracle} from "../../oracle/interfaces/IDataOracle.sol";
 import {IWUSDC} from "../../token/interfaces/IWUSDC.sol";
 import {IMarketToken} from "./IMarketToken.sol";

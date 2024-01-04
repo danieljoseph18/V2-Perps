@@ -23,7 +23,6 @@ import {IMarket} from "./interfaces/IMarket.sol";
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {PricingCalculator} from "../positions/PricingCalculator.sol";
 import {MarketHelper} from "./MarketHelper.sol";
 
 /// @dev needs StateUpdater Role
@@ -48,6 +47,8 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
         2. Update the MaxOI of a Market 
 
         Setting Values to 0 will skip updating them.
+
+        Note we don't want this off chain -> we want 100% decentralized
      */
     /// @param _indexToken The index token of the market
     /// @param _allocation The amount of liquidity to allocate to the market in WUSDC

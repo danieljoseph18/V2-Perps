@@ -17,73 +17,81 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "../markets/MarketStructs.sol";
+import {Types} from "../libraries/Types.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 
-/// @dev Note, need to handle the case where velocity crosses 0 (pos -> neg or neg -> pos)
-library FundingCalculator {
+/// @dev Library for Funding Related Calculations
+library Funding {
     uint256 constant PRECISION = 1e18;
 
     /// @dev Calculate the funding rate velocity.
-    function calculateFundingRateVelocity(address _market, int256 _skew) external view returns (int256 velocity) {
+    function calculateVelocity(address _market, int256 _skew) external view returns (int256 velocity) {
         uint256 c = (IMarket(_market).maxFundingVelocity() * PRECISION) / IMarket(_market).skewScale();
         int256 skew = _skew;
         velocity = (int256(c) * skew) / int256(PRECISION);
     }
 
     /// @dev Get the total funding fees accumulated for each side
-    /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
-    function getFundingFees(address _market) external view returns (uint256 longFunding, uint256 shortFunding) {
+    /// @notice For External Queries
+    function getTotalAccumulatedFees(address _market)
+        external
+        view
+        returns (uint256 longAccumulatedFees, uint256 shortAccumulatedFees)
+    {
         IMarket market = IMarket(_market);
 
-        (uint256 longFundingSinceUpdate, uint256 shortFundingSinceUpdate) = _calculateAdjustedFunding(
-            address(market),
+        (uint256 longFundingSinceUpdate, uint256 shortFundingSinceUpdate) = _calculateAdjustedFees(
+            _market,
             market.fundingRate(),
             market.fundingRateVelocity(),
             market.maxFundingRate(),
             market.minFundingRate()
         );
 
-        longFunding = market.longCumulativeFundingFees() + longFundingSinceUpdate;
-        shortFunding = market.shortCumulativeFundingFees() + shortFundingSinceUpdate;
+        longAccumulatedFees = market.longCumulativeFundingFees() + longFundingSinceUpdate;
+        shortAccumulatedFees = market.shortCumulativeFundingFees() + shortFundingSinceUpdate;
     }
 
     /// @dev Returns fees earned and fees owed in tokens
     /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
     /// to charge for a position need to go: index -> usd -> collateral
-    function getTotalPositionFees(address _market, MarketStructs.Position memory _position)
+    function getTotalPositionFees(address _market, Types.Position memory _position)
         external
         view
-        returns (uint256 earned, uint256 owed)
+        returns (uint256 earnedIndexTokens, uint256 owedIndexTokens)
     {
-        uint256 shortFees =
-            IMarket(_market).shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
-        uint256 longFees =
-            IMarket(_market).longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
-
+        // Get the fees accumulated since the last position update
+        uint256 shortAccumulatedFees =
+            IMarket(_market).shortCumulativeFundingFees() - _position.funding.lastShortCumulativeFunding;
+        uint256 longAccumulatedFees =
+            IMarket(_market).longCumulativeFundingFees() - _position.funding.lastLongCumulativeFunding;
+        // Separate Short and Long Fees to Earned and Owed
         uint256 accumulatedFundingEarned;
         uint256 accumulatedFundingOwed;
         if (_position.isLong) {
-            accumulatedFundingEarned = shortFees;
-            accumulatedFundingOwed = longFees;
+            accumulatedFundingEarned = shortAccumulatedFees;
+            accumulatedFundingOwed = longAccumulatedFees;
         } else {
-            accumulatedFundingEarned = longFees;
-            accumulatedFundingOwed = shortFees;
+            accumulatedFundingEarned = longAccumulatedFees;
+            accumulatedFundingOwed = shortAccumulatedFees;
         }
-        (uint256 feesEarned, uint256 feesOwed) = getFeesSinceLastMarketUpdate(_market, _position.isLong);
-        earned = feesEarned + _position.fundingParams.feesEarned
+        // Get the fees accumulated since the last market update
+        (uint256 feesEarnedSinceUpdate, uint256 feesOwedSinceUpdate) =
+            getFeesSinceLastMarketUpdate(_market, _position.isLong);
+        // Calculate the Total Fees Earned and Owed
+        earnedIndexTokens = feesEarnedSinceUpdate + _position.funding.feesEarned
             + ((accumulatedFundingEarned * _position.positionSize) / PRECISION);
-        owed = feesOwed + _position.fundingParams.feesOwed
+        owedIndexTokens = feesOwedSinceUpdate + _position.funding.feesOwed
             + ((accumulatedFundingOwed * _position.positionSize) / PRECISION);
     }
 
     // Rate to 18 D.P
-    function getCurrentFundingRate(address _market) external view returns (int256) {
+    function getCurrentRate(address _market) external view returns (int256) {
         IMarket market = IMarket(_market);
         uint256 timeElapsed = block.timestamp - market.lastFundingUpdateTime();
         int256 fundingRate = market.fundingRate();
         int256 fundingRateVelocity = market.fundingRateVelocity();
-
+        // currentRate = prevRate + (velocity * timeElapsed)
         return fundingRate + (fundingRateVelocity * int256(timeElapsed));
     }
 
@@ -96,7 +104,7 @@ library FundingCalculator {
     {
         IMarket market = IMarket(_market);
 
-        (uint256 longFees, uint256 shortFees) = _calculateAdjustedFunding(
+        (uint256 longFees, uint256 shortFees) = _calculateAdjustedFees(
             _market,
             market.fundingRate(),
             market.fundingRateVelocity(),
@@ -114,7 +122,8 @@ library FundingCalculator {
     }
 
     /// @dev Adjusts the total funding calculation when max or min limits are reached, or when the sign flips.
-    function _calculateAdjustedFunding(
+    /// @dev Mainly for external queries, as lastFundingUpdateTIme is updated before for position edits.
+    function _calculateAdjustedFees(
         address _market,
         int256 _fundingRate,
         int256 _fundingRateVelocity,
@@ -125,11 +134,12 @@ library FundingCalculator {
         if (timeElapsed == 0) {
             return (0, 0);
         }
-        // Calculate final funding rate after time elapsed
+        // Calculate which logical path to follow
         int256 finalFundingRate = _fundingRate + (_fundingRateVelocity * int256(timeElapsed));
         bool flipsSign = (_fundingRate >= 0 && finalFundingRate < 0) || (_fundingRate < 0 && finalFundingRate >= 0);
         bool crossesBoundary = finalFundingRate > _maxFundingRate || finalFundingRate < _minFundingRate;
 
+        // Direct the calculation down a path depending on the case
         if (crossesBoundary && flipsSign) {
             (longFees, shortFees) =
                 _calculateForDoubleCross(_fundingRate, _fundingRateVelocity, _maxFundingRate, timeElapsed);
@@ -154,7 +164,7 @@ library FundingCalculator {
      * totalFunding = fundingUntilBoundary + fundingAfterBoundary
      */
 
-    /// @dev For calculations when the funding rate crosses the max or min boundary and the sign flips.
+    /// @notice For calculations when the funding rate crosses the max or min boundary and the sign flips.
     function _calculateForDoubleCross(
         int256 _fundingRate,
         int256 _fundingRateVelocity,
@@ -163,24 +173,22 @@ library FundingCalculator {
     ) internal pure returns (uint256 longFees, uint256 shortFees) {
         uint256 absRate = _fundingRate >= 0 ? uint256(_fundingRate) : uint256(-_fundingRate);
         uint256 absVelocity = _fundingRateVelocity >= 0 ? uint256(_fundingRateVelocity) : uint256(-_fundingRateVelocity);
+        // Calculate no. of seconds until sign flip
         uint256 timeToFlip = absRate / absVelocity;
         uint256 fundingDistance =
             _fundingRate >= 0 ? uint256((_maxFundingRate + _fundingRate)) : uint256((_maxFundingRate + -_fundingRate));
+        // Calculate no. of seconds until max/min boundary
         uint256 timeToBoundary = fundingDistance / absVelocity;
+        // Calculate the funding until the sign flip
         uint256 fundingUntilFlip = _calculateSeriesSum(_fundingRate, _fundingRateVelocity, timeToFlip);
+        // Get the new funding rate after the sign flip
         int256 newFundingRate = _fundingRate + (_fundingRateVelocity * int256(timeToFlip));
+        // Calculate the funding from the sign flip until the max/min boundary
         uint256 fundingUntilBoundary =
             _calculateSeriesSum(newFundingRate, _fundingRateVelocity, timeToBoundary - timeToFlip);
-
+        // Calculate the funding after the max/min boundary is reached
         uint256 fundingAfterBoundary = uint256(_maxFundingRate) * (_timeElapsed - timeToBoundary);
-
-        // add remainder from sign flip
-        uint256 remainder = absRate % absVelocity;
-        if (remainder > 0) {
-            fundingUntilFlip += remainder;
-            fundingUntilBoundary += (absVelocity - remainder);
-        }
-
+        // Combine all 3 variables to get the total funding
         (longFees, shortFees) = _fundingRate >= 0
             ? (fundingUntilFlip, fundingUntilBoundary + fundingAfterBoundary)
             : (fundingUntilBoundary + fundingAfterBoundary, fundingUntilFlip);
@@ -193,7 +201,7 @@ library FundingCalculator {
      * totalFunding = fundingUntilBoundary + fundingAfterBoundary
      */
 
-    /// @dev For calculations when the funding rate crosses the max or min boundary.
+    /// @notice For calculations when the funding rate crosses the max or min boundary.
     function _calculateForBoundaryCross(
         int256 _fundingRate,
         int256 _fundingRateVelocity,
@@ -202,9 +210,13 @@ library FundingCalculator {
     ) internal pure returns (uint256 longFees, uint256 shortFees) {
         uint256 absRate = _fundingRate >= 0 ? uint256(_fundingRate) : uint256(-_fundingRate);
         uint256 absVelocity = _fundingRateVelocity >= 0 ? uint256(_fundingRateVelocity) : uint256(-_fundingRateVelocity);
+        // Calculate no. of seconds until max/min boundary
         uint256 timeToBoundary = (uint256(_maxFundingRate) - absRate) / absVelocity;
+        // Calculate the funding until the max/min boundary
         uint256 fundingUntilBoundary = _calculateSeriesSum(_fundingRate, _fundingRateVelocity, timeToBoundary);
+        // Calculate the funding after the max/min boundary is reached
         uint256 fundingAfterBoundary = uint256(_maxFundingRate) * (_timeElapsed - timeToBoundary);
+        // Combine both variables to get the total funding
         (longFees, shortFees) = _fundingRate >= 0
             ? (fundingUntilBoundary + fundingAfterBoundary, uint256(0))
             : (uint256(0), fundingUntilBoundary + fundingAfterBoundary);
@@ -217,7 +229,7 @@ library FundingCalculator {
      * fundingAfterFlip = sum(newFundingRate, velocity, timeElapsed - timeToFlip)
      */
 
-    /// @dev For calculations when the funding rate sign flips.
+    /// @notice For calculations when the funding rate sign flips.
     function _calculateForSignFlip(int256 _fundingRate, int256 _fundingRateVelocity, uint256 _timeElapsed)
         internal
         pure
@@ -225,25 +237,21 @@ library FundingCalculator {
     {
         uint256 absRate = _fundingRate >= 0 ? uint256(_fundingRate) : uint256(-_fundingRate);
         uint256 absVelocity = _fundingRateVelocity >= 0 ? uint256(_fundingRateVelocity) : uint256(-_fundingRateVelocity);
+        // Calculate no. of seconds until sign flip
         uint256 timeToFlip = absRate / absVelocity;
 
+        // If timeToFlip is greater than the time elapsed, set it to the time elapsed
         if (timeToFlip > _timeElapsed) {
             timeToFlip = _timeElapsed;
         }
 
         // Calculate funding fees before sign flip
         uint256 fundingUntilFlip = _calculateSeriesSum(_fundingRate, _fundingRateVelocity, timeToFlip);
-        // Calculate funding fees after sign flip
+        // Get the new funding rate after the sign flip
         int256 newFundingRate = _fundingRate + (int256(timeToFlip) * _fundingRateVelocity);
+        // Calculate funding fees after sign flip
         uint256 fundingAfterFlip = _calculateSeriesSum(newFundingRate, _fundingRateVelocity, _timeElapsed - timeToFlip);
-
-        uint256 remainder = absRate % absVelocity;
-        // add remainder from sign flip
-        if (remainder > 0) {
-            fundingUntilFlip += remainder;
-            fundingAfterFlip += (absVelocity - remainder);
-        }
-
+        // Direct the funding towards the relevant sides and return
         if (_fundingRate >= 0) {
             longFees = fundingUntilFlip;
             shortFees = fundingAfterFlip;
@@ -253,7 +261,7 @@ library FundingCalculator {
         }
     }
 
-    /// @dev Calculates the sum of an arithmetic series with the formula S = n/2(2a + (n-1)d
+    /// @notice Calculates the sum of an arithmetic series with the formula S = n/2(2a + (n-1)d
     function _calculateSeriesSum(int256 _fundingRate, int256 _fundingRateVelocity, uint256 _timeElapsed)
         internal
         pure

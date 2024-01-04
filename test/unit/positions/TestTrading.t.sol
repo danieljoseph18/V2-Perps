@@ -22,11 +22,11 @@ import {WUSDC} from "../../../src/token/WUSDC.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
-import {MarketStructs} from "../../../src/markets/MarketStructs.sol";
+import {Types} from "../../../src/libraries/Types.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
-import {ImpactCalculator} from "../../../src/positions/ImpactCalculator.sol";
-import {BorrowingCalculator} from "../../../src/positions/BorrowingCalculator.sol";
+import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 import {ITradeStorage} from "../../../src/positions/interfaces/ITradeStorage.sol";
 
 contract TestTrading is Test {
@@ -119,7 +119,7 @@ contract TestTrading is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory _request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -143,7 +143,7 @@ contract TestTrading is Test {
 
 // function testTradingHasBeenFacilitated() public facilitateTrading {
 //     // check the market exists
-//     MarketStructs.Market memory market =
+//     Types.Market memory market =
 //         MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken));
 //     assertNotEq(market.market, address(0));
 //     assertNotEq(market.marketKey, bytes32(0));
@@ -161,7 +161,7 @@ contract TestTrading is Test {
 //     usdc.approve(address(requestRouter), DEPOSIT_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
 //     // try to create a trade request
-//     MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory _request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -188,7 +188,7 @@ contract TestTrading is Test {
 //     usdc.approve(address(requestRouter), DEPOSIT_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
 //     // try to create a trade request
-//     MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory _request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -210,7 +210,7 @@ contract TestTrading is Test {
 // }
 
 // function testPriceImpactCalculation() public facilitateTrading {
-//     MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request = Types.PositionRequest(
 //         0,
 //         false, // is limit order
 //         address(indexToken),
@@ -225,20 +225,20 @@ contract TestTrading is Test {
 //     );
 //     uint256 signedBlockPrice = 1000e18;
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     (uint256 longOI, uint256 shortOI, uint256 sizeDeltaUsd) = ImpactCalculator.getOpenInterestAndSizeDelta(
+//     (uint256 longOI, uint256 shortOI, uint256 sizeDeltaUsd) = PriceImpact.getOpenInterestAndSizeDelta(
 //         address(marketStorage), address(dataOracle), address(priceOracle), market, request, signedBlockPrice
 //     );
 //     console.log("Long OI: ", longOI);
 //     console.log("Short OI: ", shortOI);
 //     console.log("Size Delta: ", sizeDeltaUsd);
-//     uint256 priceImpact = ImpactCalculator.calculatePriceImpact(
+//     uint256 priceImpact = PriceImpact.calculatePriceImpact(
 //         market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
 //     );
 //     console.log("Price Impact: ", priceImpact);
 //     uint256 impactedPrice =
-//         ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpact, request.isLong, request.isIncrease);
+//         PriceImpact.applyPriceImpact(signedBlockPrice, priceImpact, request.isLong, request.isIncrease);
 //     console.log("Impacted Price: ", impactedPrice);
-//     ImpactCalculator.checkSlippage(impactedPrice, signedBlockPrice, request.maxSlippage);
+//     PriceImpact.checkSlippage(impactedPrice, signedBlockPrice, request.maxSlippage);
 // }
 
 // function testExecutedTradesHaveTheCorrectParameters() public facilitateTrading {
@@ -247,7 +247,7 @@ contract TestTrading is Test {
 //     usdc.approve(address(requestRouter), DEPOSIT_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
 //     // try to create a trade request
-//     MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory _request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -268,7 +268,7 @@ contract TestTrading is Test {
 //     bytes32 _positionKey = TradeHelper.generateKey(_request);
 //     executor.executeTradeOrder(_positionKey, OWNER, false);
 //     vm.stopPrank();
-//     MarketStructs.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+//     Types.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
 //     assertEq(
 //         position.market, MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).marketKey
 //     );
@@ -277,9 +277,9 @@ contract TestTrading is Test {
 //     assertGt(position.collateralAmount, 0);
 //     assertEq(position.isLong, true);
 //     assertEq(position.realisedPnl, 0);
-//     console.log(position.pnlParams.leverage);
-//     assertGt(position.pnlParams.leverage, 1);
-//     assertGt(position.pnlParams.weightedAvgEntryPrice, 0);
+//     console.log(position.pnl.leverage);
+//     assertGt(position.pnl.leverage, 1);
+//     assertGt(position.pnl.weightedAvgEntryPrice, 0);
 //     assertEq(position.entryTimestamp, block.timestamp);
 // }
 
@@ -289,7 +289,7 @@ contract TestTrading is Test {
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
 //     // try to create a trade request
-//     MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -307,13 +307,13 @@ contract TestTrading is Test {
 //     // Run the calculate price impact function on the request
 //     uint256 signedBlockPrice = 1000e18;
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     uint256 priceImpact = ImpactCalculator.calculatePriceImpact(
+//     uint256 priceImpact = PriceImpact.calculatePriceImpact(
 //         market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
 //     );
 //     uint256 impactedPrice =
-//         ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpact, request.isLong, request.isIncrease);
+//         PriceImpact.applyPriceImpact(signedBlockPrice, priceImpact, request.isLong, request.isIncrease);
 //     console.log(impactedPrice);
-//     ImpactCalculator.checkSlippage(impactedPrice, signedBlockPrice, request.maxSlippage);
+//     PriceImpact.checkSlippage(impactedPrice, signedBlockPrice, request.maxSlippage);
 // }
 
 // function testOpenInterestValues() public facilitateTrading {
@@ -322,7 +322,7 @@ contract TestTrading is Test {
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
 //     // try to create a trade request
-//     MarketStructs.PositionRequest memory _request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory _request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -354,7 +354,7 @@ contract TestTrading is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -375,7 +375,7 @@ contract TestTrading is Test {
 //     vm.stopPrank();
 //     // create a collateral edit request
 //     vm.startPrank(USER);
-//     MarketStructs.PositionRequest memory collateralRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory collateralRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -396,7 +396,7 @@ contract TestTrading is Test {
 //     vm.stopPrank();
 //     // // check values
 //     bytes32 _positionKey = TradeHelper.generateKey(request);
-//     MarketStructs.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+//     Types.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
 //     assertGt(position.collateralAmount, 100e18);
 //     console.log(position.collateralAmount);
 // }
@@ -406,7 +406,7 @@ contract TestTrading is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -426,10 +426,10 @@ contract TestTrading is Test {
 //     executor.executeTradeOrders(OWNER);
 //     vm.stopPrank();
 //     bytes32 _positionKey = TradeHelper.generateKey(request);
-//     MarketStructs.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+//     Types.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
 //     // create another trade request
 //     vm.startPrank(USER);
-//     MarketStructs.PositionRequest memory request2 = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request2 = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -449,7 +449,7 @@ contract TestTrading is Test {
 //     executor.executeTradeOrders(OWNER);
 //     vm.stopPrank();
 //     // check the positions have stacked
-//     MarketStructs.Position memory positionAfter = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+//     Types.Position memory positionAfter = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
 //     // check values are as expected
 //     assertGt(positionAfter.collateralAmount, position.collateralAmount);
 //     assertGt(positionAfter.positionSize, position.positionSize);
@@ -460,7 +460,7 @@ contract TestTrading is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -481,7 +481,7 @@ contract TestTrading is Test {
 //     // create close request
 //     bytes32 _positionKey = TradeHelper.generateKey(request);
 //     console.log("WUSDC Bal: ", wusdc.balanceOf(address(tradeVault)));
-//     MarketStructs.Position memory positionBefore = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+//     Types.Position memory positionBefore = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
 //     assertEq(wusdc.balanceOf(address(tradeVault)), positionBefore.collateralAmount);
 //     vm.prank(USER);
 //     requestRouter.createCloseRequest{value: executionFee}(_positionKey, 0, 0.1e18, false, executionFee);
@@ -489,14 +489,14 @@ contract TestTrading is Test {
 //     vm.prank(OWNER);
 //     executor.executeTradeOrders(OWNER);
 //     // ensure trade is wiped from storage
-//     MarketStructs.Position memory positionAfter = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+//     Types.Position memory positionAfter = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
 //     assertEq(positionAfter.user, address(0));
 // }
 
 // function testWeCanPartiallyCloseOutAPosition() public facilitateTradingAndOpenTrade {
 //     uint256 executionFee = tradeStorage.minExecutionFee();
 //     // create a partial close request
-//     MarketStructs.PositionRequest memory decreaseRequest = MarketStructs.PositionRequest({
+//     Types.PositionRequest memory decreaseRequest = Types.PositionRequest({
 //         requestIndex: 0,
 //         isLimit: false,
 //         indexToken: address(indexToken),
@@ -510,7 +510,7 @@ contract TestTrading is Test {
 //         isIncrease: false
 //     });
 //     bytes32 _positionKey = TradeHelper.generateKey(decreaseRequest);
-//     MarketStructs.Position memory positionBefore = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+//     Types.Position memory positionBefore = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
 //     console.log("Before Collat: ", positionBefore.collateralAmount);
 //     console.log("Before Size: ", positionBefore.positionSize);
 //     vm.prank(USER);
@@ -519,7 +519,7 @@ contract TestTrading is Test {
 //     vm.prank(OWNER);
 //     executor.executeTradeOrders(OWNER);
 //     // ensure the position has partially closed
-//     MarketStructs.Position memory positionAfter = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
+//     Types.Position memory positionAfter = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
 //     console.log("End Collat: ", positionAfter.collateralAmount);
 //     console.log("End Size: ", positionAfter.positionSize);
 // }
@@ -529,7 +529,7 @@ contract TestTrading is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -547,7 +547,7 @@ contract TestTrading is Test {
 //     // create another open request
 //     vm.startPrank(OWNER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
-//     MarketStructs.PositionRequest memory request2 = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request2 = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -573,8 +573,8 @@ contract TestTrading is Test {
 //     vm.prank(OWNER);
 //     executor.executeTradeOrders(OWNER);
 //     // check positions are separate
-//     MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
-//     MarketStructs.Position memory ownerPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey2);
+//     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
+//     Types.Position memory ownerPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey2);
 //     assertEq(userPosition.user, USER);
 //     assertEq(ownerPosition.user, OWNER);
 // }
@@ -584,7 +584,7 @@ contract TestTrading is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userLong = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userLong = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -598,7 +598,7 @@ contract TestTrading is Test {
 //         true
 //     );
 //     requestRouter.createTradeRequest{value: executionFee}(userLong, executionFee);
-//     MarketStructs.PositionRequest memory userShort = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userShort = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -616,7 +616,7 @@ contract TestTrading is Test {
 //     // open a long and a short request from owner
 //     vm.startPrank(OWNER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
-//     MarketStructs.PositionRequest memory ownerLong = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory ownerLong = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -630,7 +630,7 @@ contract TestTrading is Test {
 //         true
 //     );
 //     requestRouter.createTradeRequest{value: executionFee}(ownerLong, executionFee);
-//     MarketStructs.PositionRequest memory ownerShort = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory ownerShort = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),

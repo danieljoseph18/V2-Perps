@@ -12,7 +12,7 @@ interface ITradeVault {
         uint256 _liqFee,
         bytes32 _marketKey,
         uint256 _totalCollateral,
-        uint256 _fundingOwed,
+        uint256 _collateralFundingOwed,
         bool _isLong
     ) external;
     function swapFundingAmount(bytes32 _marketKey, uint256 _amount, bool _isLong) external;

@@ -20,7 +20,6 @@ pragma solidity 0.8.23;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IMarketToken} from "./interfaces/IMarketToken.sol";
-import {MarketStructs} from "./MarketStructs.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
@@ -32,7 +31,6 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 contract LiquidityVault is RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeERC20 for IMarketToken;
-    using MarketStructs for MarketStructs.Market;
 
     uint256 public constant SCALING_FACTOR = 1e18;
     uint256 public constant MIN_LIQUIDITY_FEE = 0.0001e18; // 0.01%
@@ -77,6 +75,8 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     error LiquidityVault_LiquidityFeeOutOfBounds();
     error LiquidityVault_InsufficientLiquidity();
     error LiquidityVault_CallerIsAContract();
+    error LiquidityVault_USDCTransferFailed();
+    error LiquidityVault_LiquidityTokenTransferFailed();
 
     // liquidity token = market token
     constructor(address _wusdc, address _liquidityToken, address _roleStorage) RoleValidation(_roleStorage) {
@@ -131,23 +131,28 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         _addLiquidity(msg.sender, _amount);
     }
 
-    function removeLiquidity(uint256 _marketTokenAmount) external nonReentrant {
-        _removeLiquidity(msg.sender, _marketTokenAmount);
+    function removeLiquidity(uint256 _liquidityTokenAmount) external nonReentrant {
+        _removeLiquidity(msg.sender, _liquidityTokenAmount);
     }
 
     function addLiquidityForAccount(address _account, uint256 _amount) external nonReentrant {
-        _validateHandler(msg.sender, _account);
+        if (_account == msg.sender) revert LiquidityVault_InvalidHandler();
+        if (!isHandler[msg.sender][_account]) revert LiquidityVault_InvalidHandler();
+        if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
         _addLiquidity(_account, _amount);
     }
 
     function removeLiquidityForAccount(address _account, uint256 _liquidityTokenAmount) external nonReentrant {
-        _validateHandler(msg.sender, _account);
+        if (_account == msg.sender) revert LiquidityVault_InvalidHandler();
+        if (!isHandler[msg.sender][_account]) revert LiquidityVault_InvalidHandler();
+        if (_liquidityTokenAmount == 0) revert LiquidityVault_InvalidTokenAmount();
         _removeLiquidity(_account, _liquidityTokenAmount);
     }
 
     // q - are fees being accumulated with universal units?
     // q - are we missing checks? what must hold true?
     function accumulateFees(uint256 _amount) external onlyFeeAccumulator {
+        if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
         accumulatedFees += _amount;
         emit FeesAccumulated(_amount);
     }
@@ -157,9 +162,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     // q - what must hold true in order to transfer profit to a user???
     function transferPositionProfit(address _user, uint256 _amount) external onlyTradeStorage {
         if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
+        if (_user == address(0)) revert LiquidityVault_ZeroAddress();
         // check enough in pool to transfer position
-        // q - is this check sufficient?
-        if (_amount > poolAmounts) revert LiquidityVault_InsufficientFunds();
+        if (_amount > poolAmounts - totalReserved) revert LiquidityVault_InsufficientFunds();
         // transfer collateral token to user
         poolAmounts -= _amount;
         IERC20(address(WUSDC)).safeTransfer(_user, _amount);
@@ -188,9 +193,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     // $1 = 1e18
-    function getLiquidityTokenPrice() public view returns (uint256 lpTokenPrice) {
+    function getLiquidityTokenPrice(uint256 _collateralPrice) public view returns (uint256 lpTokenPrice) {
         // market token price = (worth of market pool in USD) / total supply
-        uint256 aum = getAum();
+        uint256 aum = getAum(_collateralPrice);
         uint256 supply = IERC20(address(liquidityToken)).totalSupply();
         if (aum == 0 || supply == 0) {
             lpTokenPrice = 0;
@@ -200,10 +205,9 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
     }
 
     // Returns AUM in USD value
-    function getAum() public view returns (uint256 aum) {
+    function getAum(uint256 _collateralPrice) public view returns (uint256 aum) {
         // pool amount * price / decimals
-        uint256 price = priceOracle.getCollateralPrice();
-        aum = (poolAmounts * price) / SCALING_FACTOR;
+        aum = (poolAmounts * _collateralPrice) / SCALING_FACTOR;
         // subtract losses, ignore profit => should only reflect available liquidity
         int256 pendingPnL = dataOracle.getCumulativeNetPnl();
         if (pendingPnL > 0) {
@@ -211,59 +215,69 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         }
     }
 
-    /// @dev Gas Inefficient -> Revisit
+    /// @dev Do we need transfer invariant checks???
     function _addLiquidity(address _account, uint256 _amount) internal {
         if (_amount == 0) revert LiquidityVault_InvalidTokenAmount();
         if (_account == address(0)) revert LiquidityVault_ZeroAddress();
-
-        uint256 initialPoolAmount = poolAmounts;
-        uint256 initialAccumulatedFees = accumulatedFees;
+        // Deposit USDC to the contract
+        uint256 usdcBalanceBefore = USDC.balanceOf(address(this));
         USDC.safeTransferFrom(msg.sender, address(this), _amount);
+        if (USDC.balanceOf(address(this)) != usdcBalanceBefore + _amount) revert LiquidityVault_USDCTransferFailed();
 
+        // Wrap USDC to WUSDC
         uint256 wusdcAmount = _wrapUsdc(_amount);
+        // Deduct Fees
         uint256 afterFeeAmount = _deductLiquidityFees(wusdcAmount);
-        uint256 price = priceOracle.getCollateralPrice();
-        uint256 valueUsd = (afterFeeAmount * price) / SCALING_FACTOR;
-        uint256 lpTokenPrice = getLiquidityTokenPrice();
+
+        // Calculate Mint Amount
+        uint256 collateralPrice = priceOracle.getCollateralPrice();
+        uint256 valueUsd = (afterFeeAmount * collateralPrice) / SCALING_FACTOR;
+        uint256 lpTokenPrice = getLiquidityTokenPrice(collateralPrice);
         uint256 mintAmount = lpTokenPrice == 0 ? valueUsd : (valueUsd * SCALING_FACTOR) / lpTokenPrice;
+
+        // Update Pool Amounts
         poolAmounts += afterFeeAmount;
-
+        // Mint Liquidity Token
         liquidityToken.mint(_account, mintAmount);
-        emit LiquidityAdded(_account, afterFeeAmount, mintAmount);
 
-        uint256 feeAmount = wusdcAmount - afterFeeAmount;
-        assert(poolAmounts == initialPoolAmount + afterFeeAmount); // Pool amount correctly increased
-        assert(accumulatedFees == initialAccumulatedFees + feeAmount); // Fees correctly accumulated
-        assert(wusdcAmount == afterFeeAmount + feeAmount); // Total wrapped amount accounted for
+        emit LiquidityAdded(_account, afterFeeAmount, mintAmount);
     }
 
-    /// @dev Gas Inefficient -> Revisit
+    /// @dev Do we need transfer invariant checks???
     function _removeLiquidity(address _account, uint256 _liquidityTokenAmount) internal {
         if (_liquidityTokenAmount == 0) revert LiquidityVault_InvalidTokenAmount();
         if (_account == address(0)) revert LiquidityVault_ZeroAddress();
-
-        uint256 initialPoolAmount = poolAmounts;
-        uint256 initialAccumulatedFees = accumulatedFees;
+        // Deposit Liquidity Token to this contract
+        uint256 liquidityTokenBalance = liquidityToken.balanceOf(address(this));
         liquidityToken.safeTransferFrom(_account, address(this), _liquidityTokenAmount);
-        uint256 lpTokenValueUsd = (_liquidityTokenAmount * getLiquidityTokenPrice()) / SCALING_FACTOR;
-        uint256 tokenAmount = (lpTokenValueUsd * SCALING_FACTOR) / priceOracle.getCollateralPrice();
+        if (liquidityToken.balanceOf(address(this)) != liquidityTokenBalance + _liquidityTokenAmount) {
+            revert LiquidityVault_LiquidityTokenTransferFailed();
+        }
+
+        // Calculate Available Liquidity & Tokens to Redeem
+        uint256 collateralPrice = priceOracle.getCollateralPrice();
+        uint256 lpTokenValueUsd = (_liquidityTokenAmount * getLiquidityTokenPrice(collateralPrice)) / SCALING_FACTOR;
+        uint256 tokenAmount = (lpTokenValueUsd * SCALING_FACTOR) / collateralPrice;
         uint256 availableLiquidity = poolAmounts - totalReserved;
 
-        // Ensures markets stay liquid
+        // Check if enough liquidity to redeem
         if (tokenAmount > availableLiquidity) revert LiquidityVault_InsufficientFunds();
 
+        // Update Pool Amounts
         poolAmounts -= tokenAmount;
+        // Burn Liquidity Token
         liquidityToken.burn(address(this), _liquidityTokenAmount);
+        // Deduct Fees & Unwrap USDC
         uint256 afterFeeAmount = _deductLiquidityFees(tokenAmount);
-        uint256 tokenOutAmount = _unwrapUsdc(afterFeeAmount);
-
+        uint256 tokenOutAmount = WUSDC.withdraw(afterFeeAmount);
+        // Transfer USDC to User
+        uint256 usdcBalanceBefore = USDC.balanceOf(address(this));
         USDC.safeTransfer(_account, tokenOutAmount);
-        emit LiquidityWithdrawn(_account, address(WUSDC), _liquidityTokenAmount, afterFeeAmount);
+        if (USDC.balanceOf(address(this)) != usdcBalanceBefore - tokenOutAmount) {
+            revert LiquidityVault_USDCTransferFailed();
+        }
 
-        uint256 feeAmount = tokenAmount - afterFeeAmount;
-        assert(poolAmounts == initialPoolAmount - tokenAmount); // Pool amount correctly decreased
-        assert(accumulatedFees == initialAccumulatedFees + feeAmount); // Fees correctly accumulated
-        assert(tokenAmount == afterFeeAmount + feeAmount); // Total wrapped amount accounted for
+        emit LiquidityWithdrawn(_account, address(WUSDC), _liquidityTokenAmount, afterFeeAmount);
     }
 
     function _wrapUsdc(uint256 _amount) internal returns (uint256 wusdcAmount) {
@@ -271,19 +285,10 @@ contract LiquidityVault is RoleValidation, ReentrancyGuard {
         wusdcAmount = WUSDC.deposit(_amount);
     }
 
-    function _unwrapUsdc(uint256 _amount) internal returns (uint256 usdcAmount) {
-        usdcAmount = WUSDC.withdraw(_amount);
-    }
-
-    /// @dev Protects against arbitrary from address in transferFrom
-    function _validateHandler(address _sender, address _handler) internal view {
-        if (!isHandler[_sender][_handler]) revert LiquidityVault_InvalidHandler();
-    }
-
     // Returns % amount after fee deduction
     function _deductLiquidityFees(uint256 _amount) internal returns (uint256 afterFeeAmount) {
-        uint256 liqFee = (_amount * liquidityFee) / SCALING_FACTOR;
-        accumulatedFees += liqFee;
-        afterFeeAmount = _amount - liqFee;
+        uint256 feeToCharge = (_amount * liquidityFee) / SCALING_FACTOR;
+        accumulatedFees += feeToCharge;
+        afterFeeAmount = _amount - feeToCharge;
     }
 }

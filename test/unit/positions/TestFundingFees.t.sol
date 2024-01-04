@@ -22,12 +22,12 @@ import {WUSDC} from "../../../src/token/WUSDC.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
-import {MarketStructs} from "../../../src/markets/MarketStructs.sol";
+import {Types} from "../../../src/libraries/Types.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
-import {ImpactCalculator} from "../../../src/positions/ImpactCalculator.sol";
-import {BorrowingCalculator} from "../../../src/positions/BorrowingCalculator.sol";
-import {FundingCalculator} from "../../../src/positions/FundingCalculator.sol";
+import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Borrowing} from "../../../src/libraries/Borrowing.sol";
+import {Funding} from "../../../src/libraries/Funding.sol";
 import {ITradeStorage} from "../../../src/positions/interfaces/ITradeStorage.sol";
 
 contract TestFunding is Test {
@@ -105,7 +105,7 @@ contract TestFunding is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -139,15 +139,15 @@ contract TestFunding is Test {
 //     );
 //     console.log("Last update time: ", Market(market).lastFundingUpdateTime());
 //     console.log(
-//         "Velocity: ", uint256(FundingCalculator.calculateFundingRateVelocity(market, 10000000000000000000000000))
+//         "Velocity: ", uint256(Funding.calculateFundingRateVelocity(market, 10000000000000000000000000))
 //     );
 //     console.log("Funding Rate: ", uint256(Market(market).fundingRate()));
-//     (uint256 funding1, uint256 funding2) = FundingCalculator.getFundingFees(market);
+//     (uint256 funding1, uint256 funding2) = Funding.getFundingFees(market);
 //     console.log("Funding Fee Total Long: ", funding1);
 //     console.log("Funding Fee Total Short: ", funding2);
 //     bytes32 userPositionKey = TradeHelper.generateKey(userRequest);
-//     MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userPositionKey);
-//     (funding1, funding2) = FundingCalculator.getTotalPositionFees(market, userPosition);
+//     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userPositionKey);
+//     (funding1, funding2) = Funding.getTotalPositionFees(market, userPosition);
 //     console.log("User Fees Earned Since Last Update: ", funding1);
 //     console.log("User Fees Owed Since Last Update: ", funding2);
 // }
@@ -157,7 +157,7 @@ contract TestFunding is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -189,15 +189,15 @@ contract TestFunding is Test {
 //     );
 //     console.log("Last update time: ", Market(market).lastFundingUpdateTime());
 //     console.log(
-//         "Velocity: ", uint256(FundingCalculator.calculateFundingRateVelocity(market, 10000000000000000000000000))
+//         "Velocity: ", uint256(Funding.calculateFundingRateVelocity(market, 10000000000000000000000000))
 //     );
 //     console.log("Funding Rate: ", uint256(Market(market).fundingRate()));
-//     (uint256 funding1, uint256 funding2) = FundingCalculator.getFundingFees(market);
+//     (uint256 funding1, uint256 funding2) = Funding.getFundingFees(market);
 //     console.log("Funding Fee Total Long: ", funding1);
 //     console.log("Funding Fee Total Short: ", funding2);
 //     bytes32 userPositionKey = TradeHelper.generateKey(userRequest);
-//     MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userPositionKey);
-//     (funding1, funding2) = FundingCalculator.getTotalPositionFees(market, userPosition);
+//     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userPositionKey);
+//     (funding1, funding2) = Funding.getTotalPositionFees(market, userPosition);
 //     console.log("User Fees Earned Since Last Update: ", funding1);
 //     console.log("User Fees Owed Since Last Update: ", funding2);
 //     // call update funding rate
@@ -205,11 +205,11 @@ contract TestFunding is Test {
 //     // check the funding rate
 //     console.log("Funding Rate After: ", uint256(Market(market).fundingRate()));
 //     // check funding fees
-//     (funding1, funding2) = FundingCalculator.getFundingFees(market);
+//     (funding1, funding2) = Funding.getFundingFees(market);
 //     console.log("Funding Fee Total Long After: ", funding1);
 //     console.log("Funding Fee Total Short After: ", funding2);
 //     userPosition = ITradeStorage(address(tradeStorage)).openPositions(userPositionKey);
-//     (funding1, funding2) = FundingCalculator.getTotalPositionFees(market, userPosition);
+//     (funding1, funding2) = Funding.getTotalPositionFees(market, userPosition);
 //     console.log("User Fees Earned Since Last Update After: ", funding1);
 //     console.log("User Fees Owed Since Last Update After: ", funding2);
 // }
@@ -219,7 +219,7 @@ contract TestFunding is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -241,16 +241,16 @@ contract TestFunding is Test {
 //     vm.warp(block.timestamp + 1 days);
 //     vm.roll(block.number + 1);
 //     // check the funding rate
-//     MarketStructs.Position memory userPosition =
+//     Types.Position memory userPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
 //     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
 //     // check funding fees
-//     (uint256 feesOwed,) = FundingCalculator.getTotalPositionFees(market, userPosition);
+//     (uint256 feesOwed,) = Funding.getTotalPositionFees(market, userPosition);
 //     console.log("Funding Fee Owed Before Update: ", feesOwed);
 //     // call update funding rate
 //     Market(market).updateFundingRate();
 //     // check the funding rate
-//     (uint256 feesOwedAfter,) = FundingCalculator.getTotalPositionFees(market, userPosition);
+//     (uint256 feesOwedAfter,) = Funding.getTotalPositionFees(market, userPosition);
 //     console.log("Funding Fee Owed After Update: ", feesOwedAfter);
 // }
 
@@ -259,7 +259,7 @@ contract TestFunding is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -277,7 +277,7 @@ contract TestFunding is Test {
 //     // open a small short from owner
 //     vm.startPrank(OWNER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
-//     MarketStructs.PositionRequest memory ownerRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory ownerRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -299,11 +299,11 @@ contract TestFunding is Test {
 //     vm.warp(block.timestamp + 1 days);
 //     vm.roll(block.number + 1);
 //     // check the fees earned by the owner's position
-//     MarketStructs.Position memory ownerPosition =
+//     Types.Position memory ownerPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(ownerRequest));
 //     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
 //     // check funding fees
-//     (uint256 feesEarned, uint256 feesOwed) = FundingCalculator.getTotalPositionFees(market, ownerPosition);
+//     (uint256 feesEarned, uint256 feesOwed) = Funding.getTotalPositionFees(market, ownerPosition);
 //     assertEq(feesOwed, 0);
 //     assertGt(feesEarned, 0);
 //     console.log("Fees Owed: ", feesOwed);
@@ -315,7 +315,7 @@ contract TestFunding is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -339,7 +339,7 @@ contract TestFunding is Test {
 //     // open a trade from owner skewing OI short
 //     vm.startPrank(OWNER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
-//     MarketStructs.PositionRequest memory ownerRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory ownerRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -360,11 +360,11 @@ contract TestFunding is Test {
 //     vm.warp(block.timestamp + 1 days);
 //     vm.roll(block.number + 1);
 //     // check the user's trade has fees owed and fees earned
-//     MarketStructs.Position memory userPosition =
+//     Types.Position memory userPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
 //     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
 //     // check funding fees
-//     (uint256 feesEarned, uint256 feesOwed) = FundingCalculator.getTotalPositionFees(market, userPosition);
+//     (uint256 feesEarned, uint256 feesOwed) = Funding.getTotalPositionFees(market, userPosition);
 //     assertGt(feesEarned, 0);
 //     assertGt(feesOwed, 0);
 //     console.log("Fees Earned: ", feesEarned);
@@ -376,7 +376,7 @@ contract TestFunding is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -400,7 +400,7 @@ contract TestFunding is Test {
 //     // create larger owner request on other side
 //     vm.startPrank(OWNER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
-//     MarketStructs.PositionRequest memory ownerRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory ownerRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -421,11 +421,11 @@ contract TestFunding is Test {
 //     vm.warp(block.timestamp + 1 days);
 //     vm.roll(block.number + 1);
 //     // check fees
-//     MarketStructs.Position memory userPosition =
+//     Types.Position memory userPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
 //     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
 //     // check funding fees
-//     (uint256 feesOwed, uint256 feesEarned) = FundingCalculator.getTotalPositionFees(market, userPosition);
+//     (uint256 feesOwed, uint256 feesEarned) = Funding.getTotalPositionFees(market, userPosition);
 //     console.log("Fees Owed: ", feesOwed);
 //     console.log("Fees Earned: ", feesEarned);
 // }
@@ -435,7 +435,7 @@ contract TestFunding is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -449,7 +449,7 @@ contract TestFunding is Test {
 //         true
 //     );
 //     requestRouter.createTradeRequest{value: executionFee}(userRequest, executionFee);
-//     MarketStructs.PositionRequest memory userRequest2 = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest2 = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -470,7 +470,7 @@ contract TestFunding is Test {
 //     // open a small long
 //     vm.startPrank(OWNER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
-//     MarketStructs.PositionRequest memory ownerRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory ownerRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -493,7 +493,7 @@ contract TestFunding is Test {
 //     // open a slightly larger short
 //     vm.startPrank(OWNER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
-//     MarketStructs.PositionRequest memory ownerRequest2 = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory ownerRequest2 = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -514,15 +514,15 @@ contract TestFunding is Test {
 //     vm.warp(block.timestamp + 25);
 //     vm.roll(block.number + 1);
 //     // check fees on small long
-//     MarketStructs.Position memory ownerPosition =
+//     Types.Position memory ownerPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(ownerRequest));
 //     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
 //     // check funding fees
-//     (uint256 feesEarned, uint256 feesOwed) = FundingCalculator.getTotalPositionFees(market, ownerPosition);
+//     (uint256 feesEarned, uint256 feesOwed) = Funding.getTotalPositionFees(market, ownerPosition);
 //     console.log("Fees Owed: ", feesOwed);
 //     console.log("Fees Earned: ", feesEarned);
 //     (uint256 feesForDurationShort, uint256 feesForDurationLong) =
-//         FundingCalculator.getFeesSinceLastUpdate(market, true);
+//         Funding.getFeesSinceLastUpdate(market, true);
 //     console.log("Fees For Duration Long: ", feesForDurationLong); // should be 0
 //     console.log("Fees For Duration Short: ", feesForDurationShort);
 // }
@@ -537,7 +537,7 @@ contract TestFunding is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -560,9 +560,9 @@ contract TestFunding is Test {
 //     vm.roll(block.number + 1);
 //     // check funding fees owed
 //     bytes32 userKey = TradeHelper.generateKey(userRequest);
-//     MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userKey);
+//     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userKey);
 //     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
-//     (uint256 feesEarned, uint256 feesOwed) = FundingCalculator.getTotalPositionFees(market, userPosition);
+//     (uint256 feesEarned, uint256 feesOwed) = Funding.getTotalPositionFees(market, userPosition);
 //     assertGt(feesOwed, 0);
 //     assertEq(feesEarned, 0);
 //     console.log("Fees Owed: ", feesOwed);

@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "../markets/MarketStructs.sol";
+import {Types} from "../libraries/Types.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -25,7 +25,7 @@ import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeVault} from "./interfaces/ITradeVault.sol";
-import {ImpactCalculator} from "./ImpactCalculator.sol";
+import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
 import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
@@ -82,21 +82,20 @@ contract RequestRouter is ReentrancyGuard {
         _;
     }
 
-    function createTradeRequest(MarketStructs.Trade calldata _trade) external payable nonReentrant validExecutionFee {
-        if (msg.sender.code.length > 0) revert RequestRouter_CallerIsContract();
+    function createTradeRequest(Types.Trade calldata _trade) external payable nonReentrant validExecutionFee {
         if (_trade.maxSlippage < MIN_SLIPPAGE || _trade.maxSlippage > MAX_SLIPPAGE) {
             revert RequestRouter_InvalidSlippage();
         }
         if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
 
         bytes32 marketKey = keccak256(abi.encode(_trade.indexToken));
-        MarketStructs.Market memory market = marketStorage.markets(marketKey);
+        Types.Market memory market = marketStorage.markets(marketKey);
         if (address(market.market) == address(0)) {
             revert RequestRouter_InvalidIndexToken();
         }
 
         bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
-        MarketStructs.Position memory position = tradeStorage.openPositions(positionKey);
+        Types.Position memory position = tradeStorage.openPositions(positionKey);
 
         uint256 collateralDelta;
         if (_trade.isIncrease) {
@@ -106,46 +105,45 @@ contract RequestRouter is ReentrancyGuard {
             collateralDelta = _trade.collateralDelta * COLLATERAL_MULTIPLIER;
         }
 
-        MarketStructs.RequestType requestType = _calculateRequestType(_trade, position);
+        Types.RequestType requestType = _getRequestType(_trade, position);
         _sendExecutionFeeToVault();
-        MarketStructs.Request memory request =
-            TradeHelper.createRequest(_trade, msg.sender, collateralDelta, requestType);
+        Types.Request memory request = TradeHelper.createRequest(_trade, msg.sender, collateralDelta, requestType);
         tradeStorage.createOrderRequest(request);
     }
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
-        MarketStructs.Request memory request = tradeStorage.orders(_key);
+        Types.Request memory request = tradeStorage.orders(_key);
         if (request.user == address(0)) revert RequestRouter_RequestDoesNotExist();
         if (msg.sender != request.user) revert RequestRouter_CallerIsNotPositionOwner();
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
 
-    function _calculateRequestType(MarketStructs.Trade calldata _trade, MarketStructs.Position memory _position)
+    function _getRequestType(Types.Trade calldata _trade, Types.Position memory _position)
         private
         pure
-        returns (MarketStructs.RequestType requestType)
+        returns (Types.RequestType requestType)
     {
         if (_position.user == address(0)) {
             if (!_trade.isIncrease) revert RequestRouter_DecreaseNonExistentPosition();
             if (_trade.sizeDelta == 0) revert RequestRouter_SizeDeltaIsZero();
             if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
-            requestType = MarketStructs.RequestType.CREATE_POSITION;
+            requestType = Types.RequestType.CREATE_POSITION;
         } else if (_trade.sizeDelta == 0) {
             if (_trade.isIncrease) {
                 if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
-                requestType = MarketStructs.RequestType.COLLATERAL_INCREASE;
+                requestType = Types.RequestType.COLLATERAL_INCREASE;
             } else {
                 if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
                 if (_position.collateralAmount < _trade.collateralDelta) {
                     revert RequestRouter_CollateralDeltaExceedsCollateralAmount();
                 }
-                requestType = MarketStructs.RequestType.COLLATERAL_DECREASE;
+                requestType = Types.RequestType.COLLATERAL_DECREASE;
             }
         } else {
             if (_trade.isIncrease) {
                 if (_trade.sizeDelta == 0) revert RequestRouter_SizeDeltaIsZero();
                 if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
-                requestType = MarketStructs.RequestType.POSITION_INCREASE;
+                requestType = Types.RequestType.POSITION_INCREASE;
             } else {
                 if (_trade.sizeDelta == 0) revert RequestRouter_SizeDeltaIsZero();
                 if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
@@ -153,7 +151,7 @@ contract RequestRouter is ReentrancyGuard {
                 if (_position.collateralAmount < _trade.collateralDelta) {
                     revert RequestRouter_CollateralDeltaExceedsCollateralAmount();
                 }
-                requestType = MarketStructs.RequestType.POSITION_DECREASE;
+                requestType = Types.RequestType.POSITION_DECREASE;
             }
         }
     }
@@ -177,7 +175,7 @@ contract RequestRouter is ReentrancyGuard {
     }
 
     function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) private view {
-        MarketStructs.Market memory market = marketStorage.markets(_marketKey);
+        Types.Market memory market = marketStorage.markets(_marketKey);
         uint256 totalOI = MarketHelper.getTotalIndexOpenInterest(address(marketStorage), market.indexToken);
         if (totalOI + _sizeDelta > marketStorage.maxOpenInterests(_marketKey)) {
             revert RequestRouter_PositionSizeTooLarge();

@@ -17,19 +17,16 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "./MarketStructs.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
+import {Types} from "../libraries/Types.sol";
 
 /// @dev Needs MarketStorage Role
 contract MarketStorage is RoleValidation {
-    using MarketStructs for MarketStructs.Market;
-    using MarketStructs for MarketStructs.Position;
-
     ILiquidityVault liquidityVault;
 
-    mapping(bytes32 _marketKey => MarketStructs.Market) public markets;
+    mapping(bytes32 _marketKey => Types.Market) public markets;
     mapping(bytes32 _marketKey => uint256 _allocation) public marketAllocations;
     mapping(bytes32 _marketKey => uint256 _maxOI) public maxOpenInterests; // Max OI in Index Tokens
     mapping(bytes32 _marketKey => uint256 _openInterest) public collatTokenLongOpenInterest; // OI of collat token long
@@ -56,7 +53,7 @@ contract MarketStorage is RoleValidation {
     }
 
     /// @dev Only MarketFactory
-    function storeMarket(MarketStructs.Market memory _market) external onlyMarketMaker {
+    function storeMarket(Types.Market memory _market) external onlyMarketMaker {
         if (markets[_market.marketKey].market != address(0)) revert MarketStorage_MarketAlreadyExists();
         marketKeys.push(_market.marketKey);
         markets[_market.marketKey] = _market;

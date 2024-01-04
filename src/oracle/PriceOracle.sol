@@ -18,7 +18,7 @@
 pragma solidity 0.8.23;
 
 // Do we need to allow DEX pricing to price PRINT?
-//https://sips.synthetix.io/sips/sip-285/
+// https://sips.synthetix.io/sips/sip-285/
 contract PriceOracle {
     error PriceOracle_InvalidToken();
     error PriceOracle_PriceNotSigned();
@@ -54,6 +54,7 @@ contract PriceOracle {
         // return price of token
     }
 
+    /// @dev Request and fetch structure -> Request requests, executor fetches
     function getSignedPrice(address _token, uint256 _block) external view returns (uint256 price) {
         // require token is whitelisted
         if (!whitelistedTokens[_token]) revert PriceOracle_InvalidToken();
@@ -62,6 +63,7 @@ contract PriceOracle {
         if (price == 0) revert PriceOracle_PriceNotSigned();
     }
 
+    /// @dev Request and fetch structure -> Request requests, executor fetches
     function requestSignedPrice(address _indexToken, uint256 _block) external {
         // only callable by permissioned roles
         // request price for all whitelisted tokens at block

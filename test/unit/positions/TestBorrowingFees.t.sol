@@ -22,13 +22,13 @@ import {WUSDC} from "../../../src/token/WUSDC.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
-import {MarketStructs} from "../../../src/markets/MarketStructs.sol";
+import {Types} from "../../../src/libraries/Types.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
-import {ImpactCalculator} from "../../../src/positions/ImpactCalculator.sol";
-import {BorrowingCalculator} from "../../../src/positions/BorrowingCalculator.sol";
-import {FundingCalculator} from "../../../src/positions/FundingCalculator.sol";
-import {PricingCalculator} from "../../../src/positions/PricingCalculator.sol";
+import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Borrowing} from "../../../src/libraries/Borrowing.sol";
+import {Funding} from "../../../src/libraries/Funding.sol";
+import {Pricing} from "../../../src/libraries/Pricing.sol";
 import {ITradeStorage} from "../../../src/positions/interfaces/ITradeStorage.sol";
 
 contract TestBorrowing is Test {
@@ -120,7 +120,7 @@ contract TestBorrowing is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.Trade memory userRequest = MarketStructs.Trade(
+//     Types.Trade memory userRequest = Types.Trade(
 //         address(indexToken),
 //         200e6,
 //         2e18,
@@ -132,7 +132,7 @@ contract TestBorrowing is Test {
 //         true
 //     );
 //     requestRouter.createTradeRequest{value: executionFee}(userRequest);
-//     MarketStructs.Trade memory userRequest2 = MarketStructs.Trade(
+//     Types.Trade memory userRequest2 = Types.Trade(
 //         address(indexToken),
 //         100e6,
 //         1e18,
@@ -152,15 +152,15 @@ contract TestBorrowing is Test {
 //     vm.warp(block.timestamp + 1 days);
 //     vm.roll(block.number + 1);
 //     bytes32 positionKey1 = keccak256(abi.encode(userRequest.indexToken, USER, userRequest.isLong));
-//     MarketStructs.Position memory userPositionLong =
+//     Types.Position memory userPositionLong =
 //         ITradeStorage(address(tradeStorage)).openPositions(positionKey1);
 //     bytes32 positionKey2 = keccak256(abi.encode(userRequest2.indexToken, USER, userRequest2.isLong));
-//     MarketStructs.Position memory userPositionShort =
+//     Types.Position memory userPositionShort =
 //         ITradeStorage(address(tradeStorage)).openPositions(positionKey2);
 //     // check the borrowing fee on the long and short
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     uint256 longBorrowingFee = BorrowingCalculator.getBorrowingFees(market, userPositionLong);
-//     uint256 shortBorrowingFee = BorrowingCalculator.getBorrowingFees(market, userPositionShort);
+//     uint256 longBorrowingFee = Borrowing.getBorrowingFees(market, userPositionLong);
+//     uint256 shortBorrowingFee = Borrowing.getBorrowingFees(market, userPositionShort);
 //     console.log("Long Borrow Fee: ", longBorrowingFee);
 //     console.log("Short Borrow Fee: ", shortBorrowingFee);
 // }
@@ -171,7 +171,7 @@ contract TestBorrowing is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.Trade memory userRequest = MarketStructs.Trade(
+//     Types.Trade memory userRequest = Types.Trade(
 //         address(indexToken),
 //         200e6,
 //         2e18,
@@ -192,12 +192,12 @@ contract TestBorrowing is Test {
 //     vm.roll(block.number + 1);
 //     // check fees greater than 0
 //     bytes32 positionKey = keccak256(abi.encode(userRequest.indexToken, USER, userRequest.isLong));
-//     MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
+//     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     uint256 borrowingFee = BorrowingCalculator.getBorrowingFees(market, userPosition);
+//     uint256 borrowingFee = Borrowing.getBorrowingFees(market, userPosition);
 //     assertGt(borrowingFee, 0);
 //     // close trade
-//     MarketStructs.Trade memory closeRequest = MarketStructs.Trade(
+//     Types.Trade memory closeRequest = Types.Trade(
 //         address(indexToken),
 //         200e6,
 //         2e18,
@@ -224,7 +224,7 @@ contract TestBorrowing is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.Trade memory userRequest = MarketStructs.Trade(
+//     Types.Trade memory userRequest = Types.Trade(
 //         address(indexToken),
 //         200e6,
 //         2e18,
@@ -245,12 +245,12 @@ contract TestBorrowing is Test {
 //     vm.roll(block.number + 1);
 //     // check fees greater than 0
 //     bytes32 positionKey = TradeHelper.generatePositionKey(userRequest);
-//     MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
+//     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     uint256 borrowingFee = BorrowingCalculator.getBorrowingFees(market, userPosition);
+//     uint256 borrowingFee = Borrowing.getBorrowingFees(market, userPosition);
 //     assertGt(borrowingFee, 0);
 //     // decrease trade
-//     MarketStructs.PositionRequest memory userDecrease = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userDecrease = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -272,7 +272,7 @@ contract TestBorrowing is Test {
 //     uint256 accumulatedFeesAfter = liquidityVault.accumulatedFees();
 //     assertGt(accumulatedFeesAfter, accumulatedFeesBefore);
 //     // check fees owed on position
-//     MarketStructs.Position memory userPositionAfter =
+//     Types.Position memory userPositionAfter =
 //         ITradeStorage(address(tradeStorage)).openPositions(positionKey);
 //     console.log("Fees Owed: ", userPositionAfter.borrowParams.feesOwed);
 // }
@@ -282,7 +282,7 @@ contract TestBorrowing is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -305,11 +305,11 @@ contract TestBorrowing is Test {
 //     vm.roll(block.number + 1);
 //     // check fees greater than 0
 //     bytes32 positionKey = TradeHelper.generateKey(userRequest);
-//     MarketStructs.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
+//     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     uint256 quarterClose = BorrowingCalculator.calculateBorrowingFee(market, userPosition, 0.25e18);
-//     uint256 halfClose = BorrowingCalculator.calculateBorrowingFee(market, userPosition, 0.5e18);
-//     uint256 threeQuarterClose = BorrowingCalculator.calculateBorrowingFee(market, userPosition, 0.75e18);
+//     uint256 quarterClose = Borrowing.calculateBorrowingFee(market, userPosition, 0.25e18);
+//     uint256 halfClose = Borrowing.calculateBorrowingFee(market, userPosition, 0.5e18);
+//     uint256 threeQuarterClose = Borrowing.calculateBorrowingFee(market, userPosition, 0.75e18);
 //     console.log("Quarter Close: ", quarterClose);
 //     console.log("Half Close: ", halfClose);
 //     console.log("Three Quarter Close: ", threeQuarterClose);

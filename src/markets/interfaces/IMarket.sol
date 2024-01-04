@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "../MarketStructs.sol";
-
 interface IMarket {
     function initialise(
         uint256 _maxFundingVelocity,
@@ -31,8 +29,8 @@ interface IMarket {
     function getMarketKey() external view returns (bytes32);
     function longCumulativeFundingFees() external view returns (uint256);
     function shortCumulativeFundingFees() external view returns (uint256);
-    function longCumulativeBorrowFee() external view returns (uint256);
-    function shortCumulativeBorrowFee() external view returns (uint256);
+    function longCumulativeBorrowFees() external view returns (uint256);
+    function shortCumulativeBorrowFees() external view returns (uint256);
     function priceImpactFactor() external view returns (uint256);
     function priceImpactExponent() external view returns (uint256);
     function MAX_PRICE_IMPACT() external view returns (int256);

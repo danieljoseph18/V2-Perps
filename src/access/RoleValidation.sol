@@ -79,7 +79,7 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyKeeperOrContract() {
+    modifier onlyKeeperOrSelf() {
         if (!roleStorage.hasRole(Roles.KEEPER, msg.sender) && !(msg.sender == address(this))) {
             revert RoleValidation_AccessDenied();
         }

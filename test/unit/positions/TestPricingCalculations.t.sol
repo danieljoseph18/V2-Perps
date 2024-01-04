@@ -22,13 +22,13 @@ import {WUSDC} from "../../../src/token/WUSDC.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
-import {MarketStructs} from "../../../src/markets/MarketStructs.sol";
+import {Types} from "../../../src/libraries/Types.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
-import {ImpactCalculator} from "../../../src/positions/ImpactCalculator.sol";
-import {BorrowingCalculator} from "../../../src/positions/BorrowingCalculator.sol";
-import {FundingCalculator} from "../../../src/positions/FundingCalculator.sol";
-import {PricingCalculator} from "../../../src/positions/PricingCalculator.sol";
+import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Borrowing} from "../../../src/libraries/Borrowing.sol";
+import {Funding} from "../../../src/libraries/Funding.sol";
+import {Pricing} from "../../../src/libraries/Pricing.sol";
 import {ITradeStorage} from "../../../src/positions/interfaces/ITradeStorage.sol";
 
 contract TestPriceImpact is Test {
@@ -104,7 +104,7 @@ contract TestPriceImpact is Test {
 // // test pnl calculations on constructed positions
 // function testPnlCalculations() public facilitateTrading {
 //     bytes32 market = keccak256(abi.encode(address(indexToken)));
-//     MarketStructs.Position memory position = MarketStructs.Position(
+//     Types.Position memory position = Types.Position(
 //         0,
 //         market,
 //         address(indexToken),
@@ -113,12 +113,12 @@ contract TestPriceImpact is Test {
 //         1e18,
 //         true,
 //         0,
-//         MarketStructs.BorrowParams(0, 0, 0, 0),
-//         MarketStructs.FundingParams(0, 0, 0, 0, 0),
-//         MarketStructs.PnLParams(700e18, 1000e18, 1000),
+//         Types.BorrowParams(0, 0, 0, 0),
+//         Types.FundingParams(0, 0, 0, 0, 0),
+//         Types.PnLParams(700e18, 1000e18, 1000),
 //         0
 //     );
-//     int256 pnl = PricingCalculator.calculatePnL(address(priceOracle), address(dataOracle), position);
+//     int256 pnl = Pricing.calculatePnL(address(priceOracle), address(dataOracle), position);
 //     console.log("pnl: ", uint256(pnl));
 // }
 // // test net pnl calculations for entire markets
@@ -128,7 +128,7 @@ contract TestPriceImpact is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -142,7 +142,7 @@ contract TestPriceImpact is Test {
 //         true
 //     );
 //     requestRouter.createTradeRequest{value: executionFee}(request, executionFee);
-//     MarketStructs.PositionRequest memory request2 = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request2 = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -159,7 +159,7 @@ contract TestPriceImpact is Test {
 //     vm.stopPrank();
 //     vm.startPrank(OWNER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
-//     MarketStructs.PositionRequest memory request3 = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request3 = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -173,7 +173,7 @@ contract TestPriceImpact is Test {
 //         true
 //     );
 //     requestRouter.createTradeRequest{value: executionFee}(request3, executionFee);
-//     MarketStructs.PositionRequest memory request4 = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request4 = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -191,7 +191,7 @@ contract TestPriceImpact is Test {
 //     vm.stopPrank();
 //     // check the net pnl
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     int256 netPnl = PricingCalculator.getNetPnL(
+//     int256 netPnl = Pricing.getNetPnL(
 //         market, address(marketStorage), address(dataOracle), address(priceOracle), false
 //     );
 //     bool isNegative = netPnl < 0;
@@ -204,7 +204,7 @@ contract TestPriceImpact is Test {
 // // test weighted average entry price calculations
 
 // function testWeightedAvgEntryCalc() public facilitateTrading {
-//     uint256 waep = PricingCalculator.calculateWeightedAverageEntryPrice(1000e18, 1000e18, 5000e18, 1250e18);
+//     uint256 waep = Pricing.calculateWeightedAverageEntryPrice(1000e18, 1000e18, 5000e18, 1250e18);
 //     assertEq(1.208333333333333333333e21, waep); // expected $1208.33
 // }
 }

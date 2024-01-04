@@ -17,7 +17,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "../markets/MarketStructs.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -27,8 +26,6 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
 /// @dev Needs Liquidator role
 contract Liquidator is RoleValidation {
-    using MarketStructs for MarketStructs.Position;
-
     ITradeStorage public tradeStorage;
     IMarketStorage public marketStorage;
     IPriceOracle public priceOracle;

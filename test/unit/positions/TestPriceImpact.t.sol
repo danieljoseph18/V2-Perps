@@ -22,12 +22,12 @@ import {WUSDC} from "../../../src/token/WUSDC.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
-import {MarketStructs} from "../../../src/markets/MarketStructs.sol";
+import {Types} from "../../../src/libraries/Types.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
-import {ImpactCalculator} from "../../../src/positions/ImpactCalculator.sol";
-import {BorrowingCalculator} from "../../../src/positions/BorrowingCalculator.sol";
-import {FundingCalculator} from "../../../src/positions/FundingCalculator.sol";
+import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Borrowing} from "../../../src/libraries/Borrowing.sol";
+import {Funding} from "../../../src/libraries/Funding.sol";
 import {ITradeStorage} from "../../../src/positions/interfaces/ITradeStorage.sol";
 
 contract TestPriceImpact is Test {
@@ -104,7 +104,7 @@ contract TestPriceImpact is Test {
 // function testHigherPriceImpactIsChargedOnLargeTrades() public facilitateTrading {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
-//     MarketStructs.PositionRequest memory userRequestLarge = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequestLarge = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -119,11 +119,11 @@ contract TestPriceImpact is Test {
 //     );
 //     vm.stopPrank();
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     uint256 impact = ImpactCalculator.calculatePriceImpact(
+//     uint256 impact = PriceImpact.calculatePriceImpact(
 //         market, address(marketStorage), address(dataOracle), address(priceOracle), userRequestLarge, 1000e18
 //     );
 //     console.log("Large Impact: ", impact);
-//     MarketStructs.PositionRequest memory userRequestSmall = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequestSmall = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -136,7 +136,7 @@ contract TestPriceImpact is Test {
 //         true,
 //         true
 //     );
-//     uint256 smallImpact = ImpactCalculator.calculatePriceImpact(
+//     uint256 smallImpact = PriceImpact.calculatePriceImpact(
 //         market, address(marketStorage), address(dataOracle), address(priceOracle), userRequestSmall, 1000e18
 //     );
 //     console.log("Small Impact: ", smallImpact);
@@ -145,7 +145,7 @@ contract TestPriceImpact is Test {
 
 // // test reasonable impact on smaller trades
 // function testReasonableImpactOnSmallerTrades() public facilitateTrading {
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -159,14 +159,14 @@ contract TestPriceImpact is Test {
 //         true
 //     );
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     uint256 impactedPrice = ImpactCalculator.executePriceImpact(
+//     uint256 impactedPrice = PriceImpact.executePriceImpact(
 //         market, address(marketStorage), address(dataOracle), address(priceOracle), userRequest, 1000e18
 //     );
 //     console.log("Impacted Price: ", impactedPrice);
 // }
 
 // function testLargeImpactOnLargeTrades() public facilitateTrading {
-//     MarketStructs.PositionRequest memory userRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory userRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -180,7 +180,7 @@ contract TestPriceImpact is Test {
 //         true
 //     );
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     uint256 impactedPrice = ImpactCalculator.executePriceImpact(
+//     uint256 impactedPrice = PriceImpact.executePriceImpact(
 //         market, address(marketStorage), address(dataOracle), address(priceOracle), userRequest, 1000e18
 //     );
 //     console.log("Impacted Price: ", impactedPrice);
@@ -192,7 +192,7 @@ contract TestPriceImpact is Test {
 //     vm.startPrank(USER);
 //     usdc.approve(address(requestRouter), LARGE_AMOUNT);
 //     uint256 executionFee = tradeStorage.minExecutionFee();
-//     MarketStructs.PositionRequest memory request = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory request = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -212,7 +212,7 @@ contract TestPriceImpact is Test {
 //     executor.executeTradeOrders(OWNER);
 //     vm.stopPrank();
 //     // create a collateral edit request
-//     MarketStructs.PositionRequest memory collateralRequest = MarketStructs.PositionRequest(
+//     Types.PositionRequest memory collateralRequest = Types.PositionRequest(
 //         0,
 //         false,
 //         address(indexToken),
@@ -226,7 +226,7 @@ contract TestPriceImpact is Test {
 //         true
 //     );
 //     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
-//     uint256 impactedPrice = ImpactCalculator.executePriceImpact(
+//     uint256 impactedPrice = PriceImpact.executePriceImpact(
 //         market, address(marketStorage), address(dataOracle), address(priceOracle), collateralRequest, 1000e18
 //     );
 //     console.log("Impacted Price: ", impactedPrice);
@@ -236,20 +236,20 @@ contract TestPriceImpact is Test {
 // function testCheckSlippageAccuratelyDeterminesPriceSlippage() public facilitateTrading {
 //     uint256 impactedPrice = 500e18; // slippage 50%
 //     uint256 signedPrice = 1000e18;
-//     ImpactCalculator.checkSlippage(impactedPrice, signedPrice, 0.55e18); // 55%
-//     ImpactCalculator.checkSlippage(impactedPrice, signedPrice, 0.5e18); // 50%
+//     PriceImpact.checkSlippage(impactedPrice, signedPrice, 0.55e18); // 55%
+//     PriceImpact.checkSlippage(impactedPrice, signedPrice, 0.5e18); // 50%
 //     vm.expectRevert();
-//     ImpactCalculator.checkSlippage(impactedPrice, signedPrice, 0.499e18); // 49.9%
+//     PriceImpact.checkSlippage(impactedPrice, signedPrice, 0.499e18); // 49.9%
 //     vm.expectRevert();
-//     ImpactCalculator.checkSlippage(impactedPrice, signedPrice, 0.1e18); // 10%
+//     PriceImpact.checkSlippage(impactedPrice, signedPrice, 0.1e18); // 10%
 // }
 
 // function testApplyPriceImpactCorrectlyAppliesImpactToPrices() public facilitateTrading {
 //     uint256 signedBlockPrice = 1000e18;
 //     uint256 priceImpactUsd = 700e18;
-//     uint256 impactedPrice = ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpactUsd, true, true);
+//     uint256 impactedPrice = PriceImpact.applyPriceImpact(signedBlockPrice, priceImpactUsd, true, true);
 //     assertEq(impactedPrice, 1700e18);
-//     impactedPrice = ImpactCalculator.applyPriceImpact(signedBlockPrice, priceImpactUsd, true, false);
+//     impactedPrice = PriceImpact.applyPriceImpact(signedBlockPrice, priceImpactUsd, true, false);
 //     assertEq(impactedPrice, 300e18);
 // }
 }

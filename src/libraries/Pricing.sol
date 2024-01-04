@@ -17,7 +17,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
@@ -26,25 +25,25 @@ import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
+import {Types} from "../libraries/Types.sol";
 
 /*
     weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
     PNL = (Current price of index tokens - Weighted average entry price) * (Total position size / Current price of index tokens)
  */
-
-library PricingCalculator {
+/// @dev Library for pricing related functions
+library Pricing {
     uint256 public constant PRICE_PRECISION = 1e18;
 
     /// @dev returns PNL in USD
-    function calculatePnL(address _priceOracle, address _dataOracle, MarketStructs.Position memory _position)
+    function calculatePnL(uint256 _indexPriceUsd, address _dataOracle, Types.Position memory _position)
         external
         view
         returns (int256)
     {
-        uint256 indexPrice = IPriceOracle(_priceOracle).getPrice(_position.indexToken);
         uint256 baseUnits = IDataOracle(_dataOracle).getBaseUnits(_position.indexToken);
-        uint256 entryValue = (_position.positionSize * _position.pnlParams.weightedAvgEntryPrice) / baseUnits;
-        uint256 currentValue = (_position.positionSize * indexPrice) / baseUnits;
+        uint256 entryValue = (_position.positionSize * _position.pnl.weightedAvgEntryPrice) / baseUnits;
+        uint256 currentValue = (_position.positionSize * _indexPriceUsd) / baseUnits;
         return _position.isLong ? int256(currentValue) - int256(entryValue) : int256(entryValue) - int256(currentValue);
     }
 
@@ -76,7 +75,7 @@ library PricingCalculator {
         // Get OI in USD
         uint256 indexValue =
             MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, indexToken, _isLong);
-        uint256 entryValue = MarketHelper.getTotalEntryValue(_market, _marketStorage, _dataOracle, _isLong);
+        uint256 entryValue = MarketHelper.getTotalEntryValueUsd(_market, _marketStorage, _dataOracle, _isLong);
 
         return _isLong ? int256(indexValue) - int256(entryValue) : int256(entryValue) - int256(indexValue);
     }

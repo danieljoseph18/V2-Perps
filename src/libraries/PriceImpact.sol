@@ -17,31 +17,30 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "../markets/MarketStructs.sol";
 import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
+import {Types} from "../libraries/Types.sol";
 
 // library responsible for handling all price impact calculations
-library ImpactCalculator {
+library PriceImpact {
     error ImpactCalculator_ZeroParameters();
     error ImpactCalculator_SlippageExceedsMax();
 
     uint256 public constant SCALAR = 1e18;
     uint256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
 
-    function executePriceImpact(
+    function execute(
         address _market,
         address _marketStorage,
         address _dataOracle,
         address _priceOracle,
-        MarketStructs.Request memory _request,
+        Types.Request memory _request,
         uint256 _signedBlockPrice
     ) external view returns (uint256 impactedPrice) {
         if (_signedBlockPrice == 0) revert ImpactCalculator_ZeroParameters();
-        uint256 priceImpact =
-            calculatePriceImpact(_market, _marketStorage, _dataOracle, _priceOracle, _request, _signedBlockPrice);
+        uint256 priceImpact = calculate(_market, _marketStorage, _dataOracle, _priceOracle, _request, _signedBlockPrice);
         if (_request.isLong) {
             if (_request.isIncrease) {
                 impactedPrice = _signedBlockPrice + priceImpact;
@@ -59,15 +58,15 @@ library ImpactCalculator {
     }
 
     // Returns Price impact in USD
-    function calculatePriceImpact(
+    function calculate(
         address _market,
         address _marketStorage,
         address _dataOracle,
         address _priceOracle,
-        MarketStructs.Request memory _request,
+        Types.Request memory _request,
         uint256 _signedBlockPrice
     ) public view returns (uint256) {
-        if (_signedBlockPrice == 0 || _market == address(0) || _request.user == address(0)) {
+        if (_signedBlockPrice == 0) {
             revert ImpactCalculator_ZeroParameters();
         }
 
@@ -94,7 +93,11 @@ library ImpactCalculator {
         );
 
         uint256 maxImpact = (_signedBlockPrice * MAX_PRICE_IMPACT) / SCALAR;
-        return _adjustPriceImpactWithinLimits(priceImpact, maxImpact);
+        if (priceImpact > maxImpact) {
+            return maxImpact;
+        } else {
+            return priceImpact;
+        }
     }
 
     function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) public pure {
@@ -118,13 +121,5 @@ library ImpactCalculator {
         uint256 impactAfter = (absAfter ** _exponent) * _factor;
 
         return impactBefore > impactAfter ? impactBefore - impactAfter : impactAfter - impactBefore;
-    }
-
-    function _adjustPriceImpactWithinLimits(uint256 _priceImpact, uint256 _maxImpact) internal pure returns (uint256) {
-        if (_priceImpact > _maxImpact) {
-            return _maxImpact;
-        } else {
-            return _priceImpact;
-        }
     }
 }

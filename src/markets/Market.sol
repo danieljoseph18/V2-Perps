@@ -21,11 +21,10 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IMarketToken} from "./interfaces/IMarketToken.sol";
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
-import {MarketStructs} from "./MarketStructs.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {FundingCalculator} from "../positions/FundingCalculator.sol";
-import {BorrowingCalculator} from "../positions/BorrowingCalculator.sol";
-import {PricingCalculator} from "../positions/PricingCalculator.sol";
+import {Funding} from "../libraries/Funding.sol";
+import {Borrowing} from "../libraries/Borrowing.sol";
+import {Pricing} from "../libraries/Pricing.sol";
 import {MarketHelper} from "./MarketHelper.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
@@ -35,8 +34,6 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 /// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
 contract Market is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
-    using MarketStructs for MarketStructs.Market;
-    using MarketStructs for MarketStructs.Position;
 
     uint256 public constant SCALING_FACTOR = 1e18;
 
@@ -46,7 +43,7 @@ contract Market is ReentrancyGuard, RoleValidation {
     IDataOracle public dataOracle;
     IWUSDC public immutable WUSDC;
 
-    bool isInitialised;
+    bool private isInitialised;
 
     uint32 public lastFundingUpdateTime; // last time funding was updated
     uint32 public lastBorrowUpdateTime; // last time borrowing fee was updated
@@ -66,10 +63,10 @@ contract Market is ReentrancyGuard, RoleValidation {
     uint256 public borrowingExponent;
     // Flag for skipping borrowing fee for the smaller side
     bool public feeForSmallerSide;
-    uint256 public longCumulativeBorrowFee;
-    uint256 public shortCumulativeBorrowFee;
-    uint256 public longBorrowingRate; // borrow fee per second for longs per second (0.0001e18 = 0.01%)
-    uint256 public shortBorrowingRate; // borrow fee per second for shorts per second
+    uint256 public longCumulativeBorrowFees;
+    uint256 public shortCumulativeBorrowFees;
+    uint256 public longBorrowingRatePerSecond; // borrow fee per second for longs per second (0.0001e18 = 0.01%)
+    uint256 public shortBorrowingRatePerSecond; // borrow fee per second for shorts per second
 
     uint256 public priceImpactExponent;
     uint256 public priceImpactFactor;
@@ -197,6 +194,10 @@ contract Market is ReentrancyGuard, RoleValidation {
     /// @dev Called for every position entry / exit
     /// Rate can be lagging if lack of updates to positions
     function updateFundingRate() external nonReentrant {
+        // If time elapsed = 0, return
+        uint32 lastUpdate = lastFundingUpdateTime;
+        if (block.timestamp == lastUpdate) return;
+
         uint256 longOI = MarketHelper.getIndexOpenInterestUSD(
             address(marketStorage), address(dataOracle), address(priceOracle), indexToken, true
         );
@@ -207,57 +208,57 @@ contract Market is ReentrancyGuard, RoleValidation {
         int256 skew = int256(longOI) - int256(shortOI);
 
         // Calculate time since last funding update
-        uint256 timeElapsed = block.timestamp - lastFundingUpdateTime;
+        uint256 timeElapsed = block.timestamp - lastUpdate;
 
         // Update Cumulative Fees
-        (longCumulativeFundingFees, shortCumulativeFundingFees) = FundingCalculator.getFundingFees(address(this));
+        (longCumulativeFundingFees, shortCumulativeFundingFees) = Funding.getTotalAccumulatedFees(address(this));
 
         // Add the previous velocity to the funding rate
         int256 deltaRate = fundingRateVelocity * int256(timeElapsed);
         // if funding rate addition puts it above / below limit, set to limit
-        if (fundingRate + deltaRate > maxFundingRate) {
+        if (fundingRate + deltaRate >= maxFundingRate) {
             fundingRate = maxFundingRate;
-        } else if (fundingRate + deltaRate < minFundingRate) {
+        } else if (fundingRate + deltaRate <= minFundingRate) {
             fundingRate = minFundingRate;
         } else {
             fundingRate += deltaRate;
         }
 
         // Calculate the new velocity
-        int256 velocity = FundingCalculator.calculateFundingRateVelocity(address(this), skew);
-
-        fundingRateVelocity = velocity;
+        fundingRateVelocity = Funding.calculateVelocity(address(this), skew);
         lastFundingUpdateTime = uint32(block.timestamp);
+
         emit FundingConfigUpdated(
             fundingRate, fundingRateVelocity, longCumulativeFundingFees, shortCumulativeFundingFees
         );
     }
 
     // Function to calculate borrowing fees per second
-    /// @dev uses GMX Synth borrow rate calculation
     /*
         borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
      */
     /// @dev Call every time OI is updated (trade open / close)
     function updateBorrowingRate(bool _isLong) external nonReentrant {
+        // If time elapsed = 0, return
+        uint256 lastUpdate = lastBorrowUpdateTime;
+        if (block.timestamp == lastUpdate) return;
+
+        // Calculate the new Borrowing Rate
         uint256 openInterest = MarketHelper.getIndexOpenInterestUSD(
             address(marketStorage), address(dataOracle), address(priceOracle), indexToken, _isLong
-        ); // OI USD
-        uint256 poolBalance = MarketHelper.getPoolBalanceUSD(
-            address(marketStorage), getMarketKey(), address(priceOracle), address(WUSDC.USDC())
-        ); // Pool balance in USD
+        );
+        uint256 poolBalance =
+            MarketHelper.getPoolBalanceUSD(address(marketStorage), getMarketKey(), address(priceOracle));
+
         uint256 rate = (borrowingFactor * (openInterest ** borrowingExponent)) / poolBalance;
 
         // update cumulative fees with current borrowing rate
-        uint256 borrowingRate;
         if (_isLong) {
-            borrowingRate = longBorrowingRate;
-            longCumulativeBorrowFee += borrowingRate * (block.timestamp - lastBorrowUpdateTime);
-            longBorrowingRate = rate;
+            longCumulativeBorrowFees += (longBorrowingRatePerSecond * (block.timestamp - lastBorrowUpdateTime));
+            longBorrowingRatePerSecond = rate;
         } else {
-            borrowingRate = shortBorrowingRate;
-            shortCumulativeBorrowFee += borrowingRate * (block.timestamp - lastBorrowUpdateTime);
-            shortBorrowingRate = rate;
+            shortCumulativeBorrowFees += (shortBorrowingRatePerSecond * (block.timestamp - lastBorrowUpdateTime));
+            shortBorrowingRatePerSecond = rate;
         }
         lastBorrowUpdateTime = uint32(block.timestamp);
         // update borrowing rate
@@ -266,15 +267,15 @@ contract Market is ReentrancyGuard, RoleValidation {
 
     /// @dev Updates Weighted Average Entry Price => Used to Track PNL For a Market
     function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external onlyExecutor {
+        if (_price == 0) return;
+        if (_sizeDeltaUsd == 0) return;
         if (_isLong) {
-            longTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
-                longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price
-            );
+            longTotalWAEP =
+                Pricing.calculateWeightedAverageEntryPrice(longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price);
             _sizeDeltaUsd > 0 ? longSizeSumUSD += uint256(_sizeDeltaUsd) : longSizeSumUSD -= uint256(-_sizeDeltaUsd);
         } else {
-            shortTotalWAEP = PricingCalculator.calculateWeightedAverageEntryPrice(
-                shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price
-            );
+            shortTotalWAEP =
+                Pricing.calculateWeightedAverageEntryPrice(shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price);
             _sizeDeltaUsd > 0 ? shortSizeSumUSD += uint256(_sizeDeltaUsd) : shortSizeSumUSD -= uint256(-_sizeDeltaUsd);
         }
         emit TotalWAEPUpdated(longTotalWAEP, shortTotalWAEP);
@@ -282,7 +283,7 @@ contract Market is ReentrancyGuard, RoleValidation {
 
     function getMarketParameters() external view returns (uint256, uint256, uint256, uint256) {
         return
-            (longCumulativeFundingFees, shortCumulativeFundingFees, longCumulativeBorrowFee, shortCumulativeBorrowFee);
+            (longCumulativeFundingFees, shortCumulativeFundingFees, longCumulativeBorrowFees, shortCumulativeBorrowFees);
     }
 
     function getMarketKey() public view returns (bytes32) {

@@ -44,7 +44,7 @@ contract TradeVault is RoleValidation {
         uint256 indexed _liqFee,
         bytes32 indexed _marketKey,
         uint256 _totalCollateral,
-        uint256 _fundingOwed,
+        uint256 _collateralFundingOwed,
         bool _isLong
     );
 
@@ -105,15 +105,15 @@ contract TradeVault is RoleValidation {
         uint256 _liqFee,
         bytes32 _marketKey,
         uint256 _totalCollateral,
-        uint256 _fundingOwed,
+        uint256 _collateralFundingOwed,
         bool _isLong
     ) external onlyTradeStorage {
         // funding
-        _swapFundingAmount(_marketKey, _fundingOwed, _isLong);
+        _swapFundingAmount(_marketKey, _collateralFundingOwed, _isLong);
 
         WUSDC.safeTransfer(_liquidator, _liqFee);
 
-        uint256 remainingCollateral = _totalCollateral - _fundingOwed - _liqFee;
+        uint256 remainingCollateral = _totalCollateral - _collateralFundingOwed - _liqFee;
         if (remainingCollateral > 0) {
             if (_isLong) {
                 longCollateral[_marketKey] -= remainingCollateral;
@@ -122,7 +122,9 @@ contract TradeVault is RoleValidation {
             }
             _sendTokensToLiquidityVault(remainingCollateral);
         }
-        emit PositionCollateralLiquidated(_liquidator, _liqFee, _marketKey, _totalCollateral, _fundingOwed, _isLong);
+        emit PositionCollateralLiquidated(
+            _liquidator, _liqFee, _marketKey, _totalCollateral, _collateralFundingOwed, _isLong
+        );
     }
 
     function claimFundingFees(bytes32 _marketKey, address _user, uint256 _claimed, bool _isLong)

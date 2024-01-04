@@ -31,6 +31,7 @@ contract WUSDC is ERC20, ReentrancyGuard {
     error WUSDC_ZeroAddress();
     error WUSDC_MintFailed();
     error WUSDC_InsufficientBalance();
+    error WUSDC_DepositFailed();
 
     IERC20 public immutable USDC;
 
@@ -45,12 +46,14 @@ contract WUSDC is ERC20, ReentrancyGuard {
     }
 
     /// @dev Accounts for Token Decimals (from 6 dec => 18)
-    function deposit(uint256 _usdcAmount) external nonReentrant returns (uint256) {
-        // Transfer USDC from user to contract
+    function deposit(uint256 _usdcAmount) external nonReentrant returns (uint256 wusdcAmount) {
+        // Deposit USDC to the contract
+        uint256 usdcBalanceBefore = USDC.balanceOf(address(this));
         USDC.safeTransferFrom(msg.sender, address(this), _usdcAmount);
+        if (USDC.balanceOf(address(this)) != usdcBalanceBefore + _usdcAmount) revert WUSDC_DepositFailed();
 
         // Calculate the amount of WUSDC to mint (with 18 decimals)
-        uint256 wusdcAmount = _usdcAmount * DECIMALS_DIFFERENCE;
+        wusdcAmount = _usdcAmount * DECIMALS_DIFFERENCE;
 
         // Mint the user the equivalent of WUSDC
         uint256 balBefore = balanceOf(msg.sender);
@@ -60,8 +63,6 @@ contract WUSDC is ERC20, ReentrancyGuard {
         if (balanceOf(msg.sender) != balBefore + wusdcAmount) revert WUSDC_MintFailed();
 
         emit Deposit(msg.sender, _usdcAmount, wusdcAmount);
-
-        return wusdcAmount;
     }
 
     /// @dev Accounts for Token Decimals (from 18 dec => 6)

@@ -17,48 +17,48 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {MarketStructs} from "../markets/MarketStructs.sol";
+import {Types} from "../libraries/Types.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 
-// library responsible for handling all borrowing calculations
-library BorrowingCalculator {
+/// @dev Library responsible for handling Borrowing related Calculations
+library Borrowing {
     uint256 public constant PRECISION = 1e18;
 
     /// @dev Gets the Total Fee To Charge For a Position Change in Tokens
-    function calculateBorrowingFee(address _market, MarketStructs.Position calldata _position, uint256 _collateralDelta)
+    function calculateFeeForPositionChange(address _market, Types.Position calldata _position, uint256 _collateralDelta)
         external
         view
-        returns (uint256 feeForPositionChange)
+        returns (uint256 feeIndexTokens)
     {
-        feeForPositionChange = (getBorrowingFees(_market, _position) * _collateralDelta) / _position.collateralAmount;
+        feeIndexTokens = (getTotalPositionFeesOwed(_market, _position) * _collateralDelta) / _position.collateralAmount;
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
-    function getBorrowingFees(address _market, MarketStructs.Position calldata _position)
+    function getTotalPositionFeesOwed(address _market, Types.Position calldata _position)
         public
         view
-        returns (uint256 totalFeesOwed)
+        returns (uint256 totalFeesOwedIndexTokens)
     {
         uint256 feeSinceUpdate = getFeesSinceLastPositionUpdate(_market, _position);
-        totalFeesOwed = feeSinceUpdate + _position.borrowParams.feesOwed;
+        totalFeesOwedIndexTokens = feeSinceUpdate + _position.borrow.feesOwed;
     }
 
     /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
     /// @dev Units: Fees in Tokens (% of fees applied to position size)
-    function getFeesSinceLastPositionUpdate(address _market, MarketStructs.Position calldata _position)
+    function getFeesSinceLastPositionUpdate(address _market, Types.Position calldata _position)
         public
         view
-        returns (uint256 feesSinceLastUpdate)
+        returns (uint256 feesSinceUpdateIndexTokens)
     {
-        // get cumulative funding fees since last update
+        // get cumulative borrowing fees since last update
         uint256 borrowFee = _position.isLong
-            ? IMarket(_market).longCumulativeBorrowFee() - _position.borrowParams.lastLongCumulativeBorrowFee
-            : IMarket(_market).shortCumulativeBorrowFee() - _position.borrowParams.lastShortCumulativeBorrowFee;
+            ? IMarket(_market).longCumulativeBorrowFees() - _position.borrow.lastLongCumulativeBorrowFee
+            : IMarket(_market).shortCumulativeBorrowFees() - _position.borrow.lastShortCumulativeBorrowFee;
         borrowFee += _calculatePendingFees(_market, _position.isLong);
         if (borrowFee == 0) {
-            feesSinceLastUpdate = 0;
+            feesSinceUpdateIndexTokens = 0;
         } else {
-            feesSinceLastUpdate = (_position.positionSize * borrowFee) / PRECISION;
+            feesSinceUpdateIndexTokens = (_position.positionSize * borrowFee) / PRECISION;
         }
     }
 
