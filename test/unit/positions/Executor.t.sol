@@ -18,7 +18,7 @@ import {Liquidator} from "../../../src/positions/Liquidator.sol";
 import {RequestRouter} from "../../../src/positions/RequestRouter.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {TradeVault} from "../../../src/positions/TradeVault.sol";
-import {WUSDC} from "../../../src/token/WUSDC.sol";
+import {USDE} from "../../../src/token/USDE.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
@@ -47,7 +47,7 @@ contract TestExecutor is Test {
     RequestRouter requestRouter;
     TradeStorage tradeStorage;
     TradeVault tradeVault;
-    WUSDC wusdc;
+    USDE usde;
 
     address public OWNER;
 
@@ -69,14 +69,7 @@ contract TestExecutor is Test {
         requestRouter = contracts.requestRouter;
         tradeStorage = contracts.tradeStorage;
         tradeVault = contracts.tradeVault;
-        wusdc = contracts.wusdc;
+        usde = contracts.usde;
         OWNER = contracts.owner;
-    }
-
-    function testProofOfConcept() public {
-        address ATTACKER = makeAddr("ATTACKER");
-        bytes32 randomRequestKey = keccak256(abi.encode("ATTACKER"));
-        vm.expectRevert(Executor.Executor_InvalidRequestKey.selector);
-        executor.executeTradeOrder(randomRequestKey, ATTACKER, false);
     }
 }

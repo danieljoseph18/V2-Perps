@@ -2,12 +2,12 @@
 pragma solidity 0.8.23;
 
 import {IDataOracle} from "../../oracle/interfaces/IDataOracle.sol";
-import {IWUSDC} from "../../token/interfaces/IWUSDC.sol";
+import {IUSDE} from "../../token/interfaces/IUSDE.sol";
 import {IMarketToken} from "./IMarketToken.sol";
 
 interface ILiquidityVault {
     // Public State Variables
-    function WUSDC() external view returns (IWUSDC);
+    function USDE() external view returns (IUSDE);
     function liquidityToken() external view returns (IMarketToken);
     function dataOracle() external view returns (IDataOracle);
     function poolAmounts() external view returns (uint256);

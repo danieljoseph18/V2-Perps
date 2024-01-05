@@ -18,7 +18,7 @@ import {Liquidator} from "../../../src/positions/Liquidator.sol";
 import {RequestRouter} from "../../../src/positions/RequestRouter.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {TradeVault} from "../../../src/positions/TradeVault.sol";
-import {WUSDC} from "../../../src/token/WUSDC.sol";
+import {USDE} from "../../../src/token/USDE.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
@@ -39,7 +39,7 @@ contract TestMarketFactory is Test {
     RequestRouter requestRouter;
     TradeStorage tradeStorage;
     TradeVault tradeVault;
-    WUSDC wusdc;
+    USDE usde;
 
     address public OWNER;
     address public USER = makeAddr("user");
@@ -65,7 +65,7 @@ contract TestMarketFactory is Test {
         requestRouter = contracts.requestRouter;
         tradeStorage = contracts.tradeStorage;
         tradeVault = contracts.tradeVault;
-        wusdc = contracts.wusdc;
+        usde = contracts.usde;
         OWNER = contracts.owner;
     }
 
@@ -82,7 +82,7 @@ contract TestMarketFactory is Test {
 
         // Get the market info
         bytes32 marketKey = keccak256(abi.encode(address(indexToken)));
-        (, address marketAddress,) = marketStorage.markets(marketKey);
+        (,, address marketAddress,) = marketStorage.markets(marketKey);
         assertNotEq(address(0), marketAddress);
 
         // Check the market has the correct values
@@ -90,7 +90,6 @@ contract TestMarketFactory is Test {
         assertEq(address(indexToken), market.indexToken());
         assertEq(address(marketStorage), address(market.marketStorage()));
         assertEq(address(priceOracle), address(market.priceOracle()));
-        assertEq(address(wusdc), address(market.WUSDC()));
         assertEq(address(roleStorage), address(market.roleStorage()));
         assertEq(0.00000035e18, market.maxFundingVelocity());
         assertEq(1_000_000e18, market.skewScale());

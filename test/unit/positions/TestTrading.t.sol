@@ -18,7 +18,7 @@ import {Liquidator} from "../../../src/positions/Liquidator.sol";
 import {RequestRouter} from "../../../src/positions/RequestRouter.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {TradeVault} from "../../../src/positions/TradeVault.sol";
-import {WUSDC} from "../../../src/token/WUSDC.sol";
+import {USDE} from "../../../src/token/USDE.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Market} from "../../../src/markets/Market.sol";
@@ -280,7 +280,6 @@ contract TestTrading is Test {
 //     console.log(position.pnl.leverage);
 //     assertGt(position.pnl.leverage, 1);
 //     assertGt(position.pnl.weightedAvgEntryPrice, 0);
-//     assertEq(position.entryTimestamp, block.timestamp);
 // }
 
 // function testThePriceImpactOnALargeSizedTrade() public facilitateTrading {

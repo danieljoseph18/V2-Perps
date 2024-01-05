@@ -30,6 +30,7 @@ library Types {
 
     // Market
     struct Market {
+        bool exists;
         address indexToken;
         address market;
         bytes32 marketKey; // Note Use where applicable to save on gas
@@ -38,7 +39,7 @@ library Types {
     // Trade Request -> Sent by user
     struct Trade {
         address indexToken;
-        uint256 collateralDelta;
+        uint256 collateralDeltaUSDC;
         uint256 sizeDelta;
         uint256 orderPrice;
         uint256 maxSlippage;
@@ -98,7 +99,6 @@ library Types {
         Borrow borrow;
         Funding funding;
         PnL pnl;
-        uint256 entryTimestamp;
     }
 
     // Executed Request

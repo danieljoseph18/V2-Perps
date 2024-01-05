@@ -24,31 +24,23 @@ pragma solidity 0.8.23;
 import {IMarketStorage} from "./interfaces/IMarketStorage.sol";
 import {Market} from "./Market.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {Types} from "../libraries/Types.sol";
 
 /// @dev Needs MarketMaker role
 contract MarketFactory is RoleValidation {
-    address public immutable WUSDC;
-
     address public marketStorage;
     address public dataOracle;
     address public priceOracle;
 
-    error MarketFactory_ZeroAddress();
-    error MarketFactory_InvalidBaseUnit();
-    error MarketFactory_MarketExists();
-
     event MarketCreated(address indexed indexToken, address indexed market);
 
-    constructor(address _marketStorage, address _wusdc, address _priceOracle, address _dataOracle, address _roleStorage)
+    constructor(address _marketStorage, address _priceOracle, address _dataOracle, address _roleStorage)
         RoleValidation(_roleStorage)
     {
         marketStorage = _marketStorage;
         dataOracle = _dataOracle;
-        WUSDC = _wusdc;
         priceOracle = _priceOracle;
     }
 
@@ -58,22 +50,19 @@ contract MarketFactory is RoleValidation {
         onlyAdmin
         returns (Types.Market memory marketInfo)
     {
-        if (_indexToken == address(0) || _priceFeed == address(0)) revert MarketFactory_ZeroAddress();
-        if (_baseUnit != 1e18 || _baseUnit != 1e6 || _baseUnit != 1e8) revert MarketFactory_InvalidBaseUnit();
+        require(_indexToken != address(0) && _priceFeed != address(0), "MF: Zero Address");
+        require(_baseUnit == 1e18 || _baseUnit == 1e8 || _baseUnit == 1e6, "MF: Invalid Base Unit");
 
         // Check if market already exists
         bytes32 marketKey = keccak256(abi.encode(_indexToken));
-        if (IMarketStorage(marketStorage).markets(marketKey).market != address(0)) {
-            revert MarketFactory_MarketExists();
-        }
+        require(!IMarketStorage(marketStorage).markets(marketKey).exists, "MF: Market Exists");
 
         // Set Up Price Oracle
         IPriceOracle(priceOracle).updatePriceSource(_indexToken, _priceFeed);
 
         // Create new Market contract
-        Market market = new Market(
-            _indexToken, address(marketStorage), priceOracle, address(dataOracle), WUSDC, address(roleStorage)
-        );
+        Market market =
+            new Market(_indexToken, address(marketStorage), priceOracle, address(dataOracle), address(roleStorage));
 
         // Initialise With Default Values
         Market(market).initialise(
@@ -81,7 +70,7 @@ contract MarketFactory is RoleValidation {
         );
 
         // Store everything in MarketStorage
-        marketInfo = Types.Market(_indexToken, address(market), marketKey);
+        marketInfo = Types.Market(true, _indexToken, address(market), marketKey);
         IMarketStorage(marketStorage).storeMarket(marketInfo);
         IDataOracle(dataOracle).setBaseUnit(_indexToken, _baseUnit);
 

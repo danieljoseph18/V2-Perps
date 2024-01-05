@@ -23,8 +23,6 @@ import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {Types} from "../libraries/Types.sol";
 
 contract DataOracle is RoleValidation {
-    error DataOracle_InvalidMarket();
-
     IMarketStorage public marketStorage;
     address public priceOracle;
 
@@ -74,7 +72,7 @@ contract DataOracle is RoleValidation {
     }
 
     function getNetPnl(Types.Market memory _market) public view returns (int256) {
-        if (!isMarket[_market.marketKey]) revert DataOracle_InvalidMarket();
+        require(isMarket[_market.marketKey], "DO: Invalid Market");
         return Pricing.getNetPnL(_market.market, address(marketStorage), address(this), address(priceOracle), true)
             + Pricing.getNetPnL(_market.market, address(marketStorage), address(this), address(priceOracle), false);
     }

@@ -30,8 +30,6 @@ contract Liquidator is RoleValidation {
     IMarketStorage public marketStorage;
     IPriceOracle public priceOracle;
 
-    error Liquidator_PositionNotLiquidatable();
-
     constructor(address _tradeStorage, address _marketStorage, address _priceOracle, address _roleStorage)
         RoleValidation(_roleStorage)
     {

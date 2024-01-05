@@ -32,48 +32,26 @@ library TradeHelper {
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant MAX_LEVERAGE = 5000; // 50x
     uint256 public constant LEVERAGE_PRECISION = 100;
-    uint256 public constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
-    uint256 public constant MAX_TRADING_FEE = 0.01e18; // 1%
     uint256 public constant PRECISION = 1e18;
 
-    error TradeHelper_LimitPriceNotMet();
-    error TradeHelper_RequestAlreadyExists();
-    error TradeHelper_InvalidLeverage();
-    error TradeHelper_PositionNotLiquidatable();
-    error TradeHelper_InvalidCollateralReduction();
-
-    // Validate whether a request should execute or not
-    function validateRequest(address _tradeStorage, bytes32 _key) external view returns (bool) {
-        Types.Request memory request = ITradeStorage(_tradeStorage).orders(_key);
-        if (request.user != address(0)) revert TradeHelper_RequestAlreadyExists();
-        return true;
-    }
-
-    function generateKey(Types.Request memory _request) external pure returns (bytes32) {
-        return keccak256(abi.encode(_request.indexToken, _request.user, _request.isLong));
+    function generateKey(Types.Request memory _request) external pure returns (bytes32 positionKey) {
+        positionKey = keccak256(abi.encode(_request.indexToken, _request.user, _request.isLong));
     }
 
     function checkLimitPrice(uint256 _price, Types.Request memory _request) external pure {
         if (_request.isLong) {
-            if (_price >= _request.orderPrice) revert TradeHelper_LimitPriceNotMet();
+            require(_price <= _request.orderPrice, "TH: Limit Price");
         } else {
-            if (_price <= _request.orderPrice) revert TradeHelper_LimitPriceNotMet();
+            require(_price >= _request.orderPrice, "TH: Limit Price");
         }
     }
 
     // 1x = 100
-    function checkLeverage(
-        address _dataOracle,
-        address _priceOracle,
-        address _indexToken,
-        uint256 _signedPrice,
-        uint256 _size,
-        uint256 _collateral
-    ) external view {
-        uint256 sizeUsd = getTradeValueUsd(_dataOracle, _indexToken, _size, _signedPrice);
-        uint256 collateralUsd = (_collateral * IPriceOracle(_priceOracle).getCollateralPrice()) / PRECISION;
-        uint256 leverage = (sizeUsd * LEVERAGE_PRECISION) / collateralUsd;
-        if (leverage < MIN_LEVERAGE || leverage > MAX_LEVERAGE) revert TradeHelper_InvalidLeverage();
+    function checkLeverage(uint256 _collateralPrice, uint256 _sizeUsd, uint256 _collateral) external pure {
+        uint256 collateralUsd = (_collateral * _collateralPrice) / PRECISION;
+        require(collateralUsd <= _sizeUsd, "TH: cUSD > sUSD");
+        uint256 leverage = (_sizeUsd * LEVERAGE_PRECISION) / collateralUsd;
+        require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, "TH: Leverage");
     }
 
     function createRequest(
@@ -100,16 +78,15 @@ library TradeHelper {
     function generateNewPosition(address _market, address _dataOracle, Types.Request memory _request, uint256 _price)
         external
         view
-        returns (Types.Position memory)
+        returns (Types.Position memory position)
     {
-        // create a new position
-        // calculate all input variables
+        // Get Entry Funding & Borrowing Values
         (uint256 longFunding, uint256 shortFunding, uint256 longBorrowFee, uint256 shortBorrowFee) =
             IMarket(_market).getMarketParameters();
+        // get Trade Value in USD
         uint256 sizeUsd = getTradeValueUsd(_dataOracle, _request.indexToken, _request.sizeDelta, _price);
-        bytes32 marketKey = getMarketKey(_request.indexToken);
-        return Types.Position({
-            market: marketKey,
+        position = Types.Position({
+            market: getMarketKey(_request.indexToken),
             indexToken: _request.indexToken,
             user: _request.user,
             collateralAmount: _request.collateralDelta,
@@ -118,8 +95,7 @@ library TradeHelper {
             realisedPnl: 0,
             borrow: Types.Borrow(0, block.timestamp, longBorrowFee, shortBorrowFee),
             funding: Types.Funding(0, 0, block.timestamp, longFunding, shortFunding),
-            pnl: Types.PnL(_price, sizeUsd),
-            entryTimestamp: block.timestamp
+            pnl: Types.PnL(_price, sizeUsd)
         });
     }
 
@@ -127,32 +103,19 @@ library TradeHelper {
     function getTradeValueUsd(address _dataOracle, address _indexToken, uint256 _sizeDelta, uint256 _signedPrice)
         public
         view
-        returns (uint256)
+        returns (uint256 tradeValueUsd)
     {
         uint256 baseUnit = IDataOracle(_dataOracle).getBaseUnits(_indexToken);
-        return (_sizeDelta * _signedPrice) / baseUnit;
+        tradeValueUsd = (_sizeDelta * _signedPrice) / baseUnit;
     }
 
+    // Calculates the liquidation fee in Collateral Tokens
     function calculateLiquidationFee(address _priceOracle, uint256 _liquidationFeeUsd)
         external
         pure
-        returns (uint256)
+        returns (uint256 liquidationFeeUSDE)
     {
-        return (_liquidationFeeUsd * PRECISION) / (IPriceOracle(_priceOracle).getCollateralPrice());
-    }
-
-    function checkMinCollateral(Types.Request memory _request, uint256 _collateralPriceUsd, address _tradeStorage)
-        external
-        view
-        returns (bool)
-    {
-        uint256 minCollateralUsd = ITradeStorage(_tradeStorage).minCollateralUsd();
-        uint256 requestCollateralUsd = _request.collateralDelta * _collateralPriceUsd;
-        if (requestCollateralUsd < minCollateralUsd) {
-            return false;
-        } else {
-            return true;
-        }
+        liquidationFeeUSDE = (_liquidationFeeUsd * PRECISION) / (IPriceOracle(_priceOracle).getCollateralPrice());
     }
 
     function convertIndexAmountToCollateral(
@@ -160,41 +123,33 @@ library TradeHelper {
         uint256 _indexAmount,
         uint256 _indexPrice,
         uint256 _baseUnit
-    ) external pure returns (uint256) {
+    ) external pure returns (uint256 collateralAmount) {
         uint256 indexUsd = (_indexAmount * _indexPrice) / _baseUnit;
-        return (indexUsd * PRECISION) / IPriceOracle(_priceOracle).getCollateralPrice();
+        collateralAmount = (indexUsd * PRECISION) / IPriceOracle(_priceOracle).getCollateralPrice();
     }
 
     function getTotalFeesOwedUsd(address _dataOracle, Types.Position memory _position, uint256 _price, address _market)
         public
         view
-        returns (uint256)
+        returns (uint256 totalFeesOwedUsd)
     {
         uint256 baseUnits = IDataOracle(_dataOracle).getBaseUnits(_position.indexToken);
 
-        uint256 borrowingFees = Borrowing.getTotalPositionFeesOwed(_market, _position);
-        uint256 borrowingFeesUsd = _convertIndexAmountToUsd(borrowingFees, _price, baseUnits);
+        uint256 borrowingFeeOwed = Borrowing.getTotalPositionFeesOwed(_market, _position);
+        uint256 borrowingFeeUsd = (borrowingFeeOwed * _price) / baseUnits;
 
         (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_market, _position);
-        uint256 fundingValueUsd = _convertIndexAmountToUsd(fundingFeeOwed, _price, baseUnits);
+        uint256 fundingValueUsd = (fundingFeeOwed * _price) / baseUnits;
 
-        return borrowingFeesUsd + fundingValueUsd;
+        totalFeesOwedUsd = borrowingFeeUsd + fundingValueUsd;
     }
 
-    function getMarket(address _marketStorage, address _indexToken) external view returns (address) {
+    function getMarket(address _marketStorage, address _indexToken) external view returns (address marketAddress) {
         bytes32 market = keccak256(abi.encode(_indexToken));
-        return IMarketStorage(_marketStorage).markets(market).market;
+        marketAddress = IMarketStorage(_marketStorage).markets(market).market;
     }
 
-    function getMarketKey(address _indexToken) public pure returns (bytes32) {
-        return keccak256(abi.encode(_indexToken));
-    }
-
-    function _convertIndexAmountToUsd(uint256 _indexAmount, uint256 _price, uint256 _baseUnits)
-        internal
-        pure
-        returns (uint256 indexUsd)
-    {
-        indexUsd = (_indexAmount * _price) / _baseUnits;
+    function getMarketKey(address _indexToken) public pure returns (bytes32 marketKey) {
+        marketKey = keccak256(abi.encode(_indexToken));
     }
 }

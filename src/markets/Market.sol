@@ -28,7 +28,6 @@ import {Pricing} from "../libraries/Pricing.sol";
 import {MarketHelper} from "./MarketHelper.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
-import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 
 /// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
@@ -41,7 +40,6 @@ contract Market is ReentrancyGuard, RoleValidation {
     IMarketStorage public marketStorage;
     IPriceOracle public priceOracle;
     IDataOracle public dataOracle;
-    IWUSDC public immutable WUSDC;
 
     bool private isInitialised;
 
@@ -103,21 +101,17 @@ contract Market is ReentrancyGuard, RoleValidation {
         uint256 _priceImpactExponent
     );
 
-    error Market_AlreadyInitialised();
-
     constructor(
         address _indexToken,
         address _marketStorage,
         address _priceOracle,
         address _dataOracle,
-        address _wusdc,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         indexToken = _indexToken;
         marketStorage = IMarketStorage(_marketStorage);
         priceOracle = IPriceOracle(_priceOracle);
         dataOracle = IDataOracle(_dataOracle);
-        WUSDC = IWUSDC(_wusdc);
     }
 
     /// @dev All values need 18 decimals => e.g 0.0003e18 = 0.03%
@@ -134,7 +128,7 @@ contract Market is ReentrancyGuard, RoleValidation {
         uint256 _priceImpactFactor,
         uint256 _priceImpactExponent // Integer e.g 2
     ) external onlyMarketMaker {
-        if (isInitialised) revert Market_AlreadyInitialised();
+        require(!isInitialised, "Market: already initialised");
         maxFundingVelocity = _maxFundingVelocity;
         skewScale = _skewScale;
         maxFundingRate = _maxFundingRate;

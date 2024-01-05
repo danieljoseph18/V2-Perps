@@ -45,16 +45,13 @@ contract MarketStorage is RoleValidation {
     );
     event MarketStateUpdated(bytes32 indexed _marketKey, uint256 indexed _newAllocation, uint256 indexed _maxOI);
 
-    error MarketStorage_MarketAlreadyExists();
-    error MarketStorage_NonExistentMarket();
-
     constructor(address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
         liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
     /// @dev Only MarketFactory
     function storeMarket(Types.Market memory _market) external onlyMarketMaker {
-        if (markets[_market.marketKey].market != address(0)) revert MarketStorage_MarketAlreadyExists();
+        require(!markets[_market.marketKey].exists, "MS: Market Exists");
         marketKeys.push(_market.marketKey);
         markets[_market.marketKey] = _market;
     }
@@ -67,7 +64,7 @@ contract MarketStorage is RoleValidation {
         bool _isLong,
         bool _shouldAdd
     ) external onlyExecutor {
-        if (markets[_marketKey].market == address(0)) revert MarketStorage_NonExistentMarket();
+        require(markets[_marketKey].exists, "MS: Market Doesn't Exist");
         if (_shouldAdd) {
             if (_isLong) {
                 collatTokenLongOpenInterest[_marketKey] += _collateralTokenAmount;
@@ -91,7 +88,7 @@ contract MarketStorage is RoleValidation {
     /// @dev Maximum amount of liquidity allocated to markets
     /// @param _maxOI Max Open Interest in Index Tokens
     function updateState(bytes32 _marketKey, uint256 _newAllocation, uint256 _maxOI) external onlyStateUpdater {
-        if (markets[_marketKey].market == address(0)) revert MarketStorage_NonExistentMarket();
+        require(markets[_marketKey].exists, "MS: Market Doesn't Exist");
         if (_newAllocation != 0) {
             marketAllocations[_marketKey] = _newAllocation;
         }

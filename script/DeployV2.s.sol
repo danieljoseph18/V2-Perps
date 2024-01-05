@@ -18,7 +18,7 @@ import {Liquidator} from "../src/positions/Liquidator.sol";
 import {RequestRouter} from "../src/positions/RequestRouter.sol";
 import {TradeStorage} from "../src/positions/TradeStorage.sol";
 import {TradeVault} from "../src/positions/TradeVault.sol";
-import {WUSDC} from "../src/token/WUSDC.sol";
+import {USDE} from "../src/token/USDE.sol";
 import {Roles} from "../src/access/Roles.sol";
 
 contract DeployV2 is Script {
@@ -40,7 +40,7 @@ contract DeployV2 is Script {
         RequestRouter requestRouter;
         TradeStorage tradeStorage;
         TradeVault tradeVault;
-        WUSDC wusdc;
+        USDE usde;
         address owner;
     }
 
@@ -71,22 +71,21 @@ contract DeployV2 is Script {
             RequestRouter(address(0)),
             TradeStorage(address(0)),
             TradeVault(payable(address(0))),
-            WUSDC(address(0)),
+            USDE(address(0)),
             msg.sender
         );
 
         /**
          * ============ Deploy Contracts ============
          */
-
-        contracts.wusdc = new WUSDC(usdc);
+        contracts.usde = new USDE(usdc);
 
         contracts.roleStorage = new RoleStorage();
 
         contracts.marketToken = new MarketToken("BRRR-LP", "BRRR-LP", address(contracts.roleStorage));
 
         contracts.liquidityVault =
-            new LiquidityVault(address(contracts.wusdc), address(contracts.marketToken), address(contracts.roleStorage));
+            new LiquidityVault(address(contracts.usde), address(contracts.marketToken), address(contracts.roleStorage));
 
         contracts.marketStorage = new MarketStorage(address(contracts.liquidityVault), address(contracts.roleStorage));
 
@@ -95,13 +94,12 @@ contract DeployV2 is Script {
         );
 
         contracts.tradeVault =
-            new TradeVault(address(contracts.wusdc), address(contracts.liquidityVault), address(contracts.roleStorage));
+            new TradeVault(address(contracts.usde), address(contracts.liquidityVault), address(contracts.roleStorage));
 
         contracts.tradeStorage = new TradeStorage(
             address(contracts.marketStorage),
             address(contracts.liquidityVault),
             address(contracts.tradeVault),
-            address(contracts.wusdc),
             priceOracle,
             address(contracts.dataOracle),
             address(contracts.roleStorage)
@@ -109,7 +107,6 @@ contract DeployV2 is Script {
 
         contracts.marketFactory = new MarketFactory(
             address(contracts.marketStorage),
-            address(contracts.wusdc),
             address(priceOracle),
             address(contracts.dataOracle),
             address(contracts.roleStorage)
@@ -136,7 +133,7 @@ contract DeployV2 is Script {
             address(contracts.liquidityVault),
             address(contracts.marketStorage),
             address(contracts.tradeVault),
-            address(contracts.wusdc)
+            address(contracts.usde)
         );
 
         contracts.stateUpdater = new StateUpdater(
@@ -153,7 +150,6 @@ contract DeployV2 is Script {
         /**
          * ============ Set Up Contracts ============
          */
-
         contracts.liquidityVault.initialise(address(contracts.dataOracle), address(contracts.priceOracle), 0.0003e18);
         contracts.tradeStorage.initialise(5e18, 0.001e18, 0.001 ether);
 

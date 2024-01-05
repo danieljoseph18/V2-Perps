@@ -21,14 +21,14 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
-import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
+import {IUSDE} from "../token/interfaces/IUSDE.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 
 /// @dev Needs Vault Role
 contract TradeVault is RoleValidation {
-    using SafeERC20 for IWUSDC;
+    using SafeERC20 for IUSDE;
 
-    IWUSDC public immutable WUSDC;
+    IUSDE public immutable USDE;
     ILiquidityVault public liquidityVault;
 
     mapping(bytes32 _marketKey => uint256 _collateral) public longCollateral;
@@ -48,17 +48,8 @@ contract TradeVault is RoleValidation {
         bool _isLong
     );
 
-    error TradeVault_InvalidToken();
-    error TradeVault_IncorrectMarketKey();
-    error TradeVault_ZeroAddressTransfer();
-    error TradeVault_ZeroBalanceTransfer();
-    error TradeVault_InsufficientCollateral();
-    error TradeVault_InsufficientCollateralToClaim();
-    error TradeVault_InsufficientBalance();
-    error TradeVault_ExecutionFeeTransferFailed();
-
-    constructor(address _wusdc, address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
-        WUSDC = IWUSDC(_wusdc);
+    constructor(address _usde, address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
+        USDE = IUSDE(_usde);
         liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
@@ -71,17 +62,17 @@ contract TradeVault is RoleValidation {
         external
         onlyTradeStorage
     {
-        if (longCollateral[_marketKey] == 0 && shortCollateral[_marketKey] == 0) revert TradeVault_IncorrectMarketKey();
-        if (_to == address(0)) revert TradeVault_ZeroAddressTransfer();
-        if (_collateralDelta == 0) revert TradeVault_ZeroBalanceTransfer();
+        require(longCollateral[_marketKey] != 0 || shortCollateral[_marketKey] != 0, "TV: Incorrect Market Key");
+        require(_to != address(0), "TV: Zero Address");
+        require(_collateralDelta != 0, "TV: Zero Amount");
         if (_isLong) {
-            if (longCollateral[_marketKey] < _collateralDelta) revert TradeVault_InsufficientCollateral();
+            require(longCollateral[_marketKey] >= _collateralDelta, "TV: Insufficient Collateral");
         } else {
-            if (shortCollateral[_marketKey] < _collateralDelta) revert TradeVault_InsufficientCollateral();
+            require(shortCollateral[_marketKey] >= _collateralDelta, "TV: Insufficient Collateral");
         }
         uint256 amount = _collateralDelta;
         _isLong ? longCollateral[_marketKey] -= amount : shortCollateral[_marketKey] -= amount;
-        WUSDC.safeTransfer(_to, amount);
+        USDE.safeTransfer(_to, amount);
         emit TransferOutTokens(_marketKey, _to, _collateralDelta, _isLong);
     }
 
@@ -111,7 +102,7 @@ contract TradeVault is RoleValidation {
         // funding
         _swapFundingAmount(_marketKey, _collateralFundingOwed, _isLong);
 
-        WUSDC.safeTransfer(_liquidator, _liqFee);
+        USDE.safeTransfer(_liquidator, _liqFee);
 
         uint256 remainingCollateral = _totalCollateral - _collateralFundingOwed - _liqFee;
         if (remainingCollateral > 0) {
@@ -132,20 +123,20 @@ contract TradeVault is RoleValidation {
         onlyTradeStorage
     {
         if (_isLong) {
-            if (shortCollateral[_marketKey] < _claimed) revert TradeVault_InsufficientCollateralToClaim();
+            require(shortCollateral[_marketKey] >= _claimed, "TV: Insufficient Claimable");
         } else {
-            if (longCollateral[_marketKey] < _claimed) revert TradeVault_InsufficientCollateralToClaim();
+            require(longCollateral[_marketKey] >= _claimed, "TV: Insufficient Claimable");
         }
         // transfer funding from the counter parties' liquidity pool
         _updateCollateralBalance(_marketKey, _claimed, _isLong, false);
         // transfer funding to the user
-        WUSDC.safeTransfer(_user, _claimed);
+        USDE.safeTransfer(_user, _claimed);
     }
 
     function sendExecutionFee(address payable _executor, uint256 _executionFee) external onlyTradeStorage {
-        if (address(this).balance < _executionFee) revert TradeVault_InsufficientBalance();
+        require(address(this).balance >= _executionFee, "TV: Insufficient Balance");
         (bool success,) = _executor.call{value: _executionFee}("");
-        if (!success) revert TradeVault_ExecutionFeeTransferFailed();
+        require(success, "TV: Fee Transfer Failed");
         emit ExecutionFeeSent(_executor, _executionFee);
     }
 
@@ -169,9 +160,9 @@ contract TradeVault is RoleValidation {
     }
 
     function _sendTokensToLiquidityVault(uint256 _amount) internal {
-        if (_amount == 0) revert TradeVault_ZeroBalanceTransfer();
+        require(_amount != 0, "TV: Zero Amount");
         liquidityVault.accumulateFees(_amount);
-        WUSDC.safeTransfer(address(liquidityVault), _amount);
+        USDE.safeTransfer(address(liquidityVault), _amount);
         emit LossesTransferred(_amount);
     }
 }

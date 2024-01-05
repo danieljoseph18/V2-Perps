@@ -28,157 +28,142 @@ import {ITradeVault} from "./interfaces/ITradeVault.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
-import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
+import {IUSDE} from "../token/interfaces/IUSDE.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 
 /// @dev Needs Router role
 contract RequestRouter is ReentrancyGuard {
     using SafeERC20 for IERC20;
-    using SafeERC20 for IWUSDC;
+    using SafeERC20 for IUSDE;
 
     ITradeStorage tradeStorage;
     ILiquidityVault liquidityVault;
     IMarketStorage marketStorage;
     ITradeVault tradeVault;
-    IWUSDC immutable WUSDC;
+    IUSDE immutable USDE;
 
     uint256 constant PRECISION = 1e18;
     uint256 constant COLLATERAL_MULTIPLIER = 1e12;
     uint256 constant MIN_SLIPPAGE = 0.0003e18; // 0.03%
     uint256 constant MAX_SLIPPAGE = 0.99e18; // 99%
 
-    error RequestRouter_InvalidExecutionFee();
-    error RequestRouter_ExecutionFeeTransferFailed();
-    error RequestRouter_PositionSizeTooLarge();
-    error RequestRouter_CallerIsNotPositionOwner();
-    error RequestRouter_ExecutionFeeDoesNotMatch();
-    error RequestRouter_RequestDoesNotExist();
-    error RequestRouter_InvalidIndexToken();
-    error RequestRouter_InvalidSlippage();
-    error RequestRouter_PositionDoesNotExist();
-    error RequestRouter_CollateralDeltaIsZero();
-    error RequestRouter_CallerIsContract();
-    error RequestRouter_DecreaseNonExistentPosition();
-    error RequestRouter_SizeDeltaIsZero();
-    error RequestRouter_SizeDeltaExceedsPositionSize();
-    error RequestRouter_CollateralDeltaExceedsCollateralAmount();
-
     constructor(
         address _tradeStorage,
         address _liquidityVault,
         address _marketStorage,
         address _tradeVault,
-        address _wusdc
+        address _usde
     ) {
         tradeStorage = ITradeStorage(_tradeStorage);
         liquidityVault = ILiquidityVault(_liquidityVault);
         marketStorage = IMarketStorage(_marketStorage);
         tradeVault = ITradeVault(_tradeVault);
-        WUSDC = IWUSDC(_wusdc);
+        USDE = IUSDE(_usde);
     }
 
     modifier validExecutionFee() {
-        if (msg.value != tradeStorage.executionFee()) revert RequestRouter_InvalidExecutionFee();
+        require(msg.value == tradeStorage.executionFee(), "RR: Execution Fee");
         _;
     }
 
+    /// @dev collateralDelta always in USDC
     function createTradeRequest(Types.Trade calldata _trade) external payable nonReentrant validExecutionFee {
-        if (_trade.maxSlippage < MIN_SLIPPAGE || _trade.maxSlippage > MAX_SLIPPAGE) {
-            revert RequestRouter_InvalidSlippage();
-        }
-        if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
+        require(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE, "RR: Slippage");
+        require(_trade.collateralDeltaUSDC != 0, "RR: Collateral Delta");
 
+        // Check if Market exists
         bytes32 marketKey = keccak256(abi.encode(_trade.indexToken));
         Types.Market memory market = marketStorage.markets(marketKey);
-        if (address(market.market) == address(0)) {
-            revert RequestRouter_InvalidIndexToken();
-        }
-
+        require(market.exists, "RR: Market Doesn't Exist");
+        // Create a Pointer to the Position
         bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
         Types.Position memory position = tradeStorage.openPositions(positionKey);
 
-        uint256 collateralDelta;
+        // Calculate the Collateral Delta in USDE
+        uint256 collateralDeltaUSDE;
         if (_trade.isIncrease) {
+            // Check Position doesn't exceed Market Allocation
             _validateAllocation(marketKey, _trade.sizeDelta);
-            collateralDelta = _handleTokenTransfers(_trade.collateralDelta, marketKey, _trade.isLong, true);
+            // Send USDC to correct location and return amount in USDE
+            collateralDeltaUSDE = _handleTokenTransfers(_trade.collateralDeltaUSDC, marketKey, _trade.isLong, true);
         } else {
-            collateralDelta = _trade.collateralDelta * COLLATERAL_MULTIPLIER;
+            // Convert USDC to USDE
+            collateralDeltaUSDE = _trade.collateralDeltaUSDC * COLLATERAL_MULTIPLIER;
         }
-
-        Types.RequestType requestType = _getRequestType(_trade, position);
+        // Calculate Request Type
+        Types.RequestType requestType = _getRequestType(_trade, position, collateralDeltaUSDE);
+        // Send Fee for Execution to Vault to be sent to whoever executes the request
         _sendExecutionFeeToVault();
-        Types.Request memory request = TradeHelper.createRequest(_trade, msg.sender, collateralDelta, requestType);
+        // Construct Request
+        Types.Request memory request = TradeHelper.createRequest(_trade, msg.sender, collateralDeltaUSDE, requestType);
+        // Send Constructed Request to Storage
         tradeStorage.createOrderRequest(request);
     }
 
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
+        // Fetch the Request
         Types.Request memory request = tradeStorage.orders(_key);
-        if (request.user == address(0)) revert RequestRouter_RequestDoesNotExist();
-        if (msg.sender != request.user) revert RequestRouter_CallerIsNotPositionOwner();
+        // Check it exists
+        require(request.user != address(0), "RR: Request Doesn't Exist");
+        // Check the caller is the position owner
+        require(msg.sender == request.user, "RR: Not Position Owner");
+        // Cancel the Request
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
 
-    function _getRequestType(Types.Trade calldata _trade, Types.Position memory _position)
+    /// @notice Calculate and return the requestType
+    function _getRequestType(Types.Trade calldata _trade, Types.Position memory _position, uint256 _collateralDeltaUSDE)
         private
         pure
         returns (Types.RequestType requestType)
     {
+        // Case 1: Position doesn't exist (Create Position)
         if (_position.user == address(0)) {
-            if (!_trade.isIncrease) revert RequestRouter_DecreaseNonExistentPosition();
-            if (_trade.sizeDelta == 0) revert RequestRouter_SizeDeltaIsZero();
-            if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
+            require(_trade.isIncrease, "RR: Invalid Decrease");
+            require(_trade.sizeDelta != 0, "RR: Size Delta");
             requestType = Types.RequestType.CREATE_POSITION;
         } else if (_trade.sizeDelta == 0) {
+            // Case 2: Position exists but sizeDelta is 0 (Collateral Increase / Decrease)
             if (_trade.isIncrease) {
-                if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
                 requestType = Types.RequestType.COLLATERAL_INCREASE;
             } else {
-                if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
-                if (_position.collateralAmount < _trade.collateralDelta) {
-                    revert RequestRouter_CollateralDeltaExceedsCollateralAmount();
-                }
+                require(_position.collateralAmount >= _collateralDeltaUSDE, "RR: CD > CA");
                 requestType = Types.RequestType.COLLATERAL_DECREASE;
             }
         } else {
+            // Case 3: Position exists and sizeDelta is not 0 (Position Increase / Decrease)
+            require(_trade.sizeDelta != 0, "RR: Size Delta");
             if (_trade.isIncrease) {
-                if (_trade.sizeDelta == 0) revert RequestRouter_SizeDeltaIsZero();
-                if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
                 requestType = Types.RequestType.POSITION_INCREASE;
             } else {
-                if (_trade.sizeDelta == 0) revert RequestRouter_SizeDeltaIsZero();
-                if (_trade.collateralDelta == 0) revert RequestRouter_CollateralDeltaIsZero();
-                if (_position.positionSize < _trade.sizeDelta) revert RequestRouter_SizeDeltaExceedsPositionSize();
-                if (_position.collateralAmount < _trade.collateralDelta) {
-                    revert RequestRouter_CollateralDeltaExceedsCollateralAmount();
-                }
+                require(_position.positionSize >= _trade.sizeDelta, "RR: PS < SD");
+                require(_position.collateralAmount >= _collateralDeltaUSDE, "RR: CD > CA");
                 requestType = Types.RequestType.POSITION_DECREASE;
             }
         }
     }
 
-    function _handleTokenTransfers(uint256 _usdcAmountIn, bytes32 _marketKey, bool _isLong, bool _isIncrease)
+    function _handleTokenTransfers(uint256 _amountInUSDC, bytes32 _marketKey, bool _isLong, bool _isIncrease)
         private
-        returns (uint256 amountOut)
+        returns (uint256 amountOutUSDE)
     {
-        IERC20 usdc = WUSDC.USDC();
-        usdc.safeTransferFrom(msg.sender, address(this), _usdcAmountIn);
-        usdc.safeIncreaseAllowance(address(WUSDC), _usdcAmountIn);
-        amountOut = WUSDC.deposit(_usdcAmountIn);
-        tradeVault.updateCollateralBalance(_marketKey, amountOut, _isLong, _isIncrease);
-        WUSDC.safeTransfer(address(tradeVault), amountOut);
+        IERC20 usdc = USDE.USDC();
+        usdc.safeTransferFrom(msg.sender, address(this), _amountInUSDC);
+        usdc.safeIncreaseAllowance(address(USDE), _amountInUSDC);
+        amountOutUSDE = USDE.deposit(_amountInUSDC);
+        tradeVault.updateCollateralBalance(_marketKey, amountOutUSDE, _isLong, _isIncrease);
+        USDE.safeTransfer(address(tradeVault), amountOutUSDE);
     }
 
     function _sendExecutionFeeToVault() private {
         uint256 executionFee = tradeStorage.executionFee();
         (bool success,) = address(tradeVault).call{value: executionFee}("");
-        if (!success) revert RequestRouter_ExecutionFeeTransferFailed();
+        require(success, "RR: Fee Transfer Failed");
     }
 
     function _validateAllocation(bytes32 _marketKey, uint256 _sizeDelta) private view {
         Types.Market memory market = marketStorage.markets(_marketKey);
         uint256 totalOI = MarketHelper.getTotalIndexOpenInterest(address(marketStorage), market.indexToken);
-        if (totalOI + _sizeDelta > marketStorage.maxOpenInterests(_marketKey)) {
-            revert RequestRouter_PositionSizeTooLarge();
-        }
+        require(totalOI + _sizeDelta <= marketStorage.maxOpenInterests(_marketKey), "RR: Max Alloc");
     }
 }

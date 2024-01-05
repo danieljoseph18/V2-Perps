@@ -25,9 +25,6 @@ import {Types} from "../libraries/Types.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
-    error ImpactCalculator_ZeroParameters();
-    error ImpactCalculator_SlippageExceedsMax();
-
     uint256 public constant SCALAR = 1e18;
     uint256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
 
@@ -39,7 +36,7 @@ library PriceImpact {
         Types.Request memory _request,
         uint256 _signedBlockPrice
     ) external view returns (uint256 impactedPrice) {
-        if (_signedBlockPrice == 0) revert ImpactCalculator_ZeroParameters();
+        require(_signedBlockPrice != 0, "signedBlockPrice is 0");
         uint256 priceImpact = calculate(_market, _marketStorage, _dataOracle, _priceOracle, _request, _signedBlockPrice);
         if (_request.isLong) {
             if (_request.isIncrease) {
@@ -66,9 +63,7 @@ library PriceImpact {
         Types.Request memory _request,
         uint256 _signedBlockPrice
     ) public view returns (uint256) {
-        if (_signedBlockPrice == 0) {
-            revert ImpactCalculator_ZeroParameters();
-        }
+        require(_signedBlockPrice != 0, "signedBlockPrice is 0");
 
         IMarket market = IMarket(_market);
 
@@ -104,14 +99,14 @@ library PriceImpact {
         uint256 impactDelta =
             _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
         uint256 slippage = (impactDelta * SCALAR) / _signedPrice;
-        if (slippage > _maxSlippage) revert ImpactCalculator_SlippageExceedsMax();
+        require(slippage <= _maxSlippage, "slippage exceeds max");
     }
 
     // Helper function to handle exponentiation
     function _calculateExponentiatedImpact(uint256 _skewBefore, uint256 _skewAfter, uint256 _exponent, uint256 _factor)
         internal
         pure
-        returns (uint256)
+        returns (uint256 exponentiatedImpact)
     {
         uint256 absBefore = _skewBefore / SCALAR;
         uint256 absAfter = _skewAfter / SCALAR;
@@ -120,6 +115,6 @@ library PriceImpact {
         uint256 impactBefore = (absBefore ** _exponent) * _factor;
         uint256 impactAfter = (absAfter ** _exponent) * _factor;
 
-        return impactBefore > impactAfter ? impactBefore - impactAfter : impactAfter - impactBefore;
+        exponentiatedImpact = impactBefore > impactAfter ? impactBefore - impactAfter : impactAfter - impactBefore;
     }
 }

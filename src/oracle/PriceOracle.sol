@@ -55,6 +55,8 @@ contract PriceOracle {
     }
 
     /// @dev Request and fetch structure -> Request requests, executor fetches
+    /// @dev When fetching a price which has previously been signed to the block, it
+    /// should check if the price has moved by a maximum amount -> prevent price manipulation
     function getSignedPrice(address _token, uint256 _block) external view returns (uint256 price) {
         // require token is whitelisted
         if (!whitelistedTokens[_token]) revert PriceOracle_InvalidToken();

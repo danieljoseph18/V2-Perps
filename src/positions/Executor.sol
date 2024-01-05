@@ -32,19 +32,12 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 
 /// @dev Needs Executor Role
 contract Executor is RoleValidation, ReentrancyGuard {
-    error Executor_LimitNotHit();
-    error Executor_InvalidIncrease();
-    error Executor_ZeroAddress();
-
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
     ILiquidityVault public liquidityVault;
     IPriceOracle public priceOracle;
     IDataOracle public dataOracle;
 
-    error Executor_InvalidRequestKey();
-    error Executor_InvalidDecrease();
-    error Executor_InvalidExecutionPrice();
     error Executor_InvalidRequestType();
 
     constructor(
@@ -85,11 +78,11 @@ contract Executor is RoleValidation, ReentrancyGuard {
     {
         // Fetch and validate request from key
         Types.Request memory request = tradeStorage.orders(_orderKey);
-        if (request.user == address(0)) revert Executor_InvalidRequestKey();
-        if (_feeReceiver == address(0)) revert Executor_ZeroAddress();
+        require(request.user != address(0), "E: Request Key");
+        require(_feeReceiver != address(0), "E: Fee Receiver");
         // Fetch and validate price
         uint256 signedBlockPrice = priceOracle.getSignedPrice(request.indexToken, request.requestBlock);
-        if (signedBlockPrice == 0) revert Executor_InvalidExecutionPrice();
+        require(signedBlockPrice != 0, "E: Invalid Price");
         if (_isLimitOrder) TradeHelper.checkLimitPrice(signedBlockPrice, request);
 
         // Execute Price Impact

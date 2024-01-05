@@ -18,7 +18,7 @@ import {Liquidator} from "../../../src/positions/Liquidator.sol";
 import {RequestRouter} from "../../../src/positions/RequestRouter.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {TradeVault} from "../../../src/positions/TradeVault.sol";
-import {WUSDC} from "../../../src/token/WUSDC.sol";
+import {USDE} from "../../../src/token/USDE.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 
 contract TestLiquidityVault is Test {
@@ -37,7 +37,7 @@ contract TestLiquidityVault is Test {
     RequestRouter requestRouter;
     TradeStorage tradeStorage;
     TradeVault tradeVault;
-    WUSDC wusdc;
+    USDE usde;
 
     address public OWNER;
     address public USER = makeAddr("user");
@@ -63,7 +63,7 @@ contract TestLiquidityVault is Test {
         requestRouter = contracts.requestRouter;
         tradeStorage = contracts.tradeStorage;
         tradeVault = contracts.tradeVault;
-        wusdc = contracts.wusdc;
+        usde = contracts.usde;
         OWNER = contracts.owner;
     }
 
@@ -79,7 +79,7 @@ contract TestLiquidityVault is Test {
 
     /**
      * Invariants:
-     * - Liquidity should be wrapped to WUSDC from USDC
+     * - Liquidity should be wrapped to usde from USDC
      * - Can't be reentrancy attacked
      * - Can't add more liquidity than I own
      * - Can't add liquidity for another account without permission

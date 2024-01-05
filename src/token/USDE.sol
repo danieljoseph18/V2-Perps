@@ -23,61 +23,56 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /*
-    Contract acts as a Wrapper for USDC to make it 18 decimals
+    Extended version of USDC -> Makes it 18 decimals
 */
-contract WUSDC is ERC20, ReentrancyGuard {
+contract USDE is ERC20, ReentrancyGuard {
     using SafeERC20 for IERC20;
-
-    error WUSDC_ZeroAddress();
-    error WUSDC_MintFailed();
-    error WUSDC_InsufficientBalance();
-    error WUSDC_DepositFailed();
 
     IERC20 public immutable USDC;
 
-    event Deposit(address indexed user, uint256 indexed usdcAmount, uint256 indexed wusdcAmount);
-    event Withdraw(address indexed user, uint256 indexed wusdcAmount, uint256 indexed usdcAmount);
+    event Deposit(address indexed user, uint256 indexed usdcAmount, uint256 indexed usdeAmount);
+    event Withdraw(address indexed user, uint256 indexed usdeAmount, uint256 indexed usdcAmount);
 
     uint256 private constant DECIMALS_DIFFERENCE = 1e12;
 
-    constructor(address _usdc) ERC20("Wrapped USDC", "WUSDC") {
-        if (_usdc == address(0)) revert WUSDC_ZeroAddress();
+    constructor(address _usdc) ERC20("USDC Extended", "USDE") {
+        require(_usdc != address(0), "USDE: Zero Address");
         USDC = IERC20(_usdc);
     }
 
     /// @dev Accounts for Token Decimals (from 6 dec => 18)
-    function deposit(uint256 _usdcAmount) external nonReentrant returns (uint256 wusdcAmount) {
+    function deposit(uint256 _usdcAmount) external nonReentrant returns (uint256 usdeAmount) {
         // Deposit USDC to the contract
         uint256 usdcBalanceBefore = USDC.balanceOf(address(this));
         USDC.safeTransferFrom(msg.sender, address(this), _usdcAmount);
-        if (USDC.balanceOf(address(this)) != usdcBalanceBefore + _usdcAmount) revert WUSDC_DepositFailed();
+        require(USDC.balanceOf(address(this)) == usdcBalanceBefore + _usdcAmount, "USDE: Deposit Failed");
 
-        // Calculate the amount of WUSDC to mint (with 18 decimals)
-        wusdcAmount = _usdcAmount * DECIMALS_DIFFERENCE;
+        // Calculate the amount of USDE to mint (with 18 decimals)
+        usdeAmount = _usdcAmount * DECIMALS_DIFFERENCE;
 
-        // Mint the user the equivalent of WUSDC
+        // Mint the user the equivalent of USDE
         uint256 balBefore = balanceOf(msg.sender);
 
-        _mint(msg.sender, wusdcAmount);
+        _mint(msg.sender, usdeAmount);
 
-        if (balanceOf(msg.sender) != balBefore + wusdcAmount) revert WUSDC_MintFailed();
+        require(balanceOf(msg.sender) == balBefore + usdeAmount, "USDE: Mint Failed");
 
-        emit Deposit(msg.sender, _usdcAmount, wusdcAmount);
+        emit Deposit(msg.sender, _usdcAmount, usdeAmount);
     }
 
     /// @dev Accounts for Token Decimals (from 18 dec => 6)
-    function withdraw(uint256 _wusdcAmount) external nonReentrant returns (uint256) {
-        if (balanceOf(msg.sender) < _wusdcAmount) revert WUSDC_InsufficientBalance();
-        // Burn WUSDC first to protect against reentrancy
-        _burn(msg.sender, _wusdcAmount);
+    function withdraw(uint256 usdeAmount) external nonReentrant returns (uint256) {
+        require(balanceOf(msg.sender) >= usdeAmount, "USDE: Insufficient Balance");
+        // Burn USDE first to protect against reentrancy
+        _burn(msg.sender, usdeAmount);
 
         // Calculate the amount of USDC to transfer (with 6 decimals)
-        uint256 usdcAmount = _wusdcAmount / DECIMALS_DIFFERENCE;
+        uint256 usdcAmount = usdeAmount / DECIMALS_DIFFERENCE;
 
         // Transfer out equivalent of USDC
         USDC.safeTransfer(msg.sender, usdcAmount);
 
-        emit Withdraw(msg.sender, _wusdcAmount, usdcAmount);
+        emit Withdraw(msg.sender, usdeAmount, usdcAmount);
 
         return usdcAmount;
     }

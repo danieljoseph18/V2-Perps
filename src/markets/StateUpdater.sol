@@ -31,8 +31,6 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
     IMarketStorage public marketStorage;
     ITradeStorage public tradeStorage;
 
-    error StateUpdater_AllocationExceedsAvailableLiquidity();
-
     constructor(address _liquidityVault, address _marketStorage, address _tradeStorage, address _roleStorage)
         RoleValidation(_roleStorage)
     {
@@ -59,7 +57,7 @@ contract StateUpdater is RoleValidation, ReentrancyGuard {
         onlyStateKeeper
     {
         uint256 totalAvailableLiquidity = liquidityVault.getAumInWusdc();
-        if (_allocation > totalAvailableLiquidity) revert StateUpdater_AllocationExceedsAvailableLiquidity();
+        require(_allocation <= totalAvailableLiquidity, "SU: Allocation > Available");
         bytes32 marketKey = MarketHelper.getMarketFromIndexToken(address(marketStorage), _indexToken).marketKey;
         marketStorage.updateState(marketKey, _allocation, _maxOI);
     }

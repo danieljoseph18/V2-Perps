@@ -21,7 +21,6 @@ import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
-import {IWUSDC} from "../token/interfaces/IWUSDC.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
