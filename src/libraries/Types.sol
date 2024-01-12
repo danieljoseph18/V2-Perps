@@ -89,7 +89,7 @@ library Types {
 
     // Open Position
     struct Position {
-        bytes32 market; // can get index token from market ?
+        address market;
         address indexToken; // collateralToken is only WUSDC
         address user;
         uint256 collateralAmount; // vs size = leverage

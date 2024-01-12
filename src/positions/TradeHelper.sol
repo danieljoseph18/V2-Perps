@@ -86,7 +86,7 @@ library TradeHelper {
         // get Trade Value in USD
         uint256 sizeUsd = getTradeValueUsd(_dataOracle, _request.indexToken, _request.sizeDelta, _price);
         position = Types.Position({
-            market: getMarketKey(_request.indexToken),
+            market: _market,
             indexToken: _request.indexToken,
             user: _request.user,
             collateralAmount: _request.collateralDelta,
@@ -129,7 +129,7 @@ library TradeHelper {
     }
 
     function getTotalFeesOwedUsd(address _dataOracle, Types.Position memory _position, uint256 _price, address _market)
-        public
+        external
         view
         returns (uint256 totalFeesOwedUsd)
     {
@@ -149,7 +149,7 @@ library TradeHelper {
         marketAddress = IMarketStorage(_marketStorage).markets(market).market;
     }
 
-    function getMarketKey(address _indexToken) public pure returns (bytes32 marketKey) {
+    function getMarketKey(address _indexToken) external pure returns (bytes32 marketKey) {
         marketKey = keccak256(abi.encode(_indexToken));
     }
 }

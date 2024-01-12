@@ -53,14 +53,17 @@ library Pricing {
         uint256 _prevSISU, // Σ INDEX SIZE USD
         int256 _sizeDeltaUsd, // Δ SIZE
         uint256 _price
-    ) external pure returns (uint256) {
+    ) external pure returns (uint256 weightedAvgEntryPrice) {
         if (_prevWAEP == 0 && _prevSISU == 0) {
-            return uint256(_price);
+            weightedAvgEntryPrice = uint256(_price);
         } else {
-            return _sizeDeltaUsd > 0
-                ? (_prevWAEP * _prevSISU + uint256(_sizeDeltaUsd) * uint256(_price)) / (_prevSISU + uint256(_sizeDeltaUsd))
-                : (_prevWAEP * _prevSISU - uint256(-_sizeDeltaUsd) * uint256(_price))
+            if (_sizeDeltaUsd > 0) {
+                weightedAvgEntryPrice = (_prevWAEP * _prevSISU + uint256(_sizeDeltaUsd) * uint256(_price))
+                    / (_prevSISU + uint256(_sizeDeltaUsd));
+            } else {
+                weightedAvgEntryPrice = (_prevWAEP * _prevSISU - uint256(-_sizeDeltaUsd) * uint256(_price))
                     / (_prevSISU - uint256(-_sizeDeltaUsd));
+            }
         }
     }
 
@@ -68,7 +71,7 @@ library Pricing {
     function getNetPnL(address _market, address _marketStorage, address _dataOracle, address _priceOracle, bool _isLong)
         external
         view
-        returns (int256)
+        returns (int256 netPnl)
     {
         address indexToken = IMarket(_market).indexToken();
         // Get OI in USD
@@ -76,7 +79,7 @@ library Pricing {
             MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, indexToken, _isLong);
         uint256 entryValue = MarketHelper.getTotalEntryValueUsd(_market, _marketStorage, _dataOracle, _isLong);
 
-        return _isLong ? int256(indexValue) - int256(entryValue) : int256(entryValue) - int256(indexValue);
+        netPnl = _isLong ? int256(indexValue) - int256(entryValue) : int256(entryValue) - int256(indexValue);
     }
 
     /// RealisedPNL=(Current price − Weighted average entry price)×(Realised position size/Current price)
@@ -89,7 +92,7 @@ library Pricing {
         uint256 _positionWAEP,
         uint256 _currentPrice,
         bool _isLong
-    ) external view returns (int256) {
+    ) external view returns (int256 decreasePositionPnl) {
         // only realise a percentage equivalent to the percentage of the position being closed
         uint256 baseUnit = IDataOracle(_dataOracle).getBaseUnits(_indexToken);
         uint256 entryValue = (_sizeDelta * _positionWAEP) / baseUnit;
@@ -97,9 +100,9 @@ library Pricing {
         // if long, > 0 is profit, < 0 is loss
         // if short, > 0 is loss, < 0 is profit
         if (_isLong) {
-            return int256(exitValue) - int256(entryValue);
+            decreasePositionPnl = int256(exitValue) - int256(entryValue);
         } else {
-            return int256(entryValue) - int256(exitValue);
+            decreasePositionPnl = int256(entryValue) - int256(exitValue);
         }
     }
 }

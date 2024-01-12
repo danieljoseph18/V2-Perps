@@ -62,7 +62,7 @@ library PriceImpact {
         address _priceOracle,
         Types.Request memory _request,
         uint256 _signedBlockPrice
-    ) public view returns (uint256) {
+    ) public view returns (uint256 priceImpact) {
         require(_signedBlockPrice != 0, "signedBlockPrice is 0");
 
         IMarket market = IMarket(_market);
@@ -83,15 +83,13 @@ library PriceImpact {
         }
         uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
-        uint256 priceImpact = _calculateExponentiatedImpact(
+        priceImpact = _calculateExponentiatedImpact(
             skewBefore, skewAfter, market.priceImpactExponent(), market.priceImpactFactor()
         );
 
         uint256 maxImpact = (_signedBlockPrice * MAX_PRICE_IMPACT) / SCALAR;
         if (priceImpact > maxImpact) {
-            return maxImpact;
-        } else {
-            return priceImpact;
+            priceImpact = maxImpact;
         }
     }
 

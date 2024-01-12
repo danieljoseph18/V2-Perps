@@ -33,7 +33,6 @@ contract TradeVault is RoleValidation {
 
     mapping(bytes32 _marketKey => uint256 _collateral) public longCollateral;
     mapping(bytes32 _marketKey => uint256 _collateral) public shortCollateral;
-    mapping(address _user => uint256 _rewards) public liquidationRewards;
 
     event TransferOutTokens(bytes32 indexed _marketKey, address indexed _to, uint256 _collateralDelta, bool _isLong);
     event LossesTransferred(uint256 indexed _amount);
@@ -53,10 +52,7 @@ contract TradeVault is RoleValidation {
         liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
-    receive() external payable {
-        // get the amount received
-        // any extra should be claimable by contract owner
-    }
+    receive() external payable {}
 
     function transferOutTokens(bytes32 _marketKey, address _to, uint256 _collateralDelta, bool _isLong)
         external
@@ -70,9 +66,8 @@ contract TradeVault is RoleValidation {
         } else {
             require(shortCollateral[_marketKey] >= _collateralDelta, "TV: Insufficient Collateral");
         }
-        uint256 amount = _collateralDelta;
-        _isLong ? longCollateral[_marketKey] -= amount : shortCollateral[_marketKey] -= amount;
-        USDE.safeTransfer(_to, amount);
+        _isLong ? longCollateral[_marketKey] -= _collateralDelta : shortCollateral[_marketKey] -= _collateralDelta;
+        USDE.safeTransfer(_to, _collateralDelta);
         emit TransferOutTokens(_marketKey, _to, _collateralDelta, _isLong);
     }
 
@@ -100,10 +95,10 @@ contract TradeVault is RoleValidation {
         bool _isLong
     ) external onlyTradeStorage {
         // funding
-        _swapFundingAmount(_marketKey, _collateralFundingOwed, _isLong);
-
-        USDE.safeTransfer(_liquidator, _liqFee);
-
+        if (_collateralFundingOwed > 0) {
+            _swapFundingAmount(_marketKey, _collateralFundingOwed, _isLong);
+        }
+        // Funds remaining after paying funding and liquidation fee
         uint256 remainingCollateral = _totalCollateral - _collateralFundingOwed - _liqFee;
         if (remainingCollateral > 0) {
             if (_isLong) {
@@ -113,6 +108,7 @@ contract TradeVault is RoleValidation {
             }
             _sendTokensToLiquidityVault(remainingCollateral);
         }
+        USDE.safeTransfer(_liquidator, _liqFee);
         emit PositionCollateralLiquidated(
             _liquidator, _liqFee, _marketKey, _totalCollateral, _collateralFundingOwed, _isLong
         );

@@ -24,7 +24,8 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 library Funding {
     uint256 constant PRECISION = 1e18;
 
-    /// @dev Calculate the funding rate velocity.
+    /// @dev Calculate the funding rate velocity
+    /// @dev velocity units = % per second (18 dp)
     function calculateVelocity(address _market, int256 _skew) external view returns (int256 velocity) {
         uint256 c = (IMarket(_market).maxFundingVelocity() * PRECISION) / IMarket(_market).skewScale();
         int256 skew = _skew;
@@ -58,7 +59,7 @@ library Funding {
     function getTotalPositionFees(address _market, Types.Position memory _position)
         external
         view
-        returns (uint256 earnedIndexTokens, uint256 owedIndexTokens)
+        returns (uint256 indexFeeEarned, uint256 indexFeeOwed)
     {
         // Get the fees accumulated since the last position update
         uint256 shortAccumulatedFees =
@@ -79,9 +80,9 @@ library Funding {
         (uint256 feesEarnedSinceUpdate, uint256 feesOwedSinceUpdate) =
             getFeesSinceLastMarketUpdate(_market, _position.isLong);
         // Calculate the Total Fees Earned and Owed
-        earnedIndexTokens = feesEarnedSinceUpdate + _position.funding.feesEarned
+        indexFeeEarned = feesEarnedSinceUpdate + _position.funding.feesEarned
             + ((accumulatedFundingEarned * _position.positionSize) / PRECISION);
-        owedIndexTokens = feesOwedSinceUpdate + _position.funding.feesOwed
+        indexFeeOwed = feesOwedSinceUpdate + _position.funding.feesOwed
             + ((accumulatedFundingOwed * _position.positionSize) / PRECISION);
     }
 

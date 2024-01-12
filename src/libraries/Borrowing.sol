@@ -28,19 +28,19 @@ library Borrowing {
     function calculateFeeForPositionChange(address _market, Types.Position calldata _position, uint256 _collateralDelta)
         external
         view
-        returns (uint256 feeIndexTokens)
+        returns (uint256 indexFee)
     {
-        feeIndexTokens = (getTotalPositionFeesOwed(_market, _position) * _collateralDelta) / _position.collateralAmount;
+        indexFee = (getTotalPositionFeesOwed(_market, _position) * _collateralDelta) / _position.collateralAmount;
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
     function getTotalPositionFeesOwed(address _market, Types.Position calldata _position)
         public
         view
-        returns (uint256 totalFeesOwedIndexTokens)
+        returns (uint256 indexTotalFeesOwed)
     {
         uint256 feeSinceUpdate = getFeesSinceLastPositionUpdate(_market, _position);
-        totalFeesOwedIndexTokens = feeSinceUpdate + _position.borrow.feesOwed;
+        indexTotalFeesOwed = feeSinceUpdate + _position.borrow.feesOwed;
     }
 
     /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
@@ -48,7 +48,7 @@ library Borrowing {
     function getFeesSinceLastPositionUpdate(address _market, Types.Position calldata _position)
         public
         view
-        returns (uint256 feesSinceUpdateIndexTokens)
+        returns (uint256 indexFeesSinceUpdate)
     {
         // get cumulative borrowing fees since last update
         uint256 borrowFee = _position.isLong
@@ -56,9 +56,9 @@ library Borrowing {
             : IMarket(_market).shortCumulativeBorrowFees() - _position.borrow.lastShortCumulativeBorrowFee;
         borrowFee += _calculatePendingFees(_market, _position.isLong);
         if (borrowFee == 0) {
-            feesSinceUpdateIndexTokens = 0;
+            indexFeesSinceUpdate = 0;
         } else {
-            feesSinceUpdateIndexTokens = (_position.positionSize * borrowFee) / PRECISION;
+            indexFeesSinceUpdate = (_position.positionSize * borrowFee) / PRECISION;
         }
     }
 
