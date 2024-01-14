@@ -17,9 +17,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Types} from "../libraries/Types.sol";
-import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
@@ -29,10 +27,12 @@ import {TradeHelper} from "./TradeHelper.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {Request} from "../structs/Request.sol";
+import {Position} from "../structs/Position.sol";
 
 /// @dev Needs Executor Role
 contract Executor is RoleValidation, ReentrancyGuard {
-    IMarketStorage public marketStorage;
+    IMarketMaker public marketMaker;
     ITradeStorage public tradeStorage;
     ILiquidityVault public liquidityVault;
     IPriceOracle public priceOracle;
@@ -41,14 +41,14 @@ contract Executor is RoleValidation, ReentrancyGuard {
     error Executor_InvalidRequestType();
 
     constructor(
-        address _marketStorage,
+        address _marketMaker,
         address _tradeStorage,
         address _priceOracle,
         address _liquidityVault,
         address _dataOracle,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
-        marketStorage = IMarketStorage(_marketStorage);
+        marketMaker = IMarketMaker(_marketMaker);
         tradeStorage = ITradeStorage(_tradeStorage);
         priceOracle = IPriceOracle(_priceOracle);
         liquidityVault = ILiquidityVault(_liquidityVault);
@@ -77,7 +77,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
         onlyKeeperOrSelf
     {
         // Fetch and validate request from key
-        Types.Request memory request = tradeStorage.orders(_orderKey);
+        Request.Data memory request = tradeStorage.orders(_orderKey);
         require(request.user != address(0), "E: Request Key");
         require(_feeReceiver != address(0), "E: Fee Receiver");
         // Fetch and validate price
@@ -86,31 +86,31 @@ contract Executor is RoleValidation, ReentrancyGuard {
         if (_isLimitOrder) TradeHelper.checkLimitPrice(signedBlockPrice, request);
 
         // Execute Price Impact
-        address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), request.indexToken).market;
+        bytes32 marketKey = keccak256(abi.encode(request.indexToken));
         uint256 impactedPrice = PriceImpact.execute(
-            market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
+            marketKey, address(marketMaker), address(dataOracle), address(priceOracle), request, signedBlockPrice
         );
         // Update Market State
         int256 sizeDeltaUsd = _calculateSizeDeltaUsd(request, signedBlockPrice);
-        _updateMarketState(market, request, impactedPrice, sizeDeltaUsd);
+        _updateMarketState(marketKey, request, impactedPrice, sizeDeltaUsd);
 
         // Execute Trade
-        if (request.requestType == Types.RequestType.CREATE_POSITION) {
-            tradeStorage.createNewPosition(Types.ExecutionParams(request, impactedPrice, _feeReceiver));
-        } else if (request.requestType == Types.RequestType.POSITION_DECREASE) {
-            tradeStorage.decreaseExistingPosition(Types.ExecutionParams(request, impactedPrice, _feeReceiver));
-        } else if (request.requestType == Types.RequestType.POSITION_INCREASE) {
-            tradeStorage.increaseExistingPosition(Types.ExecutionParams(request, impactedPrice, _feeReceiver));
-        } else if (request.requestType == Types.RequestType.COLLATERAL_DECREASE) {
-            tradeStorage.executeCollateralDecrease(Types.ExecutionParams(request, impactedPrice, _feeReceiver));
-        } else if (request.requestType == Types.RequestType.COLLATERAL_INCREASE) {
-            tradeStorage.executeCollateralIncrease(Types.ExecutionParams(request, impactedPrice, _feeReceiver));
+        if (request.requestType == Request.Type.CREATE_POSITION) {
+            tradeStorage.createNewPosition(Request.Execution(request, impactedPrice, _feeReceiver));
+        } else if (request.requestType == Request.Type.POSITION_DECREASE) {
+            tradeStorage.decreaseExistingPosition(Request.Execution(request, impactedPrice, _feeReceiver));
+        } else if (request.requestType == Request.Type.POSITION_INCREASE) {
+            tradeStorage.increaseExistingPosition(Request.Execution(request, impactedPrice, _feeReceiver));
+        } else if (request.requestType == Request.Type.COLLATERAL_DECREASE) {
+            tradeStorage.executeCollateralDecrease(Request.Execution(request, impactedPrice, _feeReceiver));
+        } else if (request.requestType == Request.Type.COLLATERAL_INCREASE) {
+            tradeStorage.executeCollateralIncrease(Request.Execution(request, impactedPrice, _feeReceiver));
         } else {
             revert Executor_InvalidRequestType();
         }
     }
 
-    function _calculateSizeDeltaUsd(Types.Request memory _request, uint256 _signedIndexPrice)
+    function _calculateSizeDeltaUsd(Request.Data memory _request, uint256 _signedIndexPrice)
         internal
         view
         returns (int256 sizeDeltaUsd)
@@ -133,20 +133,18 @@ contract Executor is RoleValidation, ReentrancyGuard {
     }
 
     function _updateMarketState(
-        address _market,
-        Types.Request memory _request,
+        bytes32 _marketKey,
+        Request.Data memory _request,
         uint256 _impactedIndexPrice,
         int256 _sizeDeltaUsd
     ) internal {
-        IMarket market = IMarket(_market);
-        bytes32 marketKey = market.getMarketKey();
-        IMarketStorage(marketStorage).updateOpenInterest(
-            marketKey, _request.collateralDelta, _request.sizeDelta, _request.isLong, _request.isIncrease
+        IMarketMaker(marketMaker).updateOpenInterest(
+            _marketKey, _request.collateralDelta, _request.sizeDelta, _request.isLong, _request.isIncrease
         );
-        market.updateFundingRate();
-        market.updateBorrowingRate(_request.isLong);
+        IMarketMaker(marketMaker).updateFundingRate(_marketKey);
+        IMarketMaker(marketMaker).updateBorrowingRate(_marketKey, _request.isLong);
         if (_sizeDeltaUsd != 0) {
-            market.updateTotalWAEP(_impactedIndexPrice, _sizeDeltaUsd, _request.isLong);
+            IMarketMaker(marketMaker).updateTotalWAEP(_marketKey, _impactedIndexPrice, _sizeDeltaUsd, _request.isLong);
         }
     }
 }

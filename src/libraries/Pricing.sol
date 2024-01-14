@@ -17,14 +17,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
-import {Types} from "../libraries/Types.sol";
+import {Market} from "../structs/Market.sol";
+import {Position} from "../structs/Position.sol";
 
 /*
     weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -35,7 +34,7 @@ library Pricing {
     uint256 public constant PRICE_PRECISION = 1e18;
 
     /// @dev returns PNL in USD
-    function calculatePnL(uint256 _indexPriceUsd, address _dataOracle, Types.Position memory _position)
+    function calculatePnL(uint256 _indexPriceUsd, address _dataOracle, Position.Data memory _position)
         external
         view
         returns (int256)
@@ -68,16 +67,17 @@ library Pricing {
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
-    function getNetPnL(address _market, address _marketStorage, address _dataOracle, address _priceOracle, bool _isLong)
-        external
-        view
-        returns (int256 netPnl)
-    {
-        address indexToken = IMarket(_market).indexToken();
+    function getNetPnL(
+        address _indexToken,
+        address _marketMaker,
+        address _dataOracle,
+        address _priceOracle,
+        bool _isLong
+    ) external view returns (int256 netPnl) {
         // Get OI in USD
         uint256 indexValue =
-            MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, indexToken, _isLong);
-        uint256 entryValue = MarketHelper.getTotalEntryValueUsd(_market, _marketStorage, _dataOracle, _isLong);
+            MarketHelper.getIndexOpenInterestUSD(_marketMaker, _dataOracle, _priceOracle, _indexToken, _isLong);
+        uint256 entryValue = MarketHelper.getTotalEntryValueUsd(_indexToken, _marketMaker, _dataOracle, _isLong);
 
         netPnl = _isLong ? int256(indexValue) - int256(entryValue) : int256(entryValue) - int256(indexValue);
     }

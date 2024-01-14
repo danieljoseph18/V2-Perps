@@ -6,8 +6,7 @@ import {DeployV2} from "../../../script/DeployV2.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {LiquidityVault} from "../../../src/markets/LiquidityVault.sol";
-import {MarketFactory} from "../../../src/markets/MarketFactory.sol";
-import {MarketStorage} from "../../../src/markets/MarketStorage.sol";
+import {MarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {MarketToken} from "../../../src/markets/MarketToken.sol";
 import {StateUpdater} from "../../../src/markets/StateUpdater.sol";
 import {IMockPriceOracle} from "../../mocks/interfaces/IMockPriceOracle.sol";
@@ -21,8 +20,6 @@ import {TradeVault} from "../../../src/positions/TradeVault.sol";
 import {USDE} from "../../../src/token/USDE.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Market} from "../../../src/markets/Market.sol";
-import {Types} from "../../../src/libraries/Types.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
@@ -36,7 +33,7 @@ contract TestBorrowing is Test {
 // GlobalMarketConfig globalMarketConfig;
 // LiquidityVault liquidityVault;
 // MarketFactory marketFactory;
-// MarketStorage marketStorage;
+// MarketMaker marketMaker;
 // MarketToken marketToken;
 // StateUpdater stateUpdater;
 // IMockPriceOracle priceOracle;
@@ -65,7 +62,7 @@ contract TestBorrowing is Test {
 //     globalMarketConfig = contracts.globalMarketConfig;
 //     liquidityVault = contracts.liquidityVault;
 //     marketFactory = contracts.marketFactory;
-//     marketStorage = contracts.marketStorage;
+//     marketMaker = contracts.marketMaker;
 //     marketToken = contracts.marketToken;
 //     stateUpdater = contracts.stateUpdater;
 //     priceOracle = contracts.priceOracle;
@@ -158,7 +155,7 @@ contract TestBorrowing is Test {
 //     Types.Position memory userPositionShort =
 //         ITradeStorage(address(tradeStorage)).openPositions(positionKey2);
 //     // check the borrowing fee on the long and short
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     uint256 longBorrowingFee = Borrowing.getBorrowingFees(market, userPositionLong);
 //     uint256 shortBorrowingFee = Borrowing.getBorrowingFees(market, userPositionShort);
 //     console.log("Long Borrow Fee: ", longBorrowingFee);
@@ -193,7 +190,7 @@ contract TestBorrowing is Test {
 //     // check fees greater than 0
 //     bytes32 positionKey = keccak256(abi.encode(userRequest.indexToken, USER, userRequest.isLong));
 //     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     uint256 borrowingFee = Borrowing.getBorrowingFees(market, userPosition);
 //     assertGt(borrowingFee, 0);
 //     // close trade
@@ -246,7 +243,7 @@ contract TestBorrowing is Test {
 //     // check fees greater than 0
 //     bytes32 positionKey = TradeHelper.generatePositionKey(userRequest);
 //     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     uint256 borrowingFee = Borrowing.getBorrowingFees(market, userPosition);
 //     assertGt(borrowingFee, 0);
 //     // decrease trade
@@ -306,7 +303,7 @@ contract TestBorrowing is Test {
 //     // check fees greater than 0
 //     bytes32 positionKey = TradeHelper.generateKey(userRequest);
 //     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(positionKey);
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     uint256 quarterClose = Borrowing.calculateBorrowingFee(market, userPosition, 0.25e18);
 //     uint256 halfClose = Borrowing.calculateBorrowingFee(market, userPosition, 0.5e18);
 //     uint256 threeQuarterClose = Borrowing.calculateBorrowingFee(market, userPosition, 0.75e18);

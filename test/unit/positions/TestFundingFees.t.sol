@@ -6,8 +6,7 @@ import {DeployV2} from "../../../script/DeployV2.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {LiquidityVault} from "../../../src/markets/LiquidityVault.sol";
-import {MarketFactory} from "../../../src/markets/MarketFactory.sol";
-import {MarketStorage} from "../../../src/markets/MarketStorage.sol";
+import {MarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {MarketToken} from "../../../src/markets/MarketToken.sol";
 import {StateUpdater} from "../../../src/markets/StateUpdater.sol";
 import {IMockPriceOracle} from "../../mocks/interfaces/IMockPriceOracle.sol";
@@ -21,8 +20,6 @@ import {TradeVault} from "../../../src/positions/TradeVault.sol";
 import {USDE} from "../../../src/token/USDE.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Market} from "../../../src/markets/Market.sol";
-import {Types} from "../../../src/libraries/Types.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
@@ -35,7 +32,7 @@ contract TestFunding is Test {
 // GlobalMarketConfig globalMarketConfig;
 // LiquidityVault liquidityVault;
 // MarketFactory marketFactory;
-// MarketStorage marketStorage;
+// MarketMaker marketMaker;
 // MarketToken marketToken;
 // StateUpdater stateUpdater;
 // IMockPriceOracle priceOracle;
@@ -64,7 +61,7 @@ contract TestFunding is Test {
 //     globalMarketConfig = contracts.globalMarketConfig;
 //     liquidityVault = contracts.liquidityVault;
 //     marketFactory = contracts.marketFactory;
-//     marketStorage = contracts.marketStorage;
+//     marketMaker = contracts.marketMaker;
 //     marketToken = contracts.marketToken;
 //     stateUpdater = contracts.stateUpdater;
 //     priceOracle = contracts.priceOracle;
@@ -125,7 +122,7 @@ contract TestFunding is Test {
 //     // pass some time
 //     vm.warp(block.timestamp + 1 days);
 //     vm.roll(block.number + 1);
-//     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+//     address market = TradeHelper.getMarket(address(marketMaker), address(indexToken));
 //     Market(market).updateFundingRate();
 //     vm.warp(block.timestamp + 6 days);
 //     vm.roll(block.number + 1);
@@ -134,7 +131,7 @@ contract TestFunding is Test {
 //     console.log(
 //         "Long OI: ",
 //         MarketHelper.getIndexOpenInterestUSD(
-//             address(marketStorage), address(dataOracle), address(priceOracle), address(indexToken), true
+//             address(marketMaker), address(dataOracle), address(priceOracle), address(indexToken), true
 //         )
 //     );
 //     console.log("Last update time: ", Market(market).lastFundingUpdateTime());
@@ -179,12 +176,12 @@ contract TestFunding is Test {
 //     vm.warp(block.timestamp + 1 days);
 //     vm.roll(block.number + 1);
 //     // check the funding rate
-//     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+//     address market = TradeHelper.getMarket(address(marketMaker), address(indexToken));
 //     // check funding fees
 //     console.log(
 //         "Long OI: ",
 //         MarketHelper.getIndexOpenInterestUSD(
-//             address(marketStorage), address(dataOracle), address(priceOracle), address(indexToken), true
+//             address(marketMaker), address(dataOracle), address(priceOracle), address(indexToken), true
 //         )
 //     );
 //     console.log("Last update time: ", Market(market).lastFundingUpdateTime());
@@ -243,7 +240,7 @@ contract TestFunding is Test {
 //     // check the funding rate
 //     Types.Position memory userPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
-//     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+//     address market = TradeHelper.getMarket(address(marketMaker), address(indexToken));
 //     // check funding fees
 //     (uint256 feesOwed,) = Funding.getTotalPositionFees(market, userPosition);
 //     console.log("Funding Fee Owed Before Update: ", feesOwed);
@@ -301,7 +298,7 @@ contract TestFunding is Test {
 //     // check the fees earned by the owner's position
 //     Types.Position memory ownerPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(ownerRequest));
-//     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+//     address market = TradeHelper.getMarket(address(marketMaker), address(indexToken));
 //     // check funding fees
 //     (uint256 feesEarned, uint256 feesOwed) = Funding.getTotalPositionFees(market, ownerPosition);
 //     assertEq(feesOwed, 0);
@@ -362,7 +359,7 @@ contract TestFunding is Test {
 //     // check the user's trade has fees owed and fees earned
 //     Types.Position memory userPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
-//     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+//     address market = TradeHelper.getMarket(address(marketMaker), address(indexToken));
 //     // check funding fees
 //     (uint256 feesEarned, uint256 feesOwed) = Funding.getTotalPositionFees(market, userPosition);
 //     assertGt(feesEarned, 0);
@@ -423,7 +420,7 @@ contract TestFunding is Test {
 //     // check fees
 //     Types.Position memory userPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(userRequest));
-//     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+//     address market = TradeHelper.getMarket(address(marketMaker), address(indexToken));
 //     // check funding fees
 //     (uint256 feesOwed, uint256 feesEarned) = Funding.getTotalPositionFees(market, userPosition);
 //     console.log("Fees Owed: ", feesOwed);
@@ -516,7 +513,7 @@ contract TestFunding is Test {
 //     // check fees on small long
 //     Types.Position memory ownerPosition =
 //         ITradeStorage(address(tradeStorage)).openPositions(TradeHelper.generateKey(ownerRequest));
-//     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+//     address market = TradeHelper.getMarket(address(marketMaker), address(indexToken));
 //     // check funding fees
 //     (uint256 feesEarned, uint256 feesOwed) = Funding.getTotalPositionFees(market, ownerPosition);
 //     console.log("Fees Owed: ", feesOwed);
@@ -561,7 +558,7 @@ contract TestFunding is Test {
 //     // check funding fees owed
 //     bytes32 userKey = TradeHelper.generateKey(userRequest);
 //     Types.Position memory userPosition = ITradeStorage(address(tradeStorage)).openPositions(userKey);
-//     address market = TradeHelper.getMarket(address(marketStorage), address(indexToken));
+//     address market = TradeHelper.getMarket(address(marketMaker), address(indexToken));
 //     (uint256 feesEarned, uint256 feesOwed) = Funding.getTotalPositionFees(market, userPosition);
 //     assertGt(feesOwed, 0);
 //     assertEq(feesEarned, 0);

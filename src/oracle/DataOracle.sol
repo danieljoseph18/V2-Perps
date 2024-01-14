@@ -19,25 +19,25 @@ pragma solidity 0.8.23;
 
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Pricing} from "../libraries/Pricing.sol";
-import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
-import {Types} from "../libraries/Types.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
+import {Market} from "../structs/Market.sol";
 
 contract DataOracle is RoleValidation {
-    IMarketStorage public marketStorage;
+    IMarketMaker public marketMaker;
     address public priceOracle;
 
-    mapping(uint256 _index => Types.Market) public markets;
+    mapping(uint256 _index => Market.Data) public markets;
     mapping(bytes32 => bool) public isMarket;
     mapping(address => uint256) private baseUnits;
 
     uint256 private marketEndIndex;
 
-    constructor(address _marketStorage, address _priceOracle, address _roleStorage) RoleValidation(_roleStorage) {
-        marketStorage = IMarketStorage(_marketStorage);
+    constructor(address _marketMaker, address _priceOracle, address _roleStorage) RoleValidation(_roleStorage) {
+        marketMaker = IMarketMaker(_marketMaker);
         priceOracle = _priceOracle;
     }
 
-    function setMarkets(Types.Market[] memory _markets) external onlyAdmin {
+    function setMarkets(Market.Data[] memory _markets) external onlyAdmin {
         uint32 len = uint32(_markets.length);
         for (uint256 i = 0; i < len;) {
             markets[i] = _markets[i];
@@ -70,11 +70,14 @@ contract DataOracle is RoleValidation {
         } while (i <= marketEndIndex);
         marketEndIndex = 0;
     }
+    // wrong -> get net pnl first arg is index token
+    // market is wrong
+    // should return named var
 
-    function getNetPnl(Types.Market memory _market) public view returns (int256) {
+    function getNetPnl(Market.Data memory _market) public view returns (int256 netPnl) {
         require(isMarket[_market.marketKey], "DO: Invalid Market");
-        return Pricing.getNetPnL(_market.market, address(marketStorage), address(this), address(priceOracle), true)
-            + Pricing.getNetPnL(_market.market, address(marketStorage), address(this), address(priceOracle), false);
+        netPnl = Pricing.getNetPnL(_market.indexToken, address(marketMaker), address(this), address(priceOracle), true)
+            + Pricing.getNetPnL(_market.indexToken, address(marketMaker), address(this), address(priceOracle), false);
     }
 
     /// @dev To convert to usd, needs to be 1e18 DPs

@@ -6,8 +6,7 @@ import {HelperConfig} from "./HelperConfig.s.sol";
 import {RoleStorage} from "../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../src/markets/GlobalMarketConfig.sol";
 import {LiquidityVault} from "../src/markets/LiquidityVault.sol";
-import {MarketFactory} from "../src/markets/MarketFactory.sol";
-import {MarketStorage} from "../src/markets/MarketStorage.sol";
+import {MarketMaker} from "../src/markets/MarketMaker.sol";
 import {MarketToken} from "../src/markets/MarketToken.sol";
 import {StateUpdater} from "../src/markets/StateUpdater.sol";
 import {IMockPriceOracle} from "../test/mocks/interfaces/IMockPriceOracle.sol";
@@ -28,8 +27,7 @@ contract DeployV2 is Script {
         RoleStorage roleStorage;
         GlobalMarketConfig globalMarketConfig;
         LiquidityVault liquidityVault;
-        MarketFactory marketFactory;
-        MarketStorage marketStorage;
+        MarketMaker marketMaker;
         MarketToken marketToken;
         StateUpdater stateUpdater;
         IMockPriceOracle priceOracle;
@@ -59,8 +57,7 @@ contract DeployV2 is Script {
             RoleStorage(address(0)),
             GlobalMarketConfig(address(0)),
             LiquidityVault(payable(address(0))),
-            MarketFactory(address(0)),
-            MarketStorage(address(0)),
+            MarketMaker(address(0)),
             MarketToken(address(0)),
             StateUpdater(address(0)),
             IMockPriceOracle(priceOracle),
@@ -87,17 +84,17 @@ contract DeployV2 is Script {
         contracts.liquidityVault =
             new LiquidityVault(address(contracts.usde), address(contracts.marketToken), address(contracts.roleStorage));
 
-        contracts.marketStorage = new MarketStorage(address(contracts.liquidityVault), address(contracts.roleStorage));
+        contracts.marketMaker = new MarketMaker(address(contracts.liquidityVault), address(contracts.roleStorage));
 
         contracts.dataOracle = new DataOracle(
-            address(contracts.marketStorage), address(contracts.priceOracle), address(contracts.roleStorage)
+            address(contracts.marketMaker), address(contracts.priceOracle), address(contracts.roleStorage)
         );
 
         contracts.tradeVault =
             new TradeVault(address(contracts.usde), address(contracts.liquidityVault), address(contracts.roleStorage));
 
         contracts.tradeStorage = new TradeStorage(
-            address(contracts.marketStorage),
+            address(contracts.marketMaker),
             address(contracts.liquidityVault),
             address(contracts.tradeVault),
             priceOracle,
@@ -105,15 +102,8 @@ contract DeployV2 is Script {
             address(contracts.roleStorage)
         );
 
-        contracts.marketFactory = new MarketFactory(
-            address(contracts.marketStorage),
-            address(priceOracle),
-            address(contracts.dataOracle),
-            address(contracts.roleStorage)
-        );
-
         contracts.executor = new Executor(
-            address(contracts.marketStorage),
+            address(contracts.marketMaker),
             address(contracts.tradeStorage),
             priceOracle,
             address(contracts.liquidityVault),
@@ -123,7 +113,7 @@ contract DeployV2 is Script {
 
         contracts.liquidator = new Liquidator(
             address(contracts.tradeStorage),
-            address(contracts.marketStorage),
+            address(contracts.marketMaker),
             address(contracts.priceOracle),
             address(contracts.roleStorage)
         );
@@ -131,14 +121,14 @@ contract DeployV2 is Script {
         contracts.requestRouter = new RequestRouter(
             address(contracts.tradeStorage),
             address(contracts.liquidityVault),
-            address(contracts.marketStorage),
+            address(contracts.marketMaker),
             address(contracts.tradeVault),
             address(contracts.usde)
         );
 
         contracts.stateUpdater = new StateUpdater(
             address(contracts.liquidityVault),
-            address(contracts.marketStorage),
+            address(contracts.marketMaker),
             address(contracts.tradeStorage),
             address(contracts.roleStorage)
         );
@@ -150,14 +140,14 @@ contract DeployV2 is Script {
         /**
          * ============ Set Up Contracts ============
          */
+        contracts.marketMaker.initialise(address(contracts.dataOracle), address(contracts.priceOracle));
         contracts.liquidityVault.initialise(address(contracts.dataOracle), address(contracts.priceOracle), 0.0003e18);
         contracts.tradeStorage.initialise(5e18, 0.001e18, 0.001 ether, 10e18);
 
         // Set Up Roles
-        contracts.roleStorage.grantRole(Roles.MARKET_MAKER, address(contracts.marketFactory));
         contracts.roleStorage.grantRole(Roles.VAULT, address(contracts.liquidityVault));
         contracts.roleStorage.grantRole(Roles.CONFIGURATOR, address(contracts.globalMarketConfig));
-        contracts.roleStorage.grantRole(Roles.MARKET_STORAGE, address(contracts.marketStorage));
+        contracts.roleStorage.grantRole(Roles.MARKET_MAKER, address(contracts.marketMaker));
         contracts.roleStorage.grantRole(Roles.STATE_UPDATER, address(contracts.stateUpdater));
         contracts.roleStorage.grantRole(Roles.STATE_KEEPER, msg.sender);
         contracts.roleStorage.grantRole(Roles.EXECUTOR, address(contracts.executor));

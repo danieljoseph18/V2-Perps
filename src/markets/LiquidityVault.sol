@@ -20,7 +20,6 @@ pragma solidity 0.8.23;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IMarketToken} from "./interfaces/IMarketToken.sol";
-import {IMarket} from "./interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {IUSDE} from "../token/interfaces/IUSDE.sol";

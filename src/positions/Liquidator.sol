@@ -18,8 +18,7 @@
 pragma solidity 0.8.23;
 
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
-import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
@@ -27,14 +26,14 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 /// @dev Needs Liquidator role
 contract Liquidator is RoleValidation {
     ITradeStorage public tradeStorage;
-    IMarketStorage public marketStorage;
+    IMarketMaker public marketMaker;
     IPriceOracle public priceOracle;
 
-    constructor(address _tradeStorage, address _marketStorage, address _priceOracle, address _roleStorage)
+    constructor(address _tradeStorage, address _marketMaker, address _priceOracle, address _roleStorage)
         RoleValidation(_roleStorage)
     {
         tradeStorage = ITradeStorage(_tradeStorage);
-        marketStorage = IMarketStorage(_marketStorage);
+        marketMaker = IMarketMaker(_marketMaker);
         priceOracle = IPriceOracle(_priceOracle);
     }
 

@@ -6,8 +6,7 @@ import {DeployV2} from "../../../script/DeployV2.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {LiquidityVault} from "../../../src/markets/LiquidityVault.sol";
-import {MarketFactory} from "../../../src/markets/MarketFactory.sol";
-import {MarketStorage} from "../../../src/markets/MarketStorage.sol";
+import {MarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {MarketToken} from "../../../src/markets/MarketToken.sol";
 import {StateUpdater} from "../../../src/markets/StateUpdater.sol";
 import {IMockPriceOracle} from "../../mocks/interfaces/IMockPriceOracle.sol";
@@ -21,8 +20,6 @@ import {TradeVault} from "../../../src/positions/TradeVault.sol";
 import {USDE} from "../../../src/token/USDE.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Market} from "../../../src/markets/Market.sol";
-import {Types} from "../../../src/libraries/Types.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
@@ -34,7 +31,7 @@ contract TestTrading is Test {
 // GlobalMarketConfig globalMarketConfig;
 // LiquidityVault liquidityVault;
 // MarketFactory marketFactory;
-// MarketStorage marketStorage;
+// MarketMaker marketMaker;
 // MarketToken marketToken;
 // StateUpdater stateUpdater;
 // IMockPriceOracle priceOracle;
@@ -63,7 +60,7 @@ contract TestTrading is Test {
 //     globalMarketConfig = contracts.globalMarketConfig;
 //     liquidityVault = contracts.liquidityVault;
 //     marketFactory = contracts.marketFactory;
-//     marketStorage = contracts.marketStorage;
+//     marketMaker = contracts.marketMaker;
 //     marketToken = contracts.marketToken;
 //     stateUpdater = contracts.stateUpdater;
 //     priceOracle = contracts.priceOracle;
@@ -144,13 +141,13 @@ contract TestTrading is Test {
 // function testTradingHasBeenFacilitated() public facilitateTrading {
 //     // check the market exists
 //     Types.Market memory market =
-//         MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken));
+//         MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken));
 //     assertNotEq(market.market, address(0));
 //     assertNotEq(market.marketKey, bytes32(0));
 //     assertNotEq(market.indexToken, address(0));
 //     // check the market has the correct allocation
-//     uint256 alloc = marketStorage.marketAllocations(market.marketKey);
-//     uint256 maxOi = marketStorage.maxOpenInterests(market.marketKey);
+//     uint256 alloc = marketMaker.marketAllocations(market.marketKey);
+//     uint256 maxOi = marketMaker.maxOpenInterests(market.marketKey);
 //     assertEq(alloc, INDEX_ALLOCATION);
 //     assertEq(maxOi, (INDEX_ALLOCATION * 4) / 5);
 // }
@@ -224,15 +221,15 @@ contract TestTrading is Test {
 //         true // increase
 //     );
 //     uint256 signedBlockPrice = 1000e18;
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     (uint256 longOI, uint256 shortOI, uint256 sizeDeltaUsd) = PriceImpact.getOpenInterestAndSizeDelta(
-//         address(marketStorage), address(dataOracle), address(priceOracle), market, request, signedBlockPrice
+//         address(marketMaker), address(dataOracle), address(priceOracle), market, request, signedBlockPrice
 //     );
 //     console.log("Long OI: ", longOI);
 //     console.log("Short OI: ", shortOI);
 //     console.log("Size Delta: ", sizeDeltaUsd);
 //     uint256 priceImpact = PriceImpact.calculatePriceImpact(
-//         market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
+//         market, address(marketMaker), address(dataOracle), address(priceOracle), request, signedBlockPrice
 //     );
 //     console.log("Price Impact: ", priceImpact);
 //     uint256 impactedPrice =
@@ -270,7 +267,7 @@ contract TestTrading is Test {
 //     vm.stopPrank();
 //     Types.Position memory position = ITradeStorage(address(tradeStorage)).openPositions(_positionKey);
 //     assertEq(
-//         position.market, MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).marketKey
+//         position.market, MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).marketKey
 //     );
 //     assertEq(position.indexToken, address(indexToken));
 //     assertEq(position.user, USER);
@@ -305,9 +302,9 @@ contract TestTrading is Test {
 //     vm.stopPrank();
 //     // Run the calculate price impact function on the request
 //     uint256 signedBlockPrice = 1000e18;
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     uint256 priceImpact = PriceImpact.calculatePriceImpact(
-//         market, address(marketStorage), address(dataOracle), address(priceOracle), request, signedBlockPrice
+//         market, address(marketMaker), address(dataOracle), address(priceOracle), request, signedBlockPrice
 //     );
 //     uint256 impactedPrice =
 //         PriceImpact.applyPriceImpact(signedBlockPrice, priceImpact, request.isLong, request.isIncrease);
@@ -339,10 +336,10 @@ contract TestTrading is Test {
 //     vm.prank(OWNER);
 //     executor.executeTradeOrders(OWNER);
 //     uint256 longOI = MarketHelper.getIndexOpenInterestUSD(
-//         address(marketStorage), address(dataOracle), address(priceOracle), address(indexToken), true
+//         address(marketMaker), address(dataOracle), address(priceOracle), address(indexToken), true
 //     );
 //     uint256 shortOI = MarketHelper.getIndexOpenInterestUSD(
-//         address(marketStorage), address(dataOracle), address(priceOracle), address(indexToken), false
+//         address(marketMaker), address(dataOracle), address(priceOracle), address(indexToken), false
 //     );
 //     console.log("Long OI: ", longOI);
 //     console.log("Short OI: ", shortOI);

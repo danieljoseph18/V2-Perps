@@ -17,11 +17,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IMarketStorage} from "../markets/interfaces/IMarketStorage.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";
-import {Types} from "../libraries/Types.sol";
+import {Market} from "../structs/Market.sol";
+import {Request} from "../structs/Request.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
@@ -29,15 +29,16 @@ library PriceImpact {
     uint256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
 
     function execute(
-        address _market,
-        address _marketStorage,
+        bytes32 _marketKey,
+        address _marketMaker,
         address _dataOracle,
         address _priceOracle,
-        Types.Request memory _request,
+        Request.Data memory _request,
         uint256 _signedBlockPrice
     ) external view returns (uint256 impactedPrice) {
         require(_signedBlockPrice != 0, "signedBlockPrice is 0");
-        uint256 priceImpact = calculate(_market, _marketStorage, _dataOracle, _priceOracle, _request, _signedBlockPrice);
+        uint256 priceImpact =
+            calculate(_marketKey, _marketMaker, _dataOracle, _priceOracle, _request, _signedBlockPrice);
         if (_request.isLong) {
             if (_request.isIncrease) {
                 impactedPrice = _signedBlockPrice + priceImpact;
@@ -56,24 +57,22 @@ library PriceImpact {
 
     // Returns Price impact in USD
     function calculate(
-        address _market,
-        address _marketStorage,
+        bytes32 _marketKey,
+        address _marketMaker,
         address _dataOracle,
         address _priceOracle,
-        Types.Request memory _request,
+        Request.Data memory _request,
         uint256 _signedBlockPrice
     ) public view returns (uint256 priceImpact) {
         require(_signedBlockPrice != 0, "signedBlockPrice is 0");
-
-        IMarket market = IMarket(_market);
+        Market.Config memory marketConfig = IMarketMaker(_marketMaker).markets(_marketKey).config;
 
         uint256 longOI =
-            MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, market.indexToken(), true);
+            MarketHelper.getIndexOpenInterestUSD(_marketMaker, _dataOracle, _priceOracle, _request.indexToken, true);
         uint256 shortOI =
-            MarketHelper.getIndexOpenInterestUSD(_marketStorage, _dataOracle, _priceOracle, market.indexToken(), false);
-        address indexToken = IMarket(_market).indexToken();
+            MarketHelper.getIndexOpenInterestUSD(_marketMaker, _dataOracle, _priceOracle, _request.indexToken, false);
         uint256 sizeDeltaUSD =
-            (_request.sizeDelta * _signedBlockPrice) / (IDataOracle(_dataOracle).getBaseUnits(indexToken));
+            (_request.sizeDelta * _signedBlockPrice) / (IDataOracle(_dataOracle).getBaseUnits(_request.indexToken));
 
         uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
         if (_request.isIncrease) {
@@ -84,7 +83,7 @@ library PriceImpact {
         uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
         priceImpact = _calculateExponentiatedImpact(
-            skewBefore, skewAfter, market.priceImpactExponent(), market.priceImpactFactor()
+            skewBefore, skewAfter, marketConfig.priceImpactExponent, marketConfig.priceImpactFactor
         );
 
         uint256 maxImpact = (_signedBlockPrice * MAX_PRICE_IMPACT) / SCALAR;

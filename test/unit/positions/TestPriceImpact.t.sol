@@ -6,8 +6,7 @@ import {DeployV2} from "../../../script/DeployV2.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {LiquidityVault} from "../../../src/markets/LiquidityVault.sol";
-import {MarketFactory} from "../../../src/markets/MarketFactory.sol";
-import {MarketStorage} from "../../../src/markets/MarketStorage.sol";
+import {MarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {MarketToken} from "../../../src/markets/MarketToken.sol";
 import {StateUpdater} from "../../../src/markets/StateUpdater.sol";
 import {IMockPriceOracle} from "../../mocks/interfaces/IMockPriceOracle.sol";
@@ -21,8 +20,6 @@ import {TradeVault} from "../../../src/positions/TradeVault.sol";
 import {USDE} from "../../../src/token/USDE.sol";
 import {Roles} from "../../../src/access/Roles.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Market} from "../../../src/markets/Market.sol";
-import {Types} from "../../../src/libraries/Types.sol";
 import {TradeHelper} from "../../../src/positions/TradeHelper.sol";
 import {MarketHelper} from "../../../src/markets/MarketHelper.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
@@ -35,7 +32,7 @@ contract TestPriceImpact is Test {
 // GlobalMarketConfig globalMarketConfig;
 // LiquidityVault liquidityVault;
 // MarketFactory marketFactory;
-// MarketStorage marketStorage;
+// MarketMaker marketMaker;
 // MarketToken marketToken;
 // StateUpdater stateUpdater;
 // IMockPriceOracle priceOracle;
@@ -64,7 +61,7 @@ contract TestPriceImpact is Test {
 //     globalMarketConfig = contracts.globalMarketConfig;
 //     liquidityVault = contracts.liquidityVault;
 //     marketFactory = contracts.marketFactory;
-//     marketStorage = contracts.marketStorage;
+//     marketMaker = contracts.marketMaker;
 //     marketToken = contracts.marketToken;
 //     stateUpdater = contracts.stateUpdater;
 //     priceOracle = contracts.priceOracle;
@@ -118,9 +115,9 @@ contract TestPriceImpact is Test {
 //         true
 //     );
 //     vm.stopPrank();
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     uint256 impact = PriceImpact.calculatePriceImpact(
-//         market, address(marketStorage), address(dataOracle), address(priceOracle), userRequestLarge, 1000e18
+//         market, address(marketMaker), address(dataOracle), address(priceOracle), userRequestLarge, 1000e18
 //     );
 //     console.log("Large Impact: ", impact);
 //     Types.PositionRequest memory userRequestSmall = Types.PositionRequest(
@@ -137,7 +134,7 @@ contract TestPriceImpact is Test {
 //         true
 //     );
 //     uint256 smallImpact = PriceImpact.calculatePriceImpact(
-//         market, address(marketStorage), address(dataOracle), address(priceOracle), userRequestSmall, 1000e18
+//         market, address(marketMaker), address(dataOracle), address(priceOracle), userRequestSmall, 1000e18
 //     );
 //     console.log("Small Impact: ", smallImpact);
 //     assertGt(impact, smallImpact);
@@ -158,9 +155,9 @@ contract TestPriceImpact is Test {
 //         true,
 //         true
 //     );
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     uint256 impactedPrice = PriceImpact.executePriceImpact(
-//         market, address(marketStorage), address(dataOracle), address(priceOracle), userRequest, 1000e18
+//         market, address(marketMaker), address(dataOracle), address(priceOracle), userRequest, 1000e18
 //     );
 //     console.log("Impacted Price: ", impactedPrice);
 // }
@@ -179,9 +176,9 @@ contract TestPriceImpact is Test {
 //         true,
 //         true
 //     );
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     uint256 impactedPrice = PriceImpact.executePriceImpact(
-//         market, address(marketStorage), address(dataOracle), address(priceOracle), userRequest, 1000e18
+//         market, address(marketMaker), address(dataOracle), address(priceOracle), userRequest, 1000e18
 //     );
 //     console.log("Impacted Price: ", impactedPrice);
 // }
@@ -225,9 +222,9 @@ contract TestPriceImpact is Test {
 //         true,
 //         true
 //     );
-//     address market = MarketHelper.getMarketFromIndexToken(address(marketStorage), address(indexToken)).market;
+//     address market = MarketHelper.getMarketFromIndexToken(address(marketMaker), address(indexToken)).market;
 //     uint256 impactedPrice = PriceImpact.executePriceImpact(
-//         market, address(marketStorage), address(dataOracle), address(priceOracle), collateralRequest, 1000e18
+//         market, address(marketMaker), address(dataOracle), address(priceOracle), collateralRequest, 1000e18
 //     );
 //     console.log("Impacted Price: ", impactedPrice);
 //     assertEq(impactedPrice, 1000e18);

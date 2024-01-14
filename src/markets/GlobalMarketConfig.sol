@@ -17,10 +17,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IMarket} from "./interfaces/IMarket.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
+import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 
 /// @dev Needs Configurator Role
 contract GlobalMarketConfig is RoleValidation {
@@ -35,7 +35,6 @@ contract GlobalMarketConfig is RoleValidation {
     /**
      * ========================= Oracle =========================
      */
-
     function setDataOracle(address _dataOracle) external onlyModerator {
         // set data oracle across all contracts to a new contract address
     }
@@ -47,40 +46,37 @@ contract GlobalMarketConfig is RoleValidation {
     /**
      * ========================= Market Config =========================
      */
-
     function setMarketFundingConfig(
-        address _market,
+        address _marketMaker,
+        bytes32 _marketKey,
         uint256 _maxFundingVelocity,
         uint256 _skewScale,
         int256 _maxFundingRate,
-        int256 _minFundingRate
-    ) external onlyModerator {
-        require(_market != address(0), "Market does not exist");
-        IMarket(_market).setFundingConfig(_maxFundingVelocity, _skewScale, _maxFundingRate, _minFundingRate);
-    }
-
-    function setMarketBorrowingConfig(
-        address _market,
+        int256 _minFundingRate,
         uint256 _borrowingFactor,
         uint256 _borrowingExponent,
-        bool _feeForSmallerSide
+        bool _feeForSmallerSide,
+        uint256 _priceImpactFactor,
+        uint256 _priceImpactExponent
     ) external onlyModerator {
-        require(_market != address(0), "Market does not exist");
-        IMarket(_market).setBorrowingConfig(_borrowingFactor, _borrowingExponent, _feeForSmallerSide);
-    }
-
-    function setMarketPriceImpactConfig(address _market, uint256 _priceImpactFactor, uint256 _priceImpactExponent)
-        external
-        onlyModerator
-    {
-        require(_market != address(0), "Market does not exist");
-        IMarket(_market).setPriceImpactConfig(_priceImpactFactor, _priceImpactExponent);
+        require(_marketMaker != address(0), "Market does not exist");
+        IMarketMaker(_marketMaker).setMarketConfig(
+            _marketKey,
+            _maxFundingVelocity,
+            _skewScale,
+            _maxFundingRate,
+            _minFundingRate,
+            _borrowingFactor,
+            _borrowingExponent,
+            _feeForSmallerSide,
+            _priceImpactFactor,
+            _priceImpactExponent
+        );
     }
 
     /**
      * ========================= Fees =========================
      */
-
     function setLiquidityFee(uint256 _liquidityFee) external onlyModerator {
         liquidityVault.updateLiquidityFee(_liquidityFee);
     }

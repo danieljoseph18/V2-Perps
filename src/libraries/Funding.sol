@@ -17,8 +17,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Types} from "../libraries/Types.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
+import {Market} from "../structs/Market.sol";
+import {Position} from "../structs/Position.sol";
 
 /// @dev Library for Funding Related Calculations
 library Funding {
@@ -26,46 +27,47 @@ library Funding {
 
     /// @dev Calculate the funding rate velocity
     /// @dev velocity units = % per second (18 dp)
-    function calculateVelocity(address _market, int256 _skew) external view returns (int256 velocity) {
-        uint256 c = (IMarket(_market).maxFundingVelocity() * PRECISION) / IMarket(_market).skewScale();
+    function calculateVelocity(address _marketMaker, bytes32 _marketKey, int256 _skew)
+        external
+        view
+        returns (int256 velocity)
+    {
+        Market.Data memory market = IMarketMaker(_marketMaker).markets(_marketKey);
+        uint256 c = (market.config.maxFundingVelocity * PRECISION) / market.config.skewScale;
         int256 skew = _skew;
         velocity = (int256(c) * skew) / int256(PRECISION);
     }
 
     /// @dev Get the total funding fees accumulated for each side
     /// @notice For External Queries
-    function getTotalAccumulatedFees(address _market)
+    function getTotalAccumulatedFees(address _marketMaker, bytes32 _marketKey)
         external
         view
         returns (uint256 longAccumulatedFees, uint256 shortAccumulatedFees)
     {
-        IMarket market = IMarket(_market);
+        Market.Data memory market = IMarketMaker(_marketMaker).markets(_marketKey);
 
-        (uint256 longFundingSinceUpdate, uint256 shortFundingSinceUpdate) = _calculateAdjustedFees(
-            _market,
-            market.fundingRate(),
-            market.fundingRateVelocity(),
-            market.maxFundingRate(),
-            market.minFundingRate()
-        );
+        (uint256 longFundingSinceUpdate, uint256 shortFundingSinceUpdate) = _calculateAdjustedFees(market);
 
-        longAccumulatedFees = market.longCumulativeFundingFees() + longFundingSinceUpdate;
-        shortAccumulatedFees = market.shortCumulativeFundingFees() + shortFundingSinceUpdate;
+        longAccumulatedFees = market.funding.longCumulativeFundingFees + longFundingSinceUpdate;
+        shortAccumulatedFees = market.funding.shortCumulativeFundingFees + shortFundingSinceUpdate;
     }
 
     /// @dev Returns fees earned and fees owed in tokens
     /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
     /// to charge for a position need to go: index -> usd -> collateral
-    function getTotalPositionFees(address _market, Types.Position memory _position)
+    function getTotalPositionFees(address _marketMaker, Position.Data memory _position)
         external
         view
         returns (uint256 indexFeeEarned, uint256 indexFeeOwed)
     {
+        bytes32 marketKey = keccak256(abi.encode(_position.indexToken));
+        Market.Data memory market = IMarketMaker(_marketMaker).markets(marketKey);
         // Get the fees accumulated since the last position update
         uint256 shortAccumulatedFees =
-            IMarket(_market).shortCumulativeFundingFees() - _position.funding.lastShortCumulativeFunding;
+            market.funding.shortCumulativeFundingFees - _position.funding.lastShortCumulativeFunding;
         uint256 longAccumulatedFees =
-            IMarket(_market).longCumulativeFundingFees() - _position.funding.lastLongCumulativeFunding;
+            market.funding.longCumulativeFundingFees - _position.funding.lastLongCumulativeFunding;
         // Separate Short and Long Fees to Earned and Owed
         uint256 accumulatedFundingEarned;
         uint256 accumulatedFundingOwed;
@@ -78,7 +80,7 @@ library Funding {
         }
         // Get the fees accumulated since the last market update
         (uint256 feesEarnedSinceUpdate, uint256 feesOwedSinceUpdate) =
-            getFeesSinceLastMarketUpdate(_market, _position.isLong);
+            getFeesSinceLastMarketUpdate(market, _position.isLong);
         // Calculate the Total Fees Earned and Owed
         indexFeeEarned = feesEarnedSinceUpdate + _position.funding.feesEarned
             + ((accumulatedFundingEarned * _position.positionSize) / PRECISION);
@@ -87,31 +89,23 @@ library Funding {
     }
 
     // Rate to 18 D.P
-    function getCurrentRate(address _market) external view returns (int256) {
-        IMarket market = IMarket(_market);
-        uint256 timeElapsed = block.timestamp - market.lastFundingUpdateTime();
-        int256 fundingRate = market.fundingRate();
-        int256 fundingRateVelocity = market.fundingRateVelocity();
+    function getCurrentRate(address _marketMaker, bytes32 _marketKey) external view returns (int256) {
+        Market.Data memory market = IMarketMaker(_marketMaker).markets(_marketKey);
+        uint256 timeElapsed = block.timestamp - market.funding.lastFundingUpdateTime;
+        int256 fundingRate = market.funding.fundingRate;
+        int256 fundingRateVelocity = market.funding.fundingRateVelocity;
         // currentRate = prevRate + (velocity * timeElapsed)
         return fundingRate + (fundingRateVelocity * int256(timeElapsed));
     }
 
     /// @dev Get the funding fees earned and owed since the last market update
     /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
-    function getFeesSinceLastMarketUpdate(address _market, bool _isLong)
+    function getFeesSinceLastMarketUpdate(Market.Data memory _market, bool _isLong)
         public
         view
         returns (uint256 feesEarned, uint256 feesOwed)
     {
-        IMarket market = IMarket(_market);
-
-        (uint256 longFees, uint256 shortFees) = _calculateAdjustedFees(
-            _market,
-            market.fundingRate(),
-            market.fundingRateVelocity(),
-            market.maxFundingRate(),
-            market.minFundingRate()
-        );
+        (uint256 longFees, uint256 shortFees) = _calculateAdjustedFees(_market);
 
         if (_isLong) {
             feesEarned = shortFees;
@@ -124,34 +118,45 @@ library Funding {
 
     /// @dev Adjusts the total funding calculation when max or min limits are reached, or when the sign flips.
     /// @dev Mainly for external queries, as lastFundingUpdateTIme is updated before for position edits.
-    function _calculateAdjustedFees(
-        address _market,
-        int256 _fundingRate,
-        int256 _fundingRateVelocity,
-        int256 _maxFundingRate,
-        int256 _minFundingRate
-    ) internal view returns (uint256 longFees, uint256 shortFees) {
-        uint256 timeElapsed = block.timestamp - IMarket(_market).lastFundingUpdateTime();
+    function _calculateAdjustedFees(Market.Data memory _market)
+        internal
+        view
+        returns (uint256 longFees, uint256 shortFees)
+    {
+        uint256 timeElapsed = block.timestamp - _market.funding.lastFundingUpdateTime;
         if (timeElapsed == 0) {
             return (0, 0);
         }
         // Calculate which logical path to follow
-        int256 finalFundingRate = _fundingRate + (_fundingRateVelocity * int256(timeElapsed));
-        bool flipsSign = (_fundingRate >= 0 && finalFundingRate < 0) || (_fundingRate < 0 && finalFundingRate >= 0);
-        bool crossesBoundary = finalFundingRate > _maxFundingRate || finalFundingRate < _minFundingRate;
+        int256 finalFundingRate =
+            _market.funding.fundingRate + (_market.funding.fundingRateVelocity * int256(timeElapsed));
+        bool flipsSign = (_market.funding.fundingRate >= 0 && finalFundingRate < 0)
+            || (_market.funding.fundingRate < 0 && finalFundingRate >= 0);
+        bool crossesBoundary =
+            finalFundingRate > _market.config.maxFundingRate || finalFundingRate < _market.config.minFundingRate;
 
         // Direct the calculation down a path depending on the case
         if (crossesBoundary && flipsSign) {
-            (longFees, shortFees) =
-                _calculateForDoubleCross(_fundingRate, _fundingRateVelocity, _maxFundingRate, timeElapsed);
+            (longFees, shortFees) = _calculateForDoubleCross(
+                _market.funding.fundingRate,
+                _market.funding.fundingRateVelocity,
+                _market.config.maxFundingRate,
+                timeElapsed
+            );
         } else if (crossesBoundary) {
-            (longFees, shortFees) =
-                _calculateForBoundaryCross(_fundingRate, _fundingRateVelocity, _maxFundingRate, timeElapsed);
+            (longFees, shortFees) = _calculateForBoundaryCross(
+                _market.funding.fundingRate,
+                _market.funding.fundingRateVelocity,
+                _market.config.maxFundingRate,
+                timeElapsed
+            );
         } else if (flipsSign) {
-            (longFees, shortFees) = _calculateForSignFlip(_fundingRate, _fundingRateVelocity, timeElapsed);
+            (longFees, shortFees) =
+                _calculateForSignFlip(_market.funding.fundingRate, _market.funding.fundingRateVelocity, timeElapsed);
         } else {
-            uint256 fee = _calculateSeriesSum(_fundingRate, _fundingRateVelocity, timeElapsed);
-            (longFees, shortFees) = _fundingRate >= 0 ? (fee, uint256(0)) : (uint256(0), fee);
+            uint256 fee =
+                _calculateSeriesSum(_market.funding.fundingRate, _market.funding.fundingRateVelocity, timeElapsed);
+            (longFees, shortFees) = _market.funding.fundingRate >= 0 ? (fee, uint256(0)) : (uint256(0), fee);
         }
     }
 
