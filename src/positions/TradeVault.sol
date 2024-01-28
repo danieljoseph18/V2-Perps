@@ -20,15 +20,14 @@ pragma solidity 0.8.23;
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
-import {IUSDE} from "../token/interfaces/IUSDE.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {TradeHelper} from "./TradeHelper.sol";
 
 /// @dev Needs Vault Role
 contract TradeVault is RoleValidation {
-    using SafeERC20 for IUSDE;
+    using SafeERC20 for IERC20;
 
-    IUSDE public immutable USDE;
+    IERC20 public immutable USDC;
     ILiquidityVault public liquidityVault;
 
     mapping(bytes32 _marketKey => uint256 _collateral) public longCollateral;
@@ -47,8 +46,8 @@ contract TradeVault is RoleValidation {
         bool _isLong
     );
 
-    constructor(address _usde, address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
-        USDE = IUSDE(_usde);
+    constructor(address _usdc, address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
+        USDC = IERC20(_usdc);
         liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
@@ -67,7 +66,7 @@ contract TradeVault is RoleValidation {
             require(shortCollateral[_marketKey] >= _collateralDelta, "TV: Insufficient Collateral");
         }
         _isLong ? longCollateral[_marketKey] -= _collateralDelta : shortCollateral[_marketKey] -= _collateralDelta;
-        USDE.safeTransfer(_to, _collateralDelta);
+        USDC.safeTransfer(_to, _collateralDelta);
         emit TransferOutTokens(_marketKey, _to, _collateralDelta, _isLong);
     }
 
@@ -108,7 +107,7 @@ contract TradeVault is RoleValidation {
             }
             _sendTokensToLiquidityVault(remainingCollateral);
         }
-        USDE.safeTransfer(_liquidator, _liqFee);
+        USDC.safeTransfer(_liquidator, _liqFee);
         emit PositionCollateralLiquidated(
             _liquidator, _liqFee, _marketKey, _totalCollateral, _collateralFundingOwed, _isLong
         );
@@ -126,7 +125,7 @@ contract TradeVault is RoleValidation {
         // transfer funding from the counter parties' liquidity pool
         _updateCollateralBalance(_marketKey, _claimed, _isLong, false);
         // transfer funding to the user
-        USDE.safeTransfer(_user, _claimed);
+        USDC.safeTransfer(_user, _claimed);
     }
 
     function sendExecutionFee(address payable _executor, uint256 _executionFee) external onlyTradeStorage {
@@ -158,7 +157,7 @@ contract TradeVault is RoleValidation {
     function _sendTokensToLiquidityVault(uint256 _amount) internal {
         require(_amount != 0, "TV: Zero Amount");
         liquidityVault.accumulateFees(_amount);
-        USDE.safeTransfer(address(liquidityVault), _amount);
+        USDC.safeTransfer(address(liquidityVault), _amount);
         emit LossesTransferred(_amount);
     }
 }

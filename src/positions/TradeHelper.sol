@@ -24,7 +24,7 @@ import {Borrowing} from "../libraries/Borrowing.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
-import {Request} from "../structs/Request.sol";
+import {PositionRequest} from "../structs/PositionRequest.sol";
 import {Position} from "../structs/Position.sol";
 
 // Helper functions for trade related logic
@@ -34,11 +34,11 @@ library TradeHelper {
     uint256 public constant LEVERAGE_PRECISION = 100;
     uint256 public constant PRECISION = 1e18;
 
-    function generateKey(Request.Data memory _request) external pure returns (bytes32 positionKey) {
+    function generateKey(PositionRequest.Data memory _request) external pure returns (bytes32 positionKey) {
         positionKey = keccak256(abi.encode(_request.indexToken, _request.user, _request.isLong));
     }
 
-    function checkLimitPrice(uint256 _price, Request.Data memory _request) external pure {
+    function checkLimitPrice(uint256 _price, PositionRequest.Data memory _request) external pure {
         if (_request.isLong) {
             require(_price <= _request.orderPrice, "TH: Limit Price");
         } else {
@@ -55,12 +55,12 @@ library TradeHelper {
     }
 
     function createRequest(
-        Request.Input calldata _trade,
+        PositionRequest.Input calldata _trade,
         address _user,
         uint256 _collateralAmount,
-        Request.Type _requestType
-    ) external view returns (Request.Data memory request) {
-        request = Request.Data({
+        PositionRequest.Type _requestType
+    ) external view returns (PositionRequest.Data memory request) {
+        request = PositionRequest.Data({
             indexToken: _trade.indexToken,
             user: _user,
             collateralDelta: _collateralAmount,
@@ -78,7 +78,7 @@ library TradeHelper {
     function generateNewPosition(
         address _marketMaker,
         address _dataOracle,
-        Request.Data memory _request,
+        PositionRequest.Data memory _request,
         uint256 _price
     ) external view returns (Position.Data memory position) {
         // Get Entry Funding & Borrowing Values

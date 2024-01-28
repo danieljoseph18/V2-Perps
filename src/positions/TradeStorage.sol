@@ -21,9 +21,8 @@ import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {ITradeVault} from "./interfaces/ITradeVault.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {TradeHelper} from "./TradeHelper.sol";
@@ -32,7 +31,7 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {Market} from "../structs/Market.sol";
-import {Request} from "../structs/Request.sol";
+import {PositionRequest} from "../structs/PositionRequest.sol";
 import {Position} from "../structs/Position.sol";
 
 /// @dev Needs TradeStorage Role
@@ -51,7 +50,7 @@ contract TradeStorage is RoleValidation {
     uint256 constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
     uint256 constant MAX_TRADING_FEE = 0.01e18; // 1%
 
-    mapping(bytes32 _key => Request.Data _order) public orders;
+    mapping(bytes32 _key => PositionRequest.Data _order) public orders;
     EnumerableSet.Bytes32Set private marketOrderKeys;
     EnumerableSet.Bytes32Set private limitOrderKeys;
 
@@ -66,9 +65,9 @@ contract TradeStorage is RoleValidation {
     uint256 public tradingFee;
     uint256 public executionFee;
 
-    event OrderRequestCreated(bytes32 indexed _orderKey, Request.Data indexed _request);
+    event OrderRequestCreated(bytes32 indexed _orderKey, PositionRequest.Data indexed _request);
     event OrderRequestCancelled(bytes32 indexed _orderKey);
-    event TradeExecuted(Request.Execution indexed _executionParams);
+    event TradeExecuted(PositionRequest.Execution indexed _executionParams);
     event DecreaseTokenTransfer(address indexed _user, uint256 indexed _principle, int256 indexed _pnl);
     event LiquidatePosition(
         bytes32 indexed _positionKey, address indexed _liquidator, uint256 indexed _amountLiquidated, bool _isLong
@@ -127,7 +126,7 @@ contract TradeStorage is RoleValidation {
     }
 
     /// @dev Adds Order to EnumerableSet
-    function createOrderRequest(Request.Data calldata _request) external onlyRouter {
+    function createOrderRequest(PositionRequest.Data calldata _request) external onlyRouter {
         // Generate the Key
         bytes32 orderKey = TradeHelper.generateKey(_request);
         // Create a Storage Pointer to the Order Set
@@ -155,7 +154,7 @@ contract TradeStorage is RoleValidation {
         emit OrderRequestCancelled(_orderKey);
     }
 
-    function executeCollateralIncrease(Request.Execution calldata _params) external onlyExecutor {
+    function executeCollateralIncrease(PositionRequest.Execution calldata _params) external onlyExecutor {
         // Generate the Key
         bytes32 positionKey = TradeHelper.generateKey(_params.requestData);
         _validateAndPrepareExecution(positionKey, _params, true);
@@ -164,7 +163,7 @@ contract TradeStorage is RoleValidation {
         emit CollateralEdited(positionKey, _params.requestData.collateralDelta, _params.requestData.isIncrease);
     }
 
-    function executeCollateralDecrease(Request.Execution calldata _params) external onlyExecutor {
+    function executeCollateralDecrease(PositionRequest.Execution calldata _params) external onlyExecutor {
         bytes32 positionKey = TradeHelper.generateKey(_params.requestData);
         _validateAndPrepareExecution(positionKey, _params, true);
 
@@ -194,7 +193,7 @@ contract TradeStorage is RoleValidation {
         emit CollateralEdited(positionKey, _params.requestData.collateralDelta, _params.requestData.isIncrease);
     }
 
-    function createNewPosition(Request.Execution calldata _params) external onlyExecutor {
+    function createNewPosition(PositionRequest.Execution calldata _params) external onlyExecutor {
         bytes32 positionKey = TradeHelper.generateKey(_params.requestData);
         _validateAndPrepareExecution(positionKey, _params, false);
 
@@ -205,7 +204,13 @@ contract TradeStorage is RoleValidation {
 
         // Reserve Liquidity Equal to the Position Size
         _updateLiquidityReservation(
-            positionKey, _params.requestData.user, _params.requestData.sizeDelta, sizeUsd, collateralPrice, true
+            positionKey,
+            _params.requestData.user,
+            _params.requestData.sizeDelta,
+            sizeUsd,
+            collateralPrice,
+            true,
+            _params.requestData.isLong
         );
         // Check that the Position meets the minimum collateral threshold
         require(_checkMinCollateral(_params.requestData.collateralDelta, collateralPrice), "TS: Min Collat");
@@ -225,7 +230,7 @@ contract TradeStorage is RoleValidation {
         emit PositionCreated(positionKey, position);
     }
 
-    function increaseExistingPosition(Request.Execution calldata _params) external onlyExecutor {
+    function increaseExistingPosition(PositionRequest.Execution calldata _params) external onlyExecutor {
         bytes32 positionKey = TradeHelper.generateKey(_params.requestData);
         _validateAndPrepareExecution(positionKey, _params, true);
         // Fetch Position
@@ -238,7 +243,13 @@ contract TradeStorage is RoleValidation {
             address(dataOracle), _params.requestData.indexToken, _params.requestData.sizeDelta, _params.price
         );
         _updateLiquidityReservation(
-            positionKey, _params.requestData.user, sizeDelta, sizeDeltaUsd, priceOracle.getCollateralPrice(), true
+            positionKey,
+            _params.requestData.user,
+            sizeDelta,
+            sizeDeltaUsd,
+            priceOracle.getCollateralPrice(),
+            true,
+            _params.requestData.isLong
         );
         // Update the Existing Position
         _editPosition(_params.requestData.collateralDelta, sizeDelta, sizeDeltaUsd, 0, _params.price, true, positionKey);
@@ -248,7 +259,7 @@ contract TradeStorage is RoleValidation {
         emit IncreasePosition(positionKey, _params.requestData.collateralDelta, _params.requestData.sizeDelta);
     }
 
-    function decreaseExistingPosition(Request.Execution calldata _params) external onlyExecutor {
+    function decreaseExistingPosition(PositionRequest.Execution calldata _params) external onlyExecutor {
         bytes32 positionKey = TradeHelper.generateKey(_params.requestData);
         _validateAndPrepareExecution(positionKey, _params, true);
 
@@ -262,7 +273,8 @@ contract TradeStorage is RoleValidation {
                 address(dataOracle), _params.requestData.indexToken, _params.requestData.sizeDelta, _params.price
             ),
             collateralPrice,
-            false
+            false,
+            position.isLong
         );
 
         uint256 sizeDelta;
@@ -444,7 +456,7 @@ contract TradeStorage is RoleValidation {
 
     function _validateAndPrepareExecution(
         bytes32 _positionKey,
-        Request.Execution calldata _params,
+        PositionRequest.Execution calldata _params,
         bool _positionShouldExist
     ) internal {
         if (_positionShouldExist) {
@@ -467,7 +479,7 @@ contract TradeStorage is RoleValidation {
 
     function _processFeesAndTransfer(
         bytes32 _positionKey,
-        Request.Execution calldata _params,
+        PositionRequest.Execution calldata _params,
         int256 pnl,
         uint256 _collateralPrice
     ) internal {
@@ -500,7 +512,9 @@ contract TradeStorage is RoleValidation {
                 marketKey, _params.requestData.user, afterFeeAmount, _params.requestData.isLong
             );
             if (pnl > 0) {
-                liquidityVault.transferPositionProfit(_params.requestData.user, uint256(pnl));
+                liquidityVault.transferPositionProfit(
+                    _params.requestData.user, uint256(pnl), _params.requestData.isLong
+                );
             }
         }
     }
@@ -605,16 +619,17 @@ contract TradeStorage is RoleValidation {
         uint256 _sizeDelta,
         uint256 _sizeDeltaUsd,
         uint256 _collateralPrice,
-        bool _isIncrease
+        bool _isIncrease,
+        bool _isLong
     ) internal {
         int256 reserveDelta;
         if (_isIncrease) {
             reserveDelta = int256((_sizeDeltaUsd * PRECISION) / _collateralPrice);
         } else {
-            uint256 reserved = liquidityVault.reservedAmounts(_user);
+            uint256 reserved = liquidityVault.reservedAmounts(_user, _isLong);
             uint256 realisedAmount = (_sizeDelta * reserved) / openPositions[_positionKey].positionSize;
             reserveDelta = -int256(realisedAmount);
         }
-        liquidityVault.updateReservation(_user, reserveDelta);
+        liquidityVault.updateReservation(_user, reserveDelta, _isLong);
     }
 }

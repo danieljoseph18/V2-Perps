@@ -18,7 +18,7 @@
 pragma solidity 0.8.23;
 
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {ILiquidityVault} from "../markets/interfaces/ILiquidityVault.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {MarketHelper} from "../markets/MarketHelper.sol";

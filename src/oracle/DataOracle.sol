@@ -21,8 +21,12 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {Market} from "../structs/Market.sol";
+import {Block} from "./Block.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract DataOracle is RoleValidation {
+    using EnumerableSet for EnumerableSet.UintSet;
+
     IMarketMaker public marketMaker;
     address public priceOracle;
 
@@ -30,12 +34,18 @@ contract DataOracle is RoleValidation {
     mapping(bytes32 => bool) public isMarket;
     mapping(address => uint256) private baseUnits;
 
+    mapping(uint256 blockNumber => Block.Data data) public blockData;
+    EnumerableSet.UintSet private dataRequests;
+
     uint256 private marketEndIndex;
+
+    event BlockDataRequested(uint256 indexed blockNumber);
 
     constructor(address _marketMaker, address _priceOracle, address _roleStorage) RoleValidation(_roleStorage) {
         marketMaker = IMarketMaker(_marketMaker);
         priceOracle = _priceOracle;
     }
+    /// @dev Don't use a for loop here.
 
     function setMarkets(Market.Data[] memory _markets) external onlyAdmin {
         uint32 len = uint32(_markets.length);
@@ -56,6 +66,20 @@ contract DataOracle is RoleValidation {
 
     function clearBaseUnit(address _token) external onlyMarketMaker {
         delete baseUnits[_token];
+    }
+
+    function requestBlockData(uint256 _blockNumber) external onlyAdmin {
+        if (!dataRequests.contains(_blockNumber)) {
+            dataRequests.add(_blockNumber);
+            emit BlockDataRequested(_blockNumber);
+        }
+    }
+
+    function setBlockData(Block.Data memory _data) external onlyAdmin {
+        require(dataRequests.contains(_data.blockNumber), "DO: Block Data Not Requested");
+        require(_data.isValid, "DO: Is Valid Must Be True");
+        dataRequests.remove(_data.blockNumber);
+        blockData[_data.blockNumber] = _data;
     }
 
     /// @dev Do While loop more efficient than For loop
@@ -81,14 +105,10 @@ contract DataOracle is RoleValidation {
     }
 
     /// @dev To convert to usd, needs to be 1e18 DPs
-    function getCumulativeNetPnl() external view returns (int256 totalPnl) {
-        uint256 i = 0;
-        do {
-            totalPnl += getNetPnl(markets[i]);
-            unchecked {
-                ++i;
-            }
-        } while (i <= marketEndIndex);
+    function getCumulativeNetPnl(uint256 _blockNumber) external view returns (int256 totalPnl) {
+        Block.Data memory data = blockData[_blockNumber];
+        require(data.isValid, "DO: Invalid Block Number");
+        totalPnl = int256(data.cumulativePnl);
     }
 
     function getBaseUnits(address _token) external view returns (uint256) {

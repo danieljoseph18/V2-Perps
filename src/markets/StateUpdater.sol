@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";

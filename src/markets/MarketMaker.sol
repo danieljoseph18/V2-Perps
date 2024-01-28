@@ -18,7 +18,7 @@
 pragma solidity 0.8.23;
 
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {MarketHelper} from "./MarketHelper.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
@@ -34,6 +34,7 @@ contract MarketMaker is RoleValidation, ReentrancyGuard {
     IPriceOracle public priceOracle;
 
     mapping(bytes32 _marketKey => Market.Data) public markets;
+    // Do we make this an Enumerable Set?
     bytes32[] public marketKeys;
 
     bool private isInitialised;
@@ -281,6 +282,7 @@ contract MarketMaker is RoleValidation, ReentrancyGuard {
      * Higher risk markets will get reduced allocations
      * Markets with higher demand will get higher allocations
      * Allocations will be stored as maxOpenInterestUSD
+     * @dev -> Don't use a for loop here.
      */
     function updateAllocations(uint256[] calldata _maxOpenInterestsUsd) external onlyStateUpdater {
         uint256 len = marketKeys.length;

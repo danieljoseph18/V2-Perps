@@ -18,7 +18,7 @@
 pragma solidity 0.8.23;
 
 /// @dev Library containing all the data types used throughout the protocol
-library Request {
+library PositionRequest {
     // Request Type Classification
     enum Type {
         COLLATERAL_INCREASE,

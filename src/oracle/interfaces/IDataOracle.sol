@@ -20,11 +20,14 @@ interface IDataOracle {
     function getNetPnl(Market.Data memory _market) external view returns (int256 netPnl);
 
     // Function to get cumulative net PnL for all markets
-    function getCumulativeNetPnl() external view returns (int256 totalPnl);
+    function getCumulativeNetPnl(uint256 _blockNumber) external view returns (int256 totalPnl);
 
     // Function to get base units for a token
     function getBaseUnits(address _token) external view returns (uint256);
 
     // Function to set base units for a token
     function setBaseUnit(address _token, uint256 _baseUnit) external;
+
+    // Function to request data for a block
+    function requestBlockData(uint32 _blockNumber) external;
 }
