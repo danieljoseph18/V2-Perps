@@ -22,7 +22,6 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {MarketHelper} from "./MarketHelper.sol";
 
 /// @dev needs StateUpdater Role
 contract StateUpdater is RoleValidation, ReentrancyGuard {

@@ -13,13 +13,14 @@ interface ILiquidityVault {
     function initialise(
         IPriceOracle _priceOracle,
         IDataOracle _dataOracle,
-        address _marketMaker,
-        uint32 _minTimeToExpiration,
-        uint256 _minExecutionFee,
+        uint48 _minTimeToExpiration,
+        uint8 _priceImpactExponent,
+        uint256 _priceImpactFactor,
+        uint256 _executionFee,
         uint256 _depositFee,
         uint256 _withdrawalFee
     ) external;
-    function updateFees(uint256 _minExecutionFee, uint256 _depositFee, uint256 _withdrawalFee) external;
+    function updateFees(uint256 _executionFee, uint256 _depositFee, uint256 _withdrawalFee) external;
 
     // Trading related functions
     function transferPositionProfit(address _user, uint256 _amount, bool _isLong) external;
@@ -42,6 +43,7 @@ interface ILiquidityVault {
 
     // Getter
     function reservedAmounts(address _user, bool _isLong) external view returns (uint256);
+    function executionFee() external view returns (uint256);
 
     event DepositRequestCreated(
         bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 blockNumber

@@ -20,43 +20,49 @@ pragma solidity 0.8.23;
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
-import {Market} from "../structs/Market.sol";
-import {Block} from "./Block.sol";
+import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
+import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-contract DataOracle is RoleValidation {
+contract DataOracle is IDataOracle, RoleValidation {
     using EnumerableSet for EnumerableSet.UintSet;
 
     IMarketMaker public marketMaker;
-    address public priceOracle;
+    IPriceOracle public priceOracle;
 
-    mapping(uint256 _index => Market.Data) public markets;
-    mapping(bytes32 => bool) public isMarket;
+    uint256 public immutable LONG_BASE_UNIT;
+    uint256 public immutable SHORT_BASE_UNIT;
+
+    struct BlockData {
+        bool isValid;
+        uint256 blockNumber;
+        uint256 blockTimestamp;
+        uint256 cumulativeNetPnl; // Across all markets
+        uint256 longMarketTokenPrice;
+        uint256 shortMarketTokenPrice;
+    }
+
+    mapping(address => bool) public isMarket;
     mapping(address => uint256) private baseUnits;
 
-    mapping(uint256 blockNumber => Block.Data data) public blockData;
+    mapping(uint256 blockNumber => BlockData data) public blockData;
+    mapping(uint256 _blockNumber => mapping(address _token => uint256 _price)) public tokenPrices;
     EnumerableSet.UintSet private dataRequests;
-
-    uint256 private marketEndIndex;
 
     event BlockDataRequested(uint256 indexed blockNumber);
 
-    constructor(address _marketMaker, address _priceOracle, address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(
+        address _marketMaker,
+        address _priceOracle,
+        uint256 _longBaseUnit,
+        uint256 _shortBaseUnit,
+        address _roleStorage
+    ) RoleValidation(_roleStorage) {
         marketMaker = IMarketMaker(_marketMaker);
-        priceOracle = _priceOracle;
-    }
-    /// @dev Don't use a for loop here.
-
-    function setMarkets(Market.Data[] memory _markets) external onlyAdmin {
-        uint32 len = uint32(_markets.length);
-        for (uint256 i = 0; i < len;) {
-            markets[i] = _markets[i];
-            isMarket[_markets[i].marketKey] = true;
-            unchecked {
-                ++i;
-            }
-        }
-        marketEndIndex = len - 1;
+        priceOracle = IPriceOracle(_priceOracle);
+        LONG_BASE_UNIT = _longBaseUnit;
+        SHORT_BASE_UNIT = _shortBaseUnit;
     }
 
     /// @dev e.g 1e18 = 18 decimal places
@@ -75,40 +81,33 @@ contract DataOracle is RoleValidation {
         }
     }
 
-    function setBlockData(Block.Data memory _data) external onlyAdmin {
+    function setBlockData(BlockData memory _data) external onlyAdmin {
         require(dataRequests.contains(_data.blockNumber), "DO: Block Data Not Requested");
         require(_data.isValid, "DO: Is Valid Must Be True");
         dataRequests.remove(_data.blockNumber);
         blockData[_data.blockNumber] = _data;
     }
 
-    /// @dev Do While loop more efficient than For loop
-    function clearMarkets() external onlyAdmin {
-        uint256 i = 0;
-        do {
-            isMarket[markets[i].marketKey] = false;
-            delete markets[i];
-            unchecked {
-                ++i;
-            }
-        } while (i <= marketEndIndex);
-        marketEndIndex = 0;
-    }
     // wrong -> get net pnl first arg is index token
     // market is wrong
     // should return named var
 
-    function getNetPnl(Market.Data memory _market) public view returns (int256 netPnl) {
-        require(isMarket[_market.marketKey], "DO: Invalid Market");
-        netPnl = Pricing.getNetPnL(_market.indexToken, address(marketMaker), address(this), address(priceOracle), true)
-            + Pricing.getNetPnL(_market.indexToken, address(marketMaker), address(this), address(priceOracle), false);
+    function getNetPnl(IMarket _market, uint256 _blockNumber) public view returns (int256 netPnl) {
+        require(isMarket[address(_market)], "DO: Invalid Market");
+        BlockData memory data = blockData[_blockNumber];
+        require(data.isValid, "DO: Invalid Block Number");
+        address indexToken = _market.indexToken();
+        uint256 indexPrice = tokenPrices[_blockNumber][indexToken];
+        uint256 indexBaseUnit = baseUnits[indexToken];
+        netPnl = Pricing.getNetPnL(_market, indexPrice, indexBaseUnit, true)
+            + Pricing.getNetPnL(_market, indexPrice, indexBaseUnit, false);
     }
 
     /// @dev To convert to usd, needs to be 1e18 DPs
     function getCumulativeNetPnl(uint256 _blockNumber) external view returns (int256 totalPnl) {
-        Block.Data memory data = blockData[_blockNumber];
+        BlockData memory data = blockData[_blockNumber];
         require(data.isValid, "DO: Invalid Block Number");
-        totalPnl = int256(data.cumulativePnl);
+        totalPnl = int256(data.cumulativeNetPnl);
     }
 
     function getBaseUnits(address _token) external view returns (uint256) {

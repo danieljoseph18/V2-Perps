@@ -1,26 +1,67 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {PositionRequest} from "../../structs/PositionRequest.sol";
-import {Position} from "../../structs/Position.sol";
+import {Position} from "../../positions/Position.sol";
 
 interface ITradeStorage {
-    function initialise(uint256 _liquidationFee, uint256 _tradingFee, uint256 _executionFee) external;
-    function createOrderRequest(PositionRequest.Data calldata _request) external;
+    event OrderRequestCreated(bytes32 indexed _orderKey, Position.RequestData indexed _request);
+    event OrderRequestCancelled(bytes32 indexed _orderKey);
+    event TradeExecuted(Position.RequestExecution indexed _executionParams);
+    event DecreaseTokenTransfer(address indexed _user, uint256 indexed _principle, int256 indexed _pnl);
+    event LiquidatePosition(
+        bytes32 indexed _positionKey, address indexed _liquidator, uint256 indexed _amountLiquidated, bool _isLong
+    );
+    event FeesProcessed(bytes32 indexed _positionKey, uint256 indexed _fundingFee, uint256 indexed _borrowFee);
+    event FundingFeesClaimed(address _user, uint256 _fundingFees);
+    event TradeStorageInitialised(
+        uint256 indexed _liquidationFee, uint256 indexed _tradingFee, uint256 indexed _executionFee
+    );
+    event FeesSet(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
+    event CollateralEdited(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, bool indexed _isIncrease);
+    event IncreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
+    event DecreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
+    event DeleteRequest(bytes32 indexed _positionKey, bool indexed _isLimit);
+    event EditPosition(
+        bytes32 indexed _positionKey,
+        uint256 indexed _collateralDelta,
+        uint256 indexed _sizeDelta,
+        int256 _pnlDelta,
+        bool _isIncrease
+    );
+    event PositionCreated(bytes32 indexed _positionKey, Position.Data indexed _position);
+    event FundingFeeProcessed(address indexed _user, uint256 indexed _fundingFee);
+    event FundingParamsUpdated(bytes32 indexed _positionKey, Position.FundingParams indexed _fundingParams);
+    event BorrowingFeesProcessed(address indexed _user, uint256 indexed _borrowingFee);
+    event BorrowingParamsUpdated(bytes32 indexed _positionKey, Position.BorrowingParams indexed _borrowingParams);
+
+    function initialise(uint256 _liquidationFee, uint256 _tradingFee, uint256 _executionFee, uint256 _minCollateralUsd)
+        external;
+    function createOrderRequest(Position.RequestData calldata _request) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
-    function executeCollateralIncrease(PositionRequest.Execution calldata _params) external;
-    function executeCollateralDecrease(PositionRequest.Execution calldata _params) external;
-    function createNewPosition(PositionRequest.Execution calldata _params) external;
-    function increaseExistingPosition(PositionRequest.Execution calldata _params) external;
-    function decreaseExistingPosition(PositionRequest.Execution calldata _params) external;
-    function liquidatePosition(bytes32 _positionKey, address _liquidator, uint256 _collateralPrice) external;
+    function executeCollateralIncrease(Position.RequestExecution calldata _params) external;
+    function executeCollateralDecrease(Position.RequestExecution calldata _params) external;
+    function createNewPosition(Position.RequestExecution calldata _params) external;
+    function increaseExistingPosition(Position.RequestExecution calldata _params) external;
+    function decreaseExistingPosition(Position.RequestExecution calldata _params) external;
+    function liquidatePosition(
+        bytes32 _positionKey,
+        address _liquidator,
+        uint256 _collateralPrice,
+        uint256 _signedBlockPrice,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice
+    ) external;
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external;
     function claimFundingFees(bytes32 _positionKey) external;
-    function getOpenPositionKeys(bytes32 _marketKey, bool _isLong) external view returns (bytes32[] memory);
+    function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory);
     function getOrderKeys(bool _isLimit) external view returns (bytes32[] memory orderKeys);
     function getRequestQueueLengths() external view returns (uint256 marketLen, uint256 limitLen);
-    function orders(bytes32 _key) external view returns (PositionRequest.Data memory);
-    function openPositions(bytes32 _key) external view returns (Position.Data memory);
+
+    // Getters for public variables
+    function liquidationFeeUsd() external view returns (uint256);
     function minCollateralUsd() external view returns (uint256);
+    function tradingFee() external view returns (uint256);
     function executionFee() external view returns (uint256);
+    function getOrder(bytes32 _key) external view returns (Position.RequestData memory _order);
+    function getPosition(bytes32 _positionKey) external view returns (Position.Data memory);
 }

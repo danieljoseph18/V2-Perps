@@ -20,7 +20,6 @@ pragma solidity 0.8.23;
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {TradeHelper} from "./TradeHelper.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 
 /// @dev Needs Liquidator role
@@ -41,7 +40,9 @@ contract Liquidator is RoleValidation {
     // let the liquidator claim liquidation rewards from the tradestorage contract
     function liquidatePosition(bytes32 _positionKey) external onlyKeeper {
         // check if position is flagged for liquidation
-        uint256 collateralPrice = priceOracle.getCollateralPrice();
-        tradeStorage.liquidatePosition(_positionKey, msg.sender, collateralPrice);
+        // uint256 collateralPrice = priceOracle.getCollateralPrice();
+        // fetch data to execute liquidations
+        // liquidate the position
+        // tradeStorage.liquidatePosition(_positionKey, collateralPrice);
     }
 }

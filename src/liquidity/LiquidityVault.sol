@@ -12,10 +12,12 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Pool} from "./Pool.sol";
 
 // Stores all funds for the protocol
 /// @dev Needs Vault Role
@@ -24,20 +26,20 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using Address for address payable;
 
-    uint256 public constant MAX_SLIPPAGE = 9999; // 99.99%
+    uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
+    uint256 public constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
     uint256 public constant SCALING_FACTOR = 1e18;
 
-    IERC20 public immutable LONG_TOKEN;
-    IERC20 public immutable SHORT_TOKEN;
-    uint8 private immutable LONG_TOKEN_DECIMALS;
-    uint8 private immutable SHORT_TOKEN_DECIMALS;
+    address public immutable LONG_TOKEN;
+    address public immutable SHORT_TOKEN;
+    uint256 private immutable LONG_BASE_UNIT;
+    uint256 private immutable SHORT_BASE_UNIT;
 
     IPriceOracle priceOracle;
     IDataOracle dataOracle;
-    address marketMaker;
 
-    uint32 minTimeToExpiration;
-    uint256 minExecutionFee; // in Wei
+    bool isInitialised;
+    uint48 minTimeToExpiration;
     uint256 depositFee; // 18 D.P
     uint256 withdrawalFee; // 18 D.P
 
@@ -47,7 +49,10 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     uint256 private longTokensReserved;
     uint256 private shortTokensReserved;
 
-    bool isInitialised;
+    uint8 private priceImpactExponent;
+    uint256 private priceImpactFactor;
+
+    uint256 public executionFee; // in Wei
 
     mapping(bytes32 => Deposit.Data) public depositRequests;
     EnumerableSet.Bytes32Set private depositKeys;
@@ -55,47 +60,65 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     EnumerableSet.Bytes32Set private withdrawalKeys;
     mapping(address user => mapping(bool isLong => uint256 reserved)) public reservedAmounts;
 
+    modifier isValidToken(address _token) {
+        require(_token == LONG_TOKEN || _token == SHORT_TOKEN, "LV: Invalid Token");
+        _;
+    }
+
+    modifier orderExists(bytes32 _key, bool _isDeposit) {
+        if (_isDeposit) {
+            require(depositKeys.contains(_key), "LiquidityVault: invalid key");
+        } else {
+            require(withdrawalKeys.contains(_key), "LiquidityVault: invalid key");
+        }
+        _;
+    }
+
     constructor(
-        IERC20 _longToken,
-        IERC20 _shortToken,
-        uint8 _longTokenDecimals,
-        uint8 _shortTokenDecimals,
+        address _longToken,
+        address _shortToken,
+        uint256 _longBaseUnit,
+        uint256 _shortBaseUnit,
         string memory _name,
         string memory _symbol,
         address _roleStorage
     ) ERC20(_name, _symbol) RoleValidation(_roleStorage) {
         LONG_TOKEN = _longToken;
         SHORT_TOKEN = _shortToken;
-        LONG_TOKEN_DECIMALS = _longTokenDecimals;
-        SHORT_TOKEN_DECIMALS = _shortTokenDecimals;
+        LONG_BASE_UNIT = _longBaseUnit;
+        SHORT_BASE_UNIT = _shortBaseUnit;
     }
 
     function initialise(
         IPriceOracle _priceOracle,
         IDataOracle _dataOracle,
-        address _marketMaker,
-        uint32 _minTimeToExpiration,
-        uint256 _minExecutionFee,
+        uint48 _minTimeToExpiration,
+        uint8 _priceImpactExponent,
+        uint256 _priceImpactFactor,
+        uint256 _executionFee,
         uint256 _depositFee,
         uint256 _withdrawalFee
     ) external onlyAdmin {
         require(!isInitialised, "LiquidityVault: already initialised");
         priceOracle = _priceOracle;
         dataOracle = _dataOracle;
-        marketMaker = _marketMaker;
-        minExecutionFee = _minExecutionFee;
+        executionFee = _executionFee;
         minTimeToExpiration = _minTimeToExpiration;
+        depositFee = _depositFee;
+        withdrawalFee = _withdrawalFee;
+        priceImpactFactor = _priceImpactFactor;
+        priceImpactExponent = _priceImpactExponent;
+    }
+
+    function updateFees(uint256 _executionFee, uint256 _depositFee, uint256 _withdrawalFee) external onlyConfigurator {
+        executionFee = _executionFee;
         depositFee = _depositFee;
         withdrawalFee = _withdrawalFee;
     }
 
-    function updateFees(uint256 _minExecutionFee, uint256 _depositFee, uint256 _withdrawalFee)
-        external
-        onlyConfigurator
-    {
-        minExecutionFee = _minExecutionFee;
-        depositFee = _depositFee;
-        withdrawalFee = _withdrawalFee;
+    function updatePriceImpact(uint256 _priceImpactFactor, uint8 _priceImpactExponent) external onlyConfigurator {
+        priceImpactFactor = _priceImpactFactor;
+        priceImpactExponent = _priceImpactExponent;
     }
 
     ///////////////////////////////
@@ -113,11 +136,11 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         if (_isLong) {
             require(_amount <= longTokenBalance - longTokensReserved, "LV: Insufficient Funds");
             longTokenBalance -= _amount;
-            IERC20(address(LONG_TOKEN)).safeTransfer(_user, _amount);
+            IERC20(LONG_TOKEN).safeTransfer(_user, _amount);
         } else {
             require(_amount <= shortTokenBalance - shortTokensReserved, "LV: Insufficient Funds");
             shortTokenBalance -= _amount;
-            IERC20(address(SHORT_TOKEN)).safeTransfer(_user, _amount);
+            IERC20(SHORT_TOKEN).safeTransfer(_user, _amount);
         }
         emit ProfitTransferred(_user, _amount, _isLong);
     }
@@ -129,7 +152,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     }
 
     /// @dev Used to reserve / unreserve funds for open positions
-    // q - do we need a reserve factor to cap reserves to a % of the available liquidity
+    // We need a reserve factor to cap reserves to a % of the available liquidity
     function updateReservation(address _user, int256 _amount, bool _isLong) external onlyTradeStorage {
         require(_amount != 0, "LV: Invalid Res Amount");
         uint256 amt;
@@ -137,24 +160,24 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
             amt = uint256(_amount);
             if (_isLong) {
                 require(amt <= longTokenBalance, "LV: Insufficient Long Liq");
-                longTokenBalance += amt;
+                longTokensReserved += amt;
                 reservedAmounts[_user][true] += amt;
             } else {
                 require(amt <= shortTokenBalance, "LV: Insufficient Short Liq");
-                shortTokenBalance += amt;
+                shortTokensReserved += amt;
                 reservedAmounts[_user][false] += amt;
             }
         } else {
             amt = uint256(-_amount);
             if (_isLong) {
                 require(reservedAmounts[_user][true] >= amt, "LV: Insufficient Reserves");
-                require(longTokenBalance >= amt, "LV: Insufficient Long Liq");
-                longTokenBalance -= amt;
+                require(longTokensReserved >= amt, "LV: Insufficient Long Liq");
+                longTokensReserved -= amt;
                 reservedAmounts[_user][true] -= amt;
             } else {
                 require(reservedAmounts[_user][false] >= amt, "LV: Insufficient Reserves");
-                require(shortTokenBalance >= amt, "LV: Insufficient Short Liq");
-                shortTokenBalance -= amt;
+                require(shortTokensReserved >= amt, "LV: Insufficient Short Liq");
+                shortTokensReserved -= amt;
                 reservedAmounts[_user][false] -= amt;
             }
         }
@@ -165,54 +188,38 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     // DEPOSIT EXECUTION //
     ///////////////////////
 
-    function executeDeposit(bytes32 _key) external nonReentrant onlyKeeper {
+    function executeDeposit(bytes32 _key) external onlyExecutor orderExists(_key, true) {
         // fetch and cache
-        require(depositKeys.contains(_key), "LiquidityVault: invalid key");
         Deposit.Data memory data = depositRequests[_key];
         // remove from storage
         depositKeys.remove(_key);
         delete depositRequests[_key];
-        // get price signed to the block number of the request
-        uint256 longTokenPrice = priceOracle.getSignedPrice(data.params.tokenIn, data.blockNumber);
-        uint256 shortTokenPrice = priceOracle.getSignedPrice(data.params.tokenIn, data.blockNumber);
-        // calculate the value of the assets provided
         bool isLongToken = data.params.tokenIn == address(LONG_TOKEN);
-        // calculate price impact
-        uint256 impactedPrice = PriceImpact.executeForMarket(
-            PriceImpact.Params({
+
+        (uint256 mintAmount, uint256 fee, uint256 remaining) = Deposit.execute(
+            data,
+            Pool.Values({
+                dataOracle: dataOracle,
+                priceOracle: priceOracle,
                 longTokenBalance: longTokenBalance,
                 shortTokenBalance: shortTokenBalance,
-                longTokenPrice: longTokenPrice,
-                shortTokenPrice: shortTokenPrice,
-                amount: data.params.amountIn,
-                isIncrease: true,
-                isLongToken: isLongToken,
-                longTokenDecimals: LONG_TOKEN_DECIMALS,
-                shortTokenDecimals: SHORT_TOKEN_DECIMALS,
-                marketMaker: marketMaker,
-                marketKey: keccak256(abi.encode(data.params.tokenIn))
-            })
+                marketTokenSupply: totalSupply(),
+                blockNumber: data.blockNumber,
+                longBaseUnit: LONG_BASE_UNIT,
+                shortBaseUnit: SHORT_BASE_UNIT
+            }),
+            isLongToken,
+            priceImpactExponent,
+            priceImpactFactor
         );
-        // calculate fees
-        uint256 fee = Fee.calculateForDeposit(data.params.amountIn, depositFee);
-        // calculate amount remaining after fee and price impact
-        uint256 remaining = data.params.amountIn - fee;
 
         // update storage
-        if (isLongToken) {
-            longTokenBalance += remaining;
-        } else {
-            shortTokenBalance += remaining;
-        }
+        isLongToken ? longTokenBalance += remaining : shortTokenBalance += remaining;
         accumulatedFees += fee;
 
         // send execution fee to keeper
         payable(msg.sender).sendValue(data.params.executionFee);
-
-        // mint market tokens to the user
-        uint256 mintAmount = _calculateMintAmount(
-            _calculateUsdValue(isLongToken, impactedPrice, remaining), longTokenPrice, shortTokenPrice
-        );
+        // mint tokens to user
         _mint(data.params.owner, mintAmount);
         // fire event
         emit DepositExecuted(_key, data.params.owner, data.params.tokenIn, data.params.amountIn, mintAmount);
@@ -223,52 +230,35 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     //////////////////////////
 
     // @audit - review
-    function executeWithdrawal(bytes32 _key) external nonReentrant onlyKeeper {
+    function executeWithdrawal(bytes32 _key) external onlyExecutor orderExists(_key, false) {
         // fetch and cache
-        require(withdrawalKeys.contains(_key), "LiquidityVault: invalid key");
         Withdrawal.Data memory data = withdrawalRequests[_key];
 
         _burn(msg.sender, data.params.marketTokenAmountIn);
         // remove from storage
         withdrawalKeys.remove(_key);
         delete withdrawalRequests[_key];
-        // get price signed to the block number of the request
-        uint256 longTokenPrice = priceOracle.getSignedPrice(data.params.tokenOut, data.blockNumber);
-        uint256 shortTokenPrice = priceOracle.getSignedPrice(data.params.tokenOut, data.blockNumber);
-        // calculate the value of the assets provided
         bool isLongToken = data.params.tokenOut == address(LONG_TOKEN);
-        // calculate price impact
-        uint256 impactedPrice = PriceImpact.executeForMarket(
-            PriceImpact.Params({
+
+        (uint256 amountOut, uint256 fee, uint256 remaining) = Withdrawal.execute(
+            data,
+            Pool.Values({
+                dataOracle: dataOracle,
+                priceOracle: priceOracle,
                 longTokenBalance: longTokenBalance,
                 shortTokenBalance: shortTokenBalance,
-                longTokenPrice: longTokenPrice,
-                shortTokenPrice: shortTokenPrice,
-                amount: data.params.marketTokenAmountIn,
-                isIncrease: false,
-                isLongToken: isLongToken,
-                longTokenDecimals: LONG_TOKEN_DECIMALS,
-                shortTokenDecimals: SHORT_TOKEN_DECIMALS,
-                marketMaker: marketMaker,
-                marketKey: keccak256(abi.encode(data.params.tokenOut))
-            })
+                marketTokenSupply: totalSupply(),
+                blockNumber: data.blockNumber,
+                longBaseUnit: LONG_BASE_UNIT,
+                shortBaseUnit: SHORT_BASE_UNIT
+            }),
+            isLongToken,
+            priceImpactExponent,
+            priceImpactFactor
         );
-
-        uint256 amountOut = _calculateAmountOut(
-            data.params.tokenOut, data.params.marketTokenAmountIn, longTokenPrice, shortTokenPrice, impactedPrice
-        );
-
-        // calculate fees
-        uint256 fee = Fee.calculateForWithdrawal(amountOut, withdrawalFee);
-        // calculate amount remaining after fee and price impact
-        uint256 remaining = amountOut - fee;
 
         // update storage
-        if (isLongToken) {
-            longTokenBalance -= amountOut;
-        } else {
-            shortTokenBalance -= amountOut;
-        }
+        isLongToken ? longTokenBalance -= amountOut : shortTokenBalance -= amountOut;
         accumulatedFees += fee;
 
         // send execution fee to keeper
@@ -289,31 +279,13 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     // Function to create a deposit request
     // Note -> need to add ability to create deposit in eth
-    function createDeposit(Deposit.Params memory _params) external payable nonReentrant {
-        require(_params.executionFee >= minExecutionFee, "LiquidityVault: execution fee too low");
-        require(msg.value == _params.executionFee, "LiquidityVault: invalid execution fee");
-        require(
-            _params.tokenIn == address(LONG_TOKEN) || _params.tokenIn == address(SHORT_TOKEN),
-            "LiquidityVault: invalid token"
-        );
-        require(_params.owner == msg.sender, "LiquidityVault: invalid owner");
-        require(_params.maxSlippage < MAX_SLIPPAGE, "LiquidityVault: invalid slippage");
+    function createDeposit(Deposit.Params memory _params) external payable onlyRouter isValidToken(_params.tokenIn) {
+        Deposit.validateParameters(_params, executionFee);
 
         // Transfer tokens from user to this contract
         IERC20(_params.tokenIn).safeTransferFrom(_params.owner, address(this), _params.amountIn);
 
-        // Store the request -> Use Block.number as a nonce
-        uint32 blockNumber = uint32(block.number);
-        Deposit.Data memory deposit = Deposit.Data({
-            params: _params,
-            blockNumber: blockNumber,
-            expirationTimestamp: uint32(block.timestamp) + minTimeToExpiration
-        });
-
-        // Request Required Data for the Block
-        dataOracle.requestBlockData(blockNumber);
-
-        bytes32 key = Deposit.generateKey(_params.owner, _params.tokenIn, _params.amountIn, deposit.blockNumber);
+        (Deposit.Data memory deposit, bytes32 key) = Deposit.create(dataOracle, _params, minTimeToExpiration);
 
         depositKeys.add(key);
         depositRequests[key] = deposit;
@@ -321,11 +293,10 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     }
 
     // Request must be expired for a user to cancel it
-    function cancelDeposit(bytes32 _key) external nonReentrant {
+    function cancelDeposit(bytes32 _key) external onlyRouter orderExists(_key, true) {
         Deposit.Data memory deposit = depositRequests[_key];
-        require(deposit.params.owner == msg.sender, "LiquidityVault: invalid owner");
-        require(depositKeys.contains(_key), "LiquidityVault: invalid key");
-        require(deposit.expirationTimestamp < block.timestamp, "LiquidityVault: deposit not expired");
+
+        Deposit.validateCancellation(deposit);
 
         depositKeys.remove(_key);
         delete depositRequests[_key];
@@ -341,32 +312,18 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     /////////////////////////
 
     // Function to create a withdrawal request
-    function createWithdrawal(Withdrawal.Params memory _params) external payable nonReentrant {
-        require(_params.executionFee >= minExecutionFee, "LiquidityVault: execution fee too low");
-        require(msg.value == _params.executionFee, "LiquidityVault: invalid execution fee");
-        require(
-            _params.tokenOut == address(LONG_TOKEN) || _params.tokenOut == address(SHORT_TOKEN),
-            "LiquidityVault: invalid token"
-        );
-        require(_params.owner == msg.sender, "LiquidityVault: invalid owner");
-        require(_params.maxSlippage < MAX_SLIPPAGE, "LiquidityVault: invalid slippage");
+    function createWithdrawal(Withdrawal.Params memory _params)
+        external
+        payable
+        onlyRouter
+        isValidToken(_params.tokenOut)
+    {
+        Withdrawal.validateParameters(_params, executionFee);
 
         // transfer market tokens to contract
         IERC20(address(this)).safeTransferFrom(_params.owner, address(this), _params.marketTokenAmountIn);
 
-        // Store the request -> Use Block.number as a nonce
-        uint32 blockNumber = uint32(block.number);
-        Withdrawal.Data memory withdrawal = Withdrawal.Data({
-            params: _params,
-            blockNumber: blockNumber,
-            expirationTimestamp: uint32(block.timestamp) + minTimeToExpiration
-        });
-
-        // Request Required Data for the Block
-        dataOracle.requestBlockData(blockNumber);
-
-        bytes32 key =
-            Withdrawal.generateKey(_params.owner, _params.tokenOut, _params.marketTokenAmountIn, withdrawal.blockNumber);
+        (Withdrawal.Data memory withdrawal, bytes32 key) = Withdrawal.create(dataOracle, _params, minTimeToExpiration);
 
         withdrawalKeys.add(key);
         withdrawalRequests[key] = withdrawal;
@@ -376,11 +333,10 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         );
     }
 
-    function cancelWithdrawal(bytes32 _key) external nonReentrant {
+    function cancelWithdrawal(bytes32 _key) external onlyRouter orderExists(_key, false) {
         Withdrawal.Data memory withdrawal = withdrawalRequests[_key];
-        require(withdrawal.params.owner == msg.sender, "LiquidityVault: invalid owner");
-        require(withdrawalKeys.contains(_key), "LiquidityVault: invalid key");
-        require(withdrawal.expirationTimestamp < block.timestamp, "LiquidityVault: withdrawal not expired");
+
+        Withdrawal.validateCancellation(withdrawal);
 
         withdrawalKeys.remove(_key);
         delete withdrawalRequests[_key];
@@ -388,73 +344,5 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         emit WithdrawalRequestCancelled(
             _key, withdrawal.params.owner, withdrawal.params.tokenOut, withdrawal.params.marketTokenAmountIn
         );
-    }
-
-    /////////////////////////
-    // INTERNAL FUNCTIONS //
-    ////////////////////////
-
-    function _calculateUsdValue(bool _isLongToken, uint256 _price, uint256 _amount) internal view returns (uint256) {
-        if (_isLongToken) {
-            return (_amount * _price) / 10 ** LONG_TOKEN_DECIMALS;
-        } else {
-            return (_amount * _price) / 10 ** SHORT_TOKEN_DECIMALS;
-        }
-    }
-
-    function _calculateMintAmount(uint256 _valueUsd, uint256 _longTokenPrice, uint256 _shortTokenPrice)
-        internal
-        view
-        returns (uint256 mintAmount)
-    {
-        uint256 lpTokenPrice = _getLiquidityTokenPrice(_longTokenPrice, _shortTokenPrice, uint32(block.number));
-        mintAmount = lpTokenPrice == 0 ? _valueUsd : Math.mulDiv(_valueUsd, SCALING_FACTOR, lpTokenPrice);
-    }
-
-    function _calculateAmountOut(
-        address _tokenOut,
-        uint256 _marketTokenAmount,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice,
-        uint256 _impactedPrice
-    ) internal view returns (uint256 amountOut) {
-        uint256 lpTokenPrice = _getLiquidityTokenPrice(_longTokenPrice, _shortTokenPrice, uint32(block.number));
-        uint256 marketTokenValueUsd = (lpTokenPrice * _marketTokenAmount / SCALING_FACTOR);
-        amountOut = _tokenOut == address(LONG_TOKEN)
-            ? Math.mulDiv(marketTokenValueUsd, 10 ** LONG_TOKEN_DECIMALS, _impactedPrice)
-            : Math.mulDiv(marketTokenValueUsd, 10 ** SHORT_TOKEN_DECIMALS, _impactedPrice);
-    }
-
-    function _getLiquidityTokenPrice(uint256 _longTokenPrice, uint256 _shortTokenPrice, uint32 _blockNumber)
-        internal
-        view
-        returns (uint256 lpTokenPrice)
-    {
-        // market token price = (worth of market pool in USD) / total supply
-        uint256 aum = _getAum(_longTokenPrice, _shortTokenPrice, _blockNumber);
-        uint256 supply = totalSupply();
-        if (aum == 0 || supply == 0) {
-            lpTokenPrice = 0;
-        } else {
-            lpTokenPrice = Math.mulDiv(aum, SCALING_FACTOR, supply);
-        }
-    }
-
-    function _getAum(uint256 _longTokenPrice, uint256 _shortTokenPrice, uint32 _blockNumber)
-        internal
-        view
-        returns (uint256 aum)
-    {
-        // Get Values in USD
-        uint256 longTokenValue = (longTokenBalance * _longTokenPrice) / (10 ** LONG_TOKEN_DECIMALS);
-        uint256 shortTokenValue = (shortTokenBalance * _shortTokenPrice) / (10 ** SHORT_TOKEN_DECIMALS);
-
-        // Calculate PNL
-        int256 pnl = dataOracle.getCumulativeNetPnl(_blockNumber);
-
-        // Calculate AUM
-        aum = pnl >= 0
-            ? longTokenValue + shortTokenValue + uint256(pnl)
-            : longTokenValue + shortTokenValue - uint256(-pnl);
     }
 }

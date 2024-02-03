@@ -19,11 +19,13 @@ pragma solidity 0.8.23;
 
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
-import {MarketHelper} from "../markets/MarketHelper.sol";
-import {Market} from "../structs/Market.sol";
-import {Position} from "../structs/Position.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {MarketUtils} from "../markets/MarketUtils.sol";
+import {Position} from "../positions/Position.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /*
     weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -34,14 +36,13 @@ library Pricing {
     uint256 public constant PRICE_PRECISION = 1e18;
 
     /// @dev returns PNL in USD
-    function calculatePnL(uint256 _indexPriceUsd, address _dataOracle, Position.Data memory _position)
+    function calculatePnL(Position.Data memory _position, uint256 _indexPriceUsd, uint256 _indexBaseUnit)
         external
-        view
+        pure
         returns (int256)
     {
-        uint256 baseUnits = IDataOracle(_dataOracle).getBaseUnits(_position.indexToken);
-        uint256 entryValue = (_position.positionSize * _position.pnl.weightedAvgEntryPrice) / baseUnits;
-        uint256 currentValue = (_position.positionSize * _indexPriceUsd) / baseUnits;
+        uint256 entryValue = (_position.positionSize * _position.pnlParams.weightedAvgEntryPrice) / _indexBaseUnit;
+        uint256 currentValue = (_position.positionSize * _indexPriceUsd) / _indexBaseUnit;
         return _position.isLong ? int256(currentValue) - int256(entryValue) : int256(entryValue) - int256(currentValue);
     }
 
@@ -67,36 +68,42 @@ library Pricing {
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
-    function getNetPnL(
-        address _indexToken,
-        address _marketMaker,
-        address _dataOracle,
-        address _priceOracle,
-        bool _isLong
-    ) external view returns (int256 netPnl) {
+    function getNetPnL(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
+        external
+        view
+        returns (int256 netPnl)
+    {
         // Get OI in USD
-        uint256 indexValue =
-            MarketHelper.getIndexOpenInterestUSD(_marketMaker, _dataOracle, _priceOracle, _indexToken, _isLong);
-        uint256 entryValue = MarketHelper.getTotalEntryValueUsd(_indexToken, _marketMaker, _dataOracle, _isLong);
-
-        netPnl = _isLong ? int256(indexValue) - int256(entryValue) : int256(entryValue) - int256(indexValue);
+        if (_isLong) {
+            // get index value
+            uint256 indexValue = MarketUtils.getLongOpenInterestUSD(_market, _indexPrice, _indexBaseUnit);
+            // get entry value
+            uint256 entryValue = MarketUtils.getTotalEntryValueUSD(_market, _indexBaseUnit, _isLong);
+            // return index value - entry value
+            netPnl = int256(indexValue) - int256(entryValue);
+        } else {
+            // get entry value
+            uint256 entryValue = MarketUtils.getTotalEntryValueUSD(_market, _indexBaseUnit, _isLong);
+            // get index value
+            uint256 indexValue = MarketUtils.getShortOpenInterestUSD(_market, _indexPrice, _indexBaseUnit);
+            // return entry value - index value
+            netPnl = int256(entryValue) - int256(indexValue);
+        }
     }
 
     /// RealisedPNL=(Current price − Weighted average entry price)×(Realised position size/Current price)
     /// int256 pnl = int256(amountToRealise * currentTokenPrice) - int256(amountToRealise * userPos.entryPriceWeighted);
     /// @dev Returns fractional PNL in USD
     function getDecreasePositionPnL(
-        address _dataOracle,
-        address _indexToken,
+        uint256 _indexBaseUnit,
         uint256 _sizeDelta,
         uint256 _positionWAEP,
         uint256 _currentPrice,
         bool _isLong
-    ) external view returns (int256 decreasePositionPnl) {
+    ) external pure returns (int256 decreasePositionPnl) {
         // only realise a percentage equivalent to the percentage of the position being closed
-        uint256 baseUnit = IDataOracle(_dataOracle).getBaseUnits(_indexToken);
-        uint256 entryValue = (_sizeDelta * _positionWAEP) / baseUnit;
-        uint256 exitValue = (_sizeDelta * _currentPrice) / baseUnit;
+        uint256 entryValue = Math.mulDiv(_sizeDelta, _positionWAEP, _indexBaseUnit);
+        uint256 exitValue = Math.mulDiv(_sizeDelta, _currentPrice, _indexBaseUnit);
         // if long, > 0 is profit, < 0 is loss
         // if short, > 0 is loss, < 0 is profit
         if (_isLong) {

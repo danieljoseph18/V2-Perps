@@ -17,34 +17,22 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
+import {ITradeVault} from "./interfaces/ITradeVault.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
-import {TradeHelper} from "./TradeHelper.sol";
+import {Position} from "./Position.sol";
 
 /// @dev Needs Vault Role
-contract TradeVault is RoleValidation {
+contract TradeVault is ITradeVault, RoleValidation {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable USDC;
     ILiquidityVault public liquidityVault;
 
-    mapping(bytes32 _marketKey => uint256 _collateral) public longCollateral;
-    mapping(bytes32 _marketKey => uint256 _collateral) public shortCollateral;
-
-    event TransferOutTokens(bytes32 indexed _marketKey, address indexed _to, uint256 _collateralDelta, bool _isLong);
-    event LossesTransferred(uint256 indexed _amount);
-    event UpdateCollateralBalance(bytes32 indexed _marketKey, uint256 _amount, bool _isLong, bool _isIncrease);
-    event ExecutionFeeSent(address indexed _executor, uint256 indexed _fee);
-    event PositionCollateralLiquidated(
-        address indexed _liquidator,
-        uint256 indexed _liqFee,
-        bytes32 indexed _marketKey,
-        uint256 _totalCollateral,
-        uint256 _collateralFundingOwed,
-        bool _isLong
-    );
+    mapping(address _market => uint256 _collateral) public longCollateral;
+    mapping(address _market => uint256 _collateral) public shortCollateral;
 
     constructor(address _usdc, address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
         USDC = IERC20(_usdc);
@@ -53,77 +41,77 @@ contract TradeVault is RoleValidation {
 
     receive() external payable {}
 
-    function transferOutTokens(bytes32 _marketKey, address _to, uint256 _collateralDelta, bool _isLong)
+    function transferOutTokens(address _market, address _to, uint256 _collateralDelta, bool _isLong)
         external
         onlyTradeStorage
     {
-        require(longCollateral[_marketKey] != 0 || shortCollateral[_marketKey] != 0, "TV: Incorrect Market Key");
+        require(longCollateral[_market] != 0 || shortCollateral[_market] != 0, "TV: Incorrect Market Key");
         require(_to != address(0), "TV: Zero Address");
         require(_collateralDelta != 0, "TV: Zero Amount");
         if (_isLong) {
-            require(longCollateral[_marketKey] >= _collateralDelta, "TV: Insufficient Collateral");
+            require(longCollateral[_market] >= _collateralDelta, "TV: Insufficient Collateral");
         } else {
-            require(shortCollateral[_marketKey] >= _collateralDelta, "TV: Insufficient Collateral");
+            require(shortCollateral[_market] >= _collateralDelta, "TV: Insufficient Collateral");
         }
-        _isLong ? longCollateral[_marketKey] -= _collateralDelta : shortCollateral[_marketKey] -= _collateralDelta;
+        _isLong ? longCollateral[_market] -= _collateralDelta : shortCollateral[_market] -= _collateralDelta;
         USDC.safeTransfer(_to, _collateralDelta);
-        emit TransferOutTokens(_marketKey, _to, _collateralDelta, _isLong);
+        emit TransferOutTokens(_market, _to, _collateralDelta, _isLong);
     }
 
     function transferToLiquidityVault(uint256 _amount) external onlyTradeStorage {
         _sendTokensToLiquidityVault(_amount);
     }
 
-    function updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong, bool _isIncrease)
+    function updateCollateralBalance(address _market, uint256 _amount, bool _isLong, bool _isIncrease)
         external
         onlyRouter
     {
-        _updateCollateralBalance(_marketKey, _amount, _isLong, _isIncrease);
+        _updateCollateralBalance(_market, _amount, _isLong, _isIncrease);
     }
 
-    function swapFundingAmount(bytes32 _marketKey, uint256 _amount, bool _isLong) external onlyTradeStorage {
-        _swapFundingAmount(_marketKey, _amount, _isLong);
+    function swapFundingAmount(address _market, uint256 _amount, bool _isLong) external onlyTradeStorage {
+        _swapFundingAmount(_market, _amount, _isLong);
     }
 
     function liquidatePositionCollateral(
         address _liquidator,
         uint256 _liqFee,
-        bytes32 _marketKey,
+        address _market,
         uint256 _totalCollateral,
         uint256 _collateralFundingOwed,
         bool _isLong
     ) external onlyTradeStorage {
         // funding
         if (_collateralFundingOwed > 0) {
-            _swapFundingAmount(_marketKey, _collateralFundingOwed, _isLong);
+            _swapFundingAmount(_market, _collateralFundingOwed, _isLong);
         }
         // Funds remaining after paying funding and liquidation fee
         uint256 remainingCollateral = _totalCollateral - _collateralFundingOwed - _liqFee;
         if (remainingCollateral > 0) {
             if (_isLong) {
-                longCollateral[_marketKey] -= remainingCollateral;
+                longCollateral[_market] -= remainingCollateral;
             } else {
-                shortCollateral[_marketKey] -= remainingCollateral;
+                shortCollateral[_market] -= remainingCollateral;
             }
             _sendTokensToLiquidityVault(remainingCollateral);
         }
         USDC.safeTransfer(_liquidator, _liqFee);
         emit PositionCollateralLiquidated(
-            _liquidator, _liqFee, _marketKey, _totalCollateral, _collateralFundingOwed, _isLong
+            _liquidator, _liqFee, _market, _totalCollateral, _collateralFundingOwed, _isLong
         );
     }
 
-    function claimFundingFees(bytes32 _marketKey, address _user, uint256 _claimed, bool _isLong)
+    function claimFundingFees(address _market, address _user, uint256 _claimed, bool _isLong)
         external
         onlyTradeStorage
     {
         if (_isLong) {
-            require(shortCollateral[_marketKey] >= _claimed, "TV: Insufficient Claimable");
+            require(shortCollateral[_market] >= _claimed, "TV: Insufficient Claimable");
         } else {
-            require(longCollateral[_marketKey] >= _claimed, "TV: Insufficient Claimable");
+            require(longCollateral[_market] >= _claimed, "TV: Insufficient Claimable");
         }
         // transfer funding from the counter parties' liquidity pool
-        _updateCollateralBalance(_marketKey, _claimed, _isLong, false);
+        _updateCollateralBalance(_market, _claimed, _isLong, false);
         // transfer funding to the user
         USDC.safeTransfer(_user, _claimed);
     }
@@ -135,23 +123,23 @@ contract TradeVault is RoleValidation {
         emit ExecutionFeeSent(_executor, _executionFee);
     }
 
-    function _swapFundingAmount(bytes32 _marketKey, uint256 _amount, bool _isLong) internal {
+    function _swapFundingAmount(address _market, uint256 _amount, bool _isLong) internal {
         if (_isLong) {
-            longCollateral[_marketKey] -= _amount;
-            shortCollateral[_marketKey] += _amount;
+            longCollateral[_market] -= _amount;
+            shortCollateral[_market] += _amount;
         } else {
-            shortCollateral[_marketKey] -= _amount;
-            longCollateral[_marketKey] += _amount;
+            shortCollateral[_market] -= _amount;
+            longCollateral[_market] += _amount;
         }
     }
 
-    function _updateCollateralBalance(bytes32 _marketKey, uint256 _amount, bool _isLong, bool _isIncrease) internal {
+    function _updateCollateralBalance(address _market, uint256 _amount, bool _isLong, bool _isIncrease) internal {
         if (_isLong) {
-            _isIncrease ? longCollateral[_marketKey] += _amount : longCollateral[_marketKey] -= _amount;
+            _isIncrease ? longCollateral[_market] += _amount : longCollateral[_market] -= _amount;
         } else {
-            _isIncrease ? shortCollateral[_marketKey] += _amount : shortCollateral[_marketKey] -= _amount;
+            _isIncrease ? shortCollateral[_market] += _amount : shortCollateral[_market] -= _amount;
         }
-        emit UpdateCollateralBalance(_marketKey, _amount, _isLong, _isIncrease);
+        emit UpdateCollateralBalance(_market, _amount, _isLong, _isIncrease);
     }
 
     function _sendTokensToLiquidityVault(uint256 _amount) internal {

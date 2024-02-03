@@ -20,7 +20,7 @@ pragma solidity 0.8.23;
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
+import {IMarket} from "./interfaces/IMarket.sol";
 
 /// @dev Needs Configurator Role
 contract GlobalMarketConfig is RoleValidation {
@@ -47,8 +47,7 @@ contract GlobalMarketConfig is RoleValidation {
      * ========================= Market Config =========================
      */
     function setMarketFundingConfig(
-        address _marketMaker,
-        bytes32 _marketKey,
+        address _market,
         uint256 _maxFundingVelocity,
         uint256 _skewScale,
         int256 _maxFundingRate,
@@ -59,9 +58,8 @@ contract GlobalMarketConfig is RoleValidation {
         uint256 _priceImpactFactor,
         uint256 _priceImpactExponent
     ) external onlyModerator {
-        require(_marketMaker != address(0), "Market does not exist");
-        IMarketMaker(_marketMaker).setMarketConfig(
-            _marketKey,
+        require(_market != address(0), "Market does not exist");
+        IMarket(_market).updateConfig(
             _maxFundingVelocity,
             _skewScale,
             _maxFundingRate,
