@@ -99,8 +99,7 @@ contract DataOracle is IDataOracle, RoleValidation {
         address indexToken = _market.indexToken();
         uint256 indexPrice = tokenPrices[_blockNumber][indexToken];
         uint256 indexBaseUnit = baseUnits[indexToken];
-        netPnl = Pricing.getNetPnL(_market, indexPrice, indexBaseUnit, true)
-            + Pricing.getNetPnL(_market, indexPrice, indexBaseUnit, false);
+        netPnl = Pricing.getNetPnl(_market, indexPrice, indexBaseUnit);
     }
 
     /// @dev To convert to usd, needs to be 1e18 DPs

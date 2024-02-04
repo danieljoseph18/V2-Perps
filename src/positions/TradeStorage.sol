@@ -127,7 +127,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     function executeCollateralIncrease(Position.RequestExecution calldata _params) external onlyExecutor {
         // Generate the Key
         bytes32 positionKey = Position.generateKey(_params.requestData);
-        _validateAndPrepareExecution(positionKey, _params, true);
+        _validateAndPrepareExecution(positionKey, _params, true, _params.isAdl);
         _editPosition(_params.requestData.collateralDelta, 0, 0, 0, _params.price, true, positionKey);
         tradeVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
         emit CollateralEdited(positionKey, _params.requestData.collateralDelta, _params.requestData.isIncrease);
@@ -135,7 +135,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function executeCollateralDecrease(Position.RequestExecution calldata _params) external onlyExecutor {
         bytes32 positionKey = Position.generateKey(_params.requestData);
-        _validateAndPrepareExecution(positionKey, _params, true);
+        _validateAndPrepareExecution(positionKey, _params, true, _params.isAdl);
 
         Position.Data memory position = openPositions[positionKey];
 
@@ -162,7 +162,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function createNewPosition(Position.RequestExecution calldata _params) external onlyExecutor {
         bytes32 positionKey = Position.generateKey(_params.requestData);
-        _validateAndPrepareExecution(positionKey, _params, false);
+        _validateAndPrepareExecution(positionKey, _params, false, false);
 
         uint256 collateralPrice = priceOracle.getCollateralPrice();
         uint256 sizeUsd = Position.getTradeValueUsd(
@@ -198,7 +198,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function increaseExistingPosition(Position.RequestExecution calldata _params) external onlyExecutor {
         bytes32 positionKey = Position.generateKey(_params.requestData);
-        _validateAndPrepareExecution(positionKey, _params, true);
+        _validateAndPrepareExecution(positionKey, _params, true, _params.isAdl);
         // Fetch Position
         Position.Data memory position = openPositions[positionKey];
         uint256 newCollateralAmount = position.collateralAmount + _params.requestData.collateralDelta;
@@ -225,9 +225,9 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit IncreasePosition(positionKey, _params.requestData.collateralDelta, _params.requestData.sizeDelta);
     }
 
-    function decreaseExistingPosition(Position.RequestExecution calldata _params) external onlyExecutor {
+    function decreaseExistingPosition(Position.RequestExecution calldata _params) external onlyExecutorOrAdl {
         bytes32 positionKey = Position.generateKey(_params.requestData);
-        _validateAndPrepareExecution(positionKey, _params, true);
+        _validateAndPrepareExecution(positionKey, _params, true, _params.isAdl);
 
         Position.Data memory position = openPositions[positionKey];
         uint256 collateralPrice = priceOracle.getCollateralPrice();
@@ -250,7 +250,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
             sizeDelta = (position.positionSize * _params.requestData.collateralDelta) / position.collateralAmount;
         }
         uint256 indexBaseUnit = dataOracle.getBaseUnits(_params.requestData.indexToken);
-        int256 pnl = Pricing.getDecreasePositionPnL(
+        int256 pnl = Pricing.getDecreasePositionPnl(
             indexBaseUnit, sizeDelta, position.pnlParams.weightedAvgEntryPrice, _params.price, position.isLong
         );
 
@@ -429,7 +429,8 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     function _validateAndPrepareExecution(
         bytes32 _positionKey,
         Position.RequestExecution calldata _params,
-        bool _positionShouldExist
+        bool _positionShouldExist,
+        bool _isAdl
     ) internal {
         if (_positionShouldExist) {
             // Check that the Position exists
@@ -441,7 +442,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
             require(openPositions[_positionKey].user == address(0), "TS: Position Exists");
         }
         // Delete the Request from Storage
-        delete orders[_positionKey];
+        if (!_isAdl) delete orders[_positionKey];
         if (_params.requestData.isLimit) {
             limitOrderKeys.remove(_positionKey);
         } else {

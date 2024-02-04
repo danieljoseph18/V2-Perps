@@ -125,9 +125,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     // TRADING RELATED FUNCTIONS //
     ///////////////////////////////
 
-    // q - do we need any input validation for _user?
-    // e.g user could be a contract, could he reject this function call?
-    // q - what must hold true in order to transfer profit to a user???
+    // @audit - CRITICAL -> Profit needs to be paid from a market's allocation
     function transferPositionProfit(address _user, uint256 _amount, bool _isLong) external onlyTradeStorage {
         require(_amount != 0, "LV: Invalid Profit Amount");
         require(_user != address(0), "LV: Zero Address");

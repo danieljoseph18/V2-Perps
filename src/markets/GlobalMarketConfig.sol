@@ -46,30 +46,9 @@ contract GlobalMarketConfig is RoleValidation {
     /**
      * ========================= Market Config =========================
      */
-    function setMarketFundingConfig(
-        address _market,
-        uint256 _maxFundingVelocity,
-        uint256 _skewScale,
-        int256 _maxFundingRate,
-        int256 _minFundingRate,
-        uint256 _borrowingFactor,
-        uint256 _borrowingExponent,
-        bool _feeForSmallerSide,
-        uint256 _priceImpactFactor,
-        uint256 _priceImpactExponent
-    ) external onlyModerator {
-        require(_market != address(0), "Market does not exist");
-        IMarket(_market).updateConfig(
-            _maxFundingVelocity,
-            _skewScale,
-            _maxFundingRate,
-            _minFundingRate,
-            _borrowingFactor,
-            _borrowingExponent,
-            _feeForSmallerSide,
-            _priceImpactFactor,
-            _priceImpactExponent
-        );
+    function setMarketConfig(IMarket _market, IMarket.Config memory _config) external onlyModerator {
+        require(address(_market) != address(0), "Market does not exist");
+        _market.updateConfig(_config);
     }
 
     /**

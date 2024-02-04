@@ -126,15 +126,23 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
         // Execute Trade
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            tradeStorage.createNewPosition(Position.RequestExecution(request, impactedPrice, _feeReceiver));
+            tradeStorage.createNewPosition(Position.RequestExecution(request, impactedPrice, _feeReceiver, false));
         } else if (request.requestType == Position.RequestType.POSITION_DECREASE) {
-            tradeStorage.decreaseExistingPosition(Position.RequestExecution(request, impactedPrice, _feeReceiver));
+            tradeStorage.decreaseExistingPosition(
+                Position.RequestExecution(request, impactedPrice, _feeReceiver, false)
+            );
         } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
-            tradeStorage.increaseExistingPosition(Position.RequestExecution(request, impactedPrice, _feeReceiver));
+            tradeStorage.increaseExistingPosition(
+                Position.RequestExecution(request, impactedPrice, _feeReceiver, false)
+            );
         } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
-            tradeStorage.executeCollateralDecrease(Position.RequestExecution(request, impactedPrice, _feeReceiver));
+            tradeStorage.executeCollateralDecrease(
+                Position.RequestExecution(request, impactedPrice, _feeReceiver, false)
+            );
         } else if (request.requestType == Position.RequestType.COLLATERAL_INCREASE) {
-            tradeStorage.executeCollateralIncrease(Position.RequestExecution(request, impactedPrice, _feeReceiver));
+            tradeStorage.executeCollateralIncrease(
+                Position.RequestExecution(request, impactedPrice, _feeReceiver, false)
+            );
         } else {
             revert Executor_InvalidRequestType();
         }

@@ -31,6 +31,26 @@ interface IMarket {
     function shortTotalWAEP() external view returns (uint256);
     function longSizeSumUSD() external view returns (uint256);
     function shortSizeSumUSD() external view returns (uint256);
+    function maxPnlFactor() external view returns (uint256);
+    function targetPnlFactor() external view returns (uint256);
+    function adlFlaggedLong() external view returns (bool);
+    function adlFlaggedShort() external view returns (bool);
+
+    struct Config {
+        uint256 maxFundingVelocity;
+        uint256 skewScale; // Sensitivity to Market Skew
+        int256 maxFundingRate;
+        int256 minFundingRate;
+        uint256 borrowingFactor;
+        uint256 borrowingExponent;
+        uint256 priceImpactFactor;
+        uint256 priceImpactExponent;
+        uint256 maxPnlFactor;
+        uint256 targetPnlFactor; // PNL Factor to aim for in ADLs
+        bool feeForSmallerSide; // Flag for Skipping Fee for Smaller Side
+        bool adlFlaggedLong; // Flag for ADL Long
+        bool adlFlaggedShort; // Flag for ADL Short
+    }
 
     // Events
     event MarketInitialised(
@@ -42,7 +62,9 @@ interface IMarket {
         uint256 borrowingExponent,
         bool feeForSmallerSide,
         uint256 priceImpactFactor,
-        uint256 priceImpactExponent
+        uint256 priceImpactExponent,
+        uint256 maxPnlFactor,
+        uint256 targetPnlFactor
     );
     event MarketConfigUpdated(
         uint256 maxFundingVelocity,
@@ -53,7 +75,9 @@ interface IMarket {
         uint256 borrowingExponent,
         bool feeForSmallerSide,
         uint256 priceImpactFactor,
-        uint256 priceImpactExponent
+        uint256 priceImpactExponent,
+        uint256 maxPnlFactor,
+        uint256 targetPnlFactor
     );
     event FundingUpdated(
         int256 fundingRate,
@@ -65,30 +89,12 @@ interface IMarket {
     event TotalWAEPUpdated(uint256 longTotalWAEP, uint256 shortTotalWAEP);
     event OpenInterestUpdated(uint256 longOpenInterest, uint256 shortOpenInterest);
     event AllocationUpdated(address market, uint256 longTokenAllocation, uint256 shortTokenAllocation);
+    event AdlStateUpdated(bool adlState);
 
     // Functions
-    function initialise(
-        uint256 _maxFundingVelocity,
-        uint256 _skewScale,
-        int256 _maxFundingRate,
-        int256 _minFundingRate,
-        uint256 _borrowingFactor,
-        uint256 _borrowingExponent,
-        bool _feeForSmallerSide,
-        uint256 _priceImpactFactor,
-        uint256 _priceImpactExponent
-    ) external;
-    function updateConfig(
-        uint256 _maxFundingVelocity,
-        uint256 _skewScale,
-        int256 _maxFundingRate,
-        int256 _minFundingRate,
-        uint256 _borrowingFactor,
-        uint256 _borrowingExponent,
-        bool _feeForSmallerSide,
-        uint256 _priceImpactFactor,
-        uint256 _priceImpactExponent
-    ) external;
+    function initialise(Config memory _config) external;
+    function updateConfig(Config memory _config) external;
+    function updateAdlState(bool _isFlaggedForAdl, bool _isLong) external;
     function updateFundingRate() external;
     function updateBorrowingRate(uint256 _indexPrice, uint256 _longTokenPrice, uint256 _shortTokenPrice, bool _isLong)
         external;

@@ -68,8 +68,8 @@ library Pricing {
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
-    function getNetPnL(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
-        external
+    function getPnl(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
+        public
         view
         returns (int256 netPnl)
     {
@@ -91,10 +91,16 @@ library Pricing {
         }
     }
 
+    function getNetPnl(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit) external view returns (int256) {
+        int256 longPnl = getPnl(_market, _indexPrice, _indexBaseUnit, true);
+        int256 shortPnl = getPnl(_market, _indexPrice, _indexBaseUnit, false);
+        return longPnl + shortPnl;
+    }
+
     /// RealisedPNL=(Current price − Weighted average entry price)×(Realised position size/Current price)
     /// int256 pnl = int256(amountToRealise * currentTokenPrice) - int256(amountToRealise * userPos.entryPriceWeighted);
     /// @dev Returns fractional PNL in USD
-    function getDecreasePositionPnL(
+    function getDecreasePositionPnl(
         uint256 _indexBaseUnit,
         uint256 _sizeDelta,
         uint256 _positionWAEP,

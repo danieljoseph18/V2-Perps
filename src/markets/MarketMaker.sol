@@ -27,7 +27,7 @@ import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {MarketUtils} from "./MarketUtils.sol";
-import {Market} from "./Market.sol";
+import {Market, IMarket} from "./Market.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 /// @dev Needs MarketMaker Role
@@ -75,7 +75,21 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         market = new Market(priceOracle, dataOracle, _indexToken, address(roleStorage));
         // Initialize
         market.initialise(
-            0.00000035e18, 1_000_000e18, 0.0000000035e18, -0.0000000035e18, 0.000000035e18, 1, false, 0.0000001e18, 2
+            IMarket.Config({
+                maxFundingVelocity: 0.00000035e18,
+                skewScale: 1_000_000e18,
+                maxFundingRate: 0.0000000035e18,
+                minFundingRate: -0.0000000035e18,
+                borrowingFactor: 0.000000035e18,
+                borrowingExponent: 1,
+                priceImpactFactor: 0.0000001e18,
+                priceImpactExponent: 2,
+                maxPnlFactor: 0.45e18,
+                targetPnlFactor: 0.2e18,
+                feeForSmallerSide: false,
+                adlFlaggedLong: false,
+                adlFlaggedShort: false
+            })
         );
         // Add to Storage
         markets.add(address(market));

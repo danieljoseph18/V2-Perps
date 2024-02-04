@@ -29,4 +29,8 @@ library Roles {
     bytes32 public constant MARKET_STORAGE = keccak256("MARKET_STORAGE");
 
     bytes32 public constant FEE_ACCUMULATOR = keccak256("FEE_ACCUMULATOR");
+
+    bytes32 public constant ADL_CONTROLLER = keccak256("ADL_CONTROLLER");
+
+    bytes32 public constant ADL_KEEPER = keccak256("ADL_KEEPER");
 }

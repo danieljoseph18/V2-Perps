@@ -23,9 +23,13 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
+    using SignedMath for int256;
+
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant MAX_LEVERAGE = 5000; // 50x
     uint256 public constant LEVERAGE_PRECISION = 100;
@@ -101,6 +105,7 @@ library Position {
         RequestData requestData;
         uint256 price;
         address feeReceiver;
+        bool isAdl;
     }
 
     // Request Type Classification
@@ -157,9 +162,9 @@ library Position {
 
     // 1x = 100
     function checkLeverage(uint256 _collateralPrice, uint256 _sizeUsd, uint256 _collateral) external pure {
-        uint256 collateralUsd = (_collateral * _collateralPrice) / PRECISION;
+        uint256 collateralUsd = Math.mulDiv(_collateral, _collateralPrice, PRECISION);
         require(collateralUsd <= _sizeUsd, "TH: cUSD > sUSD");
-        uint256 leverage = (_sizeUsd * LEVERAGE_PRECISION) / collateralUsd;
+        uint256 leverage = Math.mulDiv(_sizeUsd, LEVERAGE_PRECISION, collateralUsd);
         require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, "TH: Leverage");
     }
 
@@ -208,6 +213,19 @@ library Position {
         });
     }
 
+    function getPnl(Data memory _position, uint256 _price, uint256 _baseUnit) external pure returns (int256 pnl) {
+        // Get the Entry Value (WAEP * Position Size)
+        uint256 entryValue = Math.mulDiv(_position.pnlParams.weightedAvgEntryPrice, _position.positionSize, _baseUnit);
+        // Get the Current Value (Price * Position Size)
+        uint256 currentValue = Math.mulDiv(_price, _position.positionSize, _baseUnit);
+        // Return the difference
+        if (_position.isLong) {
+            pnl = int256(currentValue) - int256(entryValue);
+        } else {
+            pnl = int256(entryValue) - int256(currentValue);
+        }
+    }
+
     /// @dev Need to adjust for decimals
     function getTradeValueUsd(IDataOracle _dataOracle, address _indexToken, uint256 _sizeDelta, uint256 _signedPrice)
         public
@@ -215,7 +233,7 @@ library Position {
         returns (uint256 tradeValueUsd)
     {
         uint256 baseUnit = _dataOracle.getBaseUnits(_indexToken);
-        tradeValueUsd = (_sizeDelta * _signedPrice) / baseUnit;
+        tradeValueUsd = Math.mulDiv(_sizeDelta, _signedPrice, baseUnit);
     }
 
     // Calculates the liquidation fee in Collateral Tokens
@@ -224,7 +242,34 @@ library Position {
         pure
         returns (uint256 liquidationFeeUSDE)
     {
-        liquidationFeeUSDE = (_liquidationFeeUsd * PRECISION) / _priceOracle.getCollateralPrice();
+        liquidationFeeUSDE = Math.mulDiv(_liquidationFeeUsd, PRECISION, _priceOracle.getCollateralPrice());
+    }
+
+    function createAdlOrder(Data memory _position, uint256 _sizeDelta, uint256 _signedPrice)
+        external
+        view
+        returns (RequestExecution memory request)
+    {
+        // calculate collateral delta from size delta
+        uint256 collateralDelta = Math.mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
+        request = RequestExecution({
+            requestData: RequestData({
+                indexToken: _position.indexToken,
+                user: _position.user,
+                collateralDelta: collateralDelta,
+                sizeDelta: _sizeDelta,
+                requestBlock: block.number,
+                orderPrice: 0,
+                maxSlippage: 0,
+                isLimit: false,
+                isLong: _position.isLong,
+                isIncrease: false,
+                requestType: RequestType.POSITION_DECREASE
+            }),
+            price: _signedPrice,
+            feeReceiver: address(0),
+            isAdl: true
+        });
     }
 
     function convertIndexAmountToCollateral(
@@ -232,9 +277,9 @@ library Position {
         uint256 _indexAmount,
         uint256 _indexPrice,
         uint256 _baseUnit
-    ) external pure returns (uint256 collateralAmount) {
-        uint256 indexUsd = (_indexAmount * _indexPrice) / _baseUnit;
-        collateralAmount = (indexUsd * PRECISION) / _priceOracle.getCollateralPrice();
+    ) public pure returns (uint256 collateralAmount) {
+        uint256 indexUsd = Math.mulDiv(_indexAmount, _indexPrice, _baseUnit);
+        collateralAmount = Math.mulDiv(indexUsd, PRECISION, _priceOracle.getCollateralPrice());
     }
 
     function getTotalFeesOwedUsd(IMarket _market, IDataOracle _dataOracle, Data memory _position, uint256 _price)
@@ -245,10 +290,10 @@ library Position {
         uint256 baseUnits = _dataOracle.getBaseUnits(_position.indexToken);
 
         uint256 borrowingFeeOwed = Borrowing.getTotalPositionFeesOwed(_market, _position);
-        uint256 borrowingFeeUsd = (borrowingFeeOwed * _price) / baseUnits;
+        uint256 borrowingFeeUsd = Math.mulDiv(borrowingFeeOwed, _price, baseUnits);
 
         (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_market, _position);
-        uint256 fundingValueUsd = (fundingFeeOwed * _price) / baseUnits;
+        uint256 fundingValueUsd = Math.mulDiv(fundingFeeOwed, _price, baseUnits);
 
         totalFeesOwedUsd = borrowingFeeUsd + fundingValueUsd;
     }

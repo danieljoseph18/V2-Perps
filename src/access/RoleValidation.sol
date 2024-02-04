@@ -34,6 +34,14 @@ contract RoleValidation {
         _;
     }
 
+    modifier onlyExecutorOrAdl() {
+        if (!roleStorage.hasRole(Roles.EXECUTOR, msg.sender) && !roleStorage.hasRole(Roles.ADL_CONTROLLER, msg.sender))
+        {
+            revert RoleValidation_AccessDenied();
+        }
+        _;
+    }
+
     modifier onlyConfigurator() {
         if (!roleStorage.hasRole(Roles.CONFIGURATOR, msg.sender)) revert RoleValidation_AccessDenied();
         _;
@@ -90,6 +98,16 @@ contract RoleValidation {
         if (!roleStorage.hasRole(Roles.ROUTER, msg.sender) && !roleStorage.hasRole(Roles.EXECUTOR, msg.sender)) {
             revert RoleValidation_AccessDenied();
         }
+        _;
+    }
+
+    modifier onlyAdlController() {
+        if (!roleStorage.hasRole(Roles.ADL_CONTROLLER, msg.sender)) revert RoleValidation_AccessDenied();
+        _;
+    }
+
+    modifier onlyAdlKeeper() {
+        if (!roleStorage.hasRole(Roles.ADL_KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 

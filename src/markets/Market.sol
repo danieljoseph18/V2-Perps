@@ -29,7 +29,7 @@ import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 
-/// funding rate calculation = dr/dt = c * skew (credit to https://sips.synthetix.io/sips/sip-279/)
+// @audit - CRITICAL -> Profit needs to be paid from a market's allocation
 contract Market is IMarket, ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
 
@@ -51,9 +51,13 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     int256 public minFundingRate;
     uint256 public borrowingFactor;
     uint256 public borrowingExponent;
-    bool public feeForSmallerSide; // Flag for Skipping Fee for Smaller Side
     uint256 public priceImpactExponent;
     uint256 public priceImpactFactor;
+    uint256 public maxPnlFactor;
+    uint256 public targetPnlFactor; // PNL Factor to aim for in ADLs
+    bool public feeForSmallerSide; // Flag for Skipping Fee for Smaller Side
+    bool public adlFlaggedLong; // Flag for ADL Long
+    bool public adlFlaggedShort; // Flag for ADL Short
 
     ///////////////////////////////////////////////////
     // FUNDING: Updateable Funding-Related variables //
@@ -110,72 +114,69 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     /// @dev All values need 18 decimals => e.g 0.0003e18 = 0.03%
     /// @dev Can only be called by MarketFactory
     /// @dev Must be Called before contract is interacted with
-    function initialise(
-        uint256 _maxFundingVelocity,
-        uint256 _skewScale,
-        int256 _maxFundingRate,
-        int256 _minFundingRate,
-        uint256 _borrowingFactor,
-        uint256 _borrowingExponent, // Integer e.g 1
-        bool _feeForSmallerSide, // Flag for Skipping Fee for Smaller Side
-        uint256 _priceImpactFactor,
-        uint256 _priceImpactExponent // Integer e.g 2
-    ) external onlyMarketMaker {
+    function initialise(Config memory _config) external onlyMarketMaker {
         require(!isInitialised, "Market: already initialised");
-        maxFundingVelocity = _maxFundingVelocity;
-        skewScale = _skewScale;
-        maxFundingRate = _maxFundingRate;
-        minFundingRate = _minFundingRate;
-        borrowingFactor = _borrowingFactor;
-        borrowingExponent = _borrowingExponent;
-        feeForSmallerSide = _feeForSmallerSide;
-        priceImpactFactor = _priceImpactFactor;
-        priceImpactExponent = _priceImpactExponent;
+        maxFundingVelocity = _config.maxFundingVelocity;
+        skewScale = _config.skewScale;
+        maxFundingRate = _config.maxFundingRate;
+        minFundingRate = _config.minFundingRate;
+        borrowingFactor = _config.borrowingFactor;
+        borrowingExponent = _config.borrowingExponent;
+        priceImpactFactor = _config.priceImpactFactor;
+        priceImpactExponent = _config.priceImpactExponent;
+        maxPnlFactor = _config.maxPnlFactor;
+        targetPnlFactor = _config.targetPnlFactor;
+        feeForSmallerSide = _config.feeForSmallerSide;
+        adlFlaggedLong = _config.adlFlaggedLong;
+        adlFlaggedShort = _config.adlFlaggedShort;
         isInitialised = true;
         emit MarketInitialised(
-            _maxFundingVelocity,
-            _skewScale,
-            _maxFundingRate,
-            _minFundingRate,
-            _borrowingFactor,
-            _borrowingExponent,
-            _feeForSmallerSide,
-            _priceImpactFactor,
-            _priceImpactExponent
+            _config.maxFundingVelocity,
+            _config.skewScale,
+            _config.maxFundingRate,
+            _config.minFundingRate,
+            _config.borrowingFactor,
+            _config.borrowingExponent,
+            _config.feeForSmallerSide,
+            _config.priceImpactFactor,
+            _config.priceImpactExponent,
+            _config.maxPnlFactor,
+            _config.targetPnlFactor
         );
     }
 
-    function updateConfig(
-        uint256 _maxFundingVelocity,
-        uint256 _skewScale,
-        int256 _maxFundingRate,
-        int256 _minFundingRate,
-        uint256 _borrowingFactor,
-        uint256 _borrowingExponent,
-        bool _feeForSmallerSide,
-        uint256 _priceImpactFactor,
-        uint256 _priceImpactExponent
-    ) external onlyConfigurator {
-        maxFundingVelocity = _maxFundingVelocity;
-        skewScale = _skewScale;
-        maxFundingRate = _maxFundingRate;
-        minFundingRate = _minFundingRate;
-        borrowingFactor = _borrowingFactor;
-        borrowingExponent = _borrowingExponent;
-        feeForSmallerSide = _feeForSmallerSide;
-        priceImpactFactor = _priceImpactFactor;
-        priceImpactExponent = _priceImpactExponent;
+    function updateConfig(Config memory _config) external onlyConfigurator {
+        maxFundingVelocity = _config.maxFundingVelocity;
+        skewScale = _config.skewScale;
+        maxFundingRate = _config.maxFundingRate;
+        minFundingRate = _config.minFundingRate;
+        borrowingFactor = _config.borrowingFactor;
+        borrowingExponent = _config.borrowingExponent;
+        priceImpactFactor = _config.priceImpactFactor;
+        priceImpactExponent = _config.priceImpactExponent;
+        maxPnlFactor = _config.maxPnlFactor;
+        targetPnlFactor = _config.targetPnlFactor;
+        feeForSmallerSide = _config.feeForSmallerSide;
+        adlFlaggedLong = _config.adlFlaggedLong;
+        adlFlaggedShort = _config.adlFlaggedShort;
         emit MarketConfigUpdated(
-            _maxFundingVelocity,
-            _skewScale,
-            _maxFundingRate,
-            _minFundingRate,
-            _borrowingFactor,
-            _borrowingExponent,
-            _feeForSmallerSide,
-            _priceImpactFactor,
-            _priceImpactExponent
+            _config.maxFundingVelocity,
+            _config.skewScale,
+            _config.maxFundingRate,
+            _config.minFundingRate,
+            _config.borrowingFactor,
+            _config.borrowingExponent,
+            _config.feeForSmallerSide,
+            _config.priceImpactFactor,
+            _config.priceImpactExponent,
+            _config.maxPnlFactor,
+            _config.targetPnlFactor
         );
+    }
+
+    function updateAdlState(bool _isFlaggedForAdl, bool _isLong) external onlyAdlController {
+        _isLong ? adlFlaggedLong = _isFlaggedForAdl : adlFlaggedShort = _isFlaggedForAdl;
+        emit AdlStateUpdated(_isFlaggedForAdl);
     }
 
     /// @dev Called for every position entry / exit
