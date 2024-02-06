@@ -224,6 +224,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     function updateBorrowingRate(uint256 _indexPrice, uint256 _longTokenPrice, uint256 _shortTokenPrice, bool _isLong)
         external
         nonReentrant
+        onlyTradeStorage
     {
         // If time elapsed = 0, return
         uint256 lastUpdate = lastBorrowUpdate;

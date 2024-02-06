@@ -12,6 +12,8 @@ library Pool {
     struct Values {
         IDataOracle dataOracle;
         IPriceOracle priceOracle;
+        address longToken;
+        address shortToken;
         uint256 longTokenBalance;
         uint256 shortTokenBalance;
         uint256 marketTokenSupply;

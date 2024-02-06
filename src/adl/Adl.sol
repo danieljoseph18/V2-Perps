@@ -16,16 +16,14 @@ import {Position} from "../positions/Position.sol";
 // Start with the most profitable positions
 // ADLs happen for a specific side of the market
 
-// q - how much profit do we take from each position
-// a - I assume this is determined by the keeper
-// for us we can just liquidate the position
-// Needs Executor Role
 contract Adl is RoleValidation {
     using SignedMath for int256;
 
     IPriceOracle public priceOracle;
     IDataOracle public dataOracle;
     ITradeStorage public tradeStorage;
+
+    event AdlExecuted(IMarket indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
 
     constructor(address _tradeStorage, address _priceOracle, address _dataOracle, address _roleStorage)
         RoleValidation(_roleStorage)
@@ -53,8 +51,6 @@ contract Adl is RoleValidation {
         }
     }
 
-    // q - how do we determine the size of the position to liquidate
-    // q - how do we construct the decrease order
     function executeAdl(IMarket _market, uint256 _sizeDelta, bytes32 _positionKey, bool _isLong)
         external
         onlyAdlKeeper
@@ -69,27 +65,30 @@ contract Adl is RoleValidation {
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         require(position.positionSize > 0, "ADL: Position not active");
         // Get current pricing and token data
-        uint256 price = priceOracle.getPrice(_market.indexToken());
+        uint256 indexPrice = priceOracle.getPrice(_market.indexToken());
         uint256 baseUnit = dataOracle.getBaseUnits(_market.indexToken());
+        // Get collateral price
+        uint256 collateralPrice = priceOracle.getPrice(position.collateralToken);
         // Check the position is profitable
-        int256 pnl = Position.getPnl(position, price, baseUnit);
+        int256 pnl = Position.getPnl(position, indexPrice, baseUnit);
         require(pnl > 0, "ADL: Position not profitable");
         // Get starting PNL Factor
-        int256 startingPnlFactor = MarketUtils.getPnlFactor(_market, price, baseUnit, _isLong);
+        int256 startingPnlFactor = MarketUtils.getPnlFactor(_market, indexPrice, baseUnit, _isLong);
         // Construct an ADL Order
-        Position.RequestExecution memory request = Position.createAdlOrder(position, _sizeDelta, price);
+        Position.RequestExecution memory request =
+            Position.createAdlOrder(position, _sizeDelta, indexPrice, collateralPrice);
         // Execute the order
         tradeStorage.decreaseExistingPosition(request);
         // Get the new PNL to pool ratio
-        int256 newPnlFactor = MarketUtils.getPnlFactor(_market, price, baseUnit, _isLong);
+        int256 newPnlFactor = MarketUtils.getPnlFactor(_market, indexPrice, baseUnit, _isLong);
+        // PNL to pool has reduced
+        require(newPnlFactor < startingPnlFactor, "ADL: PNL Factor not reduced");
         // Check if the new PNL to pool ratio is greater than
         // the min PNL factor after ADL (~20%)
         // If not, unflag for ADL
         if (newPnlFactor.abs() <= _market.targetPnlFactor()) {
             _market.updateAdlState(false, _isLong);
         }
-        // Do the following invariant checks:
-        // PNL to pool has reduced
-        require(newPnlFactor < startingPnlFactor, "ADL: PNL Factor not reduced");
+        emit AdlExecuted(_market, _positionKey, _sizeDelta, _isLong);
     }
 }

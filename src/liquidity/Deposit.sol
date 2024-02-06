@@ -7,6 +7,8 @@ import {Fee} from "../libraries/Fee.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Pool} from "./Pool.sol";
+import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {MarketUtils} from "../markets/MarketUtils.sol";
 
 library Deposit {
     uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
@@ -19,6 +21,7 @@ library Deposit {
         uint256 amountIn;
         uint256 executionFee;
         uint256 maxSlippage;
+        bool shouldWrap;
     }
 
     struct Data {
@@ -27,14 +30,8 @@ library Deposit {
         uint48 expirationTimestamp;
     }
 
-    function validateParameters(Params memory _params, uint256 _executionFee) internal view {
-        require(_params.executionFee >= _executionFee, "Deposit: execution fee too low");
-        require(msg.value == _params.executionFee, "Deposit: invalid execution fee");
-        require(_params.maxSlippage < MAX_SLIPPAGE && _params.maxSlippage > MIN_SLIPPAGE, "Deposit: invalid slippage");
-    }
-
-    function validateCancellation(Data memory _data) internal view {
-        require(_data.params.owner == msg.sender, "Deposit: invalid owner");
+    function validateCancellation(Data memory _data, address _caller) internal view {
+        require(_data.params.owner == _caller, "Deposit: invalid owner");
         require(_data.expirationTimestamp < block.timestamp, "Deposit: deposit not expired");
     }
 
@@ -56,6 +53,7 @@ library Deposit {
     }
 
     function execute(
+        ILiquidityVault _liquidityVault,
         Data memory _data,
         Pool.Values memory _values,
         bool _isLongToken,
@@ -63,39 +61,50 @@ library Deposit {
         uint256 _priceImpactFactor
     ) external view returns (uint256 mintAmount, uint256 fee, uint256 remaining) {
         // Get token price and calculate price impact directly to reduce local variables
-        uint256 tokenPrice = _values.priceOracle.getSignedPrice(_data.params.tokenIn, _data.blockNumber);
-        uint256 impactedPrice =
-            _calculateImpactedPrice(_data, _values, _isLongToken, tokenPrice, _priceImpactExponent, _priceImpactFactor);
+        (uint256 longTokenPrice, uint256 shortTokenPrice) =
+            MarketUtils.validateAndRetrievePrices(_values.dataOracle, _data.blockNumber);
+
+        uint256 impactedPrice = _calculateImpactedPrice(
+            _values,
+            _isLongToken,
+            _data.params.amountIn,
+            _data.params.maxSlippage,
+            longTokenPrice,
+            shortTokenPrice,
+            _priceImpactExponent,
+            _priceImpactFactor
+        );
 
         // Calculate fee based on the impacted price
-        fee = _calculateFee(_data, _values, _isLongToken, tokenPrice, impactedPrice);
+        fee = Fee.calculateForMarketAction(_liquidityVault, _data.params.amountIn);
 
         // Calculate remaining after fee
         remaining = _data.params.amountIn - fee;
 
-        // Mint amount calculation is now more streamlined
+        // Calculate Mint amount
         mintAmount = _calculateMintAmount(
-            _isLongToken ? _values.longBaseUnit : _values.shortBaseUnit, impactedPrice, remaining, _values
+            _values, impactedPrice, longTokenPrice, shortTokenPrice, _values.longBaseUnit, remaining, _isLongToken
         );
     }
 
-    // Assumes impactedPrice calculation can be isolated
     function _calculateImpactedPrice(
-        Data memory _data,
         Pool.Values memory _values,
         bool _isLongToken,
-        uint256 tokenPrice,
+        uint256 _amountIn,
+        uint256 _maxSlippage,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice,
         uint8 _priceImpactExponent,
         uint256 _priceImpactFactor
-    ) internal pure returns (uint256) {
+    ) internal pure returns (uint256 impactedPrice) {
         return PriceImpact.executeForMarket(
             PriceImpact.Params({
                 longTokenBalance: _values.longTokenBalance,
                 shortTokenBalance: _values.shortTokenBalance,
-                longTokenPrice: tokenPrice,
-                shortTokenPrice: tokenPrice,
-                amount: _data.params.amountIn,
-                maxSlippage: _data.params.maxSlippage,
+                longTokenPrice: _longTokenPrice,
+                shortTokenPrice: _shortTokenPrice,
+                amountIn: _amountIn,
+                maxSlippage: _maxSlippage,
                 isIncrease: true,
                 isLongToken: _isLongToken,
                 longBaseUnit: _values.longBaseUnit,
@@ -106,33 +115,25 @@ library Deposit {
         );
     }
 
-    // Assumes fee calculation can be isolated
-    function _calculateFee(
-        Data memory _data,
+    function _calculateMintAmount(
         Pool.Values memory _values,
-        bool _isLongToken,
-        uint256 tokenPrice,
-        uint256 impactedPrice
-    ) internal pure returns (uint256 fee) {
-        fee = Fee.calculateForMarketAction(
-            _data.params.amountIn,
-            _values.longTokenBalance,
-            tokenPrice,
-            _values.longBaseUnit,
-            _values.shortTokenBalance,
-            impactedPrice, // Assuming impacted price is used here for an example
-            _values.shortBaseUnit,
-            _isLongToken
-        );
-    }
+        uint256 _impactedPrice,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice,
+        uint256 _baseUnitIn,
+        uint256 _remaining,
+        bool _isLongToken
+    ) internal view returns (uint256) {
+        uint256 valueUsd;
+        uint256 marketTokenPrice;
+        if (_isLongToken) {
+            valueUsd = Math.mulDiv(_remaining, _impactedPrice, _baseUnitIn);
+            marketTokenPrice = Pool.getMarketTokenPrice(_values, _impactedPrice, _shortTokenPrice);
+        } else {
+            valueUsd = Math.mulDiv(_remaining, _impactedPrice, _baseUnitIn);
+            marketTokenPrice = Pool.getMarketTokenPrice(_values, _longTokenPrice, _impactedPrice);
+        }
 
-    function _calculateMintAmount(uint256 baseUnit, uint256 price, uint256 remaining, Pool.Values memory _values)
-        internal
-        view
-        returns (uint256)
-    {
-        uint256 valueUsd = Math.mulDiv(remaining, price, baseUnit);
-        uint256 marketTokenPrice = Pool.getMarketTokenPrice(_values, price, price); // Assuming the same price for simplicity
         return marketTokenPrice == 0 ? valueUsd : Math.mulDiv(valueUsd, SCALING_FACTOR, marketTokenPrice);
     }
 

@@ -18,6 +18,8 @@ import {Fee} from "../libraries/Fee.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Pool} from "./Pool.sol";
+import {IWETH} from "../tokens/interfaces/IWETH.sol";
+import {IExecutor} from "../execution/interfaces/IExecutor.sol";
 
 // Stores all funds for the protocol
 /// @dev Needs Vault Role
@@ -37,15 +39,17 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     IPriceOracle priceOracle;
     IDataOracle dataOracle;
+    IExecutor executor;
 
     bool isInitialised;
     uint48 minTimeToExpiration;
-    uint256 depositFee; // 18 D.P
-    uint256 withdrawalFee; // 18 D.P
+    uint256 public depositFee; // 18 D.P
+    uint256 public withdrawalFee; // 18 D.P
 
     uint256 private longTokenBalance;
     uint256 private shortTokenBalance;
-    uint256 private accumulatedFees;
+    uint256 private longAccumulatedFees;
+    uint256 private shortAccumulatedFees;
     uint256 private longTokensReserved;
     uint256 private shortTokensReserved;
 
@@ -60,10 +64,8 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     EnumerableSet.Bytes32Set private withdrawalKeys;
     mapping(address user => mapping(bool isLong => uint256 reserved)) public reservedAmounts;
 
-    modifier isValidToken(address _token) {
-        require(_token == LONG_TOKEN || _token == SHORT_TOKEN, "LV: Invalid Token");
-        _;
-    }
+    mapping(address _market => uint256 _collateral) public longCollateral;
+    mapping(address _market => uint256 _collateral) public shortCollateral;
 
     modifier orderExists(bytes32 _key, bool _isDeposit) {
         if (_isDeposit) {
@@ -92,6 +94,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     function initialise(
         IPriceOracle _priceOracle,
         IDataOracle _dataOracle,
+        IExecutor _executor,
         uint48 _minTimeToExpiration,
         uint8 _priceImpactExponent,
         uint256 _priceImpactFactor,
@@ -102,6 +105,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         require(!isInitialised, "LiquidityVault: already initialised");
         priceOracle = _priceOracle;
         dataOracle = _dataOracle;
+        executor = _executor;
         executionFee = _executionFee;
         minTimeToExpiration = _minTimeToExpiration;
         depositFee = _depositFee;
@@ -119,6 +123,19 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     function updatePriceImpact(uint256 _priceImpactFactor, uint8 _priceImpactExponent) external onlyConfigurator {
         priceImpactFactor = _priceImpactFactor;
         priceImpactExponent = _priceImpactExponent;
+    }
+
+    function updateExecutor(IExecutor _executor) external onlyConfigurator {
+        executor = _executor;
+    }
+
+    function processFees() external onlyAdmin {
+        uint256 longFees = longAccumulatedFees;
+        uint256 shortFees = shortAccumulatedFees;
+        longAccumulatedFees = 0;
+        shortAccumulatedFees = 0;
+        IERC20(LONG_TOKEN).safeTransfer(msg.sender, longFees);
+        IERC20(SHORT_TOKEN).safeTransfer(msg.sender, shortFees);
     }
 
     ///////////////////////////////
@@ -143,10 +160,33 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         emit ProfitTransferred(_user, _amount, _isLong);
     }
 
-    function accumulateFees(uint256 _amount) external onlyFeeAccumulator {
+    function transferOutTokens(address _market, address _to, uint256 _collateralDelta, bool _isLong)
+        external
+        onlyTradeStorage
+    {
+        require(longCollateral[_market] != 0 || shortCollateral[_market] != 0, "TV: Incorrect Market Key");
+        require(_to != address(0), "TV: Zero Address");
+        require(_collateralDelta != 0, "TV: Zero Amount");
+        if (_isLong) {
+            require(longCollateral[_market] >= _collateralDelta, "TV: Insufficient Collateral");
+            longCollateral[_market] -= _collateralDelta;
+            IERC20(LONG_TOKEN).safeTransfer(_to, _collateralDelta);
+        } else {
+            require(shortCollateral[_market] >= _collateralDelta, "TV: Insufficient Collateral");
+            shortCollateral[_market] -= _collateralDelta;
+            IERC20(SHORT_TOKEN).safeTransfer(_to, _collateralDelta);
+        }
+        emit TransferOutTokens(_market, _to, _collateralDelta, _isLong);
+    }
+
+    function accumulateFees(uint256 _amount, bool _isLong) external onlyFeeAccumulator {
         require(_amount != 0, "LV: Invalid Acc Fee");
-        accumulatedFees += _amount;
-        emit FeesAccumulated(_amount);
+        if (_isLong) {
+            longAccumulatedFees += _amount;
+        } else {
+            shortAccumulatedFees += _amount;
+        }
+        emit FeesAccumulated(_amount, _isLong);
     }
 
     /// @dev Used to reserve / unreserve funds for open positions
@@ -182,23 +222,92 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         emit LiquidityReserved(_user, amt, _amount > 0, _isLong);
     }
 
+    function sendExecutionFee(address payable _executor, uint256 _executionFee) public onlyTradeStorage {
+        _executor.sendValue(_executionFee);
+    }
+
+    function swapFundingAmount(address _market, uint256 _amount, bool _isLong) external onlyTradeStorage {
+        _swapFundingAmount(_market, _amount, _isLong);
+    }
+
+    // @audit - Liq Fee needs to be measured in collateral token
+    function liquidatePositionCollateral(
+        address _liquidator,
+        uint256 _liqFee,
+        address _market,
+        uint256 _totalCollateral,
+        uint256 _collateralFundingOwed,
+        bool _isLong
+    ) external onlyTradeStorage {
+        // funding
+        if (_collateralFundingOwed > 0) {
+            _swapFundingAmount(_market, _collateralFundingOwed, _isLong);
+        }
+        // Funds remaining after paying funding and liquidation fee
+        uint256 remainingCollateral = _totalCollateral - _collateralFundingOwed - _liqFee;
+        if (remainingCollateral > 0) {
+            if (_isLong) {
+                longCollateral[_market] -= remainingCollateral;
+                longAccumulatedFees += remainingCollateral;
+                IERC20(LONG_TOKEN).safeTransfer(_liquidator, _liqFee);
+            } else {
+                shortCollateral[_market] -= remainingCollateral;
+                shortAccumulatedFees += remainingCollateral;
+                IERC20(SHORT_TOKEN).safeTransfer(_liquidator, _liqFee);
+            }
+        }
+        emit PositionCollateralLiquidated(
+            _liquidator, _liqFee, _market, _totalCollateral, _collateralFundingOwed, _isLong
+        );
+    }
+
+    // Funding fee needs to be measured in collateral token
+    function claimFundingFees(address _market, address _user, uint256 _claimed, bool _isLong)
+        external
+        onlyTradeStorage
+    {
+        if (_isLong) {
+            require(shortCollateral[_market] >= _claimed, "TV: Insufficient Claimable");
+            shortCollateral[_market] -= _claimed;
+            IERC20(SHORT_TOKEN).safeTransfer(_user, _claimed);
+        } else {
+            require(longCollateral[_market] >= _claimed, "TV: Insufficient Claimable");
+            longCollateral[_market] -= _claimed;
+            IERC20(LONG_TOKEN).safeTransfer(_user, _claimed);
+        }
+    }
+
+    function _swapFundingAmount(address _market, uint256 _amount, bool _isLong) internal {
+        if (_isLong) {
+            longCollateral[_market] -= _amount;
+            shortCollateral[_market] += _amount;
+        } else {
+            shortCollateral[_market] -= _amount;
+            longCollateral[_market] += _amount;
+        }
+    }
+
     ///////////////////////
     // DEPOSIT EXECUTION //
     ///////////////////////
 
-    function executeDeposit(bytes32 _key) external onlyExecutor orderExists(_key, true) {
+    function executeDeposit(bytes32 _key, address _executor) external onlyExecutor orderExists(_key, true) {
         // fetch and cache
         Deposit.Data memory data = depositRequests[_key];
         // remove from storage
         depositKeys.remove(_key);
         delete depositRequests[_key];
-        bool isLongToken = data.params.tokenIn == address(LONG_TOKEN);
+
+        bool isLongToken = data.params.tokenIn == LONG_TOKEN;
 
         (uint256 mintAmount, uint256 fee, uint256 remaining) = Deposit.execute(
+            this,
             data,
             Pool.Values({
                 dataOracle: dataOracle,
                 priceOracle: priceOracle,
+                longToken: LONG_TOKEN,
+                shortToken: SHORT_TOKEN,
                 longTokenBalance: longTokenBalance,
                 shortTokenBalance: shortTokenBalance,
                 marketTokenSupply: totalSupply(),
@@ -212,11 +321,18 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         );
 
         // update storage
-        isLongToken ? longTokenBalance += remaining : shortTokenBalance += remaining;
-        accumulatedFees += fee;
+        if (isLongToken) {
+            longTokenBalance += remaining;
+            longAccumulatedFees += fee;
+        } else {
+            shortTokenBalance += remaining;
+            shortAccumulatedFees += fee;
+        }
 
+        // Transfer in intermediary tokens
+        executor.transferDepositTokens(data.params.tokenIn, data.params.amountIn);
         // send execution fee to keeper
-        payable(msg.sender).sendValue(data.params.executionFee);
+        sendExecutionFee(payable(_executor), data.params.executionFee);
         // mint tokens to user
         _mint(data.params.owner, mintAmount);
         // fire event
@@ -228,21 +344,27 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     //////////////////////////
 
     // @audit - review
-    function executeWithdrawal(bytes32 _key) external onlyExecutor orderExists(_key, false) {
+    function executeWithdrawal(bytes32 _key, address _executor) external onlyExecutor orderExists(_key, false) {
         // fetch and cache
         Withdrawal.Data memory data = withdrawalRequests[_key];
 
+        // Transfer in intermediary market tokens
+        executor.transferDepositTokens(address(this), data.params.marketTokenAmountIn);
+        // Burn tokens
         _burn(msg.sender, data.params.marketTokenAmountIn);
         // remove from storage
         withdrawalKeys.remove(_key);
         delete withdrawalRequests[_key];
-        bool isLongToken = data.params.tokenOut == address(LONG_TOKEN);
+        bool isLongToken = data.params.tokenOut == LONG_TOKEN;
 
         (uint256 amountOut, uint256 fee, uint256 remaining) = Withdrawal.execute(
+            this,
             data,
             Pool.Values({
                 dataOracle: dataOracle,
                 priceOracle: priceOracle,
+                longToken: LONG_TOKEN,
+                shortToken: SHORT_TOKEN,
                 longTokenBalance: longTokenBalance,
                 shortTokenBalance: shortTokenBalance,
                 marketTokenSupply: totalSupply(),
@@ -256,14 +378,24 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         );
 
         // update storage
-        isLongToken ? longTokenBalance -= amountOut : shortTokenBalance -= amountOut;
-        accumulatedFees += fee;
+        if (isLongToken) {
+            longTokenBalance -= amountOut;
+            longAccumulatedFees += fee;
+        } else {
+            shortTokenBalance -= amountOut;
+            shortAccumulatedFees += fee;
+        }
 
         // send execution fee to keeper
-        payable(msg.sender).sendValue(data.params.executionFee);
+        sendExecutionFee(payable(_executor), data.params.executionFee);
 
         // transfer tokens to user
-        IERC20(data.params.tokenOut).safeTransfer(data.params.owner, remaining);
+        if (data.params.shouldUnwrap) {
+            IWETH(LONG_TOKEN).withdraw(remaining);
+            payable(data.params.owner).sendValue(remaining);
+        } else {
+            IERC20(data.params.tokenOut).safeTransfer(data.params.owner, remaining);
+        }
 
         // fire event
         emit WithdrawalExecuted(
@@ -277,24 +409,18 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     // Function to create a deposit request
     // Note -> need to add ability to create deposit in eth
-    function createDeposit(Deposit.Params memory _params) external payable onlyRouter isValidToken(_params.tokenIn) {
-        Deposit.validateParameters(_params, executionFee);
-
-        // Transfer tokens from user to this contract
-        IERC20(_params.tokenIn).safeTransferFrom(_params.owner, address(this), _params.amountIn);
-
+    function createDeposit(Deposit.Params memory _params) external payable onlyRouter {
         (Deposit.Data memory deposit, bytes32 key) = Deposit.create(dataOracle, _params, minTimeToExpiration);
-
         depositKeys.add(key);
         depositRequests[key] = deposit;
         emit DepositRequestCreated(key, _params.owner, _params.tokenIn, _params.amountIn, deposit.blockNumber);
     }
 
     // Request must be expired for a user to cancel it
-    function cancelDeposit(bytes32 _key) external onlyRouter orderExists(_key, true) {
+    function cancelDeposit(bytes32 _key, address _caller) external onlyRouter orderExists(_key, true) {
         Deposit.Data memory deposit = depositRequests[_key];
 
-        Deposit.validateCancellation(deposit);
+        Deposit.validateCancellation(deposit, _caller);
 
         depositKeys.remove(_key);
         delete depositRequests[_key];
@@ -310,17 +436,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     /////////////////////////
 
     // Function to create a withdrawal request
-    function createWithdrawal(Withdrawal.Params memory _params)
-        external
-        payable
-        onlyRouter
-        isValidToken(_params.tokenOut)
-    {
-        Withdrawal.validateParameters(_params, executionFee);
-
-        // transfer market tokens to contract
-        IERC20(address(this)).safeTransferFrom(_params.owner, address(this), _params.marketTokenAmountIn);
-
+    function createWithdrawal(Withdrawal.Params memory _params) external payable onlyRouter {
         (Withdrawal.Data memory withdrawal, bytes32 key) = Withdrawal.create(dataOracle, _params, minTimeToExpiration);
 
         withdrawalKeys.add(key);
@@ -331,10 +447,10 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         );
     }
 
-    function cancelWithdrawal(bytes32 _key) external onlyRouter orderExists(_key, false) {
+    function cancelWithdrawal(bytes32 _key, address _caller) external onlyRouter orderExists(_key, false) {
         Withdrawal.Data memory withdrawal = withdrawalRequests[_key];
 
-        Withdrawal.validateCancellation(withdrawal);
+        Withdrawal.validateCancellation(withdrawal, _caller);
 
         withdrawalKeys.remove(_key);
         delete withdrawalRequests[_key];

@@ -25,6 +25,8 @@ import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {MarketUtils} from "../markets/MarketUtils.sol";
+import {Pricing} from "../libraries/Pricing.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -38,8 +40,9 @@ library Position {
 
     struct Data {
         IMarket market;
-        address indexToken; // collateralToken is only WUSDC
+        address indexToken;
         address user;
+        address collateralToken; // WETH long, USDC short
         uint256 collateralAmount; // vs size = leverage
         uint256 positionSize; // position size in index tokens, value fluctuates in USD giving PnL
         bool isLong; // will determine token used
@@ -76,34 +79,32 @@ library Position {
     // Trade Request -> Sent by user
     struct RequestInput {
         address indexToken;
-        uint256 collateralDeltaUSDC;
+        address collateralToken;
+        uint256 collateralDelta;
         uint256 sizeDelta;
         uint256 orderPrice;
         uint256 maxSlippage;
+        uint256 executionFee;
         bool isLong;
         bool isLimit;
         bool isIncrease;
+        bool shouldWrap;
     }
 
     // Request -> Constructed by Router
     struct RequestData {
-        address indexToken; // used to derive which market
+        RequestInput input;
+        address market;
         address user;
-        uint256 collateralDelta;
-        uint256 sizeDelta;
         uint256 requestBlock;
-        uint256 orderPrice; // Price for limit order
-        uint256 maxSlippage; // 1e18 = 100% (0.03% default = 0.0003e18)
-        bool isLimit;
-        bool isLong;
-        bool isIncrease; // increase or decrease position
         RequestType requestType;
     }
 
     // Executed Request
     struct RequestExecution {
         RequestData requestData;
-        uint256 price;
+        uint256 indexPrice;
+        uint256 collateralPrice;
         address feeReceiver;
         bool isAdl;
     }
@@ -149,15 +150,19 @@ library Position {
     }
 
     function generateKey(RequestData memory _request) external pure returns (bytes32 positionKey) {
-        positionKey = keccak256(abi.encode(_request.indexToken, _request.user, _request.isLong));
+        positionKey = keccak256(abi.encode(_request.input.indexToken, _request.user, _request.input.isLong));
     }
 
     function checkLimitPrice(uint256 _price, RequestData memory _request) external pure {
-        if (_request.isLong) {
-            require(_price <= _request.orderPrice, "TH: Limit Price");
+        if (_request.input.isLong) {
+            require(_price <= _request.input.orderPrice, "TH: Limit Price");
         } else {
-            require(_price >= _request.orderPrice, "TH: Limit Price");
+            require(_price >= _request.input.orderPrice, "TH: Limit Price");
         }
+    }
+
+    function exists(Data memory _position) external pure returns (bool) {
+        return _position.user != address(0);
     }
 
     // 1x = 100
@@ -168,23 +173,16 @@ library Position {
         require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, "TH: Leverage");
     }
 
-    function createRequest(
-        RequestInput calldata _trade,
-        address _user,
-        uint256 _collateralAmount,
-        RequestType _requestType
-    ) external view returns (RequestData memory request) {
+    function createRequest(RequestInput calldata _trade, address _market, address _user, RequestType _requestType)
+        external
+        view
+        returns (RequestData memory request)
+    {
         request = RequestData({
-            indexToken: _trade.indexToken,
+            input: _trade,
+            market: _market,
             user: _user,
-            collateralDelta: _collateralAmount,
-            sizeDelta: _trade.sizeDelta,
             requestBlock: block.number,
-            orderPrice: _trade.orderPrice,
-            maxSlippage: _trade.maxSlippage,
-            isLimit: _trade.isLimit,
-            isLong: _trade.isLong,
-            isIncrease: _trade.isIncrease,
             requestType: _requestType
         });
     }
@@ -198,14 +196,16 @@ library Position {
         (uint256 longFundingFee, uint256 shortFundingFee, uint256 longBorrowFee, uint256 shortBorrowFee) =
             _market.getCumulativeFees();
         // get Trade Value in USD
-        uint256 sizeUsd = getTradeValueUsd(_dataOracle, _request.indexToken, _request.sizeDelta, _price);
+        uint256 sizeUsd =
+            getTradeValueUsd(_request.input.sizeDelta, _price, _dataOracle.getBaseUnits(_request.input.indexToken));
         position = Data({
             market: _market,
-            indexToken: _request.indexToken,
+            indexToken: _request.input.indexToken,
+            collateralToken: _request.input.collateralToken,
             user: _request.user,
-            collateralAmount: _request.collateralDelta,
-            positionSize: _request.sizeDelta,
-            isLong: _request.isLong,
+            collateralAmount: _request.input.collateralDelta,
+            positionSize: _request.input.sizeDelta,
+            isLong: _request.input.isLong,
             realisedPnl: 0,
             borrowingParams: BorrowingParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: FundingParams(0, 0, block.timestamp, longFundingFee, shortFundingFee),
@@ -227,25 +227,47 @@ library Position {
     }
 
     /// @dev Need to adjust for decimals
-    function getTradeValueUsd(IDataOracle _dataOracle, address _indexToken, uint256 _sizeDelta, uint256 _signedPrice)
+    function getTradeValueUsd(uint256 _sizeDelta, uint256 _signedPrice, uint256 _baseUnit)
         public
-        view
+        pure
         returns (uint256 tradeValueUsd)
     {
-        uint256 baseUnit = _dataOracle.getBaseUnits(_indexToken);
-        tradeValueUsd = Math.mulDiv(_sizeDelta, _signedPrice, baseUnit);
+        tradeValueUsd = Math.mulDiv(_sizeDelta, _signedPrice, _baseUnit);
+    }
+
+    function isLiquidatable(
+        IDataOracle _dataOracle,
+        Position.Data memory _position,
+        uint256 _collateralPrice,
+        uint256 _indexPrice,
+        uint256 liquidationFeeUsd
+    ) public view returns (bool) {
+        uint256 collateralValueUsd = Math.mulDiv(_position.collateralAmount, _collateralPrice, PRECISION);
+        uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position.market, _dataOracle, _position, _indexPrice);
+        uint256 indexBaseUnit = _dataOracle.getBaseUnits(_position.indexToken);
+        int256 pnl = Pricing.calculatePnL(_position, _indexPrice, indexBaseUnit);
+        uint256 losses = liquidationFeeUsd + totalFeesOwedUsd;
+        if (pnl < 0) {
+            losses += uint256(-pnl);
+        }
+        if (collateralValueUsd <= losses) {
+            return true;
+        } else {
+            return false;
+        }
     }
 
     // Calculates the liquidation fee in Collateral Tokens
-    function calculateLiquidationFee(IPriceOracle _priceOracle, uint256 _liquidationFeeUsd)
+    function calculateLiquidationFee(IPriceOracle _priceOracle, uint256 _liquidationFeeUsd, address _token)
         external
-        pure
-        returns (uint256 liquidationFeeUSDE)
+        view
+        returns (uint256 liquidationFee)
     {
-        liquidationFeeUSDE = Math.mulDiv(_liquidationFeeUsd, PRECISION, _priceOracle.getCollateralPrice());
+        uint256 price = _priceOracle.getPrice(_token);
+        liquidationFee = Math.mulDiv(_liquidationFeeUsd, PRECISION, price);
     }
 
-    function createAdlOrder(Data memory _position, uint256 _sizeDelta, uint256 _signedPrice)
+    function createAdlOrder(Data memory _position, uint256 _sizeDelta, uint256 _indexPrice, uint256 _collateralPrice)
         external
         view
         returns (RequestExecution memory request)
@@ -254,36 +276,43 @@ library Position {
         uint256 collateralDelta = Math.mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
         request = RequestExecution({
             requestData: RequestData({
-                indexToken: _position.indexToken,
+                input: RequestInput({
+                    indexToken: _position.indexToken,
+                    collateralToken: _position.collateralToken,
+                    collateralDelta: collateralDelta,
+                    sizeDelta: _sizeDelta,
+                    orderPrice: 0,
+                    maxSlippage: 0,
+                    executionFee: 0,
+                    isLong: _position.isLong,
+                    isLimit: false,
+                    isIncrease: false,
+                    shouldWrap: false
+                }),
+                market: address(_position.market),
                 user: _position.user,
-                collateralDelta: collateralDelta,
-                sizeDelta: _sizeDelta,
                 requestBlock: block.number,
-                orderPrice: 0,
-                maxSlippage: 0,
-                isLimit: false,
-                isLong: _position.isLong,
-                isIncrease: false,
                 requestType: RequestType.POSITION_DECREASE
             }),
-            price: _signedPrice,
+            indexPrice: _indexPrice,
+            collateralPrice: _collateralPrice,
             feeReceiver: address(0),
             isAdl: true
         });
     }
 
     function convertIndexAmountToCollateral(
-        IPriceOracle _priceOracle,
         uint256 _indexAmount,
         uint256 _indexPrice,
-        uint256 _baseUnit
+        uint256 _baseUnit,
+        uint256 _collateralPrice
     ) public pure returns (uint256 collateralAmount) {
         uint256 indexUsd = Math.mulDiv(_indexAmount, _indexPrice, _baseUnit);
-        collateralAmount = Math.mulDiv(indexUsd, PRECISION, _priceOracle.getCollateralPrice());
+        collateralAmount = Math.mulDiv(indexUsd, PRECISION, _collateralPrice);
     }
 
     function getTotalFeesOwedUsd(IMarket _market, IDataOracle _dataOracle, Data memory _position, uint256 _price)
-        external
+        public
         view
         returns (uint256 totalFeesOwedUsd)
     {

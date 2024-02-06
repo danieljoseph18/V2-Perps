@@ -3,6 +3,7 @@ pragma solidity 0.8.23;
 
 import {IPriceOracle} from "../../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../../oracle/interfaces/IDataOracle.sol";
+import {IExecutor} from "../../execution/interfaces/IExecutor.sol";
 import {Deposit} from "../../liquidity/Deposit.sol";
 import {Withdrawal} from "../../liquidity/Withdrawal.sol";
 
@@ -13,6 +14,7 @@ interface ILiquidityVault {
     function initialise(
         IPriceOracle _priceOracle,
         IDataOracle _dataOracle,
+        IExecutor _executor,
         uint48 _minTimeToExpiration,
         uint8 _priceImpactExponent,
         uint256 _priceImpactFactor,
@@ -25,25 +27,39 @@ interface ILiquidityVault {
     // Trading related functions
     function transferPositionProfit(address _user, uint256 _amount, bool _isLong) external;
     function updateReservation(address _user, int256 _amount, bool _isLong) external;
-    function accumulateFees(uint256 _amount) external;
+    function accumulateFees(uint256 _amount, bool _isLong) external;
+    function sendExecutionFee(address payable _executor, uint256 _executionFee) external;
+    function transferOutTokens(address _market, address _to, uint256 _collateralDelta, bool _isLong) external;
+    function liquidatePositionCollateral(
+        address _liquidator,
+        uint256 _liqFee,
+        address _market,
+        uint256 _totalCollateral,
+        uint256 _collateralFundingOwed,
+        bool _isLong
+    ) external;
+    function claimFundingFees(address _market, address _user, uint256 _claimed, bool _isLong) external;
+    function swapFundingAmount(address _market, uint256 _amount, bool _isLong) external;
 
     // Deposit execution
-    function executeDeposit(bytes32 _key) external;
+    function executeDeposit(bytes32 _key, address _executor) external;
 
     // Withdrawal execution
-    function executeWithdrawal(bytes32 _key) external;
+    function executeWithdrawal(bytes32 _key, address _executor) external;
 
     // Deposit creation
     function createDeposit(Deposit.Params memory _params) external payable;
-    function cancelDeposit(bytes32 _key) external;
+    function cancelDeposit(bytes32 _key, address _caller) external;
 
     // Withdrawal creation
     function createWithdrawal(Withdrawal.Params memory _params) external payable;
-    function cancelWithdrawal(bytes32 _key) external;
+    function cancelWithdrawal(bytes32 _key, address _caller) external;
 
     // Getter
     function reservedAmounts(address _user, bool _isLong) external view returns (uint256);
     function executionFee() external view returns (uint256);
+    function depositFee() external view returns (uint256);
+    function withdrawalFee() external view returns (uint256);
 
     event DepositRequestCreated(
         bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 blockNumber
@@ -73,5 +89,14 @@ interface ILiquidityVault {
     );
     event ProfitTransferred(address indexed user, uint256 amount, bool isLong);
     event LiquidityReserved(address indexed user, uint256 amount, bool isIncrease, bool isLong);
-    event FeesAccumulated(uint256 amount);
+    event FeesAccumulated(uint256 amount, bool _isLong);
+    event TransferOutTokens(address _market, address indexed _to, uint256 _collateralDelta, bool _isLong);
+    event PositionCollateralLiquidated(
+        address indexed _liquidator,
+        uint256 indexed _liqFee,
+        address _market,
+        uint256 _totalCollateral,
+        uint256 _collateralFundingOwed,
+        bool _isLong
+    );
 }

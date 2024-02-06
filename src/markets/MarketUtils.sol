@@ -104,4 +104,15 @@ library MarketUtils {
         uint256 factor = Math.mulDiv(pnl.abs(), SCALAR, poolUsd);
         return pnl > 0 ? int256(factor) : int256(factor) * -1;
     }
+
+    function validateAndRetrievePrices(IDataOracle _dataOracle, uint256 _blockNumber)
+        external
+        view
+        returns (uint256, uint256)
+    {
+        (bool isValid,,,, uint256 longTokenPrice, uint256 shortTokenPrice) = _dataOracle.blockData(_blockNumber);
+        require(isValid, "MarketUtils: invalid block data");
+        require(longTokenPrice > 0 && shortTokenPrice > 0, "MarketUtils: invalid token prices");
+        return (longTokenPrice, shortTokenPrice);
+    }
 }

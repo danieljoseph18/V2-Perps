@@ -27,10 +27,15 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {MarketUtils} from "../markets/MarketUtils.sol";
 
 /// @dev Needs Executor Role
 // All keeper interactions should come through this contract
 contract Executor is RoleValidation, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     ITradeStorage public tradeStorage;
     ILiquidityVault public liquidityVault;
     IPriceOracle public priceOracle;
@@ -60,7 +65,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
     function executeDeposit(bytes32 _key) external nonReentrant onlyKeeper {
         require(_key != bytes32(0), "E: Invalid Key");
-        try liquidityVault.executeDeposit(_key) {}
+        try liquidityVault.executeDeposit(_key, msg.sender) {}
         catch {
             revert("E: Execute Deposit Failed");
         }
@@ -68,10 +73,15 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
     function executeWithdrawal(bytes32 _key) external nonReentrant onlyKeeper {
         require(_key != bytes32(0), "E: Invalid Key");
-        try liquidityVault.executeWithdrawal(_key) {}
+        try liquidityVault.executeWithdrawal(_key, msg.sender) {}
         catch {
             revert("E: Execute Withdrawal Failed");
         }
+    }
+
+    // Used to transfer intermediary tokens to the vault from deposits
+    function transferDepositTokens(address _token, uint256 _amount) external onlyVault {
+        IERC20(_token).safeTransfer(address(liquidityVault), _amount);
     }
 
     /////////////
@@ -106,61 +116,79 @@ contract Executor is RoleValidation, ReentrancyGuard {
         require(request.user != address(0), "E: Request Key");
         require(_feeReceiver != address(0), "E: Fee Receiver");
         // Fetch and validate price
-        uint256 signedBlockPrice = priceOracle.getSignedPrice(request.indexToken, request.requestBlock);
+        uint256 signedBlockPrice = priceOracle.getSignedPrice(request.input.indexToken, request.requestBlock);
         require(signedBlockPrice != 0, "E: Invalid Price");
         if (_isLimitOrder) Position.checkLimitPrice(signedBlockPrice, request);
 
         // Execute Price Impact
-        IMarket market = IMarket(marketMaker.tokenToMarkets(request.indexToken));
-        uint256 baseUnit = dataOracle.getBaseUnits(request.indexToken);
-        uint256 impactedPrice = PriceImpact.execute(market, request, signedBlockPrice, baseUnit);
+        IMarket market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
+        uint256 indexBaseUnit = dataOracle.getBaseUnits(request.input.indexToken);
+        uint256 impactedPrice = PriceImpact.execute(market, request, signedBlockPrice, indexBaseUnit);
 
-        (bool isValid,,,, uint256 longMarketTokenPrice, uint256 shortMarketTokenPrice) =
-            dataOracle.blockData(request.requestBlock);
-        require(isValid, "E: Invalid Block Data");
+        (uint256 longMarketTokenPrice, uint256 shortMarketTokenPrice) =
+            MarketUtils.validateAndRetrievePrices(dataOracle, request.requestBlock);
+
         // Update Market State
-        int256 sizeDeltaUsd = _calculateSizeDeltaUsd(request, signedBlockPrice);
+        int256 sizeDeltaUsd = _calculateSizeDeltaUsd(request, signedBlockPrice, indexBaseUnit);
         _updateMarketState(
             market, request, impactedPrice, signedBlockPrice, longMarketTokenPrice, shortMarketTokenPrice, sizeDeltaUsd
         );
 
+        uint256 collateralPrice = request.input.isLong ? longMarketTokenPrice : shortMarketTokenPrice;
+
         // Execute Trade
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            tradeStorage.createNewPosition(Position.RequestExecution(request, impactedPrice, _feeReceiver, false));
+            tradeStorage.createNewPosition(
+                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+            );
         } else if (request.requestType == Position.RequestType.POSITION_DECREASE) {
             tradeStorage.decreaseExistingPosition(
-                Position.RequestExecution(request, impactedPrice, _feeReceiver, false)
+                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
             );
         } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
             tradeStorage.increaseExistingPosition(
-                Position.RequestExecution(request, impactedPrice, _feeReceiver, false)
+                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
             );
         } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
             tradeStorage.executeCollateralDecrease(
-                Position.RequestExecution(request, impactedPrice, _feeReceiver, false)
+                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
             );
         } else if (request.requestType == Position.RequestType.COLLATERAL_INCREASE) {
             tradeStorage.executeCollateralIncrease(
-                Position.RequestExecution(request, impactedPrice, _feeReceiver, false)
+                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
             );
         } else {
             revert Executor_InvalidRequestType();
         }
     }
 
-    function _calculateSizeDeltaUsd(Position.RequestData memory _request, uint256 _signedIndexPrice)
-        internal
-        view
-        returns (int256 sizeDeltaUsd)
-    {
+    // need to store who flagged and liquidated
+    // let the liquidator claim liquidation rewards from the tradestorage contract
+    function liquidatePosition(bytes32 _positionKey) external onlyKeeper {
+        // check if position is flagged for liquidation
+        // uint256 collateralPrice = priceOracle.getCollateralPrice();
+        // fetch data to execute liquidations
+        // call _updateMarketState
+        // liquidate the position
+        // tradeStorage.liquidatePosition(_positionKey, collateralPrice);
+    }
+
+    ///////////////////////////////
+    // INTERNAL HELPER FUNCTIONS //
+    ///////////////////////////////
+
+    function _calculateSizeDeltaUsd(
+        Position.RequestData memory _request,
+        uint256 _signedIndexPrice,
+        uint256 _indexBaseUnit
+    ) internal pure returns (int256 sizeDeltaUsd) {
         // Flip sign if decreasing position
-        if (_request.isIncrease) {
-            sizeDeltaUsd = int256(
-                Position.getTradeValueUsd(dataOracle, _request.indexToken, _request.sizeDelta, _signedIndexPrice)
-            );
+        if (_request.input.isIncrease) {
+            sizeDeltaUsd =
+                int256(Position.getTradeValueUsd(_request.input.sizeDelta, _signedIndexPrice, _indexBaseUnit));
         } else {
-            sizeDeltaUsd = -1
-                * int256(Position.getTradeValueUsd(dataOracle, _request.indexToken, _request.sizeDelta, _signedIndexPrice));
+            sizeDeltaUsd =
+                -1 * int256(Position.getTradeValueUsd(_request.input.sizeDelta, _signedIndexPrice, _indexBaseUnit));
         }
     }
 
@@ -173,11 +201,11 @@ contract Executor is RoleValidation, ReentrancyGuard {
         uint256 _shortTokenPrice,
         int256 _sizeDeltaUsd
     ) internal {
-        _market.updateOpenInterest(_request.sizeDelta, _request.isLong, _request.isIncrease);
+        _market.updateOpenInterest(_request.input.sizeDelta, _request.input.isLong, _request.input.isIncrease);
         _market.updateFundingRate();
-        _market.updateBorrowingRate(_signedIndexPrice, _longTokenPrice, _shortTokenPrice, _request.isLong);
+        _market.updateBorrowingRate(_signedIndexPrice, _longTokenPrice, _shortTokenPrice, _request.input.isLong);
         if (_sizeDeltaUsd != 0) {
-            _market.updateTotalWAEP(_impactedIndexPrice, _sizeDeltaUsd, _request.isLong);
+            _market.updateTotalWAEP(_impactedIndexPrice, _sizeDeltaUsd, _request.input.isLong);
         }
     }
 }

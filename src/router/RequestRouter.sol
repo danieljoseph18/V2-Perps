@@ -22,7 +22,6 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
-import {ITradeVault} from "../positions/interfaces/ITradeVault.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Market} from "../markets/Market.sol";
@@ -30,68 +29,114 @@ import {Position} from "../positions/Position.sol";
 import {Deposit} from "../liquidity/Deposit.sol";
 import {Withdrawal} from "../liquidity/Withdrawal.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IWETH} from "../tokens/interfaces/IWETH.sol";
+import {RoleValidation} from "../access/RoleValidation.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
-contract RequestRouter is ReentrancyGuard {
+contract RequestRouter is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
+    using SafeERC20 for IWETH;
 
     ITradeStorage tradeStorage;
     ILiquidityVault liquidityVault;
     IMarketMaker marketMaker;
-    ITradeVault tradeVault;
     IERC20 immutable USDC;
+    IWETH immutable WETH;
+    address executor;
 
     uint256 constant PRECISION = 1e18;
     uint256 constant COLLATERAL_MULTIPLIER = 1e12;
-    uint256 constant MIN_SLIPPAGE = 0.0003e18; // 0.03%
-    uint256 constant MAX_SLIPPAGE = 0.99e18; // 99%
+    uint256 constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
+    uint256 constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
 
     constructor(
         address _tradeStorage,
         address _liquidityVault,
         address _marketMaker,
-        address _tradeVault,
-        address _usdc
-    ) {
+        address _usdc,
+        address _weth,
+        address _executor,
+        address _roleStorage
+    ) RoleValidation(_roleStorage) {
         tradeStorage = ITradeStorage(_tradeStorage);
         liquidityVault = ILiquidityVault(_liquidityVault);
         marketMaker = IMarketMaker(_marketMaker);
-        tradeVault = ITradeVault(_tradeVault);
         USDC = IERC20(_usdc);
+        WETH = IWETH(_weth);
+        executor = _executor;
     }
 
     modifier validExecutionFee(bool _isTrade) {
         if (_isTrade) {
             require(msg.value == tradeStorage.executionFee(), "RR: Execution Fee");
         } else {
-            require(msg.value == liquidityVault.executionFee(), "RR: Execution Fee");
+            require(msg.value >= liquidityVault.executionFee(), "RR: Execution Fee");
         }
         _;
+    }
+
+    /////////////
+    // Setters //
+    /////////////
+
+    function updateConfig(address _tradeStorage, address _liquidityVault, address _marketMaker, address _executor)
+        external
+        onlyAdmin
+    {
+        require(msg.sender == executor, "RR: Invalid Executor");
+        tradeStorage = ITradeStorage(_tradeStorage);
+        liquidityVault = ILiquidityVault(_liquidityVault);
+        marketMaker = IMarketMaker(_marketMaker);
+        executor = _executor;
     }
 
     /////////////////////////
     // MARKET INTERACTIONS //
     /////////////////////////
 
-    function createDeposit(Deposit.Params memory _params) external payable nonReentrant {
+    function createDeposit(Deposit.Params memory _params) external payable nonReentrant validExecutionFee(false) {
         require(msg.sender == _params.owner, "RR: Invalid Owner");
-        liquidityVault.createDeposit{value: msg.value}(_params);
+        require(_params.maxSlippage >= MIN_SLIPPAGE && _params.maxSlippage <= MAX_SLIPPAGE, "RR: Slippage");
+        if (_params.shouldWrap) {
+            require(_params.amountIn == msg.value - _params.executionFee, "RR: Invalid Amount In");
+            require(_params.tokenIn == address(WETH), "RR: Invalid Token In");
+            WETH.deposit{value: _params.amountIn}();
+            WETH.safeTransfer(address(executor), _params.amountIn);
+        } else {
+            require(_params.tokenIn == address(USDC) || _params.tokenIn == address(WETH), "RR: Invalid Token In");
+            IERC20(_params.tokenIn).safeTransferFrom(_params.owner, address(executor), _params.amountIn);
+        }
+        liquidityVault.createDeposit(_params);
+        _sendExecutionFee(false);
     }
 
     function cancelDeposit(bytes32 _key) external nonReentrant {
         require(_key != bytes32(0));
-        liquidityVault.cancelDeposit(_key);
+        liquidityVault.cancelDeposit(_key, msg.sender);
     }
 
-    function createWithdrawal(Withdrawal.Params memory _params) external payable nonReentrant {
+    function createWithdrawal(Withdrawal.Params memory _params)
+        external
+        payable
+        validExecutionFee(false)
+        nonReentrant
+    {
         require(msg.sender == _params.owner, "RR: Invalid Owner");
+        require(_params.maxSlippage >= MIN_SLIPPAGE && _params.maxSlippage <= MAX_SLIPPAGE, "RR: Slippage");
+        if (_params.shouldUnwrap) {
+            require(_params.tokenOut == address(WETH), "RR: Invalid Token Out");
+        } else {
+            require(_params.tokenOut == address(USDC) || _params.tokenOut == address(WETH), "RR: Invalid Token Out");
+        }
+        IERC20(address(liquidityVault)).safeTransferFrom(_params.owner, address(executor), _params.marketTokenAmountIn);
         liquidityVault.createWithdrawal(_params);
+        _sendExecutionFee(false);
     }
 
     function cancelWithdrawal(bytes32 _key) external nonReentrant {
         require(_key != bytes32(0));
-        liquidityVault.cancelWithdrawal(_key);
+        liquidityVault.cancelWithdrawal(_key, msg.sender);
     }
 
     /////////////
@@ -109,26 +154,26 @@ contract RequestRouter is ReentrancyGuard {
         validExecutionFee(true)
     {
         require(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE, "RR: Slippage");
-        require(_trade.collateralDeltaUSDC != 0, "RR: Collateral Delta");
-
+        require(_trade.collateralDelta != 0, "RR: Collateral Delta");
+        require(
+            _trade.collateralToken == address(USDC) || _trade.collateralToken == address(WETH), "RR: Collateral Token"
+        );
         // Check if Market exists
         address market = marketMaker.tokenToMarkets(_trade.indexToken);
         require(market != address(0), "RR: Market Doesn't Exist");
         // Create a Pointer to the Position
         bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
-
         // Handle Transfer of Tokens to Designated Areas
-        _handleTokenTransfers(market, _trade.collateralDeltaUSDC, _trade.isLong, _trade.isIncrease);
+        _handleTokenTransfers(_trade);
         // Calculate Request Type
-        Position.RequestType requestType = Position.getRequestType(_trade, position, _trade.collateralDeltaUSDC);
-        // Send Fee for Execution to Vault to be sent to whoever executes the request
-        _sendExecutionFeeToVault();
+        Position.RequestType requestType = Position.getRequestType(_trade, position, _trade.collateralDelta);
         // Construct Request
-        Position.RequestData memory request =
-            Position.createRequest(_trade, msg.sender, _trade.collateralDeltaUSDC, requestType);
+        Position.RequestData memory request = Position.createRequest(_trade, market, msg.sender, requestType);
         // Send Constructed Request to Storage
         tradeStorage.createOrderRequest(request);
+        // Send Fee for Execution to Vault to be sent to whoever executes the request
+        _sendExecutionFee(true);
     }
 
     // @audit - need to check X blocks have passed
@@ -147,14 +192,26 @@ contract RequestRouter is ReentrancyGuard {
     // INTERNAL FUNCTIONS //
     ////////////////////////
 
-    function _handleTokenTransfers(address _market, uint256 _amountInUSDC, bool _isLong, bool _isIncrease) private {
-        tradeVault.updateCollateralBalance(_market, _amountInUSDC, _isLong, _isIncrease);
-        USDC.safeTransferFrom(msg.sender, address(tradeVault), _amountInUSDC);
+    // @audit - need to update collateral balance wherever collateral is stored
+    function _handleTokenTransfers(Position.RequestInput calldata _trade) private {
+        if (_trade.shouldWrap) {
+            require(_trade.collateralToken == address(WETH), "RR: Invalid Collateral Token");
+            require(_trade.collateralDelta == msg.value - _trade.executionFee, "RR: Invalid Collateral Delta");
+            WETH.deposit{value: _trade.collateralDelta}();
+            WETH.safeTransfer(address(executor), _trade.collateralDelta);
+        } else {
+            IERC20(_trade.collateralToken).safeTransferFrom(msg.sender, address(executor), _trade.collateralDelta);
+        }
     }
 
-    function _sendExecutionFeeToVault() private {
-        uint256 executionFee = tradeStorage.executionFee();
-        (bool success,) = address(tradeVault).call{value: executionFee}("");
+    function _sendExecutionFee(bool _isTrade) private {
+        uint256 executionFee;
+        if (_isTrade) {
+            executionFee = tradeStorage.executionFee();
+        } else {
+            executionFee = liquidityVault.executionFee();
+        }
+        (bool success,) = address(liquidityVault).call{value: executionFee}("");
         require(success, "RR: Fee Transfer Failed");
     }
 }

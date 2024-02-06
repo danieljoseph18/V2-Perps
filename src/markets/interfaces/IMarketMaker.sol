@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Market} from "../Market.sol";
+import {Market, IMarket} from "../Market.sol";
 
 interface IMarketMaker {
     event MarketMakerInitialised(address dataOracle, address priceOracle);

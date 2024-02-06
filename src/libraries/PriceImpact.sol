@@ -41,7 +41,7 @@ library PriceImpact {
         uint256 shortTokenBalance;
         uint256 longTokenPrice;
         uint256 shortTokenPrice;
-        uint256 amount;
+        uint256 amountIn;
         uint256 maxSlippage;
         bool isIncrease;
         bool isLongToken;
@@ -73,9 +73,9 @@ library PriceImpact {
 
         // Adjust token value based on operation
         if (_params.isLongToken) {
-            longTokenValue += sizeDeltaUsd;
+            _params.isIncrease ? longTokenValue += sizeDeltaUsd : longTokenValue -= sizeDeltaUsd;
         } else {
-            shortTokenValue += sizeDeltaUsd;
+            _params.isIncrease ? shortTokenValue += sizeDeltaUsd : shortTokenValue -= sizeDeltaUsd;
         }
 
         finalSkewUsd = _calculateSkewUsd(longTokenValue, shortTokenValue);
@@ -83,7 +83,7 @@ library PriceImpact {
 
         uint256 tokenUnit = _params.isLongToken ? _params.longBaseUnit : _params.shortBaseUnit;
         impactedPrice = _calculateImpactedPrice(
-            sizeDeltaUsd, uint256(priceImpactUsd.abs()), tokenUnit, _params.amount, priceImpactUsd
+            sizeDeltaUsd, uint256(priceImpactUsd.abs()), tokenUnit, _params.amountIn, priceImpactUsd
         );
 
         // Check slippage with the new impacted price
@@ -105,7 +105,7 @@ library PriceImpact {
             shortTokenBalance: _values.shortTokenBalance,
             longTokenPrice: _longTokenPrice,
             shortTokenPrice: _shortTokenPrice,
-            amount: _data.params.marketTokenAmountIn,
+            amountIn: _data.params.marketTokenAmountIn,
             maxSlippage: _data.params.maxSlippage,
             isIncrease: _isIncrease,
             isLongToken: _isLongToken,
@@ -125,32 +125,33 @@ library PriceImpact {
         shortTokenValue = Math.mulDiv(_params.shortTokenBalance, _params.shortTokenPrice, _params.shortBaseUnit);
     }
 
-    function _calculateSkewUsd(uint256 longTokenValue, uint256 shortTokenValue) internal pure returns (uint256) {
-        return Math.max(longTokenValue, shortTokenValue) - Math.min(longTokenValue, shortTokenValue);
+    function _calculateSkewUsd(uint256 _longTokenValue, uint256 _shortTokenValue) internal pure returns (uint256) {
+        return Math.max(_longTokenValue, _shortTokenValue) - Math.min(_longTokenValue, _shortTokenValue);
     }
 
+    // @audit - is this calculation correct?
     function _calculateImpactedPrice(
-        uint256 sizeDeltaUsd,
-        uint256 absolutePriceImpactUsd,
-        uint256 tokenUnit,
-        uint256 amount,
-        int256 priceImpactUsd
+        uint256 _sizeDeltaUsd,
+        uint256 _absolutePriceImpactUsd,
+        uint256 _tokenUnit,
+        uint256 _amountIn,
+        int256 _priceImpactUsd
     ) internal pure returns (uint256) {
-        uint256 unsignedIndexTokenImpact = Math.mulDiv(absolutePriceImpactUsd, tokenUnit, sizeDeltaUsd);
+        uint256 unsignedIndexTokenImpact = Math.mulDiv(_absolutePriceImpactUsd, _tokenUnit, _sizeDeltaUsd);
         int256 indexTokenImpact =
-            priceImpactUsd < 0 ? -int256(unsignedIndexTokenImpact) : int256(unsignedIndexTokenImpact);
+            _priceImpactUsd < 0 ? -int256(unsignedIndexTokenImpact) : int256(unsignedIndexTokenImpact);
 
         uint256 indexTokensAfterImpact =
-            indexTokenImpact >= 0 ? amount + uint256(indexTokenImpact) : amount - uint256(-indexTokenImpact);
+            indexTokenImpact >= 0 ? _amountIn + uint256(indexTokenImpact) : _amountIn - uint256(-indexTokenImpact);
 
-        return Math.mulDiv(sizeDeltaUsd, tokenUnit, indexTokensAfterImpact);
+        return Math.mulDiv(_sizeDeltaUsd, _tokenUnit, indexTokensAfterImpact);
     }
 
     function _calculateSizeDeltaUsd(Params memory _params) internal pure returns (uint256 sizeDeltaUsd) {
         // Inline calculation of sizeDeltaUsd
         return _params.isLongToken
-            ? Math.mulDiv(_params.amount, _params.longTokenPrice, _params.longBaseUnit)
-            : Math.mulDiv(_params.amount, _params.shortTokenPrice, _params.shortBaseUnit);
+            ? Math.mulDiv(_params.amountIn, _params.longTokenPrice, _params.longBaseUnit)
+            : Math.mulDiv(_params.amountIn, _params.shortTokenPrice, _params.shortBaseUnit);
     }
 
     /////////////
@@ -166,20 +167,20 @@ library PriceImpact {
     ) external view returns (uint256 impactedPrice) {
         require(_signedBlockPrice != 0, "signedBlockPrice is 0");
         uint256 priceImpact = calculate(_market, _request, _signedBlockPrice, _indexBaseUnit);
-        if (_request.isLong) {
-            if (_request.isIncrease) {
+        if (_request.input.isLong) {
+            if (_request.input.isIncrease) {
                 impactedPrice = _signedBlockPrice + priceImpact;
             } else {
                 impactedPrice = _signedBlockPrice - priceImpact;
             }
         } else {
-            if (_request.isIncrease) {
+            if (_request.input.isIncrease) {
                 impactedPrice = _signedBlockPrice - priceImpact;
             } else {
                 impactedPrice = _signedBlockPrice + priceImpact;
             }
         }
-        checkSlippage(impactedPrice, _signedBlockPrice, _request.maxSlippage);
+        checkSlippage(impactedPrice, _signedBlockPrice, _request.input.maxSlippage);
     }
 
     // Returns Price impact in USD
@@ -193,13 +194,13 @@ library PriceImpact {
 
         uint256 longOI = MarketUtils.getLongOpenInterestUSD(_market, _signedBlockPrice, _indexBaseUnit);
         uint256 shortOI = MarketUtils.getShortOpenInterestUSD(_market, _signedBlockPrice, _indexBaseUnit);
-        uint256 sizeDeltaUSD = Math.mulDiv(_request.sizeDelta, _signedBlockPrice, _indexBaseUnit);
+        uint256 sizeDeltaUSD = Math.mulDiv(_request.input.sizeDelta, _signedBlockPrice, _indexBaseUnit);
 
         uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
-        if (_request.isIncrease) {
-            _request.isLong ? longOI += sizeDeltaUSD : shortOI += sizeDeltaUSD;
+        if (_request.input.isIncrease) {
+            _request.input.isLong ? longOI += sizeDeltaUSD : shortOI += sizeDeltaUSD;
         } else {
-            _request.isLong ? longOI -= sizeDeltaUSD : shortOI -= sizeDeltaUSD;
+            _request.input.isLong ? longOI -= sizeDeltaUSD : shortOI -= sizeDeltaUSD;
         }
         uint256 skewAfter = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
 
