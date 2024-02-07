@@ -41,8 +41,9 @@ library Pricing {
         pure
         returns (int256)
     {
-        uint256 entryValue = (_position.positionSize * _position.pnlParams.weightedAvgEntryPrice) / _indexBaseUnit;
-        uint256 currentValue = (_position.positionSize * _indexPriceUsd) / _indexBaseUnit;
+        uint256 entryValue =
+            Math.mulDiv(_position.positionSize, _position.pnlParams.weightedAvgEntryPrice, _indexBaseUnit);
+        uint256 currentValue = Math.mulDiv(_position.positionSize, _indexPriceUsd, _indexBaseUnit);
         return _position.isLong ? int256(currentValue) - int256(entryValue) : int256(entryValue) - int256(currentValue);
     }
 

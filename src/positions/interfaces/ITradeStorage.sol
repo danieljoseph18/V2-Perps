@@ -4,9 +4,9 @@ pragma solidity 0.8.23;
 import {Position} from "../../positions/Position.sol";
 
 interface ITradeStorage {
-    event OrderRequestCreated(bytes32 indexed _orderKey, Position.RequestData indexed _request);
+    event OrderRequestCreated(bytes32 indexed _orderKey, Position.Request indexed _request);
     event OrderRequestCancelled(bytes32 indexed _orderKey);
-    event TradeExecuted(Position.RequestExecution indexed _executionParams);
+    event TradeExecuted(Position.Execution indexed _executionParams);
     event DecreaseTokenTransfer(address indexed _user, uint256 indexed _principle, int256 indexed _pnl);
     event LiquidatePosition(
         bytes32 indexed _positionKey, address indexed _liquidator, uint256 indexed _amountLiquidated, bool _isLong
@@ -33,16 +33,20 @@ interface ITradeStorage {
     event FundingParamsUpdated(bytes32 indexed _positionKey, Position.FundingParams indexed _fundingParams);
     event BorrowingFeesProcessed(address indexed _user, uint256 indexed _borrowingFee);
     event BorrowingParamsUpdated(bytes32 indexed _positionKey, Position.BorrowingParams indexed _borrowingParams);
+    event TakeProfitSet(
+        bytes32 indexed _positionKey, uint256 indexed _takeProfitPrice, uint256 indexed _takeProfitSize
+    );
+    event StopLossSet(bytes32 indexed _positionKey, uint256 indexed _stopLossPrice, uint256 indexed _stopLossSize);
 
     function initialise(uint256 _liquidationFee, uint256 _tradingFee, uint256 _executionFee, uint256 _minCollateralUsd)
         external;
-    function createOrderRequest(Position.RequestData calldata _request) external;
+    function createOrderRequest(Position.Request calldata _request) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
-    function executeCollateralIncrease(Position.RequestExecution calldata _params) external;
-    function executeCollateralDecrease(Position.RequestExecution calldata _params) external;
-    function createNewPosition(Position.RequestExecution calldata _params) external;
-    function increaseExistingPosition(Position.RequestExecution calldata _params) external;
-    function decreaseExistingPosition(Position.RequestExecution calldata _params) external;
+    function executeCollateralIncrease(Position.Execution calldata _params) external;
+    function executeCollateralDecrease(Position.Execution calldata _params) external;
+    function createNewPosition(Position.Execution calldata _params) external;
+    function increaseExistingPosition(Position.Execution calldata _params) external;
+    function decreaseExistingPosition(Position.Execution calldata _params) external;
     function liquidatePosition(
         bytes32 _positionKey,
         address _liquidator,
@@ -62,6 +66,6 @@ interface ITradeStorage {
     function minCollateralUsd() external view returns (uint256);
     function tradingFee() external view returns (uint256);
     function executionFee() external view returns (uint256);
-    function getOrder(bytes32 _key) external view returns (Position.RequestData memory _order);
+    function getOrder(bytes32 _key) external view returns (Position.Request memory _order);
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory);
 }

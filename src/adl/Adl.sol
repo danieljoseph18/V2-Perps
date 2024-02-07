@@ -75,8 +75,7 @@ contract Adl is RoleValidation {
         // Get starting PNL Factor
         int256 startingPnlFactor = MarketUtils.getPnlFactor(_market, indexPrice, baseUnit, _isLong);
         // Construct an ADL Order
-        Position.RequestExecution memory request =
-            Position.createAdlOrder(position, _sizeDelta, indexPrice, collateralPrice);
+        Position.Execution memory request = Position.createAdlOrder(position, _sizeDelta, indexPrice, collateralPrice);
         // Execute the order
         tradeStorage.decreaseExistingPosition(request);
         // Get the new PNL to pool ratio

@@ -34,7 +34,7 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
-contract RequestRouter is ReentrancyGuard, RoleValidation {
+contract Router is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
 
@@ -69,9 +69,9 @@ contract RequestRouter is ReentrancyGuard, RoleValidation {
 
     modifier validExecutionFee(bool _isTrade) {
         if (_isTrade) {
-            require(msg.value == tradeStorage.executionFee(), "RR: Execution Fee");
+            require(msg.value == tradeStorage.executionFee(), "Router: Execution Fee");
         } else {
-            require(msg.value >= liquidityVault.executionFee(), "RR: Execution Fee");
+            require(msg.value >= liquidityVault.executionFee(), "Router: Execution Fee");
         }
         _;
     }
@@ -84,7 +84,7 @@ contract RequestRouter is ReentrancyGuard, RoleValidation {
         external
         onlyAdmin
     {
-        require(msg.sender == executor, "RR: Invalid Executor");
+        require(msg.sender == executor, "Router: Invalid Executor");
         tradeStorage = ITradeStorage(_tradeStorage);
         liquidityVault = ILiquidityVault(_liquidityVault);
         marketMaker = IMarketMaker(_marketMaker);
@@ -96,15 +96,15 @@ contract RequestRouter is ReentrancyGuard, RoleValidation {
     /////////////////////////
 
     function createDeposit(Deposit.Params memory _params) external payable nonReentrant validExecutionFee(false) {
-        require(msg.sender == _params.owner, "RR: Invalid Owner");
-        require(_params.maxSlippage >= MIN_SLIPPAGE && _params.maxSlippage <= MAX_SLIPPAGE, "RR: Slippage");
+        require(msg.sender == _params.owner, "Router: Invalid Owner");
+        require(_params.maxSlippage >= MIN_SLIPPAGE && _params.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
         if (_params.shouldWrap) {
-            require(_params.amountIn == msg.value - _params.executionFee, "RR: Invalid Amount In");
-            require(_params.tokenIn == address(WETH), "RR: Invalid Token In");
+            require(_params.amountIn == msg.value - _params.executionFee, "Router: Invalid Amount In");
+            require(_params.tokenIn == address(WETH), "Router: Invalid Token In");
             WETH.deposit{value: _params.amountIn}();
             WETH.safeTransfer(address(executor), _params.amountIn);
         } else {
-            require(_params.tokenIn == address(USDC) || _params.tokenIn == address(WETH), "RR: Invalid Token In");
+            require(_params.tokenIn == address(USDC) || _params.tokenIn == address(WETH), "Router: Invalid Token In");
             IERC20(_params.tokenIn).safeTransferFrom(_params.owner, address(executor), _params.amountIn);
         }
         liquidityVault.createDeposit(_params);
@@ -122,12 +122,12 @@ contract RequestRouter is ReentrancyGuard, RoleValidation {
         validExecutionFee(false)
         nonReentrant
     {
-        require(msg.sender == _params.owner, "RR: Invalid Owner");
-        require(_params.maxSlippage >= MIN_SLIPPAGE && _params.maxSlippage <= MAX_SLIPPAGE, "RR: Slippage");
+        require(msg.sender == _params.owner, "Router: Invalid Owner");
+        require(_params.maxSlippage >= MIN_SLIPPAGE && _params.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
         if (_params.shouldUnwrap) {
-            require(_params.tokenOut == address(WETH), "RR: Invalid Token Out");
+            require(_params.tokenOut == address(WETH), "Router: Invalid Token Out");
         } else {
-            require(_params.tokenOut == address(USDC) || _params.tokenOut == address(WETH), "RR: Invalid Token Out");
+            require(_params.tokenOut == address(USDC) || _params.tokenOut == address(WETH), "Router: Invalid Token Out");
         }
         IERC20(address(liquidityVault)).safeTransferFrom(_params.owner, address(executor), _params.marketTokenAmountIn);
         liquidityVault.createWithdrawal(_params);
@@ -147,20 +147,16 @@ contract RequestRouter is ReentrancyGuard, RoleValidation {
     // @audit - Update function so:
     // If Long -> User collateral is ETH
     // If Short -> User collateral is USDC
-    function createTradeRequest(Position.RequestInput calldata _trade)
-        external
-        payable
-        nonReentrant
-        validExecutionFee(true)
-    {
-        require(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE, "RR: Slippage");
-        require(_trade.collateralDelta != 0, "RR: Collateral Delta");
+    function createTradeRequest(Position.Input calldata _trade) external payable nonReentrant validExecutionFee(true) {
+        require(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
+        require(_trade.collateralDelta != 0, "Router: Collateral Delta");
         require(
-            _trade.collateralToken == address(USDC) || _trade.collateralToken == address(WETH), "RR: Collateral Token"
+            _trade.collateralToken == address(USDC) || _trade.collateralToken == address(WETH),
+            "Router: Collateral Token"
         );
         // Check if Market exists
         address market = marketMaker.tokenToMarkets(_trade.indexToken);
-        require(market != address(0), "RR: Market Doesn't Exist");
+        require(market != address(0), "Router: Market Doesn't Exist");
         // Create a Pointer to the Position
         bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
@@ -169,7 +165,7 @@ contract RequestRouter is ReentrancyGuard, RoleValidation {
         // Calculate Request Type
         Position.RequestType requestType = Position.getRequestType(_trade, position, _trade.collateralDelta);
         // Construct Request
-        Position.RequestData memory request = Position.createRequest(_trade, market, msg.sender, requestType);
+        Position.Request memory request = Position.createRequest(_trade, market, msg.sender, requestType);
         // Send Constructed Request to Storage
         tradeStorage.createOrderRequest(request);
         // Send Fee for Execution to Vault to be sent to whoever executes the request
@@ -179,13 +175,60 @@ contract RequestRouter is ReentrancyGuard, RoleValidation {
     // @audit - need to check X blocks have passed
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
         // Fetch the Request
-        Position.RequestData memory request = tradeStorage.getOrder(_key);
+        Position.Request memory request = tradeStorage.getOrder(_key);
         // Check it exists
-        require(request.user != address(0), "RR: Request Doesn't Exist");
+        require(request.user != address(0), "Router: Request Doesn't Exist");
         // Check the caller is the position owner
-        require(msg.sender == request.user, "RR: Not Position Owner");
+        require(msg.sender == request.user, "Router: Not Position Owner");
         // Cancel the Request
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
+    }
+
+    // Stop Loss or Take Profit
+    function createEditOrder(
+        bytes32 _positionKey,
+        uint256 _executionPrice,
+        uint256 _percentage,
+        uint256 _maxSlippage,
+        bool _isStopLoss
+    ) external payable nonReentrant validExecutionFee(true) {
+        Position.Data memory position = tradeStorage.getPosition(_positionKey);
+        require(position.user == msg.sender, "Router: Invalid Position Owner");
+        require(_percentage > 0 && _percentage < PRECISION, "Router: Invalid Percentage");
+        // create a decrease position request limit order for the specified percentage
+        Position.Request memory request =
+            Position.createEditOrder(position, _executionPrice, _percentage, _maxSlippage, msg.value, _isStopLoss);
+        // Send Constructed Request to Storage
+        tradeStorage.createOrderRequest(request);
+        // Send Fee for Execution to Vault to be sent to whoever executes the request
+        _sendExecutionFee(true);
+    }
+
+    // Function for simultaneously creating a SL and a TP order
+    function createMultiEditOrder(
+        bytes32 _positionKey,
+        uint256 _stopLossPrice,
+        uint256 _takeProfitPrice,
+        uint256 _stopLossPercentage,
+        uint256 _takeProfitPercentage,
+        uint256 _maxSlippage
+    ) external payable nonReentrant {
+        require(msg.value == 2 * tradeStorage.executionFee(), "Router: Execution Fee");
+        Position.Data memory position = tradeStorage.getPosition(_positionKey);
+        require(position.user == msg.sender, "Router: Invalid Position Owner");
+        require(_stopLossPercentage > 0 && _stopLossPercentage < PRECISION, "Router: Invalid SL Percentage");
+        require(_takeProfitPercentage > 0 && _takeProfitPercentage < PRECISION, "Router: Invalid TP Percentage");
+        // create a decrease position request limit order for the specified percentage
+        Position.Request memory stopLoss =
+            Position.createEditOrder(position, _stopLossPrice, _stopLossPercentage, _maxSlippage, msg.value, true);
+        Position.Request memory takeProfit =
+            Position.createEditOrder(position, _takeProfitPrice, _takeProfitPercentage, _maxSlippage, msg.value, false);
+
+        // Send Constructed Request to Storage
+        tradeStorage.createOrderRequest(stopLoss);
+        tradeStorage.createOrderRequest(takeProfit);
+        // Send Fee for Execution to Vault to be sent to whoever executes the request
+        _sendExecutionFee(true);
     }
 
     ////////////////////////
@@ -193,10 +236,11 @@ contract RequestRouter is ReentrancyGuard, RoleValidation {
     ////////////////////////
 
     // @audit - need to update collateral balance wherever collateral is stored
-    function _handleTokenTransfers(Position.RequestInput calldata _trade) private {
+    // @audit - decrease requests won't have any transfer in
+    function _handleTokenTransfers(Position.Input calldata _trade) private {
         if (_trade.shouldWrap) {
-            require(_trade.collateralToken == address(WETH), "RR: Invalid Collateral Token");
-            require(_trade.collateralDelta == msg.value - _trade.executionFee, "RR: Invalid Collateral Delta");
+            require(_trade.collateralToken == address(WETH), "Router: Invalid Collateral Token");
+            require(_trade.collateralDelta == msg.value - _trade.executionFee, "Router: Invalid Collateral Delta");
             WETH.deposit{value: _trade.collateralDelta}();
             WETH.safeTransfer(address(executor), _trade.collateralDelta);
         } else {
@@ -212,6 +256,6 @@ contract RequestRouter is ReentrancyGuard, RoleValidation {
             executionFee = liquidityVault.executionFee();
         }
         (bool success,) = address(liquidityVault).call{value: executionFee}("");
-        require(success, "RR: Fee Transfer Failed");
+        require(success, "Router: Fee Transfer Failed");
     }
 }

@@ -161,7 +161,7 @@ library PriceImpact {
     // @audit - review - price impact should be able to be positive too
     function execute(
         IMarket _market,
-        Position.RequestData memory _request,
+        Position.Request memory _request,
         uint256 _signedBlockPrice,
         uint256 _indexBaseUnit
     ) external view returns (uint256 impactedPrice) {
@@ -186,7 +186,7 @@ library PriceImpact {
     // Returns Price impact in USD
     function calculate(
         IMarket _market,
-        Position.RequestData memory _request,
+        Position.Request memory _request,
         uint256 _signedBlockPrice,
         uint256 _indexBaseUnit
     ) public view returns (uint256 priceImpact) {

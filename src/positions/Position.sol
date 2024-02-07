@@ -33,11 +33,16 @@ library Position {
     using SignedMath for int256;
 
     uint256 public constant MIN_LEVERAGE = 100; // 1x
-    uint256 public constant MAX_LEVERAGE = 5000; // 50x
+    uint256 public constant MAX_LEVERAGE = 1000_00; // 1000x
     uint256 public constant LEVERAGE_PRECISION = 100;
     uint256 public constant PRECISION = 1e18;
-    // Open Position
+    uint256 public constant PRICE_MARGIN = 0.005e18; // 0.5%
 
+    ///////////////////////////
+    // OPEN POSITION STRUCTS //
+    ///////////////////////////
+
+    // Data for an Open Position
     struct Data {
         IMarket market;
         address indexToken;
@@ -52,7 +57,7 @@ library Position {
         PnLParams pnlParams;
     }
 
-    // Borrow Component of a Position
+    // Borrow Component of an Open Position
     struct BorrowingParams {
         uint256 feesOwed;
         uint256 lastBorrowUpdate;
@@ -76,13 +81,17 @@ library Position {
         uint256 sigmaIndexSizeUSD; // Sum of all increases and decreases in index size USD
     }
 
+    /////////////////////
+    // REQUEST STRUCTS //
+    /////////////////////
+
     // Trade Request -> Sent by user
-    struct RequestInput {
+    struct Input {
         address indexToken;
         address collateralToken;
         uint256 collateralDelta;
         uint256 sizeDelta;
-        uint256 orderPrice;
+        uint256 limitPrice;
         uint256 maxSlippage;
         uint256 executionFee;
         bool isLong;
@@ -92,8 +101,8 @@ library Position {
     }
 
     // Request -> Constructed by Router
-    struct RequestData {
-        RequestInput input;
+    struct Request {
+        Input input;
         address market;
         address user;
         uint256 requestBlock;
@@ -101,8 +110,8 @@ library Position {
     }
 
     // Executed Request
-    struct RequestExecution {
-        RequestData requestData;
+    struct Execution {
+        Request request;
         uint256 indexPrice;
         uint256 collateralPrice;
         address feeReceiver;
@@ -115,10 +124,12 @@ library Position {
         COLLATERAL_DECREASE,
         POSITION_INCREASE,
         POSITION_DECREASE,
-        CREATE_POSITION
+        CREATE_POSITION,
+        STOP_LOSS,
+        TAKE_PROFIT
     }
 
-    function getRequestType(RequestInput calldata _trade, Data memory _position, uint256 _collateralDelta)
+    function getRequestType(Input calldata _trade, Data memory _position, uint256 _collateralDelta)
         external
         pure
         returns (RequestType requestType)
@@ -149,15 +160,21 @@ library Position {
         }
     }
 
-    function generateKey(RequestData memory _request) external pure returns (bytes32 positionKey) {
+    function generateKey(Request memory _request) external pure returns (bytes32 positionKey) {
         positionKey = keccak256(abi.encode(_request.input.indexToken, _request.user, _request.input.isLong));
     }
 
-    function checkLimitPrice(uint256 _price, RequestData memory _request) external pure {
-        if (_request.input.isLong) {
-            require(_price <= _request.input.orderPrice, "TH: Limit Price");
+    // Include the request type to differentiate between types like SL/TP
+    function generateOrderKey(Request memory _request) external pure returns (bytes32 orderKey) {
+        orderKey =
+            keccak256(abi.encode(_request.input.indexToken, _request.user, _request.input.isLong, _request.requestType));
+    }
+
+    function checkLimitPrice(uint256 _price, Input memory _request) external pure {
+        if (_request.isLong) {
+            require(_price <= _request.limitPrice, "TH: Limit Price");
         } else {
-            require(_price >= _request.input.orderPrice, "TH: Limit Price");
+            require(_price >= _request.limitPrice, "TH: Limit Price");
         }
     }
 
@@ -173,12 +190,12 @@ library Position {
         require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, "TH: Leverage");
     }
 
-    function createRequest(RequestInput calldata _trade, address _market, address _user, RequestType _requestType)
+    function createRequest(Input calldata _trade, address _market, address _user, RequestType _requestType)
         external
         view
-        returns (RequestData memory request)
+        returns (Request memory request)
     {
-        request = RequestData({
+        request = Request({
             input: _trade,
             market: _market,
             user: _user,
@@ -187,7 +204,47 @@ library Position {
         });
     }
 
-    function generateNewPosition(IMarket _market, IDataOracle _dataOracle, RequestData memory _request, uint256 _price)
+    function createEditOrder(
+        Data memory _position,
+        uint256 _executionPrice,
+        uint256 _percentage,
+        uint256 _maxSlippage,
+        uint256 _executionFee,
+        bool _isStopLoss
+    ) external view returns (Request memory request) {
+        RequestType requestType;
+        // Require SL/TP Orders to be a certain % away
+        // WAEP is used as the reference price
+        uint256 priceMargin = Math.mulDiv(_position.pnlParams.weightedAvgEntryPrice, PRICE_MARGIN, PRECISION);
+        if (_isStopLoss) {
+            require(_executionPrice <= _position.pnlParams.weightedAvgEntryPrice - priceMargin, "Position: SL Price");
+            requestType = RequestType.STOP_LOSS;
+        } else {
+            require(_executionPrice >= _position.pnlParams.weightedAvgEntryPrice + priceMargin, "Position: TP Price");
+            requestType = RequestType.TAKE_PROFIT;
+        }
+        request = Request({
+            input: Input({
+                indexToken: _position.indexToken,
+                collateralToken: _position.collateralToken,
+                collateralDelta: Math.mulDiv(_position.collateralAmount, _percentage, PRECISION),
+                sizeDelta: Math.mulDiv(_position.positionSize, _percentage, PRECISION),
+                limitPrice: _executionPrice,
+                maxSlippage: _maxSlippage,
+                executionFee: _executionFee,
+                isLong: _position.isLong,
+                isLimit: true,
+                isIncrease: false,
+                shouldWrap: false
+            }),
+            market: address(_position.market),
+            user: _position.user,
+            requestBlock: block.number,
+            requestType: requestType
+        });
+    }
+
+    function generateNewPosition(IMarket _market, IDataOracle _dataOracle, Request memory _request, uint256 _price)
         external
         view
         returns (Data memory position)
@@ -270,18 +327,18 @@ library Position {
     function createAdlOrder(Data memory _position, uint256 _sizeDelta, uint256 _indexPrice, uint256 _collateralPrice)
         external
         view
-        returns (RequestExecution memory request)
+        returns (Execution memory request)
     {
         // calculate collateral delta from size delta
         uint256 collateralDelta = Math.mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
-        request = RequestExecution({
-            requestData: RequestData({
-                input: RequestInput({
+        request = Execution({
+            request: Request({
+                input: Input({
                     indexToken: _position.indexToken,
                     collateralToken: _position.collateralToken,
                     collateralDelta: collateralDelta,
                     sizeDelta: _sizeDelta,
-                    orderPrice: 0,
+                    limitPrice: 0,
                     maxSlippage: 0,
                     executionFee: 0,
                     isLong: _position.isLong,

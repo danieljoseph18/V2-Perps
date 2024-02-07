@@ -112,13 +112,13 @@ contract Executor is RoleValidation, ReentrancyGuard {
         onlyKeeperOrSelf
     {
         // Fetch and validate request from key
-        Position.RequestData memory request = tradeStorage.getOrder(_orderKey);
+        Position.Request memory request = tradeStorage.getOrder(_orderKey);
         require(request.user != address(0), "E: Request Key");
         require(_feeReceiver != address(0), "E: Fee Receiver");
         // Fetch and validate price
         uint256 signedBlockPrice = priceOracle.getSignedPrice(request.input.indexToken, request.requestBlock);
         require(signedBlockPrice != 0, "E: Invalid Price");
-        if (_isLimitOrder) Position.checkLimitPrice(signedBlockPrice, request);
+        if (_isLimitOrder) Position.checkLimitPrice(signedBlockPrice, request.input);
 
         // Execute Price Impact
         IMarket market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
@@ -139,23 +139,31 @@ contract Executor is RoleValidation, ReentrancyGuard {
         // Execute Trade
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
             tradeStorage.createNewPosition(
-                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
             );
         } else if (request.requestType == Position.RequestType.POSITION_DECREASE) {
             tradeStorage.decreaseExistingPosition(
-                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
             );
         } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
             tradeStorage.increaseExistingPosition(
-                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
             );
         } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
             tradeStorage.executeCollateralDecrease(
-                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
             );
         } else if (request.requestType == Position.RequestType.COLLATERAL_INCREASE) {
             tradeStorage.executeCollateralIncrease(
-                Position.RequestExecution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+            );
+        } else if (request.requestType == Position.RequestType.TAKE_PROFIT) {
+            tradeStorage.decreaseExistingPosition(
+                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+            );
+        } else if (request.requestType == Position.RequestType.STOP_LOSS) {
+            tradeStorage.decreaseExistingPosition(
+                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
             );
         } else {
             revert Executor_InvalidRequestType();
@@ -177,11 +185,11 @@ contract Executor is RoleValidation, ReentrancyGuard {
     // INTERNAL HELPER FUNCTIONS //
     ///////////////////////////////
 
-    function _calculateSizeDeltaUsd(
-        Position.RequestData memory _request,
-        uint256 _signedIndexPrice,
-        uint256 _indexBaseUnit
-    ) internal pure returns (int256 sizeDeltaUsd) {
+    function _calculateSizeDeltaUsd(Position.Request memory _request, uint256 _signedIndexPrice, uint256 _indexBaseUnit)
+        internal
+        pure
+        returns (int256 sizeDeltaUsd)
+    {
         // Flip sign if decreasing position
         if (_request.input.isIncrease) {
             sizeDeltaUsd =
@@ -194,7 +202,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
     function _updateMarketState(
         IMarket _market,
-        Position.RequestData memory _request,
+        Position.Request memory _request,
         uint256 _impactedIndexPrice,
         uint256 _signedIndexPrice,
         uint256 _longTokenPrice,

@@ -50,7 +50,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     uint256 constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
     uint256 constant MAX_TRADING_FEE = 0.01e18; // 1%
 
-    mapping(bytes32 _key => Position.RequestData _order) private orders;
+    mapping(bytes32 _key => Position.Request _order) private orders;
     EnumerableSet.Bytes32Set private marketOrderKeys;
     EnumerableSet.Bytes32Set private limitOrderKeys;
 
@@ -82,7 +82,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         uint256 _liquidationFee, // 5e18 = 5 USD
         uint256 _tradingFee, // 0.001e18 = 0.1%
         uint256 _executionFee, // 0.001 ether
-        uint256 _minCollateralUsd
+        uint256 _minCollateralUsd // 2e18 = 2 USD
     ) external onlyAdmin {
         require(!isInitialised, "TS: Already Initialised");
         liquidationFeeUsd = _liquidationFee;
@@ -94,10 +94,11 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     }
 
     /// @dev Adds Order to EnumerableSet
-    // STACK TOO DEEP
-    function createOrderRequest(Position.RequestData calldata _request) external onlyRouter {
+    // @audit - Need to distinguish between order key and position key
+    // order key needs to include request type to enable simultaneous stop loss and take profit
+    function createOrderRequest(Position.Request calldata _request) external onlyRouter {
         // Generate the Key
-        bytes32 orderKey = Position.generateKey(_request);
+        bytes32 orderKey = Position.generateOrderKey(_request);
         // Create a Storage Pointer to the Order Set
         EnumerableSet.Bytes32Set storage orderSet = _request.input.isLimit ? limitOrderKeys : marketOrderKeys;
         // Check if the Order already exists
@@ -123,17 +124,17 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit OrderRequestCancelled(_orderKey);
     }
 
-    function executeCollateralIncrease(Position.RequestExecution calldata _params) external onlyExecutor {
+    function executeCollateralIncrease(Position.Execution calldata _params) external onlyExecutor {
         /* Update Initial Storage */
 
         // Check the Position exists
-        bytes32 positionKey = Position.generateKey(_params.requestData);
+        bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory position = openPositions[positionKey];
 
         require(Position.exists(position), "TS: Position Doesn't Exist");
 
         // Delete the Orders from Storage
-        _deleteOrder(positionKey, _params.requestData.input.isLimit);
+        _deleteOrder(positionKey, _params.request.input.isLimit);
 
         /* Perform Execution in Library */
         position = Trade.executeCollateralIncrease(dataOracle, position, _params);
@@ -141,22 +142,20 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         /* Update Final Storage */
         openPositions[positionKey] = position;
         liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
-        emit CollateralEdited(
-            positionKey, _params.requestData.input.collateralDelta, _params.requestData.input.isIncrease
-        );
+        emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    function executeCollateralDecrease(Position.RequestExecution calldata _params) external onlyExecutor {
+    function executeCollateralDecrease(Position.Execution calldata _params) external onlyExecutor {
         /* Update Initial Storage */
 
         // Check the Position exists
-        bytes32 positionKey = Position.generateKey(_params.requestData);
+        bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory position = openPositions[positionKey];
 
         require(Position.exists(position), "TS: Position Doesn't Exist");
 
         // Delete the Orders from Storage
-        _deleteOrder(positionKey, _params.requestData.input.isLimit);
+        _deleteOrder(positionKey, _params.request.input.isLimit);
 
         /* Perform Execution in Library */
 
@@ -167,23 +166,21 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
         liquidityVault.transferOutTokens(
             address(position.market),
-            _params.requestData.user,
-            _params.requestData.input.collateralDelta,
-            _params.requestData.input.isLong
+            _params.request.user,
+            _params.request.input.collateralDelta,
+            _params.request.input.isLong
         );
-        emit CollateralEdited(
-            positionKey, _params.requestData.input.collateralDelta, _params.requestData.input.isIncrease
-        );
+        emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    function createNewPosition(Position.RequestExecution calldata _params) external onlyExecutor {
+    function createNewPosition(Position.Execution calldata _params) external onlyExecutor {
         /* Update Initial Storage */
 
-        bytes32 positionKey = Position.generateKey(_params.requestData);
+        bytes32 positionKey = Position.generateKey(_params.request);
         // Make sure the Position doesn't exist
         require(!Position.exists(openPositions[positionKey]), "TS: Position Exists");
         // Delete the Orders from Storage
-        _deleteOrder(positionKey, _params.requestData.input.isLimit);
+        _deleteOrder(positionKey, _params.request.input.isLimit);
 
         /* Perform Execution in the Library */
         (Position.Data memory position, uint256 sizeUsd, uint256 collateralPrice) =
@@ -194,12 +191,12 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Reserve Liquidity Equal to the Position Size
         _updateLiquidityReservation(
             positionKey,
-            _params.requestData.user,
-            _params.requestData.input.sizeDelta,
+            _params.request.user,
+            _params.request.input.sizeDelta,
             sizeUsd,
             collateralPrice,
             true,
-            _params.requestData.input.isLong
+            _params.request.input.isLong
         );
         openPositions[positionKey] = position;
         openPositionKeys[address(position.market)][position.isLong].add(positionKey);
@@ -208,15 +205,15 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit PositionCreated(positionKey, position);
     }
 
-    function increaseExistingPosition(Position.RequestExecution calldata _params) external onlyExecutor {
+    function increaseExistingPosition(Position.Execution calldata _params) external onlyExecutor {
         /* Update Initial Storage */
 
-        bytes32 positionKey = Position.generateKey(_params.requestData);
+        bytes32 positionKey = Position.generateKey(_params.request);
         // Check the Position exists
         Position.Data memory position = openPositions[positionKey];
         require(Position.exists(position), "TS: Position Doesn't Exist");
         // Delete the Orders from Storage
-        _deleteOrder(positionKey, _params.requestData.input.isLimit);
+        _deleteOrder(positionKey, _params.request.input.isLimit);
 
         /* Perform Execution in the Library */
         uint256 sizeDelta;
@@ -227,25 +224,25 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         openPositions[positionKey] = position;
         _updateLiquidityReservation(
             positionKey,
-            _params.requestData.user,
+            _params.request.user,
             sizeDelta,
             sizeDeltaUsd,
             _params.collateralPrice,
             true,
-            _params.requestData.input.isLong
+            _params.request.input.isLong
         );
         liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
     }
 
-    function decreaseExistingPosition(Position.RequestExecution calldata _params) external onlyExecutorOrAdl {
+    function decreaseExistingPosition(Position.Execution calldata _params) external onlyExecutorOrAdl {
         /* Update Initial Storage */
 
-        bytes32 positionKey = Position.generateKey(_params.requestData);
+        bytes32 positionKey = Position.generateKey(_params.request);
         // Check the Position exists
         Position.Data memory position = openPositions[positionKey];
         require(Position.exists(position), "TS: Position Doesn't Exist");
         // Delete the Orders from Storage
-        _deleteOrder(positionKey, _params.requestData.input.isLimit);
+        _deleteOrder(positionKey, _params.request.input.isLimit);
 
         /* Perform Execution in the Library */
         Trade.DecreaseCache memory decreaseCache;
@@ -255,12 +252,12 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         openPositions[positionKey] = position;
         _updateLiquidityReservation(
             positionKey,
-            _params.requestData.user,
-            _params.requestData.input.sizeDelta,
+            _params.request.user,
+            _params.request.input.sizeDelta,
             Position.getTradeValueUsd(
-                _params.requestData.input.sizeDelta,
+                _params.request.input.sizeDelta,
                 _params.indexPrice,
-                dataOracle.getBaseUnits(_params.requestData.input.indexToken)
+                dataOracle.getBaseUnits(_params.request.input.indexToken)
             ),
             _params.collateralPrice,
             false,
@@ -281,28 +278,26 @@ contract TradeStorage is ITradeStorage, RoleValidation {
             uint256 userAmount = decreaseCache.afterFeeAmount - lossAmount;
             liquidityVault.accumulateFees(lossAmount, position.isLong);
             liquidityVault.transferOutTokens(
-                address(position.market), _params.requestData.user, userAmount, _params.requestData.input.isLong
+                address(position.market), _params.request.user, userAmount, _params.request.input.isLong
             );
         } else {
             // Profit scenario
             liquidityVault.transferOutTokens(
                 address(position.market),
-                _params.requestData.user,
+                _params.request.user,
                 decreaseCache.afterFeeAmount,
-                _params.requestData.input.isLong
+                _params.request.input.isLong
             );
             if (decreaseCache.decreasePnl > 0) {
                 liquidityVault.transferPositionProfit(
-                    _params.requestData.user, uint256(decreaseCache.decreasePnl), _params.requestData.input.isLong
+                    _params.request.user, uint256(decreaseCache.decreasePnl), _params.request.input.isLong
                 );
             }
         }
         liquidityVault.swapFundingAmount(address(position.market), decreaseCache.fundingFee, position.isLong);
         liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
 
-        emit DecreasePosition(
-            positionKey, _params.requestData.input.collateralDelta, _params.requestData.input.sizeDelta
-        );
+        emit DecreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
     function liquidatePosition(
@@ -395,7 +390,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         return openPositions[_positionKey];
     }
 
-    function getOrder(bytes32 _orderKey) external view returns (Position.RequestData memory) {
+    function getOrder(bytes32 _orderKey) external view returns (Position.Request memory) {
         return orders[_orderKey];
     }
 
