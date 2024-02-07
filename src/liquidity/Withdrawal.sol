@@ -80,7 +80,7 @@ library Withdrawal {
         amountOut = _applyImpactToTokens(tokenAmount, impactedPrice, _isLongToken ? longTokenPrice : shortTokenPrice);
 
         // Calculate fee and remaining amount in separate functions to reduce stack depth
-        fee = Fee.calculateForMarketAction(_liquidityVault, _data.params.marketTokenAmountIn);
+        fee = Fee.calculateForMarket(_liquidityVault, _data.params.marketTokenAmountIn);
         // calculate amount remaining after fee and price impact
         remaining = amountOut - fee;
     }

@@ -30,6 +30,10 @@ import {Position} from "../positions/Position.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
+import {Fee} from "../libraries/Fee.sol";
+import {Referral} from "../referrals/Referral.sol";
+import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
+import {Trade} from "../positions/Trade.sol";
 
 /// @dev Needs Executor Role
 // All keeper interactions should come through this contract
@@ -41,6 +45,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
     IPriceOracle public priceOracle;
     IDataOracle public dataOracle;
     IMarketMaker public marketMaker;
+    IReferralStorage public referralStorage;
 
     error Executor_InvalidRequestType();
 
@@ -50,6 +55,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
         address _priceOracle,
         address _liquidityVault,
         address _dataOracle,
+        address _referralStorage,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         marketMaker = IMarketMaker(_marketMaker);
@@ -57,6 +63,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
         priceOracle = IPriceOracle(_priceOracle);
         liquidityVault = ILiquidityVault(_liquidityVault);
         dataOracle = IDataOracle(_dataOracle);
+        referralStorage = IReferralStorage(_referralStorage);
     }
 
     /////////////////////////
@@ -111,59 +118,73 @@ contract Executor is RoleValidation, ReentrancyGuard {
         nonReentrant
         onlyKeeperOrSelf
     {
+        Trade.ExecuteCache memory cache;
         // Fetch and validate request from key
         Position.Request memory request = tradeStorage.getOrder(_orderKey);
         require(request.user != address(0), "E: Request Key");
         require(_feeReceiver != address(0), "E: Fee Receiver");
         // Fetch and validate price
-        uint256 signedBlockPrice = priceOracle.getSignedPrice(request.input.indexToken, request.requestBlock);
-        require(signedBlockPrice != 0, "E: Invalid Price");
-        if (_isLimitOrder) Position.checkLimitPrice(signedBlockPrice, request.input);
+        cache.indexPrice = priceOracle.getSignedPrice(request.input.indexToken, request.requestBlock);
+        require(cache.indexPrice != 0, "E: Invalid Price");
+        if (_isLimitOrder) Position.checkLimitPrice(cache.indexPrice, request.input);
 
         // Execute Price Impact
-        IMarket market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
-        uint256 indexBaseUnit = dataOracle.getBaseUnits(request.input.indexToken);
-        uint256 impactedPrice = PriceImpact.execute(market, request, signedBlockPrice, indexBaseUnit);
+        cache.market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
+        cache.indexBaseUnit = dataOracle.getBaseUnits(request.input.indexToken);
+        cache.impactedPrice = PriceImpact.execute(cache.market, request, cache.indexPrice, cache.indexBaseUnit);
 
-        (uint256 longMarketTokenPrice, uint256 shortMarketTokenPrice) =
+        (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) =
             MarketUtils.validateAndRetrievePrices(dataOracle, request.requestBlock);
 
         // Update Market State
-        int256 sizeDeltaUsd = _calculateSizeDeltaUsd(request, signedBlockPrice, indexBaseUnit);
+        cache.sizeDeltaUsd = _calculateSizeDeltaUsd(request, cache.indexPrice, cache.indexBaseUnit);
         _updateMarketState(
-            market, request, impactedPrice, signedBlockPrice, longMarketTokenPrice, shortMarketTokenPrice, sizeDeltaUsd
+            cache.market,
+            request,
+            cache.impactedPrice,
+            cache.indexPrice,
+            cache.longMarketTokenPrice,
+            cache.shortMarketTokenPrice,
+            cache.sizeDeltaUsd
         );
 
-        uint256 collateralPrice = request.input.isLong ? longMarketTokenPrice : shortMarketTokenPrice;
+        cache.collateralPrice = request.input.isLong ? cache.longMarketTokenPrice : cache.shortMarketTokenPrice;
+
+        // Calculate Fee
+        cache.fee = Fee.calculateForPosition(
+            tradeStorage, request.input.sizeDelta, cache.indexPrice, cache.indexBaseUnit, cache.collateralPrice
+        );
+        // Calculate Fee Discount for Referral Code
+        (cache.feeDiscount, cache.referrer) = Referral.calculateFeeDiscount(referralStorage, request.user, cache.fee);
 
         // Execute Trade
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
             tradeStorage.createNewPosition(
-                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, cache.impactedPrice, cache.collateralPrice, _feeReceiver, false), cache
             );
         } else if (request.requestType == Position.RequestType.POSITION_DECREASE) {
             tradeStorage.decreaseExistingPosition(
-                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, cache.impactedPrice, cache.collateralPrice, _feeReceiver, false), cache
             );
         } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
             tradeStorage.increaseExistingPosition(
-                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, cache.impactedPrice, cache.collateralPrice, _feeReceiver, false), cache
             );
         } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
             tradeStorage.executeCollateralDecrease(
-                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, cache.impactedPrice, cache.collateralPrice, _feeReceiver, false), cache
             );
         } else if (request.requestType == Position.RequestType.COLLATERAL_INCREASE) {
             tradeStorage.executeCollateralIncrease(
-                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, cache.impactedPrice, cache.collateralPrice, _feeReceiver, false), cache
             );
         } else if (request.requestType == Position.RequestType.TAKE_PROFIT) {
             tradeStorage.decreaseExistingPosition(
-                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, cache.impactedPrice, cache.collateralPrice, _feeReceiver, false), cache
             );
         } else if (request.requestType == Position.RequestType.STOP_LOSS) {
             tradeStorage.decreaseExistingPosition(
-                Position.Execution(request, impactedPrice, collateralPrice, _feeReceiver, false)
+                Position.Execution(request, cache.impactedPrice, cache.collateralPrice, _feeReceiver, false), cache
             );
         } else {
             revert Executor_InvalidRequestType();
@@ -173,6 +194,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
     // need to store who flagged and liquidated
     // let the liquidator claim liquidation rewards from the tradestorage contract
     function liquidatePosition(bytes32 _positionKey) external onlyKeeper {
+        // need to construct ExecuteCache
         // check if position is flagged for liquidation
         // uint256 collateralPrice = priceOracle.getCollateralPrice();
         // fetch data to execute liquidations

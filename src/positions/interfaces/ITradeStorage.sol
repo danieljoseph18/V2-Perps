@@ -2,6 +2,7 @@
 pragma solidity 0.8.23;
 
 import {Position} from "../../positions/Position.sol";
+import {Trade} from "../Trade.sol";
 
 interface ITradeStorage {
     event OrderRequestCreated(bytes32 indexed _orderKey, Position.Request indexed _request);
@@ -42,19 +43,12 @@ interface ITradeStorage {
         external;
     function createOrderRequest(Position.Request calldata _request) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
-    function executeCollateralIncrease(Position.Execution calldata _params) external;
-    function executeCollateralDecrease(Position.Execution calldata _params) external;
-    function createNewPosition(Position.Execution calldata _params) external;
-    function increaseExistingPosition(Position.Execution calldata _params) external;
-    function decreaseExistingPosition(Position.Execution calldata _params) external;
-    function liquidatePosition(
-        bytes32 _positionKey,
-        address _liquidator,
-        uint256 _collateralPrice,
-        uint256 _signedBlockPrice,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice
-    ) external;
+    function executeCollateralIncrease(Position.Execution memory _params, Trade.ExecuteCache memory _cache) external;
+    function executeCollateralDecrease(Position.Execution memory _params, Trade.ExecuteCache memory _cache) external;
+    function createNewPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache) external;
+    function increaseExistingPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache) external;
+    function decreaseExistingPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache) external;
+    function liquidatePosition(Trade.ExecuteCache memory _cache, bytes32 _positionKey, address _liquidator) external;
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external;
     function claimFundingFees(bytes32 _positionKey) external;
     function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory);

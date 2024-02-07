@@ -9,6 +9,9 @@ import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Position} from "../positions/Position.sol";
+import {Trade} from "../positions/Trade.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 // Contract for Auto Deleveraging markets
 // Maintain a profit to pool ratio for each pool
@@ -51,10 +54,26 @@ contract Adl is RoleValidation {
         }
     }
 
+    /**
+     * struct ExecuteCache {
+     *     IMarket market; x
+     *     uint256 indexPrice; x
+     *     uint256 indexBaseUnit; x
+     *     uint256 impactedPrice; x
+     *     uint256 longMarketTokenPrice; x
+     *     uint256 shortMarketTokenPrice; x
+     *     int256 sizeDeltaUsd; x
+     *     uint256 collateralPrice; x
+     *     uint256 fee; 0
+     *     uint256 feeDiscount; 0
+     *     address referrer; address(0)
+     * }
+     */
     function executeAdl(IMarket _market, uint256 _sizeDelta, bytes32 _positionKey, bool _isLong)
         external
         onlyAdlKeeper
     {
+        Trade.ExecuteCache memory cache;
         // Check ADL is enabled for the market and for the side
         if (_isLong) {
             require(_market.adlFlaggedLong(), "ADL: Long side not flagged");
@@ -64,22 +83,29 @@ contract Adl is RoleValidation {
         // Check the position in question is active
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         require(position.positionSize > 0, "ADL: Position not active");
+        // cache the market
+        cache.market = _market;
         // Get current pricing and token data
-        uint256 indexPrice = priceOracle.getPrice(_market.indexToken());
-        uint256 baseUnit = dataOracle.getBaseUnits(_market.indexToken());
+        cache.indexPrice = priceOracle.getPrice(_market.indexToken());
+        cache.indexBaseUnit = dataOracle.getBaseUnits(_market.indexToken());
+        // Get token prices
+        (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) = priceOracle.getInstantMarketTokenPrices();
         // Get collateral price
-        uint256 collateralPrice = priceOracle.getPrice(position.collateralToken);
+        cache.collateralPrice = position.isLong ? cache.longMarketTokenPrice : cache.shortMarketTokenPrice;
+        // Get size delta usd
+        cache.sizeDeltaUsd = -int256(Math.mulDiv(_sizeDelta, cache.indexPrice, cache.indexBaseUnit));
         // Check the position is profitable
-        int256 pnl = Position.getPnl(position, indexPrice, baseUnit);
+        int256 pnl = Position.getPnl(position, cache.indexPrice, cache.indexBaseUnit);
         require(pnl > 0, "ADL: Position not profitable");
         // Get starting PNL Factor
-        int256 startingPnlFactor = MarketUtils.getPnlFactor(_market, indexPrice, baseUnit, _isLong);
+        int256 startingPnlFactor = MarketUtils.getPnlFactor(_market, cache.indexPrice, cache.indexBaseUnit, _isLong);
         // Construct an ADL Order
-        Position.Execution memory request = Position.createAdlOrder(position, _sizeDelta, indexPrice, collateralPrice);
+        Position.Execution memory request =
+            Position.createAdlOrder(position, _sizeDelta, cache.indexPrice, cache.collateralPrice);
         // Execute the order
-        tradeStorage.decreaseExistingPosition(request);
+        tradeStorage.decreaseExistingPosition(request, cache);
         // Get the new PNL to pool ratio
-        int256 newPnlFactor = MarketUtils.getPnlFactor(_market, indexPrice, baseUnit, _isLong);
+        int256 newPnlFactor = MarketUtils.getPnlFactor(_market, cache.indexPrice, cache.indexBaseUnit, _isLong);
         // PNL to pool has reduced
         require(newPnlFactor < startingPnlFactor, "ADL: PNL Factor not reduced");
         // Check if the new PNL to pool ratio is greater than

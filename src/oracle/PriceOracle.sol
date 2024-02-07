@@ -65,6 +65,8 @@ contract PriceOracle {
         if (price == 0) revert PriceOracle_PriceNotSigned();
     }
 
+    function getInstantMarketTokenPrices() external view returns (uint256 longTokenPrice, uint256 shortTokenPrice) {}
+
     /// @dev Request and fetch structure -> Request requests, executor fetches
     function requestSignedPrice(address _indexToken, uint256 _block) external {
         // only callable by permissioned roles

@@ -43,4 +43,6 @@ contract MockPriceOracle is IPriceOracle {
     function getCollateralPrice() external pure returns (uint256) {
         return 1e18;
     }
+
+    function getInstantMarketTokenPrices() external view returns (uint256 longTokenPrice, uint256 shortTokenPrice) {}
 }

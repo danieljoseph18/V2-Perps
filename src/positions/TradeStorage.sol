@@ -124,7 +124,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit OrderRequestCancelled(_orderKey);
     }
 
-    function executeCollateralIncrease(Position.Execution calldata _params) external onlyExecutor {
+    function executeCollateralIncrease(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+        external
+        onlyExecutor
+    {
         /* Update Initial Storage */
 
         // Check the Position exists
@@ -137,7 +140,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         _deleteOrder(positionKey, _params.request.input.isLimit);
 
         /* Perform Execution in Library */
-        position = Trade.executeCollateralIncrease(dataOracle, position, _params);
+        position = Trade.executeCollateralIncrease(position, _params, _cache);
 
         /* Update Final Storage */
         openPositions[positionKey] = position;
@@ -145,7 +148,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    function executeCollateralDecrease(Position.Execution calldata _params) external onlyExecutor {
+    function executeCollateralDecrease(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+        external
+        onlyExecutor
+    {
         /* Update Initial Storage */
 
         // Check the Position exists
@@ -159,7 +165,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
         /* Perform Execution in Library */
 
-        position = Trade.executeCollateralDecrease(dataOracle, position, _params, minCollateralUsd, liquidationFeeUsd);
+        position = Trade.executeCollateralDecrease(position, _params, _cache, minCollateralUsd, liquidationFeeUsd);
 
         /* Update Final Storage */
         openPositions[positionKey] = position;
@@ -173,7 +179,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    function createNewPosition(Position.Execution calldata _params) external onlyExecutor {
+    function createNewPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+        external
+        onlyExecutor
+    {
         /* Update Initial Storage */
 
         bytes32 positionKey = Position.generateKey(_params.request);
@@ -184,7 +193,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
         /* Perform Execution in the Library */
         (Position.Data memory position, uint256 sizeUsd, uint256 collateralPrice) =
-            Trade.createNewPosition(dataOracle, marketMaker, _params, minCollateralUsd);
+            Trade.createNewPosition(_params, _cache, minCollateralUsd);
 
         /* Update Final Storage */
 
@@ -205,7 +214,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit PositionCreated(positionKey, position);
     }
 
-    function increaseExistingPosition(Position.Execution calldata _params) external onlyExecutor {
+    function increaseExistingPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+        external
+        onlyExecutor
+    {
         /* Update Initial Storage */
 
         bytes32 positionKey = Position.generateKey(_params.request);
@@ -218,7 +230,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         /* Perform Execution in the Library */
         uint256 sizeDelta;
         uint256 sizeDeltaUsd;
-        (position, sizeDelta, sizeDeltaUsd) = Trade.increaseExistingPosition(dataOracle, position, _params);
+        (position, sizeDelta, sizeDeltaUsd) = Trade.increaseExistingPosition(position, _params, _cache);
 
         /* Update Final Storage */
         openPositions[positionKey] = position;
@@ -234,7 +246,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
     }
 
-    function decreaseExistingPosition(Position.Execution calldata _params) external onlyExecutorOrAdl {
+    function decreaseExistingPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+        external
+        onlyExecutorOrAdl
+    {
         /* Update Initial Storage */
 
         bytes32 positionKey = Position.generateKey(_params.request);
@@ -246,7 +261,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
         /* Perform Execution in the Library */
         Trade.DecreaseCache memory decreaseCache;
-        (position, decreaseCache) = Trade.decreaseExistingPosition(dataOracle, position, _params);
+        (position, decreaseCache) = Trade.decreaseExistingPosition(position, _params, _cache);
 
         /* Update Final Storage */
         openPositions[positionKey] = position;
@@ -300,40 +315,36 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit DecreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
-    function liquidatePosition(
-        bytes32 _positionKey,
-        address _liquidator,
-        uint256 _collateralPrice,
-        uint256 _signedBlockPrice,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice
-    ) external onlyLiquidator {
+    function liquidatePosition(Trade.ExecuteCache memory _cache, bytes32 _positionKey, address _liquidator)
+        external
+        onlyLiquidator
+    {
         /* Update Initial Storage */
         Position.Data memory position = openPositions[_positionKey];
         require(Position.exists(position), "TS: Position Doesn't Exist");
-        require(
-            Position.isLiquidatable(dataOracle, position, _collateralPrice, _signedBlockPrice, liquidationFeeUsd),
-            "TS: Not Liquidatable"
-        );
+        require(Position.isLiquidatable(position, _cache, liquidationFeeUsd), "TS: Not Liquidatable");
 
         // Get the position fees in index tokens
         (, uint256 indexFundingFee) = Funding.getTotalPositionFees(position.market, position);
         // Convert index funding fee to collateral
         uint256 collateralfundingFee = Position.convertIndexAmountToCollateral(
             indexFundingFee,
-            _signedBlockPrice,
-            dataOracle.getBaseUnits(position.indexToken),
-            position.isLong ? _longTokenPrice : _shortTokenPrice
+            _cache.indexPrice,
+            _cache.indexBaseUnit,
+            position.isLong ? _cache.longMarketTokenPrice : _cache.shortMarketTokenPrice
         );
+
+        // Cached to prevent double conversion
+        address market = address(position.market);
 
         // delete the position from storage
         delete openPositions[_positionKey];
-        openPositionKeys[address(position.market)][position.isLong].remove(_positionKey);
+        openPositionKeys[market][position.isLong].remove(_positionKey);
 
         liquidityVault.liquidatePositionCollateral(
             _liquidator,
             Position.calculateLiquidationFee(priceOracle, liquidationFeeUsd, position.collateralToken),
-            address(position.market),
+            market,
             position.collateralAmount,
             collateralfundingFee,
             position.isLong

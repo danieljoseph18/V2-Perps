@@ -76,7 +76,7 @@ library Deposit {
         );
 
         // Calculate fee based on the impacted price
-        fee = Fee.calculateForMarketAction(_liquidityVault, _data.params.amountIn);
+        fee = Fee.calculateForMarket(_liquidityVault, _data.params.amountIn);
 
         // Calculate remaining after fee
         remaining = _data.params.amountIn - fee;

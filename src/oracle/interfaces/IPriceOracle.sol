@@ -9,4 +9,5 @@ interface IPriceOracle {
     function updatePriceSource(address _token, address _newPriceSource) external;
     function cachedPrices(address _token) external view returns (uint256);
     function requestSignedPrice(address _indexToken, uint256 _block) external;
+    function getInstantMarketTokenPrices() external view returns (uint256 longTokenPrice, uint256 shortTokenPrice);
 }

@@ -27,6 +27,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Pricing} from "../libraries/Pricing.sol";
+import {Trade} from "../positions/Trade.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -244,19 +245,17 @@ library Position {
         });
     }
 
-    function generateNewPosition(IMarket _market, IDataOracle _dataOracle, Request memory _request, uint256 _price)
+    function generateNewPosition(Request memory _request, Trade.ExecuteCache memory _cache)
         external
         view
         returns (Data memory position)
     {
         // Get Entry Funding & Borrowing Values
         (uint256 longFundingFee, uint256 shortFundingFee, uint256 longBorrowFee, uint256 shortBorrowFee) =
-            _market.getCumulativeFees();
+            _cache.market.getCumulativeFees();
         // get Trade Value in USD
-        uint256 sizeUsd =
-            getTradeValueUsd(_request.input.sizeDelta, _price, _dataOracle.getBaseUnits(_request.input.indexToken));
         position = Data({
-            market: _market,
+            market: _cache.market,
             indexToken: _request.input.indexToken,
             collateralToken: _request.input.collateralToken,
             user: _request.user,
@@ -266,7 +265,7 @@ library Position {
             realisedPnl: 0,
             borrowingParams: BorrowingParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: FundingParams(0, 0, block.timestamp, longFundingFee, shortFundingFee),
-            pnlParams: PnLParams(_price, sizeUsd)
+            pnlParams: PnLParams(_cache.indexPrice, _cache.sizeDeltaUsd.abs())
         });
     }
 
@@ -292,17 +291,14 @@ library Position {
         tradeValueUsd = Math.mulDiv(_sizeDelta, _signedPrice, _baseUnit);
     }
 
-    function isLiquidatable(
-        IDataOracle _dataOracle,
-        Position.Data memory _position,
-        uint256 _collateralPrice,
-        uint256 _indexPrice,
-        uint256 liquidationFeeUsd
-    ) public view returns (bool) {
-        uint256 collateralValueUsd = Math.mulDiv(_position.collateralAmount, _collateralPrice, PRECISION);
-        uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position.market, _dataOracle, _position, _indexPrice);
-        uint256 indexBaseUnit = _dataOracle.getBaseUnits(_position.indexToken);
-        int256 pnl = Pricing.calculatePnL(_position, _indexPrice, indexBaseUnit);
+    function isLiquidatable(Position.Data memory _position, Trade.ExecuteCache memory _cache, uint256 liquidationFeeUsd)
+        public
+        view
+        returns (bool)
+    {
+        uint256 collateralValueUsd = Math.mulDiv(_position.collateralAmount, _cache.collateralPrice, PRECISION);
+        uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _cache);
+        int256 pnl = Pricing.calculatePnL(_position, _cache.indexPrice, _cache.indexBaseUnit);
         uint256 losses = liquidationFeeUsd + totalFeesOwedUsd;
         if (pnl < 0) {
             losses += uint256(-pnl);
@@ -361,25 +357,23 @@ library Position {
     function convertIndexAmountToCollateral(
         uint256 _indexAmount,
         uint256 _indexPrice,
-        uint256 _baseUnit,
+        uint256 _indexBaseUnit,
         uint256 _collateralPrice
     ) public pure returns (uint256 collateralAmount) {
-        uint256 indexUsd = Math.mulDiv(_indexAmount, _indexPrice, _baseUnit);
+        uint256 indexUsd = Math.mulDiv(_indexAmount, _indexPrice, _indexBaseUnit);
         collateralAmount = Math.mulDiv(indexUsd, PRECISION, _collateralPrice);
     }
 
-    function getTotalFeesOwedUsd(IMarket _market, IDataOracle _dataOracle, Data memory _position, uint256 _price)
+    function getTotalFeesOwedUsd(Data memory _position, Trade.ExecuteCache memory _cache)
         public
         view
         returns (uint256 totalFeesOwedUsd)
     {
-        uint256 baseUnits = _dataOracle.getBaseUnits(_position.indexToken);
+        uint256 borrowingFeeOwed = Borrowing.getTotalPositionFeesOwed(_cache.market, _position);
+        uint256 borrowingFeeUsd = Math.mulDiv(borrowingFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
 
-        uint256 borrowingFeeOwed = Borrowing.getTotalPositionFeesOwed(_market, _position);
-        uint256 borrowingFeeUsd = Math.mulDiv(borrowingFeeOwed, _price, baseUnits);
-
-        (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_market, _position);
-        uint256 fundingValueUsd = Math.mulDiv(fundingFeeOwed, _price, baseUnits);
+        (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_cache.market, _position);
+        uint256 fundingValueUsd = Math.mulDiv(fundingFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
 
         totalFeesOwedUsd = borrowingFeeUsd + fundingValueUsd;
     }
