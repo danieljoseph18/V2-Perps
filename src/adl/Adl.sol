@@ -10,7 +10,7 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Position} from "../positions/Position.sol";
 import {Trade} from "../positions/Trade.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 // Contract for Auto Deleveraging markets
@@ -54,21 +54,6 @@ contract Adl is RoleValidation {
         }
     }
 
-    /**
-     * struct ExecuteCache {
-     *     IMarket market; x
-     *     uint256 indexPrice; x
-     *     uint256 indexBaseUnit; x
-     *     uint256 impactedPrice; x
-     *     uint256 longMarketTokenPrice; x
-     *     uint256 shortMarketTokenPrice; x
-     *     int256 sizeDeltaUsd; x
-     *     uint256 collateralPrice; x
-     *     uint256 fee; 0
-     *     uint256 feeDiscount; 0
-     *     address referrer; address(0)
-     * }
-     */
     function executeAdl(IMarket _market, uint256 _sizeDelta, bytes32 _positionKey, bool _isLong)
         external
         onlyAdlKeeper
@@ -93,7 +78,7 @@ contract Adl is RoleValidation {
         // Get collateral price
         cache.collateralPrice = position.isLong ? cache.longMarketTokenPrice : cache.shortMarketTokenPrice;
         // Get size delta usd
-        cache.sizeDeltaUsd = -int256(Math.mulDiv(_sizeDelta, cache.indexPrice, cache.indexBaseUnit));
+        cache.sizeDeltaUsd = -int256(mulDiv(_sizeDelta, cache.indexPrice, cache.indexBaseUnit));
         // Check the position is profitable
         int256 pnl = Position.getPnl(position, cache.indexPrice, cache.indexBaseUnit);
         require(pnl > 0, "ADL: Position not profitable");

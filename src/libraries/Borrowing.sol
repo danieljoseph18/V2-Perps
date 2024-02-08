@@ -22,6 +22,8 @@ import {Position} from "../positions/Position.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
+import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
@@ -38,13 +40,16 @@ library Borrowing {
         uint256 _shortTokenBaseUnit
     ) external view returns (uint256 rate) {
         // Calculate the new Borrowing Rate
-        uint256 openInterest =
-            MarketUtils.getTotalOpenInterestUSD(_market, _indexPrice, _dataOracle.getBaseUnits(_indexToken));
-        uint256 poolBalance = MarketUtils.getPoolBalanceUSD(
-            _market, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
+        UD60x18 openInterest =
+            ud(MarketUtils.getTotalOpenInterestUSD(_market, _indexPrice, _dataOracle.getBaseUnits(_indexToken)));
+        UD60x18 poolBalance = ud(
+            MarketUtils.getPoolBalanceUSD(
+                _market, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
+            )
         );
-
-        rate = (_market.borrowingFactor() * (openInterest ** _market.borrowingExponent())) / poolBalance;
+        UD60x18 exponentiatedOI = openInterest.powu(_market.borrowingExponent());
+        UD60x18 borrowingFactor = ud(_market.borrowingFactor());
+        rate = unwrap(borrowingFactor.mul(exponentiatedOI).div(poolBalance));
     }
 
     function calculateFeeAddition(uint256 _prevRate, uint256 _lastUpdate) external view returns (uint256 feeAddition) {
@@ -58,7 +63,7 @@ library Borrowing {
         view
         returns (uint256 indexFee)
     {
-        indexFee = (getTotalPositionFeesOwed(_market, _position) * _collateralDelta) / _position.collateralAmount;
+        indexFee = mulDiv(getTotalPositionFeesOwed(_market, _position), _collateralDelta, _position.collateralAmount);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
@@ -86,7 +91,7 @@ library Borrowing {
         if (borrowFee == 0) {
             indexFeesSinceUpdate = 0;
         } else {
-            indexFeesSinceUpdate = (_position.positionSize * borrowFee) / PRECISION;
+            indexFeesSinceUpdate = mulDiv(_position.positionSize, borrowFee, PRECISION);
         }
     }
 

@@ -23,15 +23,17 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {Trade} from "../positions/Trade.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
     using SignedMath for int256;
+    using SafeCast for uint256;
 
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant MAX_LEVERAGE = 1000_00; // 1000x
@@ -185,9 +187,9 @@ library Position {
 
     // 1x = 100
     function checkLeverage(uint256 _collateralPrice, uint256 _sizeUsd, uint256 _collateral) external pure {
-        uint256 collateralUsd = Math.mulDiv(_collateral, _collateralPrice, PRECISION);
+        uint256 collateralUsd = mulDiv(_collateral, _collateralPrice, PRECISION);
         require(collateralUsd <= _sizeUsd, "TH: cUSD > sUSD");
-        uint256 leverage = Math.mulDiv(_sizeUsd, LEVERAGE_PRECISION, collateralUsd);
+        uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, collateralUsd);
         require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, "TH: Leverage");
     }
 
@@ -216,7 +218,7 @@ library Position {
         RequestType requestType;
         // Require SL/TP Orders to be a certain % away
         // WAEP is used as the reference price
-        uint256 priceMargin = Math.mulDiv(_position.pnlParams.weightedAvgEntryPrice, PRICE_MARGIN, PRECISION);
+        uint256 priceMargin = mulDiv(_position.pnlParams.weightedAvgEntryPrice, PRICE_MARGIN, PRECISION);
         if (_isStopLoss) {
             require(_executionPrice <= _position.pnlParams.weightedAvgEntryPrice - priceMargin, "Position: SL Price");
             requestType = RequestType.STOP_LOSS;
@@ -228,8 +230,8 @@ library Position {
             input: Input({
                 indexToken: _position.indexToken,
                 collateralToken: _position.collateralToken,
-                collateralDelta: Math.mulDiv(_position.collateralAmount, _percentage, PRECISION),
-                sizeDelta: Math.mulDiv(_position.positionSize, _percentage, PRECISION),
+                collateralDelta: mulDiv(_position.collateralAmount, _percentage, PRECISION),
+                sizeDelta: mulDiv(_position.positionSize, _percentage, PRECISION),
                 limitPrice: _executionPrice,
                 maxSlippage: _maxSlippage,
                 executionFee: _executionFee,
@@ -271,14 +273,14 @@ library Position {
 
     function getPnl(Data memory _position, uint256 _price, uint256 _baseUnit) external pure returns (int256 pnl) {
         // Get the Entry Value (WAEP * Position Size)
-        uint256 entryValue = Math.mulDiv(_position.pnlParams.weightedAvgEntryPrice, _position.positionSize, _baseUnit);
+        uint256 entryValue = mulDiv(_position.pnlParams.weightedAvgEntryPrice, _position.positionSize, _baseUnit);
         // Get the Current Value (Price * Position Size)
-        uint256 currentValue = Math.mulDiv(_price, _position.positionSize, _baseUnit);
+        uint256 currentValue = mulDiv(_price, _position.positionSize, _baseUnit);
         // Return the difference
         if (_position.isLong) {
-            pnl = int256(currentValue) - int256(entryValue);
+            pnl = currentValue.toInt256() - entryValue.toInt256();
         } else {
-            pnl = int256(entryValue) - int256(currentValue);
+            pnl = entryValue.toInt256() - currentValue.toInt256();
         }
     }
 
@@ -288,7 +290,7 @@ library Position {
         pure
         returns (uint256 tradeValueUsd)
     {
-        tradeValueUsd = Math.mulDiv(_sizeDelta, _signedPrice, _baseUnit);
+        tradeValueUsd = mulDiv(_sizeDelta, _signedPrice, _baseUnit);
     }
 
     function isLiquidatable(Position.Data memory _position, Trade.ExecuteCache memory _cache, uint256 liquidationFeeUsd)
@@ -296,12 +298,12 @@ library Position {
         view
         returns (bool)
     {
-        uint256 collateralValueUsd = Math.mulDiv(_position.collateralAmount, _cache.collateralPrice, PRECISION);
+        uint256 collateralValueUsd = mulDiv(_position.collateralAmount, _cache.collateralPrice, PRECISION);
         uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _cache);
         int256 pnl = Pricing.calculatePnL(_position, _cache.indexPrice, _cache.indexBaseUnit);
         uint256 losses = liquidationFeeUsd + totalFeesOwedUsd;
         if (pnl < 0) {
-            losses += uint256(-pnl);
+            losses += pnl.abs();
         }
         if (collateralValueUsd <= losses) {
             return true;
@@ -311,13 +313,12 @@ library Position {
     }
 
     // Calculates the liquidation fee in Collateral Tokens
-    function calculateLiquidationFee(IPriceOracle _priceOracle, uint256 _liquidationFeeUsd, address _token)
+    function calculateLiquidationFee(uint256 _collateralPrice, uint256 _liquidationFeeUsd)
         external
-        view
+        pure
         returns (uint256 liquidationFee)
     {
-        uint256 price = _priceOracle.getPrice(_token);
-        liquidationFee = Math.mulDiv(_liquidationFeeUsd, PRECISION, price);
+        liquidationFee = mulDiv(_liquidationFeeUsd, PRECISION, _collateralPrice);
     }
 
     function createAdlOrder(Data memory _position, uint256 _sizeDelta, uint256 _indexPrice, uint256 _collateralPrice)
@@ -326,7 +327,7 @@ library Position {
         returns (Execution memory request)
     {
         // calculate collateral delta from size delta
-        uint256 collateralDelta = Math.mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
+        uint256 collateralDelta = mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
         request = Execution({
             request: Request({
                 input: Input({
@@ -360,8 +361,8 @@ library Position {
         uint256 _indexBaseUnit,
         uint256 _collateralPrice
     ) public pure returns (uint256 collateralAmount) {
-        uint256 indexUsd = Math.mulDiv(_indexAmount, _indexPrice, _indexBaseUnit);
-        collateralAmount = Math.mulDiv(indexUsd, PRECISION, _collateralPrice);
+        uint256 indexUsd = mulDiv(_indexAmount, _indexPrice, _indexBaseUnit);
+        collateralAmount = mulDiv(indexUsd, PRECISION, _collateralPrice);
     }
 
     function getTotalFeesOwedUsd(Data memory _position, Trade.ExecuteCache memory _cache)
@@ -370,10 +371,10 @@ library Position {
         returns (uint256 totalFeesOwedUsd)
     {
         uint256 borrowingFeeOwed = Borrowing.getTotalPositionFeesOwed(_cache.market, _position);
-        uint256 borrowingFeeUsd = Math.mulDiv(borrowingFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
+        uint256 borrowingFeeUsd = mulDiv(borrowingFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
 
         (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_cache.market, _position);
-        uint256 fundingValueUsd = Math.mulDiv(fundingFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
+        uint256 fundingValueUsd = mulDiv(fundingFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
 
         totalFeesOwedUsd = borrowingFeeUsd + fundingValueUsd;
     }

@@ -2,7 +2,7 @@
 pragma solidity 0.8.23;
 
 import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 
 // Library for referral related logic
 library Referral {
@@ -14,7 +14,7 @@ library Referral {
         returns (uint256 discount, address codeOwner)
     {
         uint256 discountPercentage = _referralStorage.getDiscountForUser(_account);
-        discount = Math.mulDiv(_fee, discountPercentage, PRECISION);
+        discount = mulDiv(_fee, discountPercentage, PRECISION);
         codeOwner = _referralStorage.getAffiliateFromUser(_account);
     }
 }

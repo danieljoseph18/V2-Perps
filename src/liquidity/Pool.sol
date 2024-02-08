@@ -4,9 +4,12 @@ pragma solidity 0.8.23;
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 library Pool {
+    using SignedMath for int256;
+
     uint256 public constant SCALING_FACTOR = 1e18;
 
     struct Values {
@@ -30,9 +33,9 @@ library Pool {
         uint256 _amount
     ) external pure returns (uint256 valueUsd) {
         if (_isLongToken) {
-            valueUsd = Math.mulDiv(_amount, _price, _longBaseUnit);
+            valueUsd = mulDiv(_amount, _price, _longBaseUnit);
         } else {
-            valueUsd = Math.mulDiv(_amount, _price, _shortBaseUnit);
+            valueUsd = mulDiv(_amount, _price, _shortBaseUnit);
         }
     }
 
@@ -46,7 +49,7 @@ library Pool {
         if (aum == 0 || _values.marketTokenSupply == 0) {
             lpTokenPrice = 0;
         } else {
-            lpTokenPrice = Math.mulDiv(aum, SCALING_FACTOR, _values.marketTokenSupply);
+            lpTokenPrice = mulDiv(aum, SCALING_FACTOR, _values.marketTokenSupply);
         }
     }
 
@@ -57,15 +60,13 @@ library Pool {
         returns (uint256 aum)
     {
         // Get Values in USD
-        uint256 longTokenValue = Math.mulDiv(_values.longTokenBalance, _longTokenPrice, _values.longBaseUnit);
-        uint256 shortTokenValue = Math.mulDiv(_values.shortTokenBalance, _shortTokenPrice, _values.shortBaseUnit);
+        uint256 longTokenValue = mulDiv(_values.longTokenBalance, _longTokenPrice, _values.longBaseUnit);
+        uint256 shortTokenValue = mulDiv(_values.shortTokenBalance, _shortTokenPrice, _values.shortBaseUnit);
 
         // Calculate PNL
         int256 pnl = _values.dataOracle.getCumulativeNetPnl(_values.blockNumber);
 
         // Calculate AUM
-        aum = pnl >= 0
-            ? longTokenValue + shortTokenValue + uint256(pnl)
-            : longTokenValue + shortTokenValue - uint256(-pnl);
+        aum = pnl >= 0 ? longTokenValue + shortTokenValue + pnl.abs() : longTokenValue + shortTokenValue - pnl.abs();
     }
 }

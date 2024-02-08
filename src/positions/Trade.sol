@@ -11,12 +11,14 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Pricing} from "../libraries/Pricing.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 // Library for Handling Trade related logic
 library Trade {
     using SignedMath for int256;
+    using SafeCast for uint256;
 
     uint256 internal constant PRECISION = 1e18;
 
@@ -87,7 +89,7 @@ library Trade {
         Position.Execution calldata _params,
         ExecuteCache memory _cache,
         uint256 _minCollateralUsd
-    ) external view returns (Position.Data memory, uint256 sizeUsd, uint256 collateralPrice) {
+    ) external view returns (Position.Data memory, uint256 sizeUsd) {
         // Check that the Position meets the minimum collateral threshold
         require(
             _checkMinCollateral(_params.request.input.collateralDelta, _cache.collateralPrice, _minCollateralUsd),
@@ -99,7 +101,7 @@ library Trade {
         uint256 absSizeDelta = _cache.sizeDeltaUsd.abs();
         Position.checkLeverage(_cache.collateralPrice, absSizeDelta, position.collateralAmount);
         // Return the Position
-        return (position, absSizeDelta, _cache.collateralPrice);
+        return (position, absSizeDelta);
     }
 
     function increaseExistingPosition(
@@ -112,7 +114,7 @@ library Trade {
 
         uint256 newCollateralAmount = _position.collateralAmount + _params.request.input.collateralDelta;
         // Calculate the Size Delta to keep Leverage Consistent
-        sizeDelta = Math.mulDiv(newCollateralAmount, _position.positionSize, _position.collateralAmount);
+        sizeDelta = mulDiv(newCollateralAmount, _position.positionSize, _position.collateralAmount);
 
         // Update the Existing Position
         _position = _editPosition(_position, _cache, _params.request.input.collateralDelta, sizeDelta, true);
@@ -127,11 +129,13 @@ library Trade {
     ) external view returns (Position.Data memory, DecreaseCache memory) {
         DecreaseCache memory decreaseCache;
 
+        _position = _updateFeeParameters(_position);
+
         if (_params.request.input.collateralDelta == _position.collateralAmount) {
             decreaseCache.sizeDelta = _position.positionSize;
         } else {
             decreaseCache.sizeDelta =
-                Math.mulDiv(_position.positionSize, _params.request.input.collateralDelta, _position.collateralAmount);
+                mulDiv(_position.positionSize, _params.request.input.collateralDelta, _position.collateralAmount);
         }
         decreaseCache.decreasePnl = Pricing.getDecreasePositionPnl(
             _cache.indexBaseUnit,
@@ -203,7 +207,7 @@ library Trade {
         _position.pnlParams.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
             _position.pnlParams.weightedAvgEntryPrice,
             _position.pnlParams.sigmaIndexSizeUSD,
-            int256(_sizeDeltaUsd),
+            _sizeDeltaUsd.toInt256(),
             _price
         );
         _position.pnlParams.sigmaIndexSizeUSD += _sizeDeltaUsd;
@@ -221,7 +225,7 @@ library Trade {
         position.pnlParams.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
             position.pnlParams.weightedAvgEntryPrice,
             position.pnlParams.sigmaIndexSizeUSD,
-            -int256(sizeDeltaUsd),
+            -1 * sizeDeltaUsd.toInt256(),
             _price
         );
         position.pnlParams.sigmaIndexSizeUSD -= sizeDeltaUsd;
@@ -234,7 +238,7 @@ library Trade {
         pure
         returns (bool isValid)
     {
-        uint256 requestCollateralUsd = Math.mulDiv(_collateralAmount, _collateralPriceUsd, PRECISION);
+        uint256 requestCollateralUsd = mulDiv(_collateralAmount, _collateralPriceUsd, PRECISION);
         if (requestCollateralUsd < _minCollateralUsd) {
             isValid = false;
         } else {
@@ -247,12 +251,12 @@ library Trade {
         ExecuteCache memory _cache,
         uint256 _liquidationFeeUsd
     ) public view returns (bool isLiquidatable) {
-        uint256 collateralValueUsd = Math.mulDiv(_position.collateralAmount, _cache.collateralPrice, PRECISION);
+        uint256 collateralValueUsd = mulDiv(_position.collateralAmount, _cache.collateralPrice, PRECISION);
         uint256 totalFeesOwedUsd = Position.getTotalFeesOwedUsd(_position, _cache);
         int256 pnl = Pricing.calculatePnL(_position, _cache.indexPrice, _cache.indexBaseUnit);
         uint256 losses = _liquidationFeeUsd + totalFeesOwedUsd;
         if (pnl < 0) {
-            losses += uint256(-pnl);
+            losses += pnl.abs();
         }
         if (collateralValueUsd <= losses) {
             isLiquidatable = true;
@@ -278,8 +282,8 @@ library Trade {
         pure
         returns (Position.Data memory, uint256 collateralFeesOwed)
     {
-        uint256 feesOwedUsd = Math.mulDiv(_position.fundingParams.feesOwed, _cache.indexPrice, _cache.indexBaseUnit);
-        collateralFeesOwed = Math.mulDiv(feesOwedUsd, PRECISION, _cache.collateralPrice);
+        uint256 feesOwedUsd = mulDiv(_position.fundingParams.feesOwed, _cache.indexPrice, _cache.indexBaseUnit);
+        collateralFeesOwed = mulDiv(feesOwedUsd, PRECISION, _cache.collateralPrice);
 
         require(collateralFeesOwed <= _collateralDelta, "TS: Fee > CollateralDelta");
 
@@ -297,8 +301,8 @@ library Trade {
         uint256 borrowFee = Borrowing.calculateFeeForPositionChange(_position.market, _position, _collateralDelta);
         _position.borrowingParams.feesOwed -= borrowFee;
         // convert borrow fee from index tokens to collateral tokens to subtract from collateral:
-        uint256 borrowFeeUsd = Math.mulDiv(borrowFee, _cache.indexPrice, _cache.indexBaseUnit);
-        collateralFeesOwed = Math.mulDiv(borrowFeeUsd, PRECISION, _cache.collateralPrice);
+        uint256 borrowFeeUsd = mulDiv(borrowFee, _cache.indexPrice, _cache.indexBaseUnit);
+        collateralFeesOwed = mulDiv(borrowFeeUsd, PRECISION, _cache.collateralPrice);
 
         require(collateralFeesOwed <= _collateralDelta, "TS: Fee > CollateralDelta");
 

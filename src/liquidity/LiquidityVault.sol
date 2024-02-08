@@ -16,7 +16,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {IExecutor} from "../execution/interfaces/IExecutor.sol";
@@ -177,6 +177,19 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
             IERC20(SHORT_TOKEN).safeTransfer(_to, _collateralDelta);
         }
         emit TransferOutTokens(_market, _to, _collateralDelta, _isLong);
+    }
+
+    function recordCollateralTransferIn(address _market, uint256 _collateralDelta, bool _isLong)
+        external
+        onlyTradeStorage
+    {
+        require(_collateralDelta != 0, "TV: Zero Amount");
+        if (_isLong) {
+            longCollateral[_market] += _collateralDelta;
+        } else {
+            shortCollateral[_market] += _collateralDelta;
+        }
+        emit TransferInCollateral(_market, _collateralDelta, _isLong);
     }
 
     function accumulateFees(uint256 _amount, bool _isLong) external onlyFeeAccumulator {

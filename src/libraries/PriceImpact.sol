@@ -20,18 +20,21 @@ pragma solidity 0.8.23;
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
+import {sd, SD59x18, unwrap} from "@prb/math/SD59x18.sol";
 import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Pool} from "../liquidity/Pool.sol";
 import {Withdrawal} from "../liquidity/Withdrawal.sol";
+import {mulDiv} from "@prb/math/Common.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
     using SignedMath for int256;
+    using SafeCast for uint256;
+    using SafeCast for int256;
 
     uint256 public constant SCALAR = 1e18;
     uint256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
@@ -82,9 +85,8 @@ library PriceImpact {
         priceImpactUsd = _calculateImpactUsd(initSkewUsd, finalSkewUsd, _priceImpactExponent, _priceImpactFactor);
 
         uint256 tokenUnit = _params.isLongToken ? _params.longBaseUnit : _params.shortBaseUnit;
-        impactedPrice = _calculateImpactedPrice(
-            sizeDeltaUsd, uint256(priceImpactUsd.abs()), tokenUnit, _params.amountIn, priceImpactUsd
-        );
+        impactedPrice =
+            _calculateImpactedPrice(sizeDeltaUsd, priceImpactUsd.abs(), tokenUnit, _params.amountIn, priceImpactUsd);
 
         // Check slippage with the new impacted price
         checkSlippage(
@@ -121,12 +123,13 @@ library PriceImpact {
         pure
         returns (uint256 longTokenValue, uint256 shortTokenValue)
     {
-        longTokenValue = Math.mulDiv(_params.longTokenBalance, _params.longTokenPrice, _params.longBaseUnit);
-        shortTokenValue = Math.mulDiv(_params.shortTokenBalance, _params.shortTokenPrice, _params.shortBaseUnit);
+        longTokenValue = mulDiv(_params.longTokenBalance, _params.longTokenPrice, _params.longBaseUnit);
+        shortTokenValue = mulDiv(_params.shortTokenBalance, _params.shortTokenPrice, _params.shortBaseUnit);
     }
 
     function _calculateSkewUsd(uint256 _longTokenValue, uint256 _shortTokenValue) internal pure returns (uint256) {
-        return Math.max(_longTokenValue, _shortTokenValue) - Math.min(_longTokenValue, _shortTokenValue);
+        return
+            _longTokenValue > _shortTokenValue ? _longTokenValue - _shortTokenValue : _shortTokenValue - _longTokenValue;
     }
 
     // @audit - is this calculation correct?
@@ -137,21 +140,21 @@ library PriceImpact {
         uint256 _amountIn,
         int256 _priceImpactUsd
     ) internal pure returns (uint256) {
-        uint256 unsignedIndexTokenImpact = Math.mulDiv(_absolutePriceImpactUsd, _tokenUnit, _sizeDeltaUsd);
+        uint256 unsignedIndexTokenImpact = mulDiv(_absolutePriceImpactUsd, _tokenUnit, _sizeDeltaUsd);
         int256 indexTokenImpact =
-            _priceImpactUsd < 0 ? -int256(unsignedIndexTokenImpact) : int256(unsignedIndexTokenImpact);
+            _priceImpactUsd < 0 ? (-1 * unsignedIndexTokenImpact.toInt256()) : unsignedIndexTokenImpact.toInt256();
 
         uint256 indexTokensAfterImpact =
-            indexTokenImpact >= 0 ? _amountIn + uint256(indexTokenImpact) : _amountIn - uint256(-indexTokenImpact);
+            indexTokenImpact >= 0 ? _amountIn + indexTokenImpact.abs() : _amountIn - indexTokenImpact.abs();
 
-        return Math.mulDiv(_sizeDeltaUsd, _tokenUnit, indexTokensAfterImpact);
+        return mulDiv(_sizeDeltaUsd, _tokenUnit, indexTokensAfterImpact);
     }
 
     function _calculateSizeDeltaUsd(Params memory _params) internal pure returns (uint256 sizeDeltaUsd) {
         // Inline calculation of sizeDeltaUsd
         return _params.isLongToken
-            ? Math.mulDiv(_params.amountIn, _params.longTokenPrice, _params.longBaseUnit)
-            : Math.mulDiv(_params.amountIn, _params.shortTokenPrice, _params.shortBaseUnit);
+            ? mulDiv(_params.amountIn, _params.longTokenPrice, _params.longBaseUnit)
+            : mulDiv(_params.amountIn, _params.shortTokenPrice, _params.shortBaseUnit);
     }
 
     /////////////
@@ -194,7 +197,7 @@ library PriceImpact {
 
         uint256 longOI = MarketUtils.getLongOpenInterestUSD(_market, _signedBlockPrice, _indexBaseUnit);
         uint256 shortOI = MarketUtils.getShortOpenInterestUSD(_market, _signedBlockPrice, _indexBaseUnit);
-        uint256 sizeDeltaUSD = Math.mulDiv(_request.input.sizeDelta, _signedBlockPrice, _indexBaseUnit);
+        uint256 sizeDeltaUSD = mulDiv(_request.input.sizeDelta, _signedBlockPrice, _indexBaseUnit);
 
         uint256 skewBefore = longOI > shortOI ? longOI - shortOI : shortOI - longOI;
         if (_request.input.isIncrease) {
@@ -207,7 +210,7 @@ library PriceImpact {
         priceImpact =
             _calculateImpactUsd(skewBefore, skewAfter, _market.priceImpactExponent(), _market.priceImpactFactor()).abs();
 
-        uint256 maxImpact = Math.mulDiv(_signedBlockPrice, MAX_PRICE_IMPACT, SCALAR);
+        uint256 maxImpact = mulDiv(_signedBlockPrice, MAX_PRICE_IMPACT, SCALAR);
         if (priceImpact > maxImpact) {
             priceImpact = maxImpact;
         }
@@ -216,7 +219,7 @@ library PriceImpact {
     function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) public pure {
         uint256 impactDelta =
             _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
-        uint256 slippage = Math.mulDiv(impactDelta, SCALAR, _signedPrice);
+        uint256 slippage = mulDiv(impactDelta, SCALAR, _signedPrice);
         require(slippage <= _maxSlippage, "slippage exceeds max");
     }
 
@@ -226,14 +229,10 @@ library PriceImpact {
         returns (int256 impactUsd)
     {
         // Perform exponentiation using PRB Math library
-        uint256 impactBefore = unwrap(ud(_skewBefore).pow(ud(_exponent)));
-        uint256 impactAfter = unwrap(ud(_skewAfter).pow(ud(_exponent)));
-
-        // Apply factor
-        impactBefore = impactBefore * _factor;
-        impactAfter = impactAfter * _factor;
+        UD60x18 impactBefore = (ud(_skewBefore).powu(_exponent)).mul(ud(_factor));
+        UD60x18 impactAfter = (ud(_skewAfter).powu(_exponent)).mul(ud(_factor));
 
         // Calculate impact in USD
-        impactUsd = int256(impactBefore) - int256(impactAfter);
+        impactUsd = unwrap(impactBefore).toInt256() - unwrap(impactAfter).toInt256();
     }
 }

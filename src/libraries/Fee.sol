@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
@@ -19,7 +19,7 @@ library Fee {
         returns (uint256 fee)
     {
         uint256 depositFee = _liquidityVault.depositFee();
-        fee = Math.mulDiv(_amountIn, depositFee, SCALING_FACTOR);
+        fee = mulDiv(_amountIn, depositFee, SCALING_FACTOR);
     }
 
     function calculateForPosition(
@@ -34,6 +34,6 @@ library Fee {
         uint256 sizeInCollateral =
             Position.convertIndexAmountToCollateral(_sizeDelta, _indexPrice, _indexBaseUnit, _collateralPrice);
         // calculate fee
-        fee = Math.mulDiv(sizeInCollateral, feePercentage, SCALING_FACTOR);
+        fee = mulDiv(sizeInCollateral, feePercentage, SCALING_FACTOR);
     }
 }

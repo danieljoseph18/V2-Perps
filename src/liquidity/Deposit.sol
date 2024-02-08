@@ -5,7 +5,7 @@ import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
@@ -124,17 +124,15 @@ library Deposit {
         uint256 _remaining,
         bool _isLongToken
     ) internal view returns (uint256) {
-        uint256 valueUsd;
+        uint256 valueUsd = mulDiv(_remaining, _impactedPrice, _baseUnitIn);
         uint256 marketTokenPrice;
         if (_isLongToken) {
-            valueUsd = Math.mulDiv(_remaining, _impactedPrice, _baseUnitIn);
             marketTokenPrice = Pool.getMarketTokenPrice(_values, _impactedPrice, _shortTokenPrice);
         } else {
-            valueUsd = Math.mulDiv(_remaining, _impactedPrice, _baseUnitIn);
             marketTokenPrice = Pool.getMarketTokenPrice(_values, _longTokenPrice, _impactedPrice);
         }
 
-        return marketTokenPrice == 0 ? valueUsd : Math.mulDiv(valueUsd, SCALING_FACTOR, marketTokenPrice);
+        return marketTokenPrice == 0 ? valueUsd : mulDiv(valueUsd, SCALING_FACTOR, marketTokenPrice);
     }
 
     function _calculateUsdValue(
@@ -145,9 +143,9 @@ library Deposit {
         uint256 _amount
     ) internal pure returns (uint256 valueUsd) {
         if (_isLongToken) {
-            valueUsd = Math.mulDiv(_amount, _price, _longBaseUnit);
+            valueUsd = mulDiv(_amount, _price, _longBaseUnit);
         } else {
-            valueUsd = Math.mulDiv(_amount, _price, _shortBaseUnit);
+            valueUsd = mulDiv(_amount, _price, _shortBaseUnit);
         }
     }
 
@@ -158,7 +156,7 @@ library Deposit {
         uint256 _shortTokenPrice
     ) internal view returns (uint256 mintAmount) {
         uint256 marketTokenPrice = Pool.getMarketTokenPrice(_values, _longTokenPrice, _shortTokenPrice);
-        mintAmount = marketTokenPrice == 0 ? _valueUsd : Math.mulDiv(_valueUsd, SCALING_FACTOR, marketTokenPrice);
+        mintAmount = marketTokenPrice == 0 ? _valueUsd : mulDiv(_valueUsd, SCALING_FACTOR, marketTokenPrice);
     }
 
     function _generateKey(address owner, address tokenIn, uint256 amountIn, uint256 blockNumber)

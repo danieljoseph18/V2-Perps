@@ -40,6 +40,7 @@ interface ILiquidityVault {
     ) external;
     function claimFundingFees(address _market, address _user, uint256 _claimed, bool _isLong) external;
     function swapFundingAmount(address _market, uint256 _amount, bool _isLong) external;
+    function recordCollateralTransferIn(address _market, uint256 _collateralDelta, bool _isLong) external;
 
     // Deposit execution
     function executeDeposit(bytes32 _key, address _executor) external;
@@ -99,4 +100,5 @@ interface ILiquidityVault {
         uint256 _collateralFundingOwed,
         bool _isLong
     );
+    event TransferInCollateral(address indexed _market, uint256 indexed _collateralDelta, bool _isLong);
 }

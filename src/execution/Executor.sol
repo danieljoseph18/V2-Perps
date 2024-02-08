@@ -34,11 +34,13 @@ import {Fee} from "../libraries/Fee.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {Trade} from "../positions/Trade.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Needs Executor Role
 // All keeper interactions should come through this contract
 contract Executor is RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using SafeCast for uint256;
 
     ITradeStorage public tradeStorage;
     ILiquidityVault public liquidityVault;
@@ -48,6 +50,8 @@ contract Executor is RoleValidation, ReentrancyGuard {
     IReferralStorage public referralStorage;
 
     error Executor_InvalidRequestType();
+
+    event ExecuteTradeOrder(bytes32 indexed _orderKey, Position.Request _request, uint256 _fee, uint256 _feeDiscount);
 
     constructor(
         address _marketMaker,
@@ -189,6 +193,12 @@ contract Executor is RoleValidation, ReentrancyGuard {
         } else {
             revert Executor_InvalidRequestType();
         }
+
+        /* Handle Token Transfers */
+        _handleTokenTransfers(cache, request, cache.fee, cache.feeDiscount, request.input.isLong);
+
+        // Emit Trade Executed Event
+        emit ExecuteTradeOrder(_orderKey, request, cache.fee, cache.feeDiscount);
     }
 
     // need to store who flagged and liquidated
@@ -207,18 +217,41 @@ contract Executor is RoleValidation, ReentrancyGuard {
     // INTERNAL HELPER FUNCTIONS //
     ///////////////////////////////
 
+    function _handleTokenTransfers(
+        Trade.ExecuteCache memory _cache,
+        Position.Request memory _request,
+        uint256 _fee,
+        uint256 _feeDiscount,
+        bool _isLong
+    ) internal {
+        // Increment Liquidity Vault Fee Balance
+        liquidityVault.accumulateFees(_fee, _isLong);
+        // Transfer Fee to Liquidity Vault
+        IERC20(_request.input.collateralToken).safeTransfer(address(liquidityVault), _fee);
+        // Transfer Fee Discount to Referral Storage
+        if (_feeDiscount > 0) {
+            // Increment Referral Storage Fee Balance
+            referralStorage.accumulateAffiliateRewards(_cache.referrer, _isLong, _feeDiscount);
+            // Transfer Fee Discount to Referral Storage
+            IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), _feeDiscount);
+        }
+        // Increment LiquidityVault Collateral Balance
+        liquidityVault.recordCollateralTransferIn(address(_cache.market), _request.input.collateralDelta, _isLong);
+        // Transfer Collateral to LiquidityVault
+        IERC20(_request.input.collateralToken).safeTransfer(address(liquidityVault), _request.input.collateralDelta);
+    }
+
     function _calculateSizeDeltaUsd(Position.Request memory _request, uint256 _signedIndexPrice, uint256 _indexBaseUnit)
         internal
         pure
         returns (int256 sizeDeltaUsd)
     {
         // Flip sign if decreasing position
+        uint256 valueUsd = Position.getTradeValueUsd(_request.input.sizeDelta, _signedIndexPrice, _indexBaseUnit);
         if (_request.input.isIncrease) {
-            sizeDeltaUsd =
-                int256(Position.getTradeValueUsd(_request.input.sizeDelta, _signedIndexPrice, _indexBaseUnit));
+            sizeDeltaUsd = valueUsd.toInt256();
         } else {
-            sizeDeltaUsd =
-                -1 * int256(Position.getTradeValueUsd(_request.input.sizeDelta, _signedIndexPrice, _indexBaseUnit));
+            sizeDeltaUsd = -1 * valueUsd.toInt256();
         }
     }
 

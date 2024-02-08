@@ -42,16 +42,27 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     mapping(address indexToken => address market) public tokenToMarkets;
 
     bool private isInitialised;
+    MarketConfig public defaultConfig;
 
     constructor(address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
         liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
-    function initialise(address _dataOracle, address _priceOracle) external onlyAdmin {
+    function initialise(MarketConfig memory _defaultConfig, address _dataOracle, address _priceOracle)
+        external
+        onlyAdmin
+    {
         require(!isInitialised, "MS: Already Initialised");
         dataOracle = IDataOracle(_dataOracle);
         priceOracle = IPriceOracle(_priceOracle);
+        defaultConfig = _defaultConfig;
+        isInitialised = true;
         emit MarketMakerInitialised(_dataOracle, _priceOracle);
+    }
+
+    function setDefaultConfig(MarketConfig memory _defaultConfig) external onlyAdmin {
+        defaultConfig = _defaultConfig;
+        emit DefaultConfigSet(_defaultConfig);
     }
 
     /// @dev Only MarketFactory
@@ -91,9 +102,11 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
                 adlFlaggedShort: false
             })
         );
+        // Cache
+        address marketAddress = address(market);
         // Add to Storage
-        markets.add(address(market));
+        markets.add(marketAddress);
         // Fire Event
-        emit MarketCreated(address(market), _indexToken, _priceFeed);
+        emit MarketCreated(marketAddress, _indexToken, _priceFeed);
     }
 }

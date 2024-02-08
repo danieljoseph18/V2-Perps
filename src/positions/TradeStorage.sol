@@ -30,16 +30,21 @@ import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Position} from "../positions/Position.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Trade} from "./Trade.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Needs TradeStorage Role
 /// @dev Need to add liquidity reservation for positions
 contract TradeStorage is ITradeStorage, RoleValidation {
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.Bytes32Set;
+    using SignedMath for int256;
+    using SafeCast for uint256;
+    using SafeCast for int256;
 
     IMarketMaker public marketMaker;
     IPriceOracle priceOracle;
@@ -192,18 +197,17 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         _deleteOrder(positionKey, _params.request.input.isLimit);
 
         /* Perform Execution in the Library */
-        (Position.Data memory position, uint256 sizeUsd, uint256 collateralPrice) =
-            Trade.createNewPosition(_params, _cache, minCollateralUsd);
+        (Position.Data memory position, uint256 sizeUsd) = Trade.createNewPosition(_params, _cache, minCollateralUsd);
 
         /* Update Final Storage */
 
         // Reserve Liquidity Equal to the Position Size
         _updateLiquidityReservation(
-            positionKey,
             _params.request.user,
             _params.request.input.sizeDelta,
             sizeUsd,
-            collateralPrice,
+            _cache.collateralPrice,
+            position.positionSize,
             true,
             _params.request.input.isLong
         );
@@ -235,11 +239,11 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         /* Update Final Storage */
         openPositions[positionKey] = position;
         _updateLiquidityReservation(
-            positionKey,
             _params.request.user,
             sizeDelta,
             sizeDeltaUsd,
             _params.collateralPrice,
+            position.positionSize,
             true,
             _params.request.input.isLong
         );
@@ -262,24 +266,22 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         /* Perform Execution in the Library */
         Trade.DecreaseCache memory decreaseCache;
         (position, decreaseCache) = Trade.decreaseExistingPosition(position, _params, _cache);
+        // Cached to prevent multi conversion
+        address market = address(position.market);
 
         /* Update Final Storage */
         openPositions[positionKey] = position;
         _updateLiquidityReservation(
-            positionKey,
             _params.request.user,
             _params.request.input.sizeDelta,
-            Position.getTradeValueUsd(
-                _params.request.input.sizeDelta,
-                _params.indexPrice,
-                dataOracle.getBaseUnits(_params.request.input.indexToken)
-            ),
+            _cache.sizeDeltaUsd.abs(),
             _params.collateralPrice,
+            position.positionSize,
             false,
             position.isLong
         );
         if (position.positionSize == 0 || position.collateralAmount == 0) {
-            _deletePosition(positionKey, address(position.market), position.isLong);
+            _deletePosition(positionKey, market, position.isLong);
         }
         if (decreaseCache.borrowFee > 0) {
             // accumulate borrow fee in liquidity vault
@@ -287,29 +289,24 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         }
         if (decreaseCache.decreasePnl < 0) {
             // Loss scenario
-            uint256 lossAmount = uint256(-decreaseCache.decreasePnl); // Convert the negative decreaseCache.decreasePnl to a positive value for calculations
+            uint256 lossAmount = decreaseCache.decreasePnl.abs(); // Convert the negative decreaseCache.decreasePnl to a positive value for calculations
             require(decreaseCache.afterFeeAmount >= lossAmount, "TS: Loss > Principle");
 
             uint256 userAmount = decreaseCache.afterFeeAmount - lossAmount;
             liquidityVault.accumulateFees(lossAmount, position.isLong);
-            liquidityVault.transferOutTokens(
-                address(position.market), _params.request.user, userAmount, _params.request.input.isLong
-            );
+            liquidityVault.transferOutTokens(market, _params.request.user, userAmount, _params.request.input.isLong);
         } else {
             // Profit scenario
             liquidityVault.transferOutTokens(
-                address(position.market),
-                _params.request.user,
-                decreaseCache.afterFeeAmount,
-                _params.request.input.isLong
+                market, _params.request.user, decreaseCache.afterFeeAmount, _params.request.input.isLong
             );
             if (decreaseCache.decreasePnl > 0) {
                 liquidityVault.transferPositionProfit(
-                    _params.request.user, uint256(decreaseCache.decreasePnl), _params.request.input.isLong
+                    _params.request.user, decreaseCache.decreasePnl.toUint256(), _params.request.input.isLong
                 );
             }
         }
-        liquidityVault.swapFundingAmount(address(position.market), decreaseCache.fundingFee, position.isLong);
+        liquidityVault.swapFundingAmount(market, decreaseCache.fundingFee, position.isLong);
         liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
 
         emit DecreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
@@ -343,7 +340,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
         liquidityVault.liquidatePositionCollateral(
             _liquidator,
-            Position.calculateLiquidationFee(priceOracle, liquidationFeeUsd, position.collateralToken),
+            Position.calculateLiquidationFee(liquidationFeeUsd, _cache.collateralPrice),
             market,
             position.collateralAmount,
             collateralfundingFee,
@@ -439,21 +436,21 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     }
 
     function _updateLiquidityReservation(
-        bytes32 _positionKey,
         address _user,
         uint256 _sizeDelta,
         uint256 _sizeDeltaUsd,
         uint256 _collateralPrice,
+        uint256 _positionSize,
         bool _isIncrease,
         bool _isLong
     ) internal {
         int256 reserveDelta;
         if (_isIncrease) {
-            reserveDelta = int256(Math.mulDiv(_sizeDelta, PRECISION, _collateralPrice));
+            reserveDelta = (mulDiv(_sizeDelta, PRECISION, _collateralPrice)).toInt256();
         } else {
             uint256 reserved = liquidityVault.reservedAmounts(_user, _isLong);
-            uint256 realisedAmount = Math.mulDiv(_sizeDeltaUsd, reserved, openPositions[_positionKey].positionSize);
-            reserveDelta = -int256(realisedAmount);
+            uint256 realisedAmount = mulDiv(_sizeDeltaUsd, reserved, _positionSize);
+            reserveDelta = -1 * realisedAmount.toInt256();
         }
         liquidityVault.updateReservation(_user, reserveDelta, _isLong);
     }

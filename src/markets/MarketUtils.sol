@@ -5,12 +5,14 @@ import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 library MarketUtils {
     using SignedMath for int256;
+    using SafeCast for uint256;
 
     uint256 public constant SCALAR = 1e18;
 
@@ -19,7 +21,7 @@ library MarketUtils {
         view
         returns (uint256 longOIUSD)
     {
-        return Math.mulDiv(_market.longOpenInterest(), _price, _baseUnit);
+        return mulDiv(_market.longOpenInterest(), _price, _baseUnit);
     }
 
     function getShortOpenInterestUSD(IMarket _market, uint256 _price, uint256 _baseUnit)
@@ -27,7 +29,7 @@ library MarketUtils {
         view
         returns (uint256 shortOIUSD)
     {
-        return Math.mulDiv(_market.shortOpenInterest(), _price, _baseUnit);
+        return mulDiv(_market.shortOpenInterest(), _price, _baseUnit);
     }
 
     function getTotalOpenInterestUSD(IMarket _market, uint256 _price, uint256 _baseUnit)
@@ -35,8 +37,8 @@ library MarketUtils {
         view
         returns (uint256 totalOIUSD)
     {
-        uint256 longOIUSD = Math.mulDiv(_market.longOpenInterest(), _price, _baseUnit);
-        uint256 shortOIUSD = Math.mulDiv(_market.shortOpenInterest(), _price, _baseUnit);
+        uint256 longOIUSD = mulDiv(_market.longOpenInterest(), _price, _baseUnit);
+        uint256 shortOIUSD = mulDiv(_market.shortOpenInterest(), _price, _baseUnit);
         return longOIUSD + shortOIUSD;
     }
 
@@ -55,7 +57,7 @@ library MarketUtils {
             indexOI = _market.shortOpenInterest();
         }
 
-        entryValueUsd = Math.mulDiv(totalWAEP, indexOI, _indexBaseUnit);
+        entryValueUsd = mulDiv(totalWAEP, indexOI, _indexBaseUnit);
     }
 
     function getPoolBalanceUSD(
@@ -65,8 +67,8 @@ library MarketUtils {
         uint256 _longBaseUnit,
         uint256 _shortBaseUnit
     ) public view returns (uint256 poolBalanceUSD) {
-        uint256 longBalanceUSD = Math.mulDiv(_market.longTokenAllocation(), _longTokenPrice, _longBaseUnit);
-        uint256 shortBalance = Math.mulDiv(_market.shortTokenAllocation(), _shortTokenPrice, _shortBaseUnit);
+        uint256 longBalanceUSD = mulDiv(_market.longTokenAllocation(), _longTokenPrice, _longBaseUnit);
+        uint256 shortBalance = mulDiv(_market.shortTokenAllocation(), _shortTokenPrice, _shortBaseUnit);
         poolBalanceUSD = longBalanceUSD + shortBalance;
     }
 
@@ -84,7 +86,7 @@ library MarketUtils {
         returns (uint256 poolUsd)
     {
         uint256 poolAmount = getPoolAmount(_market, _isLong);
-        poolUsd = Math.mulDiv(poolAmount, _price, _baseUnit);
+        poolUsd = mulDiv(poolAmount, _price, _baseUnit);
     }
 
     // The pnl factor is the ratio of the pnl to the pool usd
@@ -101,8 +103,8 @@ library MarketUtils {
         // get pnl
         int256 pnl = Pricing.getPnl(_market, _price, _baseUnit, _isLong);
 
-        uint256 factor = Math.mulDiv(pnl.abs(), SCALAR, poolUsd);
-        return pnl > 0 ? int256(factor) : int256(factor) * -1;
+        uint256 factor = mulDiv(pnl.abs(), SCALAR, poolUsd);
+        return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;
     }
 
     function validateAndRetrievePrices(IDataOracle _dataOracle, uint256 _blockNumber)

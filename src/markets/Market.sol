@@ -28,10 +28,15 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {MarketUtils} from "./MarketUtils.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 // @audit - CRITICAL -> Profit needs to be paid from a market's allocation
 contract Market is IMarket, ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
+    using SafeCast for uint256;
+    using SignedMath for int256;
 
     uint256 public constant SCALING_FACTOR = 1e18;
 
@@ -189,7 +194,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         if (block.timestamp == lastUpdate) return;
 
         // Replace with Funding.calculateDelta
-        int256 skew = int256(longOpenInterest) - int256(shortOpenInterest);
+        int256 skew = longOpenInterest.toInt256() - shortOpenInterest.toInt256();
 
         // Calculate time since last funding update
         uint256 timeElapsed = block.timestamp - lastUpdate;
@@ -198,7 +203,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         (longCumulativeFundingFees, shortCumulativeFundingFees) = Funding.getTotalAccumulatedFees(this);
 
         // Add the previous velocity to the funding rate
-        int256 deltaRate = fundingRateVelocity * int256(timeElapsed);
+        int256 deltaRate = fundingRateVelocity * timeElapsed.toInt256();
         // if funding rate addition puts it above / below limit, set to limit
         if (fundingRate + deltaRate >= maxFundingRate) {
             fundingRate = maxFundingRate;
@@ -210,7 +215,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
         // Calculate the new velocity
         fundingRateVelocity = Funding.calculateVelocity(this, skew);
-        lastFundingUpdate = uint48(block.timestamp);
+        lastFundingUpdate = block.timestamp.toUint48();
 
         emit FundingUpdated(fundingRate, fundingRateVelocity, longCumulativeFundingFees, shortCumulativeFundingFees);
     }
@@ -241,14 +246,15 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         uint256 poolBalance =
             MarketUtils.getPoolBalanceUSD(this, _longTokenPrice, _shortTokenPrice, longBaseUnit, shortBaseUnit);
 
-        uint256 rate = (borrowingFactor * (openInterestUSD ** borrowingExponent)) / poolBalance;
-
+        uint256 rate =
+            unwrap((ud(borrowingFactor).mul(ud(openInterestUSD).powu(borrowingExponent))).div(ud(poolBalance)));
         // update cumulative fees with current borrowing rate
         if (_isLong) {
-            longCumulativeBorrowFees += (longBorrowingRate * (block.timestamp - lastBorrowUpdate));
+            longCumulativeBorrowFees += unwrap(ud(longBorrowingRate).mul(ud(block.timestamp).div(ud(lastBorrowUpdate))));
             longBorrowingRate = rate;
         } else {
-            shortCumulativeBorrowFees += (shortBorrowingRate * (block.timestamp - lastBorrowUpdate));
+            shortCumulativeBorrowFees +=
+                unwrap(ud(shortBorrowingRate).mul(ud(block.timestamp).div(ud(lastBorrowUpdate))));
             shortBorrowingRate = rate;
         }
         lastBorrowUpdate = uint48(block.timestamp);
@@ -263,11 +269,11 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         if (_isLong) {
             longTotalWAEP =
                 Pricing.calculateWeightedAverageEntryPrice(longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price);
-            _sizeDeltaUsd > 0 ? longSizeSumUSD += uint256(_sizeDeltaUsd) : longSizeSumUSD -= uint256(-_sizeDeltaUsd);
+            _sizeDeltaUsd > 0 ? longSizeSumUSD += _sizeDeltaUsd.abs() : longSizeSumUSD -= _sizeDeltaUsd.abs();
         } else {
             shortTotalWAEP =
                 Pricing.calculateWeightedAverageEntryPrice(shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price);
-            _sizeDeltaUsd > 0 ? shortSizeSumUSD += uint256(_sizeDeltaUsd) : shortSizeSumUSD -= uint256(-_sizeDeltaUsd);
+            _sizeDeltaUsd > 0 ? shortSizeSumUSD += _sizeDeltaUsd.abs() : shortSizeSumUSD -= _sizeDeltaUsd.abs();
         }
         emit TotalWAEPUpdated(longTotalWAEP, shortTotalWAEP);
     }

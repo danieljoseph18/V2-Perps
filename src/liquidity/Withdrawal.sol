@@ -6,7 +6,7 @@ import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 
@@ -122,7 +122,7 @@ library Withdrawal {
         pure
         returns (uint256 amountOut)
     {
-        return Math.mulDiv(_tokenAmount, _impactedPrice, _signedPrice);
+        return mulDiv(_tokenAmount, _impactedPrice, _signedPrice);
     }
 
     function _calculateTokenAmount(
@@ -132,10 +132,10 @@ library Withdrawal {
         uint256 _shortTokenPrice
     ) internal view returns (uint256 amountOut) {
         uint256 lpTokenPrice = Pool.getMarketTokenPrice(_values, _longTokenPrice, _shortTokenPrice);
-        uint256 marketTokenValueUsd = Math.mulDiv(lpTokenPrice, _values.marketTokenSupply, SCALING_FACTOR);
+        uint256 marketTokenValueUsd = mulDiv(lpTokenPrice, _values.marketTokenSupply, SCALING_FACTOR);
         amountOut = _isLongToken
-            ? Math.mulDiv(marketTokenValueUsd, _values.longBaseUnit, _longTokenPrice)
-            : Math.mulDiv(marketTokenValueUsd, _values.shortBaseUnit, _shortTokenPrice);
+            ? mulDiv(marketTokenValueUsd, _values.longBaseUnit, _longTokenPrice)
+            : mulDiv(marketTokenValueUsd, _values.shortBaseUnit, _shortTokenPrice);
     }
 
     function _generateKey(address owner, address tokenOut, uint256 marketTokenAmountIn, uint256 blockNumber)
