@@ -24,13 +24,13 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Pricing} from "../libraries/Pricing.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {MarketUtils} from "./MarketUtils.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
+import {MarketUtils} from "./MarketUtils.sol";
 
 // @audit - CRITICAL -> Profit needs to be paid from a market's allocation
 contract Market is IMarket, ReentrancyGuard, RoleValidation {
@@ -40,9 +40,9 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
     uint256 public constant SCALING_FACTOR = 1e18;
 
+    IPriceFeed public priceFeed;
+
     address public indexToken;
-    IPriceOracle priceOracle;
-    IDataOracle dataOracle;
 
     bool private isInitialised;
 
@@ -108,12 +108,9 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     uint256 public longSizeSumUSD; // Σ All Position Sizes USD Long
     uint256 public shortSizeSumUSD; // Σ All Position Sizes USD Short
 
-    constructor(IPriceOracle _priceOracle, IDataOracle _dataOracle, address _indexToken, address _roleStorage)
-        RoleValidation(_roleStorage)
-    {
+    constructor(IPriceFeed _priceFeed, address _indexToken, address _roleStorage) RoleValidation(_roleStorage) {
         indexToken = _indexToken;
-        priceOracle = _priceOracle;
-        dataOracle = _dataOracle;
+        priceFeed = _priceFeed;
     }
 
     /// @dev All values need 18 decimals => e.g 0.0003e18 = 0.03%
@@ -235,9 +232,9 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         uint256 lastUpdate = lastBorrowUpdate;
         if (block.timestamp == lastUpdate) return;
 
-        uint256 indexBaseUnit = dataOracle.getBaseUnits(indexToken);
-        uint256 longBaseUnit = dataOracle.LONG_BASE_UNIT();
-        uint256 shortBaseUnit = dataOracle.SHORT_BASE_UNIT();
+        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, indexToken);
+        uint256 longBaseUnit = Oracle.getLongBaseUnit(priceFeed);
+        uint256 shortBaseUnit = Oracle.getShortBaseUnit(priceFeed);
 
         // Calculate the new Borrowing Rate
         uint256 openInterestUSD = _isLong

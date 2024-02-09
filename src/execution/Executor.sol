@@ -19,8 +19,6 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
@@ -35,6 +33,8 @@ import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {Trade} from "../positions/Trade.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Needs Executor Role
 // All keeper interactions should come through this contract
@@ -44,10 +44,9 @@ contract Executor is RoleValidation, ReentrancyGuard {
 
     ITradeStorage public tradeStorage;
     ILiquidityVault public liquidityVault;
-    IPriceOracle public priceOracle;
-    IDataOracle public dataOracle;
     IMarketMaker public marketMaker;
     IReferralStorage public referralStorage;
+    IPriceFeed public priceFeed;
 
     error Executor_InvalidRequestType();
 
@@ -56,35 +55,39 @@ contract Executor is RoleValidation, ReentrancyGuard {
     constructor(
         address _marketMaker,
         address _tradeStorage,
-        address _priceOracle,
         address _liquidityVault,
-        address _dataOracle,
         address _referralStorage,
+        address _priceFeed,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         marketMaker = IMarketMaker(_marketMaker);
         tradeStorage = ITradeStorage(_tradeStorage);
-        priceOracle = IPriceOracle(_priceOracle);
         liquidityVault = ILiquidityVault(_liquidityVault);
-        dataOracle = IDataOracle(_dataOracle);
         referralStorage = IReferralStorage(_referralStorage);
+        priceFeed = IPriceFeed(_priceFeed);
     }
 
     /////////////////////////
     // MARKET INTERACTIONS //
     /////////////////////////
 
-    function executeDeposit(bytes32 _key) external nonReentrant onlyKeeper {
+    // @audit - keeper needs to pass in cumulative net pnl
+    // Must make sure this value is valid. Get by looping through all current active markets
+    // and summing their PNLs
+    function executeDeposit(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
         require(_key != bytes32(0), "E: Invalid Key");
-        try liquidityVault.executeDeposit(_key, msg.sender) {}
+        try liquidityVault.executeDeposit(_key, _cumulativePnl, msg.sender) {}
         catch {
             revert("E: Execute Deposit Failed");
         }
     }
 
-    function executeWithdrawal(bytes32 _key) external nonReentrant onlyKeeper {
+    // @audit - keeper needs to pass in cumulative net pnl
+    // Must make sure this value is valid. Get by looping through all current active markets
+    // and summing their PNLs
+    function executeWithdrawal(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
         require(_key != bytes32(0), "E: Invalid Key");
-        try liquidityVault.executeWithdrawal(_key, msg.sender) {}
+        try liquidityVault.executeWithdrawal(_key, _cumulativePnl, msg.sender) {}
         catch {
             revert("E: Execute Withdrawal Failed");
         }
@@ -128,17 +131,19 @@ contract Executor is RoleValidation, ReentrancyGuard {
         require(request.user != address(0), "E: Request Key");
         require(_feeReceiver != address(0), "E: Fee Receiver");
         // Fetch and validate price
-        cache.indexPrice = priceOracle.getSignedPrice(request.input.indexToken, request.requestBlock);
+        cache.indexPrice = request.input.isLong
+            ? Oracle.getMaxPrice(priceFeed, request.input.indexToken, request.requestBlock)
+            : Oracle.getMinPrice(priceFeed, request.input.indexToken, request.requestBlock);
         require(cache.indexPrice != 0, "E: Invalid Price");
         if (_isLimitOrder) Position.checkLimitPrice(cache.indexPrice, request.input);
 
         // Execute Price Impact
         cache.market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
-        cache.indexBaseUnit = dataOracle.getBaseUnits(request.input.indexToken);
+        cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, request.input.indexToken);
         cache.impactedPrice = PriceImpact.execute(cache.market, request, cache.indexPrice, cache.indexBaseUnit);
 
         (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) =
-            MarketUtils.validateAndRetrievePrices(dataOracle, request.requestBlock);
+            Oracle.getMarketTokenPrices(priceFeed, request.requestBlock);
 
         // Update Market State
         cache.sizeDeltaUsd = _calculateSizeDeltaUsd(request, cache.indexPrice, cache.indexBaseUnit);
@@ -206,7 +211,7 @@ contract Executor is RoleValidation, ReentrancyGuard {
     function liquidatePosition(bytes32 _positionKey) external onlyKeeper {
         // need to construct ExecuteCache
         // check if position is flagged for liquidation
-        // uint256 collateralPrice = priceOracle.getCollateralPrice();
+        // sign and fetch the price of the collateral token
         // fetch data to execute liquidations
         // call _updateMarketState
         // liquidate the position

@@ -20,8 +20,6 @@ pragma solidity 0.8.23;
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Position} from "../positions/Position.sol";
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";

@@ -2,33 +2,21 @@
 pragma solidity 0.8.23;
 
 import {Market, IMarket} from "../Market.sol";
+import {Oracle} from "../../oracle/Oracle.sol";
 
 interface IMarketMaker {
-    struct MarketConfig {
-        uint256 maxFundingVelocity;
-        uint256 skewScale;
-        uint256 maxFundingRate;
-        uint256 minFundingRate;
-        uint256 borrowingFactor;
-        uint256 borrowingExponent;
-        uint256 priceImpactFactor;
-        uint256 priceImpactExponent;
-        uint256 maxPnlFactor;
-        uint256 targetPnlFactor;
-        bool feeForSmallerSide;
-        bool adlFlaggedLong;
-        bool adlFlaggedShort;
-    }
+    event MarketMakerInitialised(address priceStorage);
+    event MarketCreated(address market, address indexToken, bytes32 priceId);
+    event DefaultConfigSet(IMarket.Config defaultConfig);
 
-    event MarketMakerInitialised(address dataOracle, address priceOracle);
-    event MarketCreated(address market, address indexToken, address priceFeed);
-    event DefaultConfigSet(MarketConfig defaultConfig);
-
-    function initialise(MarketConfig memory _defaultConfig, address _dataOracle, address _priceOracle) external;
-    function setDefaultConfig(MarketConfig memory _defaultConfig) external;
-    function createNewMarket(address _indexToken, address _priceFeed, uint256 _baseUnit)
-        external
-        returns (Market market);
+    function initialise(IMarket.Config memory _defaultConfig, address _priceStorage) external;
+    function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
+    function createNewMarket(
+        address _indexToken,
+        bytes32 _priceId,
+        uint256 _baseUnit,
+        Oracle.PriceProvider _priceProvider
+    ) external returns (Market market);
 
     function tokenToMarkets(address _indexToken) external view returns (address market);
 }

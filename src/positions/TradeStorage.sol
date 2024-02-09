@@ -25,8 +25,6 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Pricing} from "../libraries/Pricing.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Position} from "../positions/Position.sol";
@@ -36,6 +34,8 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Trade} from "./Trade.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Needs TradeStorage Role
 /// @dev Need to add liquidity reservation for positions
@@ -47,9 +47,8 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     using SafeCast for int256;
 
     IMarketMaker public marketMaker;
-    IPriceOracle priceOracle;
+    IPriceFeed priceFeed;
     ILiquidityVault liquidityVault;
-    IDataOracle dataOracle;
 
     uint256 constant PRECISION = 1e18;
     uint256 constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
@@ -70,17 +69,12 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     uint256 public tradingFee;
     uint256 public executionFee;
 
-    constructor(
-        address _marketMaker,
-        address _liquidityVault,
-        address _priceOracle,
-        address _dataOracle,
-        address _roleStorage
-    ) RoleValidation(_roleStorage) {
+    constructor(address _marketMaker, address _liquidityVault, address _priceFeed, address _roleStorage)
+        RoleValidation(_roleStorage)
+    {
         marketMaker = IMarketMaker(_marketMaker);
         liquidityVault = ILiquidityVault(_liquidityVault);
-        priceOracle = IPriceOracle(_priceOracle);
-        dataOracle = IDataOracle(_dataOracle);
+        priceFeed = IPriceFeed(_priceFeed);
     }
 
     function initialise(
@@ -108,8 +102,6 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         EnumerableSet.Bytes32Set storage orderSet = _request.input.isLimit ? limitOrderKeys : marketOrderKeys;
         // Check if the Order already exists
         require(!orderSet.contains(orderKey), "TS: Order Already Exists");
-        // Request the price from the oracle to be signed on the current block
-        priceOracle.requestSignedPrice(_request.input.indexToken, block.timestamp);
         // Add the Order to the Set
         orderSet.add(orderKey);
         orders[orderKey] = _request;

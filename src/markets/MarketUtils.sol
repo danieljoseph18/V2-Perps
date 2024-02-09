@@ -2,8 +2,6 @@
 pragma solidity 0.8.23;
 
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
@@ -15,6 +13,22 @@ library MarketUtils {
     using SafeCast for uint256;
 
     uint256 public constant SCALAR = 1e18;
+
+    struct Config {
+        uint256 maxFundingVelocity;
+        uint256 skewScale;
+        uint256 maxFundingRate;
+        uint256 minFundingRate;
+        uint256 borrowingFactor;
+        uint256 borrowingExponent;
+        uint256 priceImpactFactor;
+        uint256 priceImpactExponent;
+        uint256 maxPnlFactor;
+        uint256 targetPnlFactor;
+        bool feeForSmallerSide;
+        bool adlFlaggedLong;
+        bool adlFlaggedShort;
+    }
 
     function getLongOpenInterestUSD(IMarket _market, uint256 _price, uint256 _baseUnit)
         external
@@ -105,16 +119,5 @@ library MarketUtils {
 
         uint256 factor = mulDiv(pnl.abs(), SCALAR, poolUsd);
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;
-    }
-
-    function validateAndRetrievePrices(IDataOracle _dataOracle, uint256 _blockNumber)
-        external
-        view
-        returns (uint256, uint256)
-    {
-        (bool isValid,,,, uint256 longTokenPrice, uint256 shortTokenPrice) = _dataOracle.blockData(_blockNumber);
-        require(isValid, "MarketUtils: invalid block data");
-        require(longTokenPrice > 0 && shortTokenPrice > 0, "MarketUtils: invalid token prices");
-        return (longTokenPrice, shortTokenPrice);
     }
 }

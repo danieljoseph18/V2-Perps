@@ -2,7 +2,23 @@
 pragma solidity 0.8.23;
 
 interface IMarket {
-    // // Public state variables accessors
+    struct Config {
+        uint256 maxFundingVelocity;
+        uint256 skewScale;
+        int256 maxFundingRate;
+        int256 minFundingRate;
+        uint256 borrowingFactor;
+        uint256 borrowingExponent;
+        uint256 priceImpactFactor;
+        uint256 priceImpactExponent;
+        uint256 maxPnlFactor;
+        uint256 targetPnlFactor;
+        bool feeForSmallerSide;
+        bool adlFlaggedLong;
+        bool adlFlaggedShort;
+    }
+    // Public state variables accessors
+
     function indexToken() external view returns (address);
     function maxFundingVelocity() external view returns (uint256);
     function skewScale() external view returns (uint256);
@@ -35,22 +51,6 @@ interface IMarket {
     function targetPnlFactor() external view returns (uint256);
     function adlFlaggedLong() external view returns (bool);
     function adlFlaggedShort() external view returns (bool);
-
-    struct Config {
-        uint256 maxFundingVelocity;
-        uint256 skewScale; // Sensitivity to Market Skew
-        int256 maxFundingRate;
-        int256 minFundingRate;
-        uint256 borrowingFactor;
-        uint256 borrowingExponent;
-        uint256 priceImpactFactor;
-        uint256 priceImpactExponent;
-        uint256 maxPnlFactor;
-        uint256 targetPnlFactor; // PNL Factor to aim for in ADLs
-        bool feeForSmallerSide; // Flag for Skipping Fee for Smaller Side
-        bool adlFlaggedLong; // Flag for ADL Long
-        bool adlFlaggedShort; // Flag for ADL Short
-    }
 
     // Events
     event MarketInitialised(

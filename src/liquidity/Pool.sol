@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
@@ -13,8 +11,6 @@ library Pool {
     uint256 public constant SCALING_FACTOR = 1e18;
 
     struct Values {
-        IDataOracle dataOracle;
-        IPriceOracle priceOracle;
         address longToken;
         address shortToken;
         uint256 longTokenBalance;
@@ -23,6 +19,7 @@ library Pool {
         uint256 blockNumber;
         uint256 longBaseUnit;
         uint256 shortBaseUnit;
+        int256 cumulativePnl;
     }
 
     function calculateUsdValue(
@@ -41,7 +38,7 @@ library Pool {
 
     function getMarketTokenPrice(Values memory _values, uint256 _longTokenPrice, uint256 _shortTokenPrice)
         external
-        view
+        pure
         returns (uint256 lpTokenPrice)
     {
         // market token price = (worth of market pool in USD) / total supply
@@ -56,17 +53,16 @@ library Pool {
     // @audit - probably need to account for some fees
     function getAum(Values memory _values, uint256 _longTokenPrice, uint256 _shortTokenPrice)
         public
-        view
+        pure
         returns (uint256 aum)
     {
         // Get Values in USD
         uint256 longTokenValue = mulDiv(_values.longTokenBalance, _longTokenPrice, _values.longBaseUnit);
         uint256 shortTokenValue = mulDiv(_values.shortTokenBalance, _shortTokenPrice, _values.shortBaseUnit);
 
-        // Calculate PNL
-        int256 pnl = _values.dataOracle.getCumulativeNetPnl(_values.blockNumber);
-
         // Calculate AUM
-        aum = pnl >= 0 ? longTokenValue + shortTokenValue + pnl.abs() : longTokenValue + shortTokenValue - pnl.abs();
+        aum = _values.cumulativePnl >= 0
+            ? longTokenValue + shortTokenValue + _values.cumulativePnl.abs()
+            : longTokenValue + shortTokenValue - _values.cumulativePnl.abs();
     }
 }

@@ -1,14 +1,14 @@
 //SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 library Withdrawal {
     uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
@@ -35,8 +35,9 @@ library Withdrawal {
         require(_data.expirationTimestamp < block.timestamp, "Withdrawal: deposit not expired");
     }
 
-    function create(IDataOracle _dataOracle, Params memory _params, uint48 _minTimeToExpiration)
+    function create(Params memory _params, uint48 _minTimeToExpiration)
         external
+        view
         returns (Data memory data, bytes32 key)
     {
         uint256 blockNumber = block.number;
@@ -46,14 +47,12 @@ library Withdrawal {
             expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration
         });
 
-        // Request Required Data for the Block
-        _dataOracle.requestBlockData(blockNumber);
-
         key = _generateKey(_params.owner, _params.tokenOut, _params.marketTokenAmountIn, blockNumber);
     }
 
     function execute(
         ILiquidityVault _liquidityVault,
+        IPriceFeed _priceFeed,
         Data memory _data,
         Pool.Values memory _values,
         bool _isLongToken,
@@ -61,8 +60,7 @@ library Withdrawal {
         uint256 _priceImpactFactor
     ) external view returns (uint256 amountOut, uint256 fee, uint256 remaining) {
         // get price signed to the block number of the request
-        (uint256 longTokenPrice, uint256 shortTokenPrice) =
-            MarketUtils.validateAndRetrievePrices(_values.dataOracle, _data.blockNumber);
+        (uint256 longTokenPrice, uint256 shortTokenPrice) = Oracle.getMarketTokenPrices(_priceFeed, _data.blockNumber);
         // Calculate amountOut
         uint256 tokenAmount = _calculateTokenAmount(_isLongToken, _values, longTokenPrice, shortTokenPrice);
         // Calculate impacted price
@@ -130,7 +128,7 @@ library Withdrawal {
         Pool.Values memory _values,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice
-    ) internal view returns (uint256 amountOut) {
+    ) internal pure returns (uint256 amountOut) {
         uint256 lpTokenPrice = Pool.getMarketTokenPrice(_values, _longTokenPrice, _shortTokenPrice);
         uint256 marketTokenValueUsd = mulDiv(lpTokenPrice, _values.marketTokenSupply, SCALING_FACTOR);
         amountOut = _isLongToken

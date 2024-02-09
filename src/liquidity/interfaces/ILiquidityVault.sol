@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IPriceOracle} from "../../oracle/interfaces/IPriceOracle.sol";
-import {IDataOracle} from "../../oracle/interfaces/IDataOracle.sol";
 import {IExecutor} from "../../execution/interfaces/IExecutor.sol";
 import {Deposit} from "../../liquidity/Deposit.sol";
 import {Withdrawal} from "../../liquidity/Withdrawal.sol";
+import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface ILiquidityVault {
     // Constructor is not included in the interface
 
     // Admin functions
     function initialise(
-        IPriceOracle _priceOracle,
-        IDataOracle _dataOracle,
+        IPriceFeed _priceFeed,
         IExecutor _executor,
         uint48 _minTimeToExpiration,
         uint8 _priceImpactExponent,
@@ -43,10 +41,10 @@ interface ILiquidityVault {
     function recordCollateralTransferIn(address _market, uint256 _collateralDelta, bool _isLong) external;
 
     // Deposit execution
-    function executeDeposit(bytes32 _key, address _executor) external;
+    function executeDeposit(bytes32 _key, int256 _cumulativePnl, address _executor) external;
 
     // Withdrawal execution
-    function executeWithdrawal(bytes32 _key, address _executor) external;
+    function executeWithdrawal(bytes32 _key, int256 _cumulativePnl, address _executor) external;
 
     // Deposit creation
     function createDeposit(Deposit.Params memory _params) external payable;

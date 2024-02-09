@@ -95,6 +95,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     // MARKET INTERACTIONS //
     /////////////////////////
 
+    // @audit - need to request signed price here
     function createDeposit(Deposit.Params memory _params) external payable nonReentrant validExecutionFee(false) {
         require(msg.sender == _params.owner, "Router: Invalid Owner");
         require(_params.maxSlippage >= MIN_SLIPPAGE && _params.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
@@ -116,6 +117,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         liquidityVault.cancelDeposit(_key, msg.sender);
     }
 
+    // @audit - need to request signed price here
     function createWithdrawal(Withdrawal.Params memory _params)
         external
         payable
@@ -147,6 +149,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     // @audit - Update function so:
     // If Long -> User collateral is ETH
     // If Short -> User collateral is USDC
+    // @audit - need to request signed price here
     function createTradeRequest(Position.Input calldata _trade) external payable nonReentrant validExecutionFee(true) {
         require(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
         require(_trade.collateralDelta != 0, "Router: Collateral Delta");

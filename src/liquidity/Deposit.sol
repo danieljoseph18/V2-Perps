@@ -1,14 +1,14 @@
 //SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 library Deposit {
     uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
@@ -35,8 +35,9 @@ library Deposit {
         require(_data.expirationTimestamp < block.timestamp, "Deposit: deposit not expired");
     }
 
-    function create(IDataOracle _dataOracle, Params memory _params, uint48 _minTimeToExpiration)
+    function create(Params memory _params, uint48 _minTimeToExpiration)
         external
+        view
         returns (Data memory data, bytes32 key)
     {
         uint256 blockNumber = block.number;
@@ -46,14 +47,12 @@ library Deposit {
             expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration
         });
 
-        // Request Required Data for the Block
-        _dataOracle.requestBlockData(blockNumber);
-
         key = _generateKey(_params.owner, _params.tokenIn, _params.amountIn, blockNumber);
     }
 
     function execute(
         ILiquidityVault _liquidityVault,
+        IPriceFeed _priceFeed,
         Data memory _data,
         Pool.Values memory _values,
         bool _isLongToken,
@@ -61,8 +60,7 @@ library Deposit {
         uint256 _priceImpactFactor
     ) external view returns (uint256 mintAmount, uint256 fee, uint256 remaining) {
         // Get token price and calculate price impact directly to reduce local variables
-        (uint256 longTokenPrice, uint256 shortTokenPrice) =
-            MarketUtils.validateAndRetrievePrices(_values.dataOracle, _data.blockNumber);
+        (uint256 longTokenPrice, uint256 shortTokenPrice) = Oracle.getMarketTokenPrices(_priceFeed, _data.blockNumber);
 
         uint256 impactedPrice = _calculateImpactedPrice(
             _values,
@@ -123,7 +121,7 @@ library Deposit {
         uint256 _baseUnitIn,
         uint256 _remaining,
         bool _isLongToken
-    ) internal view returns (uint256) {
+    ) internal pure returns (uint256) {
         uint256 valueUsd = mulDiv(_remaining, _impactedPrice, _baseUnitIn);
         uint256 marketTokenPrice;
         if (_isLongToken) {
@@ -147,16 +145,6 @@ library Deposit {
         } else {
             valueUsd = mulDiv(_amount, _price, _shortBaseUnit);
         }
-    }
-
-    function _calculateMintAmount(
-        uint256 _valueUsd,
-        Pool.Values memory _values,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice
-    ) internal view returns (uint256 mintAmount) {
-        uint256 marketTokenPrice = Pool.getMarketTokenPrice(_values, _longTokenPrice, _shortTokenPrice);
-        mintAmount = marketTokenPrice == 0 ? _valueUsd : mulDiv(_valueUsd, SCALING_FACTOR, marketTokenPrice);
     }
 
     function _generateKey(address owner, address tokenIn, uint256 amountIn, uint256 blockNumber)

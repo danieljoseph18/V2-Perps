@@ -10,8 +10,6 @@ import {Withdrawal} from "./Withdrawal.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {Fee} from "../libraries/Fee.sol";
@@ -20,6 +18,9 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {IExecutor} from "../execution/interfaces/IExecutor.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 // Stores all funds for the protocol
 /// @dev Needs Vault Role
@@ -27,6 +28,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using Address for address payable;
+    using SignedMath for int256;
 
     uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 public constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
@@ -37,8 +39,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     uint256 private immutable LONG_BASE_UNIT;
     uint256 private immutable SHORT_BASE_UNIT;
 
-    IPriceOracle priceOracle;
-    IDataOracle dataOracle;
+    IPriceFeed priceFeed;
     IExecutor executor;
 
     bool isInitialised;
@@ -92,8 +93,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     }
 
     function initialise(
-        IPriceOracle _priceOracle,
-        IDataOracle _dataOracle,
+        IPriceFeed _priceFeed,
         IExecutor _executor,
         uint48 _minTimeToExpiration,
         uint8 _priceImpactExponent,
@@ -103,8 +103,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         uint256 _withdrawalFee
     ) external onlyAdmin {
         require(!isInitialised, "LiquidityVault: already initialised");
-        priceOracle = _priceOracle;
-        dataOracle = _dataOracle;
+        priceFeed = _priceFeed;
         executor = _executor;
         executionFee = _executionFee;
         minTimeToExpiration = _minTimeToExpiration;
@@ -206,9 +205,8 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     // We need a reserve factor to cap reserves to a % of the available liquidity
     function updateReservation(address _user, int256 _amount, bool _isLong) external onlyTradeStorage {
         require(_amount != 0, "LV: Invalid Res Amount");
-        uint256 amt;
+        uint256 amt = _amount.abs();
         if (_amount > 0) {
-            amt = uint256(_amount);
             if (_isLong) {
                 require(amt <= longTokenBalance, "LV: Insufficient Long Liq");
                 longTokensReserved += amt;
@@ -219,7 +217,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
                 reservedAmounts[_user][false] += amt;
             }
         } else {
-            amt = uint256(-_amount);
             if (_isLong) {
                 require(reservedAmounts[_user][true] >= amt, "LV: Insufficient Reserves");
                 require(longTokensReserved >= amt, "LV: Insufficient Long Liq");
@@ -304,7 +301,11 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     // DEPOSIT EXECUTION //
     ///////////////////////
 
-    function executeDeposit(bytes32 _key, address _executor) external onlyExecutor orderExists(_key, true) {
+    function executeDeposit(bytes32 _key, int256 _cumulativePnl, address _executor)
+        external
+        onlyExecutor
+        orderExists(_key, true)
+    {
         // fetch and cache
         Deposit.Data memory data = depositRequests[_key];
         // remove from storage
@@ -315,10 +316,9 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
         (uint256 mintAmount, uint256 fee, uint256 remaining) = Deposit.execute(
             this,
+            priceFeed,
             data,
             Pool.Values({
-                dataOracle: dataOracle,
-                priceOracle: priceOracle,
                 longToken: LONG_TOKEN,
                 shortToken: SHORT_TOKEN,
                 longTokenBalance: longTokenBalance,
@@ -326,7 +326,8 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
                 marketTokenSupply: totalSupply(),
                 blockNumber: data.blockNumber,
                 longBaseUnit: LONG_BASE_UNIT,
-                shortBaseUnit: SHORT_BASE_UNIT
+                shortBaseUnit: SHORT_BASE_UNIT,
+                cumulativePnl: _cumulativePnl
             }),
             isLongToken,
             priceImpactExponent,
@@ -357,7 +358,11 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     //////////////////////////
 
     // @audit - review
-    function executeWithdrawal(bytes32 _key, address _executor) external onlyExecutor orderExists(_key, false) {
+    function executeWithdrawal(bytes32 _key, int256 _cumulativePnl, address _executor)
+        external
+        onlyExecutor
+        orderExists(_key, false)
+    {
         // fetch and cache
         Withdrawal.Data memory data = withdrawalRequests[_key];
 
@@ -372,10 +377,9 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
         (uint256 amountOut, uint256 fee, uint256 remaining) = Withdrawal.execute(
             this,
+            priceFeed,
             data,
             Pool.Values({
-                dataOracle: dataOracle,
-                priceOracle: priceOracle,
                 longToken: LONG_TOKEN,
                 shortToken: SHORT_TOKEN,
                 longTokenBalance: longTokenBalance,
@@ -383,7 +387,8 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
                 marketTokenSupply: totalSupply(),
                 blockNumber: data.blockNumber,
                 longBaseUnit: LONG_BASE_UNIT,
-                shortBaseUnit: SHORT_BASE_UNIT
+                shortBaseUnit: SHORT_BASE_UNIT,
+                cumulativePnl: _cumulativePnl
             }),
             isLongToken,
             priceImpactExponent,
@@ -423,7 +428,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     // Function to create a deposit request
     // Note -> need to add ability to create deposit in eth
     function createDeposit(Deposit.Params memory _params) external payable onlyRouter {
-        (Deposit.Data memory deposit, bytes32 key) = Deposit.create(dataOracle, _params, minTimeToExpiration);
+        (Deposit.Data memory deposit, bytes32 key) = Deposit.create(_params, minTimeToExpiration);
         depositKeys.add(key);
         depositRequests[key] = deposit;
         emit DepositRequestCreated(key, _params.owner, _params.tokenIn, _params.amountIn, deposit.blockNumber);
@@ -450,7 +455,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     // Function to create a withdrawal request
     function createWithdrawal(Withdrawal.Params memory _params) external payable onlyRouter {
-        (Withdrawal.Data memory withdrawal, bytes32 key) = Withdrawal.create(dataOracle, _params, minTimeToExpiration);
+        (Withdrawal.Data memory withdrawal, bytes32 key) = Withdrawal.create(_params, minTimeToExpiration);
 
         withdrawalKeys.add(key);
         withdrawalRequests[key] = withdrawal;

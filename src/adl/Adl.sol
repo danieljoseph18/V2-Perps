@@ -4,14 +4,14 @@ pragma solidity 0.8.23;
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Position} from "../positions/Position.sol";
 import {Trade} from "../positions/Trade.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 // Contract for Auto Deleveraging markets
 // Maintain a profit to pool ratio for each pool
@@ -22,36 +22,33 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 contract Adl is RoleValidation {
     using SignedMath for int256;
 
-    IPriceOracle public priceOracle;
-    IDataOracle public dataOracle;
+    IPriceFeed public priceFeed;
     ITradeStorage public tradeStorage;
 
     event AdlExecuted(IMarket indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
 
-    constructor(address _tradeStorage, address _priceOracle, address _dataOracle, address _roleStorage)
-        RoleValidation(_roleStorage)
-    {
+    constructor(address _tradeStorage, address _priceFeed, address _roleStorage) RoleValidation(_roleStorage) {
         tradeStorage = ITradeStorage(_tradeStorage);
-        priceOracle = IPriceOracle(_priceOracle);
-        dataOracle = IDataOracle(_dataOracle);
+        priceFeed = IPriceFeed(_priceFeed);
     }
 
     function flagForAdl(IMarket _market, bool _isLong) external onlyAdlKeeper {
-        require(_market != IMarket(address(0)), "ADL: Invalid market");
-        // get current price
-        address indexToken = _market.indexToken();
-        uint256 price = priceOracle.getPrice(indexToken);
-        uint256 baseUnit = dataOracle.getBaseUnits(indexToken);
-        // fetch pnl to pool ratio
-        int256 pnlFactor = MarketUtils.getPnlFactor(_market, price, baseUnit, _isLong);
-        // fetch max pnl to pool ratio
-        uint256 maxPnlFactor = _market.maxPnlFactor();
+        // require(_market != IMarket(address(0)), "ADL: Invalid market");
+        // // get current price
+        // address indexToken = _market.indexToken();
+        // uint256 price =
+        //     _isLong ? Oracle.getMaxPrice(priceFeed, indexToken) : Oracle.getMinPrice(priceFeed, indexToken);
+        // uint256 baseUnit = Oracle.getBaseUnits(priceFeed, indexToken);
+        // // fetch pnl to pool ratio
+        // int256 pnlFactor = MarketUtils.getPnlFactor(_market, price, baseUnit, _isLong);
+        // // fetch max pnl to pool ratio
+        // uint256 maxPnlFactor = _market.maxPnlFactor();
 
-        if (pnlFactor.abs() > maxPnlFactor && pnlFactor > 0) {
-            _market.updateAdlState(true, _isLong);
-        } else {
-            revert("ADL: PTP ratio not exceeded");
-        }
+        // if (pnlFactor.abs() > maxPnlFactor && pnlFactor > 0) {
+        //     _market.updateAdlState(true, _isLong);
+        // } else {
+        //     revert("ADL: PTP ratio not exceeded");
+        // }
     }
 
     function executeAdl(IMarket _market, uint256 _sizeDelta, bytes32 _positionKey, bool _isLong)
@@ -71,10 +68,10 @@ contract Adl is RoleValidation {
         // cache the market
         cache.market = _market;
         // Get current pricing and token data
-        cache.indexPrice = priceOracle.getPrice(_market.indexToken());
-        cache.indexBaseUnit = dataOracle.getBaseUnits(_market.indexToken());
-        // Get token prices
-        (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) = priceOracle.getInstantMarketTokenPrices();
+        // cache.indexPrice = priceOracle.getPrice(_market.indexToken());
+        // cache.indexBaseUnit = dataOracle.getBaseUnits(_market.indexToken());
+        // // Get token prices
+        // (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) = priceOracle.getInstantMarketTokenPrices();
         // Get collateral price
         cache.collateralPrice = position.isLong ? cache.longMarketTokenPrice : cache.shortMarketTokenPrice;
         // Get size delta usd

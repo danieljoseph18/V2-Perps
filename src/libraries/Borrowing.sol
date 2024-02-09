@@ -19,11 +19,11 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Position} from "../positions/Position.sol";
-import {IDataOracle} from "../oracle/interfaces/IDataOracle.sol";
-import {IPriceOracle} from "../oracle/interfaces/IPriceOracle.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
@@ -31,7 +31,7 @@ library Borrowing {
 
     function calculateRate(
         IMarket _market,
-        IDataOracle _dataOracle,
+        IPriceFeed _priceFeed,
         uint256 _indexPrice,
         address _indexToken,
         uint256 _longTokenPrice,
@@ -41,7 +41,7 @@ library Borrowing {
     ) external view returns (uint256 rate) {
         // Calculate the new Borrowing Rate
         UD60x18 openInterest =
-            ud(MarketUtils.getTotalOpenInterestUSD(_market, _indexPrice, _dataOracle.getBaseUnits(_indexToken)));
+            ud(MarketUtils.getTotalOpenInterestUSD(_market, _indexPrice, Oracle.getBaseUnit(_priceFeed, _indexToken)));
         UD60x18 poolBalance = ud(
             MarketUtils.getPoolBalanceUSD(
                 _market, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
