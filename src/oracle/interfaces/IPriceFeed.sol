@@ -18,4 +18,6 @@ interface IPriceFeed {
     function lastUpdateBlock() external view returns (uint256);
     function longToken() external view returns (address);
     function shortToken() external view returns (address);
+    function secondaryPriceFee() external view returns (uint256);
+    function getPrimaryUpdateFee(bytes[] calldata _priceUpdateData) external view returns (uint256);
 }

@@ -260,7 +260,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     }
 
     /// @dev Updates Weighted Average Entry Price => Used to Track PNL For a Market
-    function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external onlyExecutor {
+    function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external onlyProcessor {
         if (_price == 0) return;
         if (_sizeDeltaUsd == 0) return;
         if (_isLong) {
@@ -275,8 +275,8 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         emit TotalWAEPUpdated(longTotalWAEP, shortTotalWAEP);
     }
 
-    /// @dev Only Executor
-    function updateOpenInterest(uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external onlyExecutor {
+    /// @dev Only Order Processor
+    function updateOpenInterest(uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external onlyProcessor {
         if (_shouldAdd) {
             _isLong ? longOpenInterest += _indexTokenAmount : shortOpenInterest += _indexTokenAmount;
         } else {

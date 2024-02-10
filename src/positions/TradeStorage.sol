@@ -109,7 +109,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit OrderRequestCreated(orderKey, _request);
     }
 
-    function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyRouterOrExecutor {
+    function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyRouterOrProcessor {
         // Create a Storage Pointer to the Order Set
         EnumerableSet.Bytes32Set storage orderKeys = _isLimit ? limitOrderKeys : marketOrderKeys;
         // Check if the Order exists
@@ -123,7 +123,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function executeCollateralIncrease(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
         external
-        onlyExecutor
+        onlyProcessor
     {
         /* Update Initial Storage */
 
@@ -147,7 +147,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function executeCollateralDecrease(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
         external
-        onlyExecutor
+        onlyProcessor
     {
         /* Update Initial Storage */
 
@@ -178,7 +178,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function createNewPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
         external
-        onlyExecutor
+        onlyProcessor
     {
         /* Update Initial Storage */
 
@@ -212,7 +212,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function increaseExistingPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
         external
-        onlyExecutor
+        onlyProcessor
     {
         /* Update Initial Storage */
 
@@ -244,7 +244,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function decreaseExistingPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
         external
-        onlyExecutorOrAdl
+        onlyProcessorOrAdl
     {
         /* Update Initial Storage */
 

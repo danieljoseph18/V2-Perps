@@ -21,7 +21,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
 
     address public longToken;
     address public shortToken;
-
+    uint256 public secondaryPriceFee; // Fee for updating secondary prices
     uint256 public lastUpdateBlock; // Used to get cached prices
 
     mapping(address token => Oracle.Asset asset) private assets;
@@ -173,5 +173,9 @@ contract PriceFeed is IPriceFeed, RoleValidation {
 
     function getAsset(address _token) external view returns (Oracle.Asset memory) {
         return assets[_token];
+    }
+
+    function getPrimaryUpdateFee(bytes[] calldata _priceUpdateData) external view returns (uint256) {
+        return pyth.getUpdateFee(_priceUpdateData);
     }
 }

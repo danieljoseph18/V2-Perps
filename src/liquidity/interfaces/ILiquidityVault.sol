@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IExecutor} from "../../execution/interfaces/IExecutor.sol";
+import {IProcessor} from "../../router/interfaces/IProcessor.sol";
 import {Deposit} from "../../liquidity/Deposit.sol";
 import {Withdrawal} from "../../liquidity/Withdrawal.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
@@ -12,7 +12,7 @@ interface ILiquidityVault {
     // Admin functions
     function initialise(
         IPriceFeed _priceFeed,
-        IExecutor _executor,
+        IProcessor _processor,
         uint48 _minTimeToExpiration,
         uint8 _priceImpactExponent,
         uint256 _priceImpactFactor,
@@ -26,7 +26,7 @@ interface ILiquidityVault {
     function transferPositionProfit(address _user, uint256 _amount, bool _isLong) external;
     function updateReservation(address _user, int256 _amount, bool _isLong) external;
     function accumulateFees(uint256 _amount, bool _isLong) external;
-    function sendExecutionFee(address payable _executor, uint256 _executionFee) external;
+    function sendExecutionFee(address payable _processor, uint256 _executionFee) external;
     function transferOutTokens(address _market, address _to, uint256 _collateralDelta, bool _isLong) external;
     function liquidatePositionCollateral(
         address _liquidator,
@@ -41,10 +41,10 @@ interface ILiquidityVault {
     function recordCollateralTransferIn(address _market, uint256 _collateralDelta, bool _isLong) external;
 
     // Deposit execution
-    function executeDeposit(bytes32 _key, int256 _cumulativePnl, address _executor) external;
+    function executeDeposit(bytes32 _key, int256 _cumulativePnl, address _processor) external;
 
     // Withdrawal execution
-    function executeWithdrawal(bytes32 _key, int256 _cumulativePnl, address _executor) external;
+    function executeWithdrawal(bytes32 _key, int256 _cumulativePnl, address _processor) external;
 
     // Deposit creation
     function createDeposit(Deposit.Params memory _params) external payable;

@@ -57,6 +57,7 @@ library Trade {
         _position = _updateFeeParameters(_position);
         // Edit the Position for Increase
         _position = _editPosition(_position, _cache, _params.request.input.collateralDelta, 0, true);
+        _position = _updateConditionals(_position, _params.request.input.conditionals);
         return _position;
     }
 
@@ -80,8 +81,20 @@ library Trade {
         // Check if the Decrease makes the Position Liquidatable
         require(!_checkIsLiquidatable(_position, _cache, _liquidationFeeUsd), "TS: Liquidatable");
 
+        // Update the Position's conditionals
+        _position = _updateConditionals(_position, _params.request.input.conditionals);
+
         // Edit the Position
         return _editPosition(_position, _cache, _params.request.input.collateralDelta, 0, false);
+    }
+
+    function executeConditionalEdit(Position.Data memory _position, Position.Execution calldata _params)
+        external
+        pure
+        returns (Position.Data memory)
+    {
+        // Update the Position's conditionals
+        return _updateConditionals(_position, _params.request.input.conditionals);
     }
 
     function createNewPosition(
@@ -115,6 +128,9 @@ library Trade {
         // Calculate the Size Delta to keep Leverage Consistent
         sizeDelta = mulDiv(newCollateralAmount, _position.positionSize, _position.collateralAmount);
 
+        // Update the Position's conditionals
+        _position = _updateConditionals(_position, _params.request.input.conditionals);
+
         // Update the Existing Position
         _position = _editPosition(_position, _cache, _params.request.input.collateralDelta, sizeDelta, true);
 
@@ -143,6 +159,8 @@ library Trade {
             _params.indexPrice,
             _position.isLong
         );
+
+        _position = _updateConditionals(_position, _params.request.input.conditionals);
 
         _position =
             _editPosition(_position, _cache, _params.request.input.collateralDelta, decreaseCache.sizeDelta, false);
@@ -229,6 +247,19 @@ library Trade {
         );
         position.pnlParams.sigmaIndexSizeUSD -= sizeDeltaUsd;
         return position;
+    }
+
+    function _updateConditionals(Position.Data memory _position, Position.Conditionals memory _conditionals)
+        internal
+        pure
+        returns (Position.Data memory)
+    {
+        // If Conditionals are Valid, Update the Position
+        try Position.validateConditionals(_conditionals, _position.pnlParams.weightedAvgEntryPrice) {
+            _position.conditionals = _conditionals;
+        } catch {}
+        // Return the Updated Position
+        return _position;
     }
 
     // Checks if a position meets the minimum collateral threshold

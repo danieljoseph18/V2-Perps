@@ -55,6 +55,7 @@ library Position {
         BorrowingParams borrowingParams;
         FundingParams fundingParams;
         PnLParams pnlParams;
+        Conditionals conditionals;
     }
 
     // Borrow Component of an Open Position
@@ -81,6 +82,15 @@ library Position {
         uint256 sigmaIndexSizeUSD; // Sum of all increases and decreases in index size USD
     }
 
+    struct Conditionals {
+        bool stopLossSet;
+        bool takeProfitSet;
+        uint256 stopLossPrice;
+        uint256 takeProfitPrice;
+        uint256 stopLossPercentage;
+        uint256 takeProfitPercentage;
+    }
+
     /////////////////////
     // REQUEST STRUCTS //
     /////////////////////
@@ -98,6 +108,7 @@ library Position {
         bool isLimit;
         bool isIncrease;
         bool shouldWrap;
+        Conditionals conditionals;
     }
 
     // Request -> Constructed by Router
@@ -216,12 +227,16 @@ library Position {
         // Require SL/TP Orders to be a certain % away
         // WAEP is used as the reference price
         uint256 priceMargin = mulDiv(_position.pnlParams.weightedAvgEntryPrice, PRICE_MARGIN, PRECISION);
+
+        Conditionals memory conditionals;
         if (_isStopLoss) {
             require(_executionPrice <= _position.pnlParams.weightedAvgEntryPrice - priceMargin, "Position: SL Price");
-            requestType = RequestType.STOP_LOSS;
+            conditionals.stopLossPrice = _executionPrice;
+            conditionals.stopLossPercentage = _percentage;
         } else {
             require(_executionPrice >= _position.pnlParams.weightedAvgEntryPrice + priceMargin, "Position: TP Price");
-            requestType = RequestType.TAKE_PROFIT;
+            conditionals.takeProfitPrice = _executionPrice;
+            conditionals.takeProfitPercentage = _percentage;
         }
         request = Request({
             input: Input({
@@ -235,7 +250,8 @@ library Position {
                 isLong: _position.isLong,
                 isLimit: true,
                 isIncrease: false,
-                shouldWrap: false
+                shouldWrap: false,
+                conditionals: conditionals
             }),
             market: address(_position.market),
             user: _position.user,
@@ -264,7 +280,8 @@ library Position {
             realisedPnl: 0,
             borrowingParams: BorrowingParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: FundingParams(0, 0, block.timestamp, longFundingFee, shortFundingFee),
-            pnlParams: PnLParams(_cache.indexPrice, _cache.sizeDeltaUsd.abs())
+            pnlParams: PnLParams(_cache.indexPrice, _cache.sizeDeltaUsd.abs()),
+            conditionals: _request.input.conditionals
         });
     }
 
@@ -338,7 +355,8 @@ library Position {
                     isLong: _position.isLong,
                     isLimit: false,
                     isIncrease: false,
-                    shouldWrap: false
+                    shouldWrap: false,
+                    conditionals: Conditionals(false, false, 0, 0, 0, 0)
                 }),
                 market: address(_position.market),
                 user: _position.user,
@@ -378,5 +396,18 @@ library Position {
 
     function getMarketKey(address _indexToken) external pure returns (bytes32 marketKey) {
         marketKey = keccak256(abi.encode(_indexToken));
+    }
+
+    // Sizes must be valid percentages
+    function validateConditionals(Conditionals memory _conditionals, uint256 _referencePrice) external pure {
+        uint256 priceMargin = mulDiv(_referencePrice, PRICE_MARGIN, PRECISION);
+        if (_conditionals.stopLossSet) {
+            require(_conditionals.stopLossPercentage > 0, "Position: SL %");
+            require(_conditionals.stopLossPrice <= _referencePrice - priceMargin, "Position: SL Price");
+        }
+        if (_conditionals.takeProfitSet) {
+            require(_conditionals.takeProfitPercentage > 0, "Position: TP %");
+            require(_conditionals.takeProfitPrice >= _referencePrice + priceMargin, "Position: TP Price");
+        }
     }
 }

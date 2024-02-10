@@ -10,7 +10,7 @@ library Roles {
 
     bytes32 public constant LIQUIDATOR = keccak256("LIQUIDATOR");
 
-    bytes32 public constant EXECUTOR = keccak256("EXECUTOR");
+    bytes32 public constant PROCESSOR = keccak256("PROCESSOR");
 
     bytes32 public constant CONFIGURATOR = keccak256("CONFIGURATOR");
 

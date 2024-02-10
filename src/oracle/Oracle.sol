@@ -98,6 +98,15 @@ library Oracle {
         shortPrice = getPrice(_priceFeed, _priceFeed.shortToken(), lastUpdateBlock);
     }
 
+    function getReferencePrice(IPriceFeed _priceFeed, address _indexToken)
+        public
+        view
+        returns (uint256 referencePrice)
+    {
+        // get last price of an asset
+        // doesn't need to be hugely accurate, just a rough estimate
+    }
+
     function getBaseUnit(IPriceFeed _priceFeed, address _token) public view returns (uint256) {
         return _priceFeed.getAsset(_token).baseUnit;
     }

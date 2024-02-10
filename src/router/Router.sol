@@ -31,6 +31,8 @@ import {Withdrawal} from "../liquidity/Withdrawal.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
@@ -41,9 +43,10 @@ contract Router is ReentrancyGuard, RoleValidation {
     ITradeStorage tradeStorage;
     ILiquidityVault liquidityVault;
     IMarketMaker marketMaker;
+    IPriceFeed priceFeed;
     IERC20 immutable USDC;
     IWETH immutable WETH;
-    address executor;
+    address processor;
 
     uint256 constant PRECISION = 1e18;
     uint256 constant COLLATERAL_MULTIPLIER = 1e12;
@@ -54,17 +57,40 @@ contract Router is ReentrancyGuard, RoleValidation {
         address _tradeStorage,
         address _liquidityVault,
         address _marketMaker,
+        address _priceFeed,
         address _usdc,
         address _weth,
-        address _executor,
+        address _processor,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         tradeStorage = ITradeStorage(_tradeStorage);
         liquidityVault = ILiquidityVault(_liquidityVault);
         marketMaker = IMarketMaker(_marketMaker);
+        priceFeed = IPriceFeed(_priceFeed);
         USDC = IERC20(_usdc);
         WETH = IWETH(_weth);
-        executor = _executor;
+        processor = _processor;
+    }
+
+    /* 
+        - User needs to pay for trade execution and pricing 
+        - Execution Fee - how can we estimate this? Or do we hardcode?
+        - Price Fee - if pyth,  the user needs to send an update fee while requesting price
+        If secondary, the user needs to send a fee for updating the price
+    */
+
+    modifier requestOraclePricing(address _token) {
+        Oracle.Asset memory asset = priceFeed.getAsset(_token);
+        require(asset.isValid, "Router: Invalid Asset");
+        // get fee
+        if (asset.priceProvider == Oracle.PriceProvider.PYTH) {
+            // request pyth price
+        } else {
+            // request secondary price
+        }
+        // check fee
+        // request price
+        _;
     }
 
     modifier validExecutionFee(bool _isTrade) {
@@ -80,15 +106,15 @@ contract Router is ReentrancyGuard, RoleValidation {
     // Setters //
     /////////////
 
-    function updateConfig(address _tradeStorage, address _liquidityVault, address _marketMaker, address _executor)
+    function updateConfig(address _tradeStorage, address _liquidityVault, address _marketMaker, address _processor)
         external
         onlyAdmin
     {
-        require(msg.sender == executor, "Router: Invalid Executor");
+        require(msg.sender == processor, "Router: Invalid processor");
         tradeStorage = ITradeStorage(_tradeStorage);
         liquidityVault = ILiquidityVault(_liquidityVault);
         marketMaker = IMarketMaker(_marketMaker);
-        executor = _executor;
+        processor = _processor;
     }
 
     /////////////////////////
@@ -103,10 +129,10 @@ contract Router is ReentrancyGuard, RoleValidation {
             require(_params.amountIn == msg.value - _params.executionFee, "Router: Invalid Amount In");
             require(_params.tokenIn == address(WETH), "Router: Invalid Token In");
             WETH.deposit{value: _params.amountIn}();
-            WETH.safeTransfer(address(executor), _params.amountIn);
+            WETH.safeTransfer(address(processor), _params.amountIn);
         } else {
             require(_params.tokenIn == address(USDC) || _params.tokenIn == address(WETH), "Router: Invalid Token In");
-            IERC20(_params.tokenIn).safeTransferFrom(_params.owner, address(executor), _params.amountIn);
+            IERC20(_params.tokenIn).safeTransferFrom(_params.owner, address(processor), _params.amountIn);
         }
         liquidityVault.createDeposit(_params);
         _sendExecutionFee(false);
@@ -131,7 +157,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         } else {
             require(_params.tokenOut == address(USDC) || _params.tokenOut == address(WETH), "Router: Invalid Token Out");
         }
-        IERC20(address(liquidityVault)).safeTransferFrom(_params.owner, address(executor), _params.marketTokenAmountIn);
+        IERC20(address(liquidityVault)).safeTransferFrom(_params.owner, address(processor), _params.marketTokenAmountIn);
         liquidityVault.createWithdrawal(_params);
         _sendExecutionFee(false);
     }
@@ -163,14 +189,18 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Create a Pointer to the Position
         bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
-        // Handle Transfer of Tokens to Designated Areas
-        _handleTokenTransfers(_trade);
+        // Get Reference Price
+        uint256 refPrice = Oracle.getReferencePrice(priceFeed, _trade.indexToken);
+        // Validate Conditionals
+        Position.validateConditionals(_trade.conditionals, refPrice);
         // Calculate Request Type
         Position.RequestType requestType = Position.getRequestType(_trade, position, _trade.collateralDelta);
         // Construct Request
         Position.Request memory request = Position.createRequest(_trade, market, msg.sender, requestType);
         // Send Constructed Request to Storage
         tradeStorage.createOrderRequest(request);
+        // Handle Transfer of Tokens to Designated Areas
+        _handleTokenTransfers(_trade);
         // Send Fee for Execution to Vault to be sent to whoever executes the request
         _sendExecutionFee(true);
     }
@@ -188,6 +218,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     // Stop Loss or Take Profit
+    // @audit - review, is necesssary?
     function createEditOrder(
         bytes32 _positionKey,
         uint256 _executionPrice,
@@ -208,6 +239,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     // Function for simultaneously creating a SL and a TP order
+    // @audit - review, is necesssary?
     function createMultiEditOrder(
         bytes32 _positionKey,
         uint256 _stopLossPrice,
@@ -216,6 +248,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         uint256 _takeProfitPercentage,
         uint256 _maxSlippage
     ) external payable nonReentrant {
+        // @audit - if Keeper call, keeper should not pay execution fee
         require(msg.value == 2 * tradeStorage.executionFee(), "Router: Execution Fee");
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         require(position.user == msg.sender, "Router: Invalid Position Owner");
@@ -245,9 +278,9 @@ contract Router is ReentrancyGuard, RoleValidation {
             require(_trade.collateralToken == address(WETH), "Router: Invalid Collateral Token");
             require(_trade.collateralDelta == msg.value - _trade.executionFee, "Router: Invalid Collateral Delta");
             WETH.deposit{value: _trade.collateralDelta}();
-            WETH.safeTransfer(address(executor), _trade.collateralDelta);
+            WETH.safeTransfer(address(processor), _trade.collateralDelta);
         } else {
-            IERC20(_trade.collateralToken).safeTransferFrom(msg.sender, address(executor), _trade.collateralDelta);
+            IERC20(_trade.collateralToken).safeTransferFrom(msg.sender, address(processor), _trade.collateralDelta);
         }
     }
 
