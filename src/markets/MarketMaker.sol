@@ -67,6 +67,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         address _indexToken,
         bytes32 _priceId,
         uint256 _baseUnit,
+        Oracle.Asset memory _asset,
         Oracle.PriceProvider _priceProvider
     ) external onlyAdmin returns (Market market) {
         require(_indexToken != address(0), "MM: Invalid Address");
@@ -76,7 +77,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         require(!markets.contains(_indexToken), "MM: Market Exists");
 
         // Set Up Price Oracle
-        priceFeed.supportAsset(_indexToken, _priceId, _baseUnit, _priceProvider);
+        priceFeed.supportAsset(_indexToken, _asset);
         // Create new Market contract
         market = new Market(priceFeed, _indexToken, address(roleStorage));
         // Initialize

@@ -190,7 +190,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
         // Get Reference Price
-        uint256 refPrice = Oracle.getReferencePrice(priceFeed, _trade.indexToken);
+        (bool hasRef, uint256 refPrice) = Oracle.getReferencePrice(priceFeed.getAsset(_trade.indexToken));
         // Validate Conditionals
         Position.validateConditionals(_trade.conditionals, refPrice);
         // Calculate Request Type

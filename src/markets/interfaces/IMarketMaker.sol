@@ -15,6 +15,7 @@ interface IMarketMaker {
         address _indexToken,
         bytes32 _priceId,
         uint256 _baseUnit,
+        Oracle.Asset memory _asset,
         Oracle.PriceProvider _priceProvider
     ) external returns (Market market);
 
