@@ -19,23 +19,24 @@ pragma solidity 0.8.23;
 
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {MarketUtils} from "./MarketUtils.sol";
-import {Market, IMarket} from "./Market.sol";
+import {Market} from "./Market.sol";
+import {IMarket} from "./interfaces/IMarket.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {PriceFeed} from "../oracle/PriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Needs MarketMaker Role
 contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    ILiquidityVault liquidityVault;
-    IPriceFeed priceFeed;
+    LiquidityVault liquidityVault;
+    PriceFeed priceFeed;
 
     EnumerableSet.AddressSet private markets;
     mapping(address indexToken => address market) public tokenToMarkets;
@@ -44,12 +45,12 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     IMarket.Config public defaultConfig;
 
     constructor(address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
-        liquidityVault = ILiquidityVault(_liquidityVault);
+        liquidityVault = LiquidityVault(_liquidityVault);
     }
 
     function initialise(IMarket.Config memory _defaultConfig, address _priceFeed) external onlyAdmin {
         require(!isInitialised, "MS: Already Initialised");
-        priceFeed = IPriceFeed(_priceFeed);
+        priceFeed = PriceFeed(_priceFeed);
         defaultConfig = _defaultConfig;
         isInitialised = true;
         emit MarketMakerInitialised(_priceFeed);
@@ -63,13 +64,11 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     /// @dev Only MarketFactory
     // q -> Do we want to use indexToken? This will require a new token for each market
     // We need to enable the use of synthetic markets
-    function createNewMarket(
-        address _indexToken,
-        bytes32 _priceId,
-        uint256 _baseUnit,
-        Oracle.Asset memory _asset,
-        Oracle.PriceProvider _priceProvider
-    ) external onlyAdmin returns (Market market) {
+    function createNewMarket(address _indexToken, bytes32 _priceId, uint256 _baseUnit, Oracle.Asset memory _asset)
+        external
+        onlyAdmin
+        returns (Market market)
+    {
         require(_indexToken != address(0), "MM: Invalid Address");
         require(_priceId != bytes32(0), "MM: Invalid Price Id");
         require(_baseUnit == 1e18 || _baseUnit == 1e8 || _baseUnit == 1e6, "MF: Invalid Base Unit");

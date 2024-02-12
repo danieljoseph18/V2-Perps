@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
-import {IMarket} from "./interfaces/IMarket.sol";
+import {MarketMaker} from "./MarketMaker.sol";
+import {Market} from "./Market.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
@@ -30,7 +30,7 @@ library MarketUtils {
         bool adlFlaggedShort;
     }
 
-    function getLongOpenInterestUSD(IMarket _market, uint256 _price, uint256 _baseUnit)
+    function getLongOpenInterestUSD(Market _market, uint256 _price, uint256 _baseUnit)
         external
         view
         returns (uint256 longOIUSD)
@@ -38,7 +38,7 @@ library MarketUtils {
         return mulDiv(_market.longOpenInterest(), _price, _baseUnit);
     }
 
-    function getShortOpenInterestUSD(IMarket _market, uint256 _price, uint256 _baseUnit)
+    function getShortOpenInterestUSD(Market _market, uint256 _price, uint256 _baseUnit)
         external
         view
         returns (uint256 shortOIUSD)
@@ -46,7 +46,7 @@ library MarketUtils {
         return mulDiv(_market.shortOpenInterest(), _price, _baseUnit);
     }
 
-    function getTotalOpenInterestUSD(IMarket _market, uint256 _price, uint256 _baseUnit)
+    function getTotalOpenInterestUSD(Market _market, uint256 _price, uint256 _baseUnit)
         public
         view
         returns (uint256 totalOIUSD)
@@ -56,7 +56,7 @@ library MarketUtils {
         return longOIUSD + shortOIUSD;
     }
 
-    function getTotalEntryValueUSD(IMarket _market, uint256 _indexBaseUnit, bool _isLong)
+    function getTotalEntryValueUSD(Market _market, uint256 _indexBaseUnit, bool _isLong)
         external
         view
         returns (uint256 entryValueUsd)
@@ -75,7 +75,7 @@ library MarketUtils {
     }
 
     function getPoolBalanceUSD(
-        IMarket _market,
+        Market _market,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice,
         uint256 _longBaseUnit,
@@ -86,7 +86,7 @@ library MarketUtils {
         poolBalanceUSD = longBalanceUSD + shortBalance;
     }
 
-    function getPoolAmount(IMarket _market, bool _isLong) public view returns (uint256 poolAmount) {
+    function getPoolAmount(Market _market, bool _isLong) public view returns (uint256 poolAmount) {
         if (_isLong) {
             poolAmount = _market.longTokenAllocation();
         } else {
@@ -94,7 +94,7 @@ library MarketUtils {
         }
     }
 
-    function getPoolUsd(IMarket _market, uint256 _price, uint256 _baseUnit, bool _isLong)
+    function getPoolUsd(Market _market, uint256 _price, uint256 _baseUnit, bool _isLong)
         public
         view
         returns (uint256 poolUsd)
@@ -104,7 +104,7 @@ library MarketUtils {
     }
 
     // The pnl factor is the ratio of the pnl to the pool usd
-    function getPnlFactor(IMarket _market, uint256 _price, uint256 _baseUnit, bool _isLong)
+    function getPnlFactor(Market _market, uint256 _price, uint256 _baseUnit, bool _isLong)
         external
         view
         returns (int256 pnlFactor)

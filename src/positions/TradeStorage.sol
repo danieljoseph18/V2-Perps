@@ -20,21 +20,21 @@ pragma solidity 0.8.23;
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {Market} from "../markets/Market.sol";
 import {Position} from "../positions/Position.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
+import {MarketMaker} from "../markets/MarketMaker.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Trade} from "./Trade.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {PriceFeed} from "../oracle/PriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Needs TradeStorage Role
@@ -46,9 +46,9 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     using SafeCast for uint256;
     using SafeCast for int256;
 
-    IMarketMaker public marketMaker;
-    IPriceFeed priceFeed;
-    ILiquidityVault liquidityVault;
+    MarketMaker public marketMaker;
+    PriceFeed priceFeed;
+    LiquidityVault liquidityVault;
 
     uint256 constant PRECISION = 1e18;
     uint256 constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
@@ -72,9 +72,9 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     constructor(address _marketMaker, address _liquidityVault, address _priceFeed, address _roleStorage)
         RoleValidation(_roleStorage)
     {
-        marketMaker = IMarketMaker(_marketMaker);
-        liquidityVault = ILiquidityVault(_liquidityVault);
-        priceFeed = IPriceFeed(_priceFeed);
+        marketMaker = MarketMaker(_marketMaker);
+        liquidityVault = LiquidityVault(_liquidityVault);
+        priceFeed = PriceFeed(_priceFeed);
     }
 
     function initialise(
@@ -141,7 +141,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
         /* Update Final Storage */
         openPositions[positionKey] = position;
-        liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
+
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
@@ -166,7 +166,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
         /* Update Final Storage */
         openPositions[positionKey] = position;
-        liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
+
         liquidityVault.transferOutTokens(
             address(position.market),
             _params.request.user,
@@ -205,7 +205,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         );
         openPositions[positionKey] = position;
         openPositionKeys[address(position.market)][position.isLong].add(positionKey);
-        liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
+
         // Fire Event
         emit PositionCreated(positionKey, position);
     }
@@ -239,7 +239,6 @@ contract TradeStorage is ITradeStorage, RoleValidation {
             true,
             _params.request.input.isLong
         );
-        liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
     }
 
     function decreaseExistingPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
@@ -299,7 +298,6 @@ contract TradeStorage is ITradeStorage, RoleValidation {
             }
         }
         liquidityVault.swapFundingAmount(market, decreaseCache.fundingFee, position.isLong);
-        liquidityVault.sendExecutionFee(payable(_params.feeReceiver), executionFee);
 
         emit DecreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
@@ -410,7 +408,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function _updateFeeParameters(bytes32 _positionKey) internal {
         Position.Data storage position = openPositions[_positionKey];
-        IMarket market = IMarket(position.market);
+        Market market = Market(position.market);
         // Borrowing Fees
         position.borrowingParams.feesOwed = Borrowing.getTotalPositionFeesOwed(market, position);
         position.borrowingParams.lastLongCumulativeBorrowFee = market.longCumulativeBorrowFees();

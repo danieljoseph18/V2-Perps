@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {Market} from "../markets/Market.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Position} from "../positions/Position.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
@@ -78,7 +78,7 @@ library Pricing {
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
-    function getPnl(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
+    function getPnl(Market _market, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
         public
         view
         returns (int256 netPnl)
@@ -101,7 +101,7 @@ library Pricing {
         }
     }
 
-    function getNetPnl(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit) external view returns (int256) {
+    function getNetPnl(Market _market, uint256 _indexPrice, uint256 _indexBaseUnit) external view returns (int256) {
         int256 longPnl = getPnl(_market, _indexPrice, _indexBaseUnit, true);
         int256 shortPnl = getPnl(_market, _indexPrice, _indexBaseUnit, false);
         return longPnl + shortPnl;

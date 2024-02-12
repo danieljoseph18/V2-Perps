@@ -17,12 +17,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {Market} from "../markets/Market.sol";
 import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {PriceFeed} from "../oracle/PriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
@@ -30,8 +30,8 @@ library Borrowing {
     uint256 public constant PRECISION = 1e18;
 
     function calculateRate(
-        IMarket _market,
-        IPriceFeed _priceFeed,
+        Market _market,
+        PriceFeed _priceFeed,
         uint256 _indexPrice,
         address _indexToken,
         uint256 _longTokenPrice,
@@ -58,7 +58,7 @@ library Borrowing {
     }
 
     /// @dev Gets the Total Fee To Charge For a Position Change in Tokens
-    function calculateFeeForPositionChange(IMarket _market, Position.Data calldata _position, uint256 _collateralDelta)
+    function calculateFeeForPositionChange(Market _market, Position.Data calldata _position, uint256 _collateralDelta)
         external
         view
         returns (uint256 indexFee)
@@ -67,7 +67,7 @@ library Borrowing {
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
-    function getTotalPositionFeesOwed(IMarket _market, Position.Data calldata _position)
+    function getTotalPositionFeesOwed(Market _market, Position.Data calldata _position)
         public
         view
         returns (uint256 indexTotalFeesOwed)
@@ -78,7 +78,7 @@ library Borrowing {
 
     /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
     /// @dev Units: Fees in Tokens (% of fees applied to position size)
-    function getFeesSinceLastPositionUpdate(IMarket _market, Position.Data calldata _position)
+    function getFeesSinceLastPositionUpdate(Market _market, Position.Data calldata _position)
         public
         view
         returns (uint256 indexFeesSinceUpdate)
@@ -97,7 +97,7 @@ library Borrowing {
 
     /// @dev Units: Fees as a percentage (e.g 0.03e18 = 3%)
     /// @dev Gets fees since last time the cumulative market rate was updated
-    function _calculatePendingFees(IMarket _market, bool _isLong) internal view returns (uint256 pendingFees) {
+    function _calculatePendingFees(Market _market, bool _isLong) internal view returns (uint256 pendingFees) {
         uint256 borrowRate = _isLong ? _market.longBorrowingRate() : _market.shortBorrowingRate();
         if (borrowRate == 0) return 0;
         uint256 timeElapsed = block.timestamp - _market.lastBorrowUpdate();

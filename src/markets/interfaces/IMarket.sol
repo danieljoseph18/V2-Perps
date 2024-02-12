@@ -13,6 +13,7 @@ interface IMarket {
         uint256 priceImpactExponent;
         uint256 maxPnlFactor;
         uint256 targetPnlFactor;
+        uint32 maxLeverage;
         bool feeForSmallerSide;
         bool adlFlaggedLong;
         bool adlFlaggedShort;

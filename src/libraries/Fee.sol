@@ -3,8 +3,8 @@ pragma solidity 0.8.23;
 
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
-import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
+import {TradeStorage} from "../positions/TradeStorage.sol";
 import {Position} from "../positions/Position.sol";
 
 library Fee {
@@ -13,7 +13,7 @@ library Fee {
     uint256 public constant SCALING_FACTOR = 1e18;
 
     // Functions to calculate fees for deposit and withdrawal.
-    function calculateForMarket(ILiquidityVault _liquidityVault, uint256 _amountIn)
+    function calculateForMarket(LiquidityVault _liquidityVault, uint256 _amountIn)
         external
         view
         returns (uint256 fee)
@@ -23,7 +23,7 @@ library Fee {
     }
 
     function calculateForPosition(
-        ITradeStorage _tradeStorage,
+        TradeStorage _tradeStorage,
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,

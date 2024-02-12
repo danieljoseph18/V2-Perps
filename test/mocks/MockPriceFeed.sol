@@ -20,17 +20,17 @@ abstract contract MockPriceFeed is MockPyth, IPriceFeed {
         bytes32 _priceId,
         uint256, /* _baseUnit */
         Oracle.PriceProvider /* _provider */
-    ) external override {
+    ) external {
         // Simply store the price ID for the token
         assetPriceIds[_token] = _priceId;
     }
 
-    function unsupportAsset(address _token) external override {
+    function unsupportAsset(address _token) external {
         // Remove the price ID for the token
         delete assetPriceIds[_token];
     }
 
-    function signPriceData(address _token, bytes[] calldata _priceUpdateData) external payable override {
+    function signPriceData(address _token, bytes[] calldata _priceUpdateData) external payable {
         // Mock implementation: Decode the first price data and emit an event
         if (_priceUpdateData.length > 0) {
             PythStructs.Price memory priceData = abi.decode(_priceUpdateData[0], (PythStructs.Price));
@@ -39,39 +39,32 @@ abstract contract MockPriceFeed is MockPyth, IPriceFeed {
         }
     }
 
-    function getPriceData(uint256, /* _block */ address _token)
-        external
-        view
-        override
-        returns (PythStructs.Price memory)
-    {
+    function getPriceData(uint256, /* _block */ address _token) external view returns (PythStructs.Price memory) {
         // Return the signed price for the token
         return signedPrices[_token];
     }
 
-    function getSecondaryPrice(address _token, uint256 _block) external view override returns (uint256) {}
-
     // Implement other interface methods as needed...
 
     // Mock implementations for remaining IPriceFeed interface methods
-    function getAsset(address token) external view override returns (Oracle.Asset memory) {}
+    function getAsset(address token) external view returns (Oracle.Asset memory) {}
 
-    function lastUpdateBlock() external view override returns (uint256) {
+    function lastUpdateBlock() external view returns (uint256) {
         // Return the current block number as the last update block
         return block.number;
     }
 
-    function longToken() external view override returns (address) {
+    function longToken() external view returns (address) {
         // Mock token address
         return address(this);
     }
 
-    function shortToken() external view override returns (address) {
+    function shortToken() external view returns (address) {
         // Mock token address
         return address(this);
     }
 
-    function secondaryPriceFee() external pure override returns (uint256) {
+    function secondaryPriceFee() external pure returns (uint256) {
         // Mock fee
         return 0;
     }

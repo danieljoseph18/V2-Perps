@@ -3,14 +3,14 @@ pragma solidity 0.8.23;
 
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {Market} from "../markets/Market.sol";
+import {TradeStorage} from "../positions/TradeStorage.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Position} from "../positions/Position.sol";
 import {Trade} from "../positions/Trade.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {PriceFeed} from "../oracle/PriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
 // Contract for Auto Deleveraging markets
@@ -22,18 +22,18 @@ import {Oracle} from "../oracle/Oracle.sol";
 contract Adl is RoleValidation {
     using SignedMath for int256;
 
-    IPriceFeed public priceFeed;
-    ITradeStorage public tradeStorage;
+    PriceFeed public priceFeed;
+    TradeStorage public tradeStorage;
 
-    event AdlExecuted(IMarket indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
+    event AdlExecuted(Market indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
 
     constructor(address _tradeStorage, address _priceFeed, address _roleStorage) RoleValidation(_roleStorage) {
-        tradeStorage = ITradeStorage(_tradeStorage);
-        priceFeed = IPriceFeed(_priceFeed);
+        tradeStorage = TradeStorage(_tradeStorage);
+        priceFeed = PriceFeed(_priceFeed);
     }
 
-    function flagForAdl(IMarket _market, bool _isLong) external onlyAdlKeeper {
-        // require(_market != IMarket(address(0)), "ADL: Invalid market");
+    function flagForAdl(Market _market, bool _isLong) external onlyAdlKeeper {
+        // require(_market != Market(address(0)), "ADL: Invalid market");
         // // get current price
         // address indexToken = _market.indexToken();
         // uint256 price =
@@ -51,7 +51,7 @@ contract Adl is RoleValidation {
         // }
     }
 
-    function executeAdl(IMarket _market, uint256 _sizeDelta, bytes32 _positionKey, bool _isLong)
+    function executeAdl(Market _market, uint256 _sizeDelta, bytes32 _positionKey, bool _isLong)
         external
         onlyAdlKeeper
     {

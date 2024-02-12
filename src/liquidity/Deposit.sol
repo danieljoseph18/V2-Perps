@@ -5,9 +5,9 @@ import {Fee} from "../libraries/Fee.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
-import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {LiquidityVault} from "./LiquidityVault.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {PriceFeed} from "../oracle/PriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
 library Deposit {
@@ -28,6 +28,13 @@ library Deposit {
         Params params;
         uint256 blockNumber;
         uint48 expirationTimestamp;
+    }
+
+    struct ExecuteCache {
+        Data data;
+        bytes32 key;
+        int256 cumulativePnl;
+        address processor;
     }
 
     function validateCancellation(Data memory _data, address _caller) internal view {
@@ -51,8 +58,8 @@ library Deposit {
     }
 
     function execute(
-        ILiquidityVault _liquidityVault,
-        IPriceFeed _priceFeed,
+        LiquidityVault _liquidityVault,
+        PriceFeed _priceFeed,
         Data memory _data,
         Pool.Values memory _values,
         bool _isLongToken,
@@ -60,7 +67,8 @@ library Deposit {
         uint256 _priceImpactFactor
     ) external view returns (uint256 mintAmount, uint256 fee, uint256 remaining) {
         // Get token price and calculate price impact directly to reduce local variables
-        (uint256 longTokenPrice, uint256 shortTokenPrice) = Oracle.getMarketTokenPrices(_priceFeed, _data.blockNumber);
+        (uint256 longTokenPrice, uint256 shortTokenPrice) =
+            Oracle.getMarketTokenPrices(_priceFeed, _data.blockNumber, true);
 
         uint256 impactedPrice = _calculateImpactedPrice(
             _values,

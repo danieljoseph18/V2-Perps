@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {Market} from "../markets/Market.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {sd, SD59x18, unwrap} from "@prb/math/SD59x18.sol";
@@ -161,7 +161,7 @@ library PriceImpact {
 
     // @audit - review - price impact should be able to be positive too
     function execute(
-        IMarket _market,
+        Market _market,
         Position.Request memory _request,
         uint256 _signedBlockPrice,
         uint256 _indexBaseUnit
@@ -186,7 +186,7 @@ library PriceImpact {
 
     // Returns Price impact in USD
     function calculate(
-        IMarket _market,
+        Market _market,
         Position.Request memory _request,
         uint256 _signedBlockPrice,
         uint256 _indexBaseUnit

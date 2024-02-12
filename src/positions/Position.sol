@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {Market} from "../markets/Market.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv} from "@prb/math/Common.sol";
@@ -33,7 +33,6 @@ library Position {
     using SafeCast for uint256;
 
     uint256 public constant MIN_LEVERAGE = 100; // 1x
-    uint256 public constant MAX_LEVERAGE = 1000_00; // 1000x
     uint256 public constant LEVERAGE_PRECISION = 100;
     uint256 public constant PRECISION = 1e18;
     uint256 public constant PRICE_MARGIN = 0.005e18; // 0.5%
@@ -44,7 +43,7 @@ library Position {
 
     // Data for an Open Position
     struct Data {
-        IMarket market;
+        Market market;
         address indexToken;
         address user;
         address collateralToken; // WETH long, USDC short
@@ -183,9 +182,9 @@ library Position {
 
     function checkLimitPrice(uint256 _price, Input memory _request) external pure {
         if (_request.isLong) {
-            require(_price <= _request.limitPrice, "TH: Limit Price");
+            require(_price <= _request.limitPrice, "Position: Limit Price");
         } else {
-            require(_price >= _request.limitPrice, "TH: Limit Price");
+            require(_price >= _request.limitPrice, "Position: Limit Price");
         }
     }
 
@@ -194,11 +193,14 @@ library Position {
     }
 
     // 1x = 100
-    function checkLeverage(uint256 _collateralPrice, uint256 _sizeUsd, uint256 _collateral) external pure {
+    function checkLeverage(Market _market, uint256 _collateralPrice, uint256 _sizeUsd, uint256 _collateral)
+        external
+        view
+    {
         uint256 collateralUsd = mulDiv(_collateral, _collateralPrice, PRECISION);
-        require(collateralUsd <= _sizeUsd, "TH: cUSD > sUSD");
+        require(collateralUsd <= _sizeUsd, "Position: cUSD > sUSD");
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, collateralUsd);
-        require(leverage >= MIN_LEVERAGE && leverage <= MAX_LEVERAGE, "TH: Leverage");
+        require(leverage >= MIN_LEVERAGE && leverage <= _market.maxLeverage(), "Position: Leverage");
     }
 
     function createRequest(Input calldata _trade, address _market, address _user, RequestType _requestType)

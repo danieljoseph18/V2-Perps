@@ -17,19 +17,19 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
-import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
+import {TradeStorage} from "../positions/TradeStorage.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {IMarket} from "./interfaces/IMarket.sol";
+import {Market} from "./Market.sol";
 
 /// @dev Needs Configurator Role
 contract GlobalMarketConfig is RoleValidation {
-    ILiquidityVault public liquidityVault;
-    ITradeStorage public tradeStorage;
+    LiquidityVault public liquidityVault;
+    TradeStorage public tradeStorage;
 
     constructor(address _liquidityVault, address _tradeStorage, address _roleStorage) RoleValidation(_roleStorage) {
-        liquidityVault = ILiquidityVault(_liquidityVault);
-        tradeStorage = ITradeStorage(_tradeStorage);
+        liquidityVault = LiquidityVault(_liquidityVault);
+        tradeStorage = TradeStorage(_tradeStorage);
     }
 
     /**
@@ -46,7 +46,7 @@ contract GlobalMarketConfig is RoleValidation {
     /**
      * ========================= Market Config =========================
      */
-    function setMarketConfig(IMarket _market, IMarket.Config memory _config) external onlyModerator {
+    function setMarketConfig(Market _market, Market.Config memory _config) external onlyModerator {
         require(address(_market) != address(0), "Market does not exist");
         _market.updateConfig(_config);
     }

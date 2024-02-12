@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
+import {TradeStorage} from "./TradeStorage.sol";
+import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
+import {Market} from "../markets/Market.sol";
+import {MarketMaker} from "../markets/MarketMaker.sol";
 import {Position} from "./Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
@@ -31,7 +31,7 @@ library Trade {
 
     // Cached Values for Execution
     struct ExecuteCache {
-        IMarket market;
+        Market market;
         uint256 indexPrice;
         uint256 indexBaseUnit;
         uint256 impactedPrice;
@@ -111,7 +111,7 @@ library Trade {
         Position.Data memory position = Position.generateNewPosition(_params.request, _cache);
         // Check the Position's Leverage is Valid
         uint256 absSizeDelta = _cache.sizeDeltaUsd.abs();
-        Position.checkLeverage(_cache.collateralPrice, absSizeDelta, position.collateralAmount);
+        Position.checkLeverage(_cache.market, _cache.collateralPrice, absSizeDelta, position.collateralAmount);
         // Return the Position
         return (position, absSizeDelta);
     }

@@ -28,7 +28,7 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {PriceFeed} from "../oracle/PriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 
@@ -40,7 +40,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
     uint256 public constant SCALING_FACTOR = 1e18;
 
-    IPriceFeed public priceFeed;
+    PriceFeed public priceFeed;
 
     address public indexToken;
 
@@ -60,6 +60,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     uint256 public priceImpactFactor;
     uint256 public maxPnlFactor;
     uint256 public targetPnlFactor; // PNL Factor to aim for in ADLs
+    uint32 public maxLeverage; // 2 D.P -> 100 = 1x, 200 = 2x
     bool public feeForSmallerSide; // Flag for Skipping Fee for Smaller Side
     bool public adlFlaggedLong; // Flag for ADL Long
     bool public adlFlaggedShort; // Flag for ADL Short
@@ -108,7 +109,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     uint256 public longSizeSumUSD; // Σ All Position Sizes USD Long
     uint256 public shortSizeSumUSD; // Σ All Position Sizes USD Short
 
-    constructor(IPriceFeed _priceFeed, address _indexToken, address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(PriceFeed _priceFeed, address _indexToken, address _roleStorage) RoleValidation(_roleStorage) {
         indexToken = _indexToken;
         priceFeed = _priceFeed;
     }
@@ -128,6 +129,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         priceImpactExponent = _config.priceImpactExponent;
         maxPnlFactor = _config.maxPnlFactor;
         targetPnlFactor = _config.targetPnlFactor;
+        maxLeverage = _config.maxLeverage;
         feeForSmallerSide = _config.feeForSmallerSide;
         adlFlaggedLong = _config.adlFlaggedLong;
         adlFlaggedShort = _config.adlFlaggedShort;

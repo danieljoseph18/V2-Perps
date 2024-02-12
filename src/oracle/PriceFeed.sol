@@ -7,6 +7,7 @@ import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Oracle} from "./Oracle.sol";
 import {IChainlinkFeed} from "./interfaces/IChainlinkFeed.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract PriceFeed is IPriceFeed, RoleValidation {
     IPyth pyth;
@@ -36,12 +37,12 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     // Not sure if need - review
     mapping(address token => uint256 block) public lastSecondaryUpdateBlock;
 
-    // array of tokens used in setCompactedPrices, saves L1 calldata gas costs
-    address[] public secondaryTokens;
-    // array of tokenPrecisions used in setCompactedPrices, saves L1 calldata gas costs
+    // Array of tokens whose pricing comes from external nodes
+    address[] public alternativeAssets;
+    // array of tokenPrecision used in setCompactedPrices, saves L1 calldata gas costs
     // if the token price will be sent with 3 decimals, then tokenPrecision for that token
     // should be 10 ** 3
-    uint256[] public tokenPrecisions;
+    uint256 public tokenPrecision;
 
     modifier validFee(bytes[] calldata _priceUpdateData) {
         require(msg.value >= pyth.getUpdateFee(_priceUpdateData), "Oracle: Insufficient fee");
@@ -63,6 +64,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         assets[_longToken] = _longAsset;
         assets[_shortToken] = _shortAsset;
         sequencerUptimeFeed = _sequencerUptimeFeed;
+        tokenPrecision = 1000;
     }
 
     function supportAsset(address _token, Oracle.Asset memory _asset) external onlyMarketMaker {
@@ -141,92 +143,72 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     }
 
     // Only used as Reference
-    function getPriceUnsafe(Oracle.Asset memory _asset) external view returns (uint256 price) {
+    function getPriceUnsafe(Oracle.Asset memory _asset) external view returns (uint256 price, uint256 confidence) {
         PythStructs.Price memory data = pyth.getPriceUnsafe(_asset.priceId);
-        (price,) = Oracle.convertPythParams(data);
+        (price, confidence) = Oracle.convertPythParams(data);
     }
 
-    ///////////////////////
-    // SECONDARY PRICING //
-    ///////////////////////
+    ////////////////////////
+    // ALTERNATIVE ASSETS //
+    ////////////////////////
 
-    function setSecondaryTokens(address[] memory _secondaryTokens, uint256[] memory _tokenPrecisions)
-        external
-        onlyAdmin
-    {
-        require(_secondaryTokens.length == _tokenPrecisions.length, "SecondaryPriceFeed: invalid lengths");
-        secondaryTokens = _secondaryTokens;
-        tokenPrecisions = _tokenPrecisions;
+    function setAlternativeAssets(address[] memory _alternativeAssets) external onlyAdmin {
+        alternativeAssets = _alternativeAssets;
     }
 
-    // function setSecondaryPrices(address[] memory _secondaryTokens, uint256[] memory _prices, uint256 _block)
-    //     external
-    //     onlyKeeper
-    // {
-    //     for (uint256 i = 0; i < _secondaryTokens.length; i++) {
-    //         address token = _secondaryTokens[i];
-    //         _setPrice(token, _prices[i], _block);
-    //     }
-    // }
+    function setTokenPrecision(uint256 _tokenPrecision) external onlyAdmin {
+        tokenPrecision = _tokenPrecision;
+    }
 
-    // function setPricesWithBits(uint256 _priceBits, uint256 _block) external onlyKeeper {
-    //     _setPricesWithBits(_priceBits, _block);
-    // }
-
-    // function _setPricesWithBits(uint256 _priceBits, uint256 _block) private {
-    //     for (uint256 j = 0; j < 8; j++) {
-    //         uint256 index = j;
-    //         if (index >= secondaryTokens.length) return;
-
-    //         uint256 startBit = 32 * j;
-    //         uint256 price = (_priceBits >> startBit) & BITMASK_32;
-
-    //         address token = secondaryTokens[j];
-    //         uint256 tokenPrecision = tokenPrecisions[j];
-    //         uint256 adjustedPrice = (price * PRICE_PRECISION) / tokenPrecision;
-
-    //         _setPrice(token, adjustedPrice, _block);
-    //     }
-    // }
-
-    // function _setPrice(address _token, uint256 _price, uint256 _confidence, uint256 _block) private {
-    //     lastSecondaryUpdateBlock[_token] = _block;
-    //     Oracle.Price memory price = Oracle.Price({max: _price + _confidence, min: _price - _confidence});
-    //     prices[_token][_block] = price;
-    // }
-
-    //////////////////
-    // CONSTRUCTORS //
-    //////////////////
-
-    function constructPriceUpdateData(int24[] calldata _prices)
-        external
-        pure
-        returns (bytes32[] memory _priceUpdateData)
-    {
-        _priceUpdateData = new bytes32[]((_prices.length + MAX_PRICE_PER_WORD - 1) / MAX_PRICE_PER_WORD);
-        for (uint256 i; i < _prices.length; ++i) {
-            uint256 outerIndex = i / MAX_PRICE_PER_WORD;
-            uint256 innerIndex = i % MAX_PRICE_PER_WORD;
-            bytes32 partialWord =
-                bytes32(uint256(uint24(_prices[i])) << (24 * (MAX_PRICE_PER_WORD - 1 - innerIndex) + 16));
-            _priceUpdateData[outerIndex] |= partialWord;
+    // Set Prices for Alternative Assets - Gas Inefficient
+    function setAssetPrices(Oracle.Price[] memory _prices, uint256 _block) external onlyKeeper {
+        address[] memory tokens = alternativeAssets;
+        for (uint256 i = 0; i < tokens.length; i++) {
+            address token = tokens[i];
+            _setPrice(token, _prices[i].max, _prices[i].min, _block);
         }
     }
 
-    function constructPublishTimeUpdateData(uint24[] calldata _publishTimeDiff)
-        external
-        pure
-        returns (bytes32[] memory _publishTimeUpdateData)
-    {
-        _publishTimeUpdateData = new bytes32[]((_publishTimeDiff.length + MAX_PRICE_PER_WORD - 1) / MAX_PRICE_PER_WORD);
-        for (uint256 i; i < _publishTimeDiff.length; ++i) {
-            uint256 outerIndex = i / MAX_PRICE_PER_WORD;
-            uint256 innerIndex = i % MAX_PRICE_PER_WORD;
-            bytes32 partialWord =
-                bytes32(uint256(_publishTimeDiff[i]) << (24 * (MAX_PRICE_PER_WORD - 1 - innerIndex) + 16));
-            _publishTimeUpdateData[outerIndex] |= partialWord;
+    function setPricesWithBits(uint256[] calldata _priceBits, uint256 _block) external onlyKeeper {
+        uint256 len = alternativeAssets.length;
+        uint256 loops = Math.ceilDiv(len, 4);
+        for (uint256 i = 0; i < loops; i++) {
+            uint256 start = i * 4;
+            uint256 end = start + 4;
+            if (end > len) {
+                end = len;
+            }
+            address[] memory assetsToSet = new address[](end - start);
+            for (uint256 j = start; j < end; j++) {
+                assetsToSet[j - start] = alternativeAssets[j];
+            }
+            _setPricesWithBits(assetsToSet, _priceBits[i], _block);
         }
+    }
+
+    function _setPricesWithBits(address[] memory _assets, uint256 _priceBits, uint256 _block) private {
+        for (uint256 i = 0; i < 4; ++i) {
+            uint256 index = i;
+            if (index >= _assets.length) return;
+
+            uint256 startBit = i * 64;
+            uint256 maxPrice = (_priceBits >> startBit) & BITMASK_32;
+            uint256 minPrice = (_priceBits >> (startBit + 32)) & BITMASK_32;
+
+            address token = _assets[index];
+            _setPrice(
+                token,
+                (maxPrice * PRICE_PRECISION) / tokenPrecision,
+                (minPrice * PRICE_PRECISION) / tokenPrecision,
+                _block
+            );
+        }
+    }
+
+    function _setPrice(address _token, uint256 _maxPrice, uint256 _minPrice, uint256 _block) private {
+        lastSecondaryUpdateBlock[_token] = _block;
+        Oracle.Price memory price = Oracle.Price({max: _maxPrice, min: _minPrice});
+        prices[_token][_block] = price;
     }
 
     /////////////
