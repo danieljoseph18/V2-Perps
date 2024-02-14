@@ -3,14 +3,14 @@ pragma solidity 0.8.23;
 
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {Market} from "../markets/Market.sol";
-import {TradeStorage} from "../positions/TradeStorage.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Position} from "../positions/Position.sol";
 import {Trade} from "../positions/Trade.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
 // Contract for Auto Deleveraging markets
@@ -22,17 +22,17 @@ import {Oracle} from "../oracle/Oracle.sol";
 contract Adl is RoleValidation {
     using SignedMath for int256;
 
-    PriceFeed public priceFeed;
-    TradeStorage public tradeStorage;
+    IPriceFeed public priceFeed;
+    ITradeStorage public tradeStorage;
 
-    event AdlExecuted(Market indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
+    event AdlExecuted(IMarket indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
 
     constructor(address _tradeStorage, address _priceFeed, address _roleStorage) RoleValidation(_roleStorage) {
-        tradeStorage = TradeStorage(_tradeStorage);
-        priceFeed = PriceFeed(_priceFeed);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        priceFeed = IPriceFeed(_priceFeed);
     }
 
-    function flagForAdl(Market _market, bool _isLong) external onlyAdlKeeper {
+    function flagForAdl(IMarket _market, bool _isLong) external onlyAdlKeeper {
         // require(_market != Market(address(0)), "ADL: Invalid market");
         // // get current price
         // address indexToken = _market.indexToken();
@@ -51,16 +51,17 @@ contract Adl is RoleValidation {
         // }
     }
 
-    function executeAdl(Market _market, uint256 _sizeDelta, bytes32 _positionKey, bool _isLong)
+    function executeAdl(IMarket _market, uint256 _sizeDelta, bytes32 _positionKey, bool _isLong)
         external
         onlyAdlKeeper
     {
         Trade.ExecuteCache memory cache;
+        IMarket.AdlConfig memory adl = _market.getAdlConfig();
         // Check ADL is enabled for the market and for the side
         if (_isLong) {
-            require(_market.adlFlaggedLong(), "ADL: Long side not flagged");
+            require(adl.flaggedLong, "ADL: Long side not flagged");
         } else {
-            require(_market.adlFlaggedShort(), "ADL: Short side not flagged");
+            require(adl.flaggedShort, "ADL: Short side not flagged");
         }
         // Check the position in question is active
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
@@ -93,7 +94,7 @@ contract Adl is RoleValidation {
         // Check if the new PNL to pool ratio is greater than
         // the min PNL factor after ADL (~20%)
         // If not, unflag for ADL
-        if (newPnlFactor.abs() <= _market.targetPnlFactor()) {
+        if (newPnlFactor.abs() <= adl.targetPnlFactor) {
             _market.updateAdlState(false, _isLong);
         }
         emit AdlExecuted(_market, _positionKey, _sizeDelta, _isLong);

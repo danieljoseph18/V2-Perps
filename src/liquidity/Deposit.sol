@@ -5,17 +5,23 @@ import {Fee} from "../libraries/Fee.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
-import {LiquidityVault} from "./LiquidityVault.sol";
+import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {IProcessor} from "../router/interfaces/IProcessor.sol";
 
 library Deposit {
+    using SignedMath for int256;
+    using SafeCast for uint256;
+
     uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 public constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
     uint256 public constant SCALING_FACTOR = 1e18;
 
-    struct Params {
+    struct Input {
         address owner;
         address tokenIn;
         uint256 amountIn;
@@ -25,134 +31,100 @@ library Deposit {
     }
 
     struct Data {
-        Params params;
+        Input input;
         uint256 blockNumber;
         uint48 expirationTimestamp;
     }
 
-    struct ExecuteCache {
+    struct ExecuteParams {
+        ILiquidityVault liquidityVault;
+        IProcessor processor;
+        IPriceFeed priceFeed;
         Data data;
+        Pool.Values values;
         bytes32 key;
         int256 cumulativePnl;
-        address processor;
+        bool isLongToken;
     }
 
+    struct InternalExecutionCache {
+        Oracle.Price longPrices;
+        Oracle.Price shortPrices;
+        Fee.Params feeParams;
+        uint256 fee;
+        uint256 afterFeeAmount;
+        uint256 mintAmount;
+    }
+
+    event DepositExecuted(
+        bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 mintAmount
+    );
+
     function validateCancellation(Data memory _data, address _caller) internal view {
-        require(_data.params.owner == _caller, "Deposit: invalid owner");
+        require(_data.input.owner == _caller, "Deposit: invalid owner");
         require(_data.expirationTimestamp < block.timestamp, "Deposit: deposit not expired");
     }
 
-    function create(Params memory _params, uint48 _minTimeToExpiration)
+    function create(Input memory _input, uint48 _minTimeToExpiration)
         external
         view
         returns (Data memory data, bytes32 key)
     {
         uint256 blockNumber = block.number;
         data = Data({
-            params: _params,
+            input: _input,
             blockNumber: blockNumber,
             expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration
         });
 
-        key = _generateKey(_params.owner, _params.tokenIn, _params.amountIn, blockNumber);
+        key = _generateKey(_input.owner, _input.tokenIn, _input.amountIn, blockNumber);
     }
 
-    function execute(
-        LiquidityVault _liquidityVault,
-        PriceFeed _priceFeed,
-        Data memory _data,
-        Pool.Values memory _values,
-        bool _isLongToken,
-        uint8 _priceImpactExponent,
-        uint256 _priceImpactFactor
-    ) external view returns (uint256 mintAmount, uint256 fee, uint256 remaining) {
+    function execute(ExecuteParams memory _params) external {
+        InternalExecutionCache memory cache;
+        // Delete Deposit Request
+        _params.liquidityVault.deleteDeposit(_params.key);
         // Get token price and calculate price impact directly to reduce local variables
-        (uint256 longTokenPrice, uint256 shortTokenPrice) =
-            Oracle.getMarketTokenPrices(_priceFeed, _data.blockNumber, true);
+        (cache.longPrices, cache.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
 
-        uint256 impactedPrice = _calculateImpactedPrice(
-            _values,
-            _isLongToken,
-            _data.params.amountIn,
-            _data.params.maxSlippage,
-            longTokenPrice,
-            shortTokenPrice,
-            _priceImpactExponent,
-            _priceImpactFactor
+        // Calculate Fee
+        cache.feeParams = Fee.constructFeeParams(
+            _params.liquidityVault,
+            _params.data.input.amountIn,
+            _params.isLongToken,
+            _params.values,
+            cache.longPrices,
+            cache.shortPrices,
+            true
         );
-
-        // Calculate fee based on the impacted price
-        fee = Fee.calculateForMarket(_liquidityVault, _data.params.amountIn);
+        cache.fee = Fee.calculateForMarketAction(cache.feeParams);
 
         // Calculate remaining after fee
-        remaining = _data.params.amountIn - fee;
+        cache.afterFeeAmount = _params.data.input.amountIn - cache.fee;
 
-        // Calculate Mint amount
-        mintAmount = _calculateMintAmount(
-            _values, impactedPrice, longTokenPrice, shortTokenPrice, _values.longBaseUnit, remaining, _isLongToken
+        // Calculate Mint amount with the remaining amount
+        cache.mintAmount = Pool.depositTokensToMarketTokens(
+            _params.values, cache.longPrices, cache.shortPrices, cache.afterFeeAmount, _params.isLongToken
         );
-    }
 
-    function _calculateImpactedPrice(
-        Pool.Values memory _values,
-        bool _isLongToken,
-        uint256 _amountIn,
-        uint256 _maxSlippage,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice,
-        uint8 _priceImpactExponent,
-        uint256 _priceImpactFactor
-    ) internal pure returns (uint256 impactedPrice) {
-        return PriceImpact.executeForMarket(
-            PriceImpact.Params({
-                longTokenBalance: _values.longTokenBalance,
-                shortTokenBalance: _values.shortTokenBalance,
-                longTokenPrice: _longTokenPrice,
-                shortTokenPrice: _shortTokenPrice,
-                amountIn: _amountIn,
-                maxSlippage: _maxSlippage,
-                isIncrease: true,
-                isLongToken: _isLongToken,
-                longBaseUnit: _values.longBaseUnit,
-                shortBaseUnit: _values.shortBaseUnit
-            }),
-            _priceImpactExponent,
-            _priceImpactFactor
+        // update storage
+        _params.liquidityVault.accumulateFees(cache.fee, _params.isLongToken);
+        _params.liquidityVault.increasePoolBalance(cache.afterFeeAmount, _params.isLongToken);
+
+        // Transfer tokens into the market
+        _params.processor.transferDepositTokens(_params.data.input.tokenIn, _params.data.input.amountIn);
+
+        // Invariant checks
+        // @audit - what invariants checks do we need here?
+        emit DepositExecuted(
+            _params.key,
+            _params.data.input.owner,
+            _params.data.input.tokenIn,
+            _params.data.input.amountIn,
+            cache.mintAmount
         );
-    }
-
-    function _calculateMintAmount(
-        Pool.Values memory _values,
-        uint256 _impactedPrice,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice,
-        uint256 _baseUnitIn,
-        uint256 _remaining,
-        bool _isLongToken
-    ) internal pure returns (uint256) {
-        uint256 valueUsd = mulDiv(_remaining, _impactedPrice, _baseUnitIn);
-        uint256 marketTokenPrice;
-        if (_isLongToken) {
-            marketTokenPrice = Pool.getMarketTokenPrice(_values, _impactedPrice, _shortTokenPrice);
-        } else {
-            marketTokenPrice = Pool.getMarketTokenPrice(_values, _longTokenPrice, _impactedPrice);
-        }
-
-        return marketTokenPrice == 0 ? valueUsd : mulDiv(valueUsd, SCALING_FACTOR, marketTokenPrice);
-    }
-
-    function _calculateUsdValue(
-        bool _isLongToken,
-        uint256 _longBaseUnit,
-        uint256 _shortBaseUnit,
-        uint256 _price,
-        uint256 _amount
-    ) internal pure returns (uint256 valueUsd) {
-        if (_isLongToken) {
-            valueUsd = mulDiv(_amount, _price, _longBaseUnit);
-        } else {
-            valueUsd = mulDiv(_amount, _price, _shortBaseUnit);
-        }
+        // mint tokens to user
+        _params.liquidityVault.mint(_params.data.input.owner, cache.mintAmount);
     }
 
     function _generateKey(address owner, address tokenIn, uint256 amountIn, uint256 blockNumber)

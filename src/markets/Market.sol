@@ -28,7 +28,7 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 
@@ -40,7 +40,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
     uint256 public constant SCALING_FACTOR = 1e18;
 
-    PriceFeed public priceFeed;
+    IPriceFeed public priceFeed;
 
     address public indexToken;
 
@@ -50,20 +50,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     // CONFIG: All Constants Used in Market Calculations //
     ///////////////////////////////////////////////////////
 
-    uint256 public maxFundingVelocity;
-    uint256 public skewScale; // Sensitivity to Market Skew
-    int256 public maxFundingRate;
-    int256 public minFundingRate;
-    uint256 public borrowingFactor;
-    uint256 public borrowingExponent;
-    uint256 public priceImpactExponent;
-    uint256 public priceImpactFactor;
-    uint256 public maxPnlFactor;
-    uint256 public targetPnlFactor; // PNL Factor to aim for in ADLs
-    uint32 public maxLeverage; // 2 D.P -> 100 = 1x, 200 = 2x
-    bool public feeForSmallerSide; // Flag for Skipping Fee for Smaller Side
-    bool public adlFlaggedLong; // Flag for ADL Long
-    bool public adlFlaggedShort; // Flag for ADL Short
+    Config private config;
 
     ///////////////////////////////////////////////////
     // FUNDING: Updateable Funding-Related variables //
@@ -109,7 +96,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     uint256 public longSizeSumUSD; // Σ All Position Sizes USD Long
     uint256 public shortSizeSumUSD; // Σ All Position Sizes USD Short
 
-    constructor(PriceFeed _priceFeed, address _indexToken, address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(IPriceFeed _priceFeed, address _indexToken, address _roleStorage) RoleValidation(_roleStorage) {
         indexToken = _indexToken;
         priceFeed = _priceFeed;
     }
@@ -119,67 +106,18 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     /// @dev Must be Called before contract is interacted with
     function initialise(Config memory _config) external onlyMarketMaker {
         require(!isInitialised, "Market: already initialised");
-        maxFundingVelocity = _config.maxFundingVelocity;
-        skewScale = _config.skewScale;
-        maxFundingRate = _config.maxFundingRate;
-        minFundingRate = _config.minFundingRate;
-        borrowingFactor = _config.borrowingFactor;
-        borrowingExponent = _config.borrowingExponent;
-        priceImpactFactor = _config.priceImpactFactor;
-        priceImpactExponent = _config.priceImpactExponent;
-        maxPnlFactor = _config.maxPnlFactor;
-        targetPnlFactor = _config.targetPnlFactor;
-        maxLeverage = _config.maxLeverage;
-        feeForSmallerSide = _config.feeForSmallerSide;
-        adlFlaggedLong = _config.adlFlaggedLong;
-        adlFlaggedShort = _config.adlFlaggedShort;
+        config = _config;
         isInitialised = true;
-        emit MarketInitialised(
-            _config.maxFundingVelocity,
-            _config.skewScale,
-            _config.maxFundingRate,
-            _config.minFundingRate,
-            _config.borrowingFactor,
-            _config.borrowingExponent,
-            _config.feeForSmallerSide,
-            _config.priceImpactFactor,
-            _config.priceImpactExponent,
-            _config.maxPnlFactor,
-            _config.targetPnlFactor
-        );
+        emit MarketInitialised(_config);
     }
 
     function updateConfig(Config memory _config) external onlyConfigurator {
-        maxFundingVelocity = _config.maxFundingVelocity;
-        skewScale = _config.skewScale;
-        maxFundingRate = _config.maxFundingRate;
-        minFundingRate = _config.minFundingRate;
-        borrowingFactor = _config.borrowingFactor;
-        borrowingExponent = _config.borrowingExponent;
-        priceImpactFactor = _config.priceImpactFactor;
-        priceImpactExponent = _config.priceImpactExponent;
-        maxPnlFactor = _config.maxPnlFactor;
-        targetPnlFactor = _config.targetPnlFactor;
-        feeForSmallerSide = _config.feeForSmallerSide;
-        adlFlaggedLong = _config.adlFlaggedLong;
-        adlFlaggedShort = _config.adlFlaggedShort;
-        emit MarketConfigUpdated(
-            _config.maxFundingVelocity,
-            _config.skewScale,
-            _config.maxFundingRate,
-            _config.minFundingRate,
-            _config.borrowingFactor,
-            _config.borrowingExponent,
-            _config.feeForSmallerSide,
-            _config.priceImpactFactor,
-            _config.priceImpactExponent,
-            _config.maxPnlFactor,
-            _config.targetPnlFactor
-        );
+        config = _config;
+        emit MarketConfigUpdated(_config);
     }
 
     function updateAdlState(bool _isFlaggedForAdl, bool _isLong) external onlyAdlController {
-        _isLong ? adlFlaggedLong = _isFlaggedForAdl : adlFlaggedShort = _isFlaggedForAdl;
+        _isLong ? config.adl.flaggedLong = _isFlaggedForAdl : config.adl.flaggedShort = _isFlaggedForAdl;
         emit AdlStateUpdated(_isFlaggedForAdl);
     }
 
@@ -204,10 +142,10 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         // Add the previous velocity to the funding rate
         int256 deltaRate = fundingRateVelocity * timeElapsed.toInt256();
         // if funding rate addition puts it above / below limit, set to limit
-        if (fundingRate + deltaRate >= maxFundingRate) {
-            fundingRate = maxFundingRate;
-        } else if (fundingRate + deltaRate <= minFundingRate) {
-            fundingRate = minFundingRate;
+        if (fundingRate + deltaRate >= config.funding.maxRate) {
+            fundingRate = config.funding.maxRate;
+        } else if (fundingRate + deltaRate <= config.funding.minRate) {
+            fundingRate = config.funding.minRate;
         } else {
             fundingRate += deltaRate;
         }
@@ -245,8 +183,9 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         uint256 poolBalance =
             MarketUtils.getPoolBalanceUSD(this, _longTokenPrice, _shortTokenPrice, longBaseUnit, shortBaseUnit);
 
-        uint256 rate =
-            unwrap((ud(borrowingFactor).mul(ud(openInterestUSD).powu(borrowingExponent))).div(ud(poolBalance)));
+        uint256 rate = unwrap(
+            (ud(config.borrowing.factor).mul(ud(openInterestUSD).powu(config.borrowing.exponent))).div(ud(poolBalance))
+        );
         // update cumulative fees with current borrowing rate
         if (_isLong) {
             longCumulativeBorrowFees += unwrap(ud(longBorrowingRate).mul(ud(block.timestamp).div(ud(lastBorrowUpdate))));
@@ -321,5 +260,25 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     {
         return
             (longCumulativeFundingFees, shortCumulativeFundingFees, longCumulativeBorrowFees, shortCumulativeBorrowFees);
+    }
+
+    function getConfig() external view returns (Config memory) {
+        return config;
+    }
+
+    function getBorrowingConfig() external view returns (BorrowingConfig memory) {
+        return config.borrowing;
+    }
+
+    function getFundingConfig() external view returns (FundingConfig memory) {
+        return config.funding;
+    }
+
+    function getImpactConfig() external view returns (ImpactConfig memory) {
+        return config.impact;
+    }
+
+    function getAdlConfig() external view returns (AdlConfig memory) {
+        return config.adl;
     }
 }

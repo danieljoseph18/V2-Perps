@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {PriceFeed} from "./PriceFeed.sol";
+import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
 import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {UD60x18, unwrap, ud, powu} from "@prb/math/UD60x18.sol";
-import {Market} from "../markets/Market.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {IChainlinkFeed} from "./interfaces/IChainlinkFeed.sol";
 import {mulDiv} from "@prb/math/Common.sol";
@@ -58,11 +58,11 @@ library Oracle {
     uint256 private constant PRICE_DECIMALS = 18;
     uint256 private constant CHAINLINK_PRICE_DECIMALS = 8;
 
-    function isValidAsset(PriceFeed _priceFeed, address _token) external view returns (bool) {
+    function isValidAsset(IPriceFeed _priceFeed, address _token) external view returns (bool) {
         return _priceFeed.getAsset(_token).isValid;
     }
 
-    function isSequencerUp(PriceFeed _priceFeed) external view {
+    function isSequencerUp(IPriceFeed _priceFeed) external view {
         address sequencerUptimeFeed = _priceFeed.sequencerUptimeFeed();
         if (sequencerUptimeFeed != address(0)) {
             IChainlinkFeed feed = IChainlinkFeed(sequencerUptimeFeed);
@@ -86,7 +86,7 @@ library Oracle {
         }
     }
 
-    function validateTradingHours(PriceFeed _priceFeed, address _token, TradingEnabled memory _isEnabled)
+    function validateTradingHours(IPriceFeed _priceFeed, address _token, TradingEnabled memory _isEnabled)
         external
         view
     {
@@ -127,21 +127,28 @@ library Oracle {
         confidence = _priceData.conf * (10 ** (PRICE_DECIMALS - absExponent));
     }
 
-    function getMaxPrice(PriceFeed _priceFeed, address _token, uint256 _block) public view returns (uint256 maxPrice) {
+    function getMaxPrice(IPriceFeed _priceFeed, address _token, uint256 _block)
+        public
+        view
+        returns (uint256 maxPrice)
+    {
         maxPrice = _priceFeed.getPrice(_block, _token).max;
     }
 
-    function getMinPrice(PriceFeed _priceFeed, address _token, uint256 _block) public view returns (uint256 minPrice) {
+    function getMinPrice(IPriceFeed _priceFeed, address _token, uint256 _block)
+        public
+        view
+        returns (uint256 minPrice)
+    {
         minPrice = _priceFeed.getPrice(_block, _token).min;
     }
 
-    function getMarketTokenPrices(PriceFeed _priceFeed, uint256 _blockNumber, bool _maximise)
+    function getMarketTokenPrices(IPriceFeed _priceFeed, uint256 _blockNumber, bool _maximise)
         public
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
-        Price memory longPrices = _priceFeed.getPrice(_blockNumber, _priceFeed.longToken());
-        Price memory shortPrices = _priceFeed.getPrice(_blockNumber, _priceFeed.shortToken());
+        (Price memory longPrices, Price memory shortPrices) = getMarketTokenPrices(_priceFeed, _blockNumber);
         if (_maximise) {
             longPrice = longPrices.max;
             shortPrice = shortPrices.max;
@@ -152,8 +159,17 @@ library Oracle {
         require(longPrice > 0 && shortPrice > 0, "Oracle: invalid token prices");
     }
 
+    function getMarketTokenPrices(IPriceFeed _priceFeed, uint256 _blockNumber)
+        public
+        view
+        returns (Price memory _longPrices, Price memory _shortPrices)
+    {
+        _longPrices = _priceFeed.getPrice(_blockNumber, _priceFeed.longToken());
+        _shortPrices = _priceFeed.getPrice(_blockNumber, _priceFeed.shortToken());
+    }
+
     // Can just use getPriceUnsafe - where do we get the confidence interval?
-    function getLastMarketTokenPrices(PriceFeed _priceFeed, bool _maximise)
+    function getLastMarketTokenPrices(IPriceFeed _priceFeed, bool _maximise)
         external
         view
         returns (uint256 longPrice, uint256 shortPrice)
@@ -181,7 +197,7 @@ library Oracle {
 
     // Use chainlink price feed if available
     // @audit - What do we do if ref price is 0???
-    function getReferencePrice(PriceFeed _priceFeed, Asset memory _asset)
+    function getReferencePrice(IPriceFeed _priceFeed, Asset memory _asset)
         public
         view
         returns (uint256 referencePrice)
@@ -214,20 +230,20 @@ library Oracle {
         referencePrice = mulDiv(_price.toUint256(), _asset.baseUnit, 10 ** CHAINLINK_PRICE_DECIMALS);
     }
 
-    function getBaseUnit(PriceFeed _priceFeed, address _token) public view returns (uint256) {
+    function getBaseUnit(IPriceFeed _priceFeed, address _token) public view returns (uint256) {
         return _priceFeed.getAsset(_token).baseUnit;
     }
 
-    function getLongBaseUnit(PriceFeed _priceFeed) public view returns (uint256) {
+    function getLongBaseUnit(IPriceFeed _priceFeed) public view returns (uint256) {
         return getBaseUnit(_priceFeed, _priceFeed.longToken());
     }
 
-    function getShortBaseUnit(PriceFeed _priceFeed) public view returns (uint256) {
+    function getShortBaseUnit(IPriceFeed _priceFeed) public view returns (uint256) {
         return getBaseUnit(_priceFeed, _priceFeed.shortToken());
     }
 
     // @audit - where is this used? should we max or min the price?
-    function getNetPnl(PriceFeed _priceFeed, Market _market, uint256 _blockNumber, bool _maximise)
+    function getNetPnl(IPriceFeed _priceFeed, IMarket _market, uint256 _blockNumber, bool _maximise)
         public
         view
         returns (int256 netPnl)

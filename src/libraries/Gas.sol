@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Processor} from "../router/Processor.sol";
+import {IProcessor} from "../router/interfaces/IProcessor.sol";
 
 library Gas {
     enum Action {
@@ -10,7 +10,7 @@ library Gas {
         POSITION
     }
 
-    function getLimitForAction(Processor _processor, Action _action) external view returns (uint256 gasLimit) {
+    function getLimitForAction(IProcessor _processor, Action _action) external view returns (uint256 gasLimit) {
         if (_action == Action.DEPOSIT) {
             gasLimit = _processor.depositGasLimit();
         } else if (_action == Action.WITHDRAW) {
@@ -22,7 +22,7 @@ library Gas {
         }
     }
 
-    function getMinExecutionFee(Processor _processor, uint256 _expectedGasLimit)
+    function getMinExecutionFee(IProcessor _processor, uint256 _expectedGasLimit)
         external
         view
         returns (uint256 minExecutionFee)
@@ -32,7 +32,7 @@ library Gas {
     }
 
     function payExecutionFee(
-        Processor _processor,
+        IProcessor _processor,
         uint256 _executionFee,
         uint256 _initialGas,
         address payable _executor,

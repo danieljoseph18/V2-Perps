@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {TradeStorage} from "./TradeStorage.sol";
-import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
-import {Market} from "../markets/Market.sol";
-import {MarketMaker} from "../markets/MarketMaker.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {Position} from "./Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
@@ -31,7 +29,7 @@ library Trade {
 
     // Cached Values for Execution
     struct ExecuteCache {
-        Market market;
+        IMarket market;
         uint256 indexPrice;
         uint256 indexBaseUnit;
         uint256 impactedPrice;

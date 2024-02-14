@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Market} from "../markets/Market.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 library Pool {
     using SignedMath for int256;
@@ -11,12 +12,9 @@ library Pool {
     uint256 public constant SCALING_FACTOR = 1e18;
 
     struct Values {
-        address longToken;
-        address shortToken;
         uint256 longTokenBalance;
         uint256 shortTokenBalance;
         uint256 marketTokenSupply;
-        uint256 blockNumber;
         uint256 longBaseUnit;
         uint256 shortBaseUnit;
         int256 cumulativePnl;
@@ -36,8 +34,38 @@ library Pool {
         }
     }
 
+    function depositTokensToMarketTokens(
+        Values memory _values,
+        Oracle.Price memory _longPrices,
+        Oracle.Price memory _shortPrices,
+        uint256 _amountIn,
+        bool _isLongToken
+    ) external pure returns (uint256 marketTokenAmount) {
+        uint256 valueUsd = _isLongToken
+            ? mulDiv(_amountIn, _longPrices.min, _values.longBaseUnit)
+            : mulDiv(_amountIn, _shortPrices.min, _values.shortBaseUnit);
+        uint256 marketTokenPrice = getMarketTokenPrice(_values, _longPrices.max, _shortPrices.max);
+        return marketTokenPrice == 0 ? valueUsd : mulDiv(valueUsd, SCALING_FACTOR, marketTokenPrice);
+    }
+
+    function withdrawMarketTokensToTokens(
+        Values memory _values,
+        Oracle.Price memory _longPrices,
+        Oracle.Price memory _shortPrices,
+        uint256 _marketTokenAmountIn,
+        bool _isLongToken
+    ) external pure returns (uint256 tokenAmount) {
+        uint256 marketTokenPrice = getMarketTokenPrice(_values, _longPrices.min, _shortPrices.min);
+        uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALING_FACTOR);
+        if (_isLongToken) {
+            tokenAmount = mulDiv(valueUsd, _values.longBaseUnit, _longPrices.max);
+        } else {
+            tokenAmount = mulDiv(valueUsd, _values.shortBaseUnit, _shortPrices.max);
+        }
+    }
+
     function getMarketTokenPrice(Values memory _values, uint256 _longTokenPrice, uint256 _shortTokenPrice)
-        external
+        public
         pure
         returns (uint256 lpTokenPrice)
     {

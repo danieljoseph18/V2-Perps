@@ -17,21 +17,29 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Market} from "../markets/Market.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
     uint256 public constant PRECISION = 1e18;
 
+    struct BorrowingCache {
+        IMarket.BorrowingConfig config;
+        UD60x18 openInterest;
+        UD60x18 poolBalance;
+        UD60x18 exponentiatedOI;
+        UD60x18 borrowingFactor;
+    }
+
     function calculateRate(
-        Market _market,
-        PriceFeed _priceFeed,
+        IMarket _market,
+        IPriceFeed _priceFeed,
         uint256 _indexPrice,
         address _indexToken,
         uint256 _longTokenPrice,
@@ -39,17 +47,19 @@ library Borrowing {
         uint256 _longTokenBaseUnit,
         uint256 _shortTokenBaseUnit
     ) external view returns (uint256 rate) {
+        BorrowingCache memory cache;
         // Calculate the new Borrowing Rate
-        UD60x18 openInterest =
+        cache.config = _market.getBorrowingConfig();
+        cache.openInterest =
             ud(MarketUtils.getTotalOpenInterestUSD(_market, _indexPrice, Oracle.getBaseUnit(_priceFeed, _indexToken)));
-        UD60x18 poolBalance = ud(
+        cache.poolBalance = ud(
             MarketUtils.getPoolBalanceUSD(
                 _market, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
             )
         );
-        UD60x18 exponentiatedOI = openInterest.powu(_market.borrowingExponent());
-        UD60x18 borrowingFactor = ud(_market.borrowingFactor());
-        rate = unwrap(borrowingFactor.mul(exponentiatedOI).div(poolBalance));
+        cache.exponentiatedOI = cache.openInterest.powu(cache.config.exponent);
+        cache.borrowingFactor = ud(cache.config.factor);
+        rate = unwrap(cache.borrowingFactor.mul(cache.exponentiatedOI).div(cache.poolBalance));
     }
 
     function calculateFeeAddition(uint256 _prevRate, uint256 _lastUpdate) external view returns (uint256 feeAddition) {
@@ -58,7 +68,7 @@ library Borrowing {
     }
 
     /// @dev Gets the Total Fee To Charge For a Position Change in Tokens
-    function calculateFeeForPositionChange(Market _market, Position.Data calldata _position, uint256 _collateralDelta)
+    function calculateFeeForPositionChange(IMarket _market, Position.Data calldata _position, uint256 _collateralDelta)
         external
         view
         returns (uint256 indexFee)
@@ -67,7 +77,7 @@ library Borrowing {
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
-    function getTotalPositionFeesOwed(Market _market, Position.Data calldata _position)
+    function getTotalPositionFeesOwed(IMarket _market, Position.Data calldata _position)
         public
         view
         returns (uint256 indexTotalFeesOwed)
@@ -78,7 +88,7 @@ library Borrowing {
 
     /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
     /// @dev Units: Fees in Tokens (% of fees applied to position size)
-    function getFeesSinceLastPositionUpdate(Market _market, Position.Data calldata _position)
+    function getFeesSinceLastPositionUpdate(IMarket _market, Position.Data calldata _position)
         public
         view
         returns (uint256 indexFeesSinceUpdate)
@@ -97,7 +107,7 @@ library Borrowing {
 
     /// @dev Units: Fees as a percentage (e.g 0.03e18 = 3%)
     /// @dev Gets fees since last time the cumulative market rate was updated
-    function _calculatePendingFees(Market _market, bool _isLong) internal view returns (uint256 pendingFees) {
+    function _calculatePendingFees(IMarket _market, bool _isLong) internal view returns (uint256 pendingFees) {
         uint256 borrowRate = _isLong ? _market.longBorrowingRate() : _market.shortBorrowingRate();
         if (borrowRate == 0) return 0;
         uint256 timeElapsed = block.timestamp - _market.lastBorrowUpdate();

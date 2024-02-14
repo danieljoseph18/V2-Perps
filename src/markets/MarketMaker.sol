@@ -19,7 +19,6 @@ pragma solidity 0.8.23;
 
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
@@ -28,15 +27,14 @@ import {MarketUtils} from "./MarketUtils.sol";
 import {Market} from "./Market.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Needs MarketMaker Role
 contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    LiquidityVault liquidityVault;
-    PriceFeed priceFeed;
+    IPriceFeed priceFeed;
 
     EnumerableSet.AddressSet private markets;
     mapping(address indexToken => address market) public tokenToMarkets;
@@ -44,13 +42,11 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     bool private isInitialised;
     IMarket.Config public defaultConfig;
 
-    constructor(address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
-        liquidityVault = LiquidityVault(_liquidityVault);
-    }
+    constructor(address _roleStorage) RoleValidation(_roleStorage) {}
 
     function initialise(IMarket.Config memory _defaultConfig, address _priceFeed) external onlyAdmin {
         require(!isInitialised, "MS: Already Initialised");
-        priceFeed = PriceFeed(_priceFeed);
+        priceFeed = IPriceFeed(_priceFeed);
         defaultConfig = _defaultConfig;
         isInitialised = true;
         emit MarketMakerInitialised(_priceFeed);
@@ -67,7 +63,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     function createNewMarket(address _indexToken, bytes32 _priceId, uint256 _baseUnit, Oracle.Asset memory _asset)
         external
         onlyAdmin
-        returns (Market market)
+        returns (address marketAddress)
     {
         require(_indexToken != address(0), "MM: Invalid Address");
         require(_priceId != bytes32(0), "MM: Invalid Price Id");
@@ -78,11 +74,11 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Set Up Price Oracle
         priceFeed.supportAsset(_indexToken, _asset);
         // Create new Market contract
-        market = new Market(priceFeed, _indexToken, address(roleStorage));
+        Market market = new Market(priceFeed, _indexToken, address(roleStorage));
         // Initialize
         market.initialise(defaultConfig);
         // Cache
-        address marketAddress = address(market);
+        marketAddress = address(market);
         // Add to Storage
         markets.add(marketAddress);
         // Fire Event

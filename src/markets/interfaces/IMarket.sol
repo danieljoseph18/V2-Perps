@@ -3,33 +3,41 @@ pragma solidity 0.8.23;
 
 interface IMarket {
     struct Config {
-        uint256 maxFundingVelocity;
-        uint256 skewScale;
-        int256 maxFundingRate;
-        int256 minFundingRate;
-        uint256 borrowingFactor;
-        uint256 borrowingExponent;
-        uint256 priceImpactFactor;
-        uint256 priceImpactExponent;
+        uint32 maxLeverage; // 2 D.P -> 100 = 1x, 200 = 2x
+        bool feeForSmallerSide;
+        FundingConfig funding;
+        BorrowingConfig borrowing;
+        ImpactConfig impact;
+        AdlConfig adl;
+    }
+
+    struct AdlConfig {
         uint256 maxPnlFactor;
         uint256 targetPnlFactor;
-        uint32 maxLeverage;
-        bool feeForSmallerSide;
-        bool adlFlaggedLong;
-        bool adlFlaggedShort;
+        bool flaggedLong;
+        bool flaggedShort;
     }
-    // Public state variables accessors
 
+    struct FundingConfig {
+        uint256 maxVelocity;
+        int256 maxRate;
+        int256 minRate;
+        uint256 skewScale; // Sensitivity to Market Skew
+    }
+
+    struct BorrowingConfig {
+        uint256 factor;
+        uint256 exponent;
+    }
+
+    struct ImpactConfig {
+        uint256 positiveFactor; // 0.01% per $50,000 = 0.0002e18
+        uint256 negativeFactor;
+        uint256 exponent;
+    }
+
+    // Public state variables accessors
     function indexToken() external view returns (address);
-    function maxFundingVelocity() external view returns (uint256);
-    function skewScale() external view returns (uint256);
-    function maxFundingRate() external view returns (int256);
-    function minFundingRate() external view returns (int256);
-    function borrowingFactor() external view returns (uint256);
-    function borrowingExponent() external view returns (uint256);
-    function feeForSmallerSide() external view returns (bool);
-    function priceImpactExponent() external view returns (uint256);
-    function priceImpactFactor() external view returns (uint256);
     function lastFundingUpdate() external view returns (uint48);
     function fundingRate() external view returns (int256);
     function fundingRateVelocity() external view returns (int256);
@@ -48,38 +56,10 @@ interface IMarket {
     function shortTotalWAEP() external view returns (uint256);
     function longSizeSumUSD() external view returns (uint256);
     function shortSizeSumUSD() external view returns (uint256);
-    function maxPnlFactor() external view returns (uint256);
-    function targetPnlFactor() external view returns (uint256);
-    function adlFlaggedLong() external view returns (bool);
-    function adlFlaggedShort() external view returns (bool);
 
     // Events
-    event MarketInitialised(
-        uint256 maxFundingVelocity,
-        uint256 skewScale,
-        int256 maxFundingRate,
-        int256 minFundingRate,
-        uint256 borrowingFactor,
-        uint256 borrowingExponent,
-        bool feeForSmallerSide,
-        uint256 priceImpactFactor,
-        uint256 priceImpactExponent,
-        uint256 maxPnlFactor,
-        uint256 targetPnlFactor
-    );
-    event MarketConfigUpdated(
-        uint256 maxFundingVelocity,
-        uint256 skewScale,
-        int256 maxFundingRate,
-        int256 minFundingRate,
-        uint256 borrowingFactor,
-        uint256 borrowingExponent,
-        bool feeForSmallerSide,
-        uint256 priceImpactFactor,
-        uint256 priceImpactExponent,
-        uint256 maxPnlFactor,
-        uint256 targetPnlFactor
-    );
+    event MarketInitialised(Config config);
+    event MarketConfigUpdated(Config config);
     event FundingUpdated(
         int256 fundingRate,
         int256 fundingRateVelocity,
@@ -111,4 +91,9 @@ interface IMarket {
             uint256 _longCumulativeBorrowFees,
             uint256 _shortCumulativeBorrowFees
         );
+    function getConfig() external view returns (Config memory);
+    function getBorrowingConfig() external view returns (BorrowingConfig memory);
+    function getFundingConfig() external view returns (FundingConfig memory);
+    function getImpactConfig() external view returns (ImpactConfig memory);
+    function getAdlConfig() external view returns (AdlConfig memory);
 }

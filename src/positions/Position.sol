@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Market} from "../markets/Market.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv} from "@prb/math/Common.sol";
@@ -43,7 +43,7 @@ library Position {
 
     // Data for an Open Position
     struct Data {
-        Market market;
+        IMarket market;
         address indexToken;
         address user;
         address collateralToken; // WETH long, USDC short
@@ -193,14 +193,15 @@ library Position {
     }
 
     // 1x = 100
-    function checkLeverage(Market _market, uint256 _collateralPrice, uint256 _sizeUsd, uint256 _collateral)
+    function checkLeverage(IMarket _market, uint256 _collateralPrice, uint256 _sizeUsd, uint256 _collateral)
         external
         view
     {
+        IMarket.Config memory config = _market.getConfig();
         uint256 collateralUsd = mulDiv(_collateral, _collateralPrice, PRECISION);
         require(collateralUsd <= _sizeUsd, "Position: cUSD > sUSD");
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, collateralUsd);
-        require(leverage >= MIN_LEVERAGE && leverage <= _market.maxLeverage(), "Position: Leverage");
+        require(leverage >= MIN_LEVERAGE && leverage <= config.maxLeverage, "Position: Leverage");
     }
 
     function createRequest(Input calldata _trade, address _market, address _user, RequestType _requestType)

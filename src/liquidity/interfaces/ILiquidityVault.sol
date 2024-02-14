@@ -1,26 +1,21 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Processor} from "../../router/Processor.sol";
 import {Deposit} from "../../liquidity/Deposit.sol";
 import {Withdrawal} from "../../liquidity/Withdrawal.sol";
-import {PriceFeed} from "../../oracle/PriceFeed.sol";
 
 interface ILiquidityVault {
     // Constructor is not included in the interface
 
     // Admin functions
     function initialise(
-        PriceFeed _priceFeed,
-        Processor _processor,
+        address _priceFeed,
+        address _processor,
         uint48 _minTimeToExpiration,
-        uint8 _priceImpactExponent,
-        uint256 _priceImpactFactor,
         uint256 _executionFee,
-        uint256 _depositFee,
-        uint256 _withdrawalFee
+        uint256 _feeScale
     ) external;
-    function updateFees(uint256 _executionFee, uint256 _depositFee, uint256 _withdrawalFee) external;
+    function updateFees(uint256 _executionFee, uint256 _feeScale) external;
 
     // Trading related functions
     function transferPositionProfit(address _user, uint256 _amount, bool _isLong) external;
@@ -39,26 +34,37 @@ interface ILiquidityVault {
     function claimFundingFees(address _market, address _user, uint256 _claimed, bool _isLong) external;
     function swapFundingAmount(address _market, uint256 _amount, bool _isLong) external;
     function recordCollateralTransferIn(address _market, uint256 _collateralDelta, bool _isLong) external;
+    function decreasePoolBalance(uint256 _amount, bool _isLong) external;
+    function increasePoolBalance(uint256 _amount, bool _isLong) external;
+    function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) external;
 
     // Deposit execution
-    function executeDeposit(Deposit.ExecuteCache memory _cache) external;
+    function executeDeposit(Deposit.ExecuteParams memory _cache) external;
 
     // Withdrawal execution
-    function executeWithdrawal(Withdrawal.ExecuteCache memory _cache) external;
+    function executeWithdrawal(Withdrawal.ExecuteParams memory _cache) external;
 
     // Deposit creation
-    function createDeposit(Deposit.Params memory _params) external payable;
+    function createDeposit(Deposit.Input memory _params) external payable;
     function cancelDeposit(bytes32 _key, address _caller) external;
+    function deleteDeposit(bytes32 _key) external;
 
     // Withdrawal creation
-    function createWithdrawal(Withdrawal.Params memory _params) external payable;
+    function createWithdrawal(Withdrawal.Input memory _params) external payable;
     function cancelWithdrawal(bytes32 _key, address _caller) external;
+    function deleteWithdrawal(bytes32 _key) external;
+
+    // Mint and Burn
+    function mint(address _user, uint256 _amount) external;
+    function burn(uint256 _amount) external;
 
     // Getter
     function reservedAmounts(address _user, bool _isLong) external view returns (uint256);
     function executionFee() external view returns (uint256);
-    function depositFee() external view returns (uint256);
-    function withdrawalFee() external view returns (uint256);
+    function feeScale() external view returns (uint256);
+    function BASE_FEE() external view returns (uint256);
+    function getDepositRequest(bytes32 _key) external view returns (Deposit.Data memory);
+    function getWithdrawalRequest(bytes32 _key) external view returns (Withdrawal.Data memory);
 
     event DepositRequestCreated(
         bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 blockNumber

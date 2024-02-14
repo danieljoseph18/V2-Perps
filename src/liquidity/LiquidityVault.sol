@@ -10,15 +10,14 @@ import {Withdrawal} from "./Withdrawal.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {Market} from "../markets/Market.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
-import {Fee} from "../libraries/Fee.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
-import {Processor} from "../router/Processor.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
+import {IProcessor} from "../router/interfaces/IProcessor.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
@@ -33,19 +32,22 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 public constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
     uint256 public constant SCALING_FACTOR = 1e18;
+    uint256 public constant BASE_FEE = 0.001e18; // 0.1%
 
     address public immutable LONG_TOKEN;
     address public immutable SHORT_TOKEN;
     uint256 private immutable LONG_BASE_UNIT;
     uint256 private immutable SHORT_BASE_UNIT;
 
-    PriceFeed priceFeed;
-    Processor processor;
+    IPriceFeed priceFeed;
+    IProcessor processor;
 
     bool isInitialised;
     uint48 minTimeToExpiration;
-    uint256 public depositFee; // 18 D.P
-    uint256 public withdrawalFee; // 18 D.P
+
+    // Value = Max Bonus Fee
+    // Users will be charged a % of this fee based on the skew of the market
+    uint256 public feeScale; // 3% = 0.03e18
 
     uint256 private longTokenBalance;
     uint256 private shortTokenBalance;
@@ -53,9 +55,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     uint256 private shortAccumulatedFees;
     uint256 private longTokensReserved;
     uint256 private shortTokensReserved;
-
-    uint8 private priceImpactExponent;
-    uint256 private priceImpactFactor;
 
     uint256 public executionFee; // in Wei
 
@@ -93,38 +92,26 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     }
 
     function initialise(
-        PriceFeed _priceFeed,
-        Processor _processor,
+        address _priceFeed,
+        address _processor,
         uint48 _minTimeToExpiration,
-        uint8 _priceImpactExponent,
-        uint256 _priceImpactFactor,
         uint256 _executionFee,
-        uint256 _depositFee,
-        uint256 _withdrawalFee
+        uint256 _feeScale
     ) external onlyAdmin {
         require(!isInitialised, "LiquidityVault: already initialised");
-        priceFeed = _priceFeed;
-        processor = _processor;
+        priceFeed = IPriceFeed(_priceFeed);
+        processor = IProcessor(_processor);
         executionFee = _executionFee;
         minTimeToExpiration = _minTimeToExpiration;
-        depositFee = _depositFee;
-        withdrawalFee = _withdrawalFee;
-        priceImpactFactor = _priceImpactFactor;
-        priceImpactExponent = _priceImpactExponent;
+        feeScale = _feeScale;
     }
 
-    function updateFees(uint256 _executionFee, uint256 _depositFee, uint256 _withdrawalFee) external onlyConfigurator {
+    function updateFees(uint256 _executionFee, uint256 _feeScale) external onlyConfigurator {
         executionFee = _executionFee;
-        depositFee = _depositFee;
-        withdrawalFee = _withdrawalFee;
+        feeScale = _feeScale;
     }
 
-    function updatePriceImpact(uint256 _priceImpactFactor, uint8 _priceImpactExponent) external onlyConfigurator {
-        priceImpactFactor = _priceImpactFactor;
-        priceImpactExponent = _priceImpactExponent;
-    }
-
-    function updateProcessor(Processor _processor) external onlyConfigurator {
+    function updateProcessor(IProcessor _processor) external onlyConfigurator {
         processor = _processor;
     }
 
@@ -176,6 +163,19 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
             IERC20(SHORT_TOKEN).safeTransfer(_to, _collateralDelta);
         }
         emit TransferOutTokens(_market, _to, _collateralDelta, _isLong);
+    }
+
+    function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
+        external
+        onlyVault
+    {
+        if (_shouldUnwrap) {
+            require(_isLongToken == true, "LiquidityVault: Unwrap Failed");
+            IWETH(LONG_TOKEN).withdraw(_amount);
+            payable(_to).sendValue(_amount);
+        } else {
+            IERC20(_isLongToken ? LONG_TOKEN : SHORT_TOKEN).safeTransfer(_to, _amount);
+        }
     }
 
     function recordCollateralTransferIn(address _market, uint256 _collateralDelta, bool _isLong)
@@ -301,52 +301,27 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     // DEPOSIT EXECUTION //
     ///////////////////////
 
-    function executeDeposit(Deposit.ExecuteCache memory _cache) external onlyProcessor orderExists(_cache.key, true) {
-        // remove from storage
-        depositKeys.remove(_cache.key);
-        delete depositRequests[_cache.key];
+    function executeDeposit(Deposit.ExecuteParams memory _params) external onlyProcessor 
+    // orderExists(_params.key, true)
+    {
+        Deposit.execute(_params);
+    }
 
-        bool isLongToken = _cache.data.params.tokenIn == LONG_TOKEN;
+    function increasePoolBalance(uint256 _amount, bool _isLong) external onlyVault {
+        _isLong ? longTokenBalance += _amount : shortTokenBalance += _amount;
+    }
 
-        (uint256 mintAmount, uint256 fee, uint256 remaining) = Deposit.execute(
-            this,
-            priceFeed,
-            _cache.data,
-            Pool.Values({
-                longToken: LONG_TOKEN,
-                shortToken: SHORT_TOKEN,
-                longTokenBalance: longTokenBalance,
-                shortTokenBalance: shortTokenBalance,
-                marketTokenSupply: totalSupply(),
-                blockNumber: _cache.data.blockNumber,
-                longBaseUnit: LONG_BASE_UNIT,
-                shortBaseUnit: SHORT_BASE_UNIT,
-                cumulativePnl: _cache.cumulativePnl
-            }),
-            isLongToken,
-            priceImpactExponent,
-            priceImpactFactor
-        );
+    function decreasePoolBalance(uint256 _amount, bool _isLong) external onlyVault {
+        _isLong ? longTokenBalance -= _amount : shortTokenBalance -= _amount;
+    }
 
-        // update storage
-        if (isLongToken) {
-            longTokenBalance += remaining;
-            longAccumulatedFees += fee;
-        } else {
-            shortTokenBalance += remaining;
-            shortAccumulatedFees += fee;
-        }
+    function mint(address _to, uint256 _amount) external onlyVault {
+        _mint(_to, _amount);
+    }
 
-        // Transfer in intermediary tokens
-        processor.transferDepositTokens(_cache.data.params.tokenIn, _cache.data.params.amountIn);
-        // send execution fee to keeper
-        sendExecutionFee(payable(_cache.processor), _cache.data.params.executionFee);
-        // mint tokens to user
-        _mint(_cache.data.params.owner, mintAmount);
-        // fire event
-        emit DepositExecuted(
-            _cache.key, _cache.data.params.owner, _cache.data.params.tokenIn, _cache.data.params.amountIn, mintAmount
-        );
+    function deleteDeposit(bytes32 _key) external onlyVault {
+        depositKeys.remove(_key);
+        delete depositRequests[_key];
     }
 
     //////////////////////////
@@ -354,68 +329,19 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     //////////////////////////
 
     // @audit - review
-    function executeWithdrawal(Withdrawal.ExecuteCache memory _cache)
-        external
-        onlyProcessor
-        orderExists(_cache.key, false)
+    function executeWithdrawal(Withdrawal.ExecuteParams memory _params) external onlyProcessor 
+    // orderExists(_params.key, false)
     {
-        // Transfer in intermediary market tokens
-        processor.transferDepositTokens(address(this), _cache.data.params.marketTokenAmountIn);
-        // Burn tokens
-        _burn(msg.sender, _cache.data.params.marketTokenAmountIn);
-        // remove from storage
-        withdrawalKeys.remove(_cache.key);
-        delete withdrawalRequests[_cache.key];
-        bool isLongToken = _cache.data.params.tokenOut == LONG_TOKEN;
+        Withdrawal.execute(_params);
+    }
 
-        (uint256 amountOut, uint256 fee, uint256 remaining) = Withdrawal.execute(
-            this,
-            priceFeed,
-            _cache.data,
-            Pool.Values({
-                longToken: LONG_TOKEN,
-                shortToken: SHORT_TOKEN,
-                longTokenBalance: longTokenBalance,
-                shortTokenBalance: shortTokenBalance,
-                marketTokenSupply: totalSupply(),
-                blockNumber: _cache.data.blockNumber,
-                longBaseUnit: LONG_BASE_UNIT,
-                shortBaseUnit: SHORT_BASE_UNIT,
-                cumulativePnl: _cache.cumulativePnl
-            }),
-            isLongToken,
-            priceImpactExponent,
-            priceImpactFactor
-        );
+    function burn(uint256 _amount) external onlyVault {
+        _burn(address(this), _amount);
+    }
 
-        // update storage
-        if (isLongToken) {
-            longTokenBalance -= amountOut;
-            longAccumulatedFees += fee;
-        } else {
-            shortTokenBalance -= amountOut;
-            shortAccumulatedFees += fee;
-        }
-
-        // send execution fee to keeper
-        sendExecutionFee(payable(_cache.processor), _cache.data.params.executionFee);
-
-        // transfer tokens to user
-        if (_cache.data.params.shouldUnwrap) {
-            IWETH(LONG_TOKEN).withdraw(remaining);
-            payable(_cache.data.params.owner).sendValue(remaining);
-        } else {
-            IERC20(_cache.data.params.tokenOut).safeTransfer(_cache.data.params.owner, remaining);
-        }
-
-        // fire event
-        emit WithdrawalExecuted(
-            _cache.key,
-            _cache.data.params.owner,
-            _cache.data.params.tokenOut,
-            _cache.data.params.marketTokenAmountIn,
-            remaining
-        );
+    function deleteWithdrawal(bytes32 _key) external onlyVault {
+        withdrawalKeys.remove(_key);
+        delete withdrawalRequests[_key];
     }
 
     //////////////////////
@@ -424,11 +350,11 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     // Function to create a deposit request
     // Note -> need to add ability to create deposit in eth
-    function createDeposit(Deposit.Params memory _params) external payable onlyRouter {
-        (Deposit.Data memory deposit, bytes32 key) = Deposit.create(_params, minTimeToExpiration);
+    function createDeposit(Deposit.Input memory _input) external payable onlyRouter {
+        (Deposit.Data memory deposit, bytes32 key) = Deposit.create(_input, minTimeToExpiration);
         depositKeys.add(key);
         depositRequests[key] = deposit;
-        emit DepositRequestCreated(key, _params.owner, _params.tokenIn, _params.amountIn, deposit.blockNumber);
+        emit DepositRequestCreated(key, _input.owner, _input.tokenIn, _input.amountIn, deposit.blockNumber);
     }
 
     // Request must be expired for a user to cancel it
@@ -441,9 +367,9 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         delete depositRequests[_key];
 
         // Transfer tokens back to user
-        IERC20(deposit.params.tokenIn).safeTransfer(msg.sender, deposit.params.amountIn);
+        IERC20(deposit.input.tokenIn).safeTransfer(msg.sender, deposit.input.amountIn);
 
-        emit DepositRequestCancelled(_key, deposit.params.owner, deposit.params.tokenIn, deposit.params.amountIn);
+        emit DepositRequestCancelled(_key, deposit.input.owner, deposit.input.tokenIn, deposit.input.amountIn);
     }
 
     /////////////////////////
@@ -451,14 +377,14 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     /////////////////////////
 
     // Function to create a withdrawal request
-    function createWithdrawal(Withdrawal.Params memory _params) external payable onlyRouter {
-        (Withdrawal.Data memory withdrawal, bytes32 key) = Withdrawal.create(_params, minTimeToExpiration);
+    function createWithdrawal(Withdrawal.Input memory _input) external payable onlyRouter {
+        (Withdrawal.Data memory withdrawal, bytes32 key) = Withdrawal.create(_input, minTimeToExpiration);
 
         withdrawalKeys.add(key);
         withdrawalRequests[key] = withdrawal;
 
         emit WithdrawalRequestCreated(
-            key, _params.owner, _params.tokenOut, _params.marketTokenAmountIn, withdrawal.blockNumber
+            key, _input.owner, _input.tokenOut, _input.marketTokenAmountIn, withdrawal.blockNumber
         );
     }
 
@@ -471,7 +397,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         delete withdrawalRequests[_key];
 
         emit WithdrawalRequestCancelled(
-            _key, withdrawal.params.owner, withdrawal.params.tokenOut, withdrawal.params.marketTokenAmountIn
+            _key, withdrawal.input.owner, withdrawal.input.tokenOut, withdrawal.input.marketTokenAmountIn
         );
     }
 

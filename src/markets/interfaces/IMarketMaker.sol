@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Market} from "../Market.sol";
 import {IMarket} from "./IMarket.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
 
@@ -14,7 +13,7 @@ interface IMarketMaker {
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function createNewMarket(address _indexToken, bytes32 _priceId, uint256 _baseUnit, Oracle.Asset memory _asset)
         external
-        returns (Market market);
+        returns (address market);
 
     function tokenToMarkets(address _indexToken) external view returns (address market);
 }

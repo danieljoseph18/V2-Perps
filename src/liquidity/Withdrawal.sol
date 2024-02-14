@@ -1,21 +1,22 @@
 //SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {LiquidityVault} from "./LiquidityVault.sol";
+import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {IProcessor} from "../router/interfaces/IProcessor.sol";
 
 library Withdrawal {
     uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 public constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
     uint256 public constant SCALING_FACTOR = 1e18;
 
-    struct Params {
+    struct Input {
         address owner;
         address tokenOut;
         uint256 marketTokenAmountIn;
@@ -25,124 +26,116 @@ library Withdrawal {
     }
 
     struct Data {
-        Params params;
+        Input input;
         uint256 blockNumber;
         uint48 expirationTimestamp;
     }
 
-    struct ExecuteCache {
+    struct ExecuteParams {
+        ILiquidityVault liquidityVault;
+        IProcessor processor;
+        IPriceFeed priceFeed;
         Data data;
+        Pool.Values values;
         bytes32 key;
         int256 cumulativePnl;
-        address processor;
+        bool isLongToken;
+        bool shouldUnwrap;
     }
 
+    struct InternalExecutionCache {
+        Oracle.Price longPrices;
+        Oracle.Price shortPrices;
+        Fee.Params feeParams;
+        uint256 fee;
+        uint256 totalTokensOut;
+        uint256 amountOut;
+    }
+
+    event WithdrawalExecuted(
+        bytes32 indexed key,
+        address indexed owner,
+        address indexed tokenOut,
+        uint256 marketTokenAmountIn,
+        uint256 amountOut
+    );
+
     function validateCancellation(Data memory _data, address _caller) internal view {
-        require(_data.params.owner == _caller, "Withdrawal: invalid owner");
+        require(_data.input.owner == _caller, "Withdrawal: invalid owner");
         require(_data.expirationTimestamp < block.timestamp, "Withdrawal: deposit not expired");
     }
 
-    function create(Params memory _params, uint48 _minTimeToExpiration)
+    function create(Input memory _input, uint48 _minTimeToExpiration)
         external
         view
         returns (Data memory data, bytes32 key)
     {
         uint256 blockNumber = block.number;
         data = Data({
-            params: _params,
+            input: _input,
             blockNumber: blockNumber,
             expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration
         });
 
-        key = _generateKey(_params.owner, _params.tokenOut, _params.marketTokenAmountIn, blockNumber);
+        key = _generateKey(_input.owner, _input.tokenOut, _input.marketTokenAmountIn, blockNumber);
     }
 
-    function execute(
-        LiquidityVault _liquidityVault,
-        PriceFeed _priceFeed,
-        Data memory _data,
-        Pool.Values memory _values,
-        bool _isLongToken,
-        uint8 _priceImpactExponent,
-        uint256 _priceImpactFactor
-    ) external view returns (uint256 amountOut, uint256 fee, uint256 remaining) {
+    function execute(ExecuteParams memory _params) external {
+        InternalExecutionCache memory cache;
+        // Transfer in Market Tokens
+        _params.processor.transferDepositTokens(address(_params.liquidityVault), _params.data.input.marketTokenAmountIn);
+        // Burn Market Tokens
+        _params.liquidityVault.burn(_params.data.input.marketTokenAmountIn);
+        // Delete the WIthdrawal from Storage
+        _params.liquidityVault.deleteWithdrawal(_params.key);
         // get price signed to the block number of the request
-        (uint256 longTokenPrice, uint256 shortTokenPrice) =
-            Oracle.getMarketTokenPrices(_priceFeed, _data.blockNumber, false);
+        (cache.longPrices, cache.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
         // Calculate amountOut
-        uint256 tokenAmount = _calculateTokenAmount(_isLongToken, _values, longTokenPrice, shortTokenPrice);
-        // Calculate impacted price
-        uint256 impactedPrice = _calculateImpactedPrice(
-            _values,
-            _isLongToken,
-            amountOut,
-            _data.params.maxSlippage,
-            longTokenPrice,
-            shortTokenPrice,
-            _priceImpactExponent,
-            _priceImpactFactor
+        cache.totalTokensOut = Pool.withdrawMarketTokensToTokens(
+            _params.values,
+            cache.longPrices,
+            cache.shortPrices,
+            _params.data.input.marketTokenAmountIn,
+            _params.isLongToken
         );
 
-        amountOut = _applyImpactToTokens(tokenAmount, impactedPrice, _isLongToken ? longTokenPrice : shortTokenPrice);
+        // Calculate Fee
+        cache.feeParams = Fee.constructFeeParams(
+            _params.liquidityVault,
+            cache.totalTokensOut,
+            _params.isLongToken,
+            _params.values,
+            cache.longPrices,
+            cache.shortPrices,
+            false
+        );
+        cache.fee = Fee.calculateForMarketAction(cache.feeParams);
 
-        // Calculate fee and remaining amount in separate functions to reduce stack depth
-        fee = Fee.calculateForMarket(_liquidityVault, _data.params.marketTokenAmountIn);
         // calculate amount remaining after fee and price impact
-        remaining = amountOut - fee;
+        cache.amountOut = cache.totalTokensOut - cache.fee;
+
+        // accumulate the fee
+        _params.liquidityVault.accumulateFees(cache.fee, _params.isLongToken);
+        // decrease the pool
+        _params.liquidityVault.decreasePoolBalance(cache.totalTokensOut, _params.isLongToken);
+
+        // @audit - add invariant checks
+        emit WithdrawalExecuted(
+            _params.key,
+            _params.data.input.owner,
+            _params.data.input.tokenOut,
+            _params.data.input.marketTokenAmountIn,
+            cache.amountOut
+        );
+        // transfer tokens to user
+        _params.liquidityVault.transferOutTokens(
+            _params.data.input.owner, cache.amountOut, _params.isLongToken, _params.shouldUnwrap
+        );
     }
 
     /////////////////////////////////////////////////////////
     // INTERNAL FUNCTIONS: To Prevent Stack Too Deep Error //
     /////////////////////////////////////////////////////////
-
-    function _calculateImpactedPrice(
-        Pool.Values memory _values,
-        bool _isLongToken,
-        uint256 _amountIn,
-        uint256 _maxSlippage,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice,
-        uint8 _priceImpactExponent,
-        uint256 _priceImpactFactor
-    ) internal pure returns (uint256 impactedPrice) {
-        impactedPrice = PriceImpact.executeForMarket(
-            PriceImpact.Params({
-                longTokenBalance: _values.longTokenBalance,
-                shortTokenBalance: _values.shortTokenBalance,
-                longTokenPrice: _longTokenPrice,
-                shortTokenPrice: _shortTokenPrice,
-                amountIn: _amountIn,
-                maxSlippage: _maxSlippage,
-                isIncrease: false,
-                isLongToken: _isLongToken,
-                longBaseUnit: _values.longBaseUnit,
-                shortBaseUnit: _values.shortBaseUnit
-            }),
-            _priceImpactExponent,
-            _priceImpactFactor
-        );
-    }
-
-    function _applyImpactToTokens(uint256 _tokenAmount, uint256 _impactedPrice, uint256 _signedPrice)
-        internal
-        pure
-        returns (uint256 amountOut)
-    {
-        return mulDiv(_tokenAmount, _impactedPrice, _signedPrice);
-    }
-
-    function _calculateTokenAmount(
-        bool _isLongToken,
-        Pool.Values memory _values,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice
-    ) internal pure returns (uint256 amountOut) {
-        uint256 lpTokenPrice = Pool.getMarketTokenPrice(_values, _longTokenPrice, _shortTokenPrice);
-        uint256 marketTokenValueUsd = mulDiv(lpTokenPrice, _values.marketTokenSupply, SCALING_FACTOR);
-        amountOut = _isLongToken
-            ? mulDiv(marketTokenValueUsd, _values.longBaseUnit, _longTokenPrice)
-            : mulDiv(marketTokenValueUsd, _values.shortBaseUnit, _shortTokenPrice);
-    }
 
     function _generateKey(address owner, address tokenOut, uint256 marketTokenAmountIn, uint256 blockNumber)
         internal

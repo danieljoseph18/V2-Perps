@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {ReferralStorage} from "./ReferralStorage.sol";
+import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 
 // Library for referral related logic
 library Referral {
     uint256 constant PRECISION = 1e18;
 
-    function calculateFeeDiscount(ReferralStorage _referralStorage, address _account, uint256 _fee)
+    function calculateFeeDiscount(IReferralStorage _referralStorage, address _account, uint256 _fee)
         external
         view
         returns (uint256 discount, address codeOwner)

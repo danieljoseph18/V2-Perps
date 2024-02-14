@@ -17,23 +17,23 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {TradeStorage} from "../positions/TradeStorage.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
-import {MarketMaker} from "../markets/MarketMaker.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {Market} from "../markets/Market.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Position} from "../positions/Position.sol";
 import {Deposit} from "../liquidity/Deposit.sol";
 import {Withdrawal} from "../liquidity/Withdrawal.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
-import {Processor} from "./Processor.sol";
+import {IProcessor} from "./interfaces/IProcessor.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
@@ -41,13 +41,13 @@ contract Router is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
 
-    TradeStorage tradeStorage;
-    LiquidityVault liquidityVault;
-    MarketMaker marketMaker;
-    PriceFeed priceFeed;
+    ITradeStorage tradeStorage;
+    ILiquidityVault liquidityVault;
+    IMarketMaker marketMaker;
+    IPriceFeed priceFeed;
     IERC20 immutable USDC;
     IWETH immutable WETH;
-    Processor processor;
+    IProcessor processor;
 
     uint256 constant PRECISION = 1e18;
     uint256 constant COLLATERAL_MULTIPLIER = 1e12;
@@ -64,13 +64,13 @@ contract Router is ReentrancyGuard, RoleValidation {
         address _processor,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
-        tradeStorage = TradeStorage(_tradeStorage);
-        liquidityVault = LiquidityVault(_liquidityVault);
-        marketMaker = MarketMaker(_marketMaker);
-        priceFeed = PriceFeed(_priceFeed);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        liquidityVault = ILiquidityVault(_liquidityVault);
+        marketMaker = IMarketMaker(_marketMaker);
+        priceFeed = IPriceFeed(_priceFeed);
         USDC = IERC20(_usdc);
         WETH = IWETH(_weth);
-        processor = Processor(_processor);
+        processor = IProcessor(_processor);
     }
 
     /* 
@@ -108,10 +108,10 @@ contract Router is ReentrancyGuard, RoleValidation {
         external
         onlyAdmin
     {
-        tradeStorage = TradeStorage(_tradeStorage);
-        liquidityVault = LiquidityVault(_liquidityVault);
-        marketMaker = MarketMaker(_marketMaker);
-        processor = Processor(_processor);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        liquidityVault = ILiquidityVault(_liquidityVault);
+        marketMaker = IMarketMaker(_marketMaker);
+        processor = IProcessor(_processor);
     }
 
     /////////////////////////
@@ -119,24 +119,24 @@ contract Router is ReentrancyGuard, RoleValidation {
     /////////////////////////
 
     // @audit - need to request signed price here
-    function createDeposit(Deposit.Params memory _params)
+    function createDeposit(Deposit.Input memory _input)
         external
         payable
         nonReentrant
         validExecutionFee(Gas.Action.DEPOSIT)
     {
-        require(msg.sender == _params.owner, "Router: Invalid Owner");
-        require(_params.maxSlippage >= MIN_SLIPPAGE && _params.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
-        if (_params.shouldWrap) {
-            require(_params.amountIn == msg.value - _params.executionFee, "Router: Invalid Amount In");
-            require(_params.tokenIn == address(WETH), "Router: Invalid Token In");
-            WETH.deposit{value: _params.amountIn}();
-            WETH.safeTransfer(address(processor), _params.amountIn);
+        require(msg.sender == _input.owner, "Router: Invalid Owner");
+        require(_input.maxSlippage >= MIN_SLIPPAGE && _input.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
+        if (_input.shouldWrap) {
+            require(_input.amountIn == msg.value - _input.executionFee, "Router: Invalid Amount In");
+            require(_input.tokenIn == address(WETH), "Router: Invalid Token In");
+            WETH.deposit{value: _input.amountIn}();
+            WETH.safeTransfer(address(processor), _input.amountIn);
         } else {
-            require(_params.tokenIn == address(USDC) || _params.tokenIn == address(WETH), "Router: Invalid Token In");
-            IERC20(_params.tokenIn).safeTransferFrom(_params.owner, address(processor), _params.amountIn);
+            require(_input.tokenIn == address(USDC) || _input.tokenIn == address(WETH), "Router: Invalid Token In");
+            IERC20(_input.tokenIn).safeTransferFrom(_input.owner, address(processor), _input.amountIn);
         }
-        liquidityVault.createDeposit(_params);
+        liquidityVault.createDeposit(_input);
         _sendExecutionFee(msg.value);
     }
 
@@ -146,21 +146,21 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     // @audit - need to request signed price here
-    function createWithdrawal(Withdrawal.Params memory _params)
+    function createWithdrawal(Withdrawal.Input memory _input)
         external
         payable
         validExecutionFee(Gas.Action.WITHDRAW)
         nonReentrant
     {
-        require(msg.sender == _params.owner, "Router: Invalid Owner");
-        require(_params.maxSlippage >= MIN_SLIPPAGE && _params.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
-        if (_params.shouldUnwrap) {
-            require(_params.tokenOut == address(WETH), "Router: Invalid Token Out");
+        require(msg.sender == _input.owner, "Router: Invalid Owner");
+        require(_input.maxSlippage >= MIN_SLIPPAGE && _input.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
+        if (_input.shouldUnwrap) {
+            require(_input.tokenOut == address(WETH), "Router: Invalid Token Out");
         } else {
-            require(_params.tokenOut == address(USDC) || _params.tokenOut == address(WETH), "Router: Invalid Token Out");
+            require(_input.tokenOut == address(USDC) || _input.tokenOut == address(WETH), "Router: Invalid Token Out");
         }
-        IERC20(address(liquidityVault)).safeTransferFrom(_params.owner, address(processor), _params.marketTokenAmountIn);
-        liquidityVault.createWithdrawal(_params);
+        IERC20(address(liquidityVault)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
+        liquidityVault.createWithdrawal(_input);
         _sendExecutionFee(msg.value);
     }
 
@@ -223,7 +223,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Check the caller is the position owner
         require(msg.sender == request.user, "Router: Not Position Owner");
         // Cancel the Request
-        TradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
+        ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
 
     // Stop Loss or Take Profit

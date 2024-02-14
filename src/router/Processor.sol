@@ -17,10 +17,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Market} from "../markets/Market.sol";
-import {TradeStorage} from "../positions/TradeStorage.sol";
-import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
-import {MarketMaker} from "../markets/MarketMaker.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
@@ -30,28 +30,29 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {Referral} from "../referrals/Referral.sol";
-import {ReferralStorage} from "../referrals/ReferralStorage.sol";
+import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {Trade} from "../positions/Trade.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {Deposit} from "../liquidity/Deposit.sol";
 import {Withdrawal} from "../liquidity/Withdrawal.sol";
+import {IProcessor} from "./interfaces/IProcessor.sol";
 
 /// @dev Needs Processor Role
 // All keeper interactions should come through this contract
-contract Processor is RoleValidation, ReentrancyGuard {
+contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
     using Address for address payable;
 
-    TradeStorage public tradeStorage;
-    LiquidityVault public liquidityVault;
-    MarketMaker public marketMaker;
-    ReferralStorage public referralStorage;
-    PriceFeed public priceFeed;
+    ITradeStorage public tradeStorage;
+    ILiquidityVault public liquidityVault;
+    IMarketMaker public marketMaker;
+    IReferralStorage public referralStorage;
+    IPriceFeed public priceFeed;
 
     // Base Gas for a TX
     uint256 public baseGasLimit;
@@ -75,11 +76,11 @@ contract Processor is RoleValidation, ReentrancyGuard {
         address _priceFeed,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
-        marketMaker = MarketMaker(_marketMaker);
-        tradeStorage = TradeStorage(_tradeStorage);
-        liquidityVault = LiquidityVault(_liquidityVault);
-        referralStorage = ReferralStorage(_referralStorage);
-        priceFeed = PriceFeed(_priceFeed);
+        marketMaker = IMarketMaker(_marketMaker);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        liquidityVault = ILiquidityVault(_liquidityVault);
+        referralStorage = IReferralStorage(_referralStorage);
+        priceFeed = IPriceFeed(_priceFeed);
     }
 
     function updateGasLimits(uint256 _deposit, uint256 _withdrawal, uint256 _position) external onlyAdmin {
@@ -97,44 +98,42 @@ contract Processor is RoleValidation, ReentrancyGuard {
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
     function executeDeposit(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
-        uint256 initialGas = gasleft();
-        require(_key != bytes32(0), "E: Invalid Key");
-        // Fetch the request
-        Deposit.ExecuteCache memory cache;
-        cache.data = liquidityVault.getDepositRequest(_key);
-        cache.key = _key;
-        cache.cumulativePnl = _cumulativePnl;
-        cache.processor = msg.sender;
-        try liquidityVault.executeDeposit(cache) {}
-        catch {
-            revert("Processor: Execute Deposit Failed");
-        }
-        // Send Execution Fee + Rebate
-        Gas.payExecutionFee(
-            this, cache.data.params.executionFee, initialGas, payable(cache.data.params.owner), payable(msg.sender)
-        );
+        // uint256 initialGas = gasleft();
+        // require(_key != bytes32(0), "E: Invalid Key");
+        // // Fetch the request
+        // Deposit.ExecuteParams memory params;
+        // params.data = liquidityVault.getDepositRequest(_key);
+        // params.key = _key;
+        // params.cumulativePnl = _cumulativePnl;
+        // try liquidityVault.executeDeposit(params) {}
+        // catch {
+        //     revert("Processor: Execute Deposit Failed");
+        // }
+        // // Send Execution Fee + Rebate
+        // Gas.payExecutionFee(
+        //     this, params.data.input.executionFee, initialGas, payable(params.data.input.owner), payable(msg.sender)
+        // );
     }
 
     // @audit - keeper needs to pass in cumulative net pnl
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
     function executeWithdrawal(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
-        uint256 initialGas = gasleft();
-        require(_key != bytes32(0), "E: Invalid Key");
-        // Fetch the request
-        Withdrawal.ExecuteCache memory cache;
-        cache.data = liquidityVault.getWithdrawalRequest(_key);
-        cache.key = _key;
-        cache.cumulativePnl = _cumulativePnl;
-        cache.processor = msg.sender;
-        try liquidityVault.executeWithdrawal(cache) {}
-        catch {
-            revert("Processor: Execute Withdrawal Failed");
-        }
-        // Send Execution Fee + Rebate
-        Gas.payExecutionFee(
-            this, cache.data.params.executionFee, initialGas, payable(cache.data.params.owner), payable(msg.sender)
-        );
+        // uint256 initialGas = gasleft();
+        // require(_key != bytes32(0), "E: Invalid Key");
+        // // Fetch the request
+        // Withdrawal.ExecuteParams memory params;
+        // params.data = liquidityVault.getWithdrawalRequest(_key);
+        // params.key = _key;
+        // params.cumulativePnl = _cumulativePnl;
+        // try liquidityVault.executeWithdrawal(params) {}
+        // catch {
+        //     revert("Processor: Execute Withdrawal Failed");
+        // }
+        // // Send Execution Fee + Rebate
+        // Gas.payExecutionFee(
+        //     this, params.data.input.executionFee, initialGas, payable(params.data.input.owner), payable(msg.sender)
+        // );
     }
 
     // Used to transfer intermediary tokens to the vault from deposits
@@ -190,9 +189,10 @@ contract Processor is RoleValidation, ReentrancyGuard {
         if (_isLimitOrder) Position.checkLimitPrice(cache.indexPrice, request.input);
 
         // Execute Price Impact
-        cache.market = Market(marketMaker.tokenToMarkets(request.input.indexToken));
+        cache.market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
         cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, request.input.indexToken);
-        cache.impactedPrice = PriceImpact.execute(cache.market, request, cache.indexPrice, cache.indexBaseUnit);
+        cache.impactedPrice =
+            PriceImpact.executeForPosition(cache.market, request, cache.indexPrice, cache.indexBaseUnit);
 
         (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) = request.input.isLong
             ? Oracle.getLastMarketTokenPrices(priceFeed, false)
@@ -363,7 +363,7 @@ contract Processor is RoleValidation, ReentrancyGuard {
     }
 
     function _updateMarketState(
-        Market _market,
+        IMarket _market,
         uint256 _sizeDelta,
         uint256 _impactedIndexPrice,
         uint256 _signedIndexPrice,

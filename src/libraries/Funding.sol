@@ -19,7 +19,7 @@ pragma solidity 0.8.23;
 
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Position} from "../positions/Position.sol";
-import {Market} from "../markets/Market.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SD59x18, sd, unwrap, gt, gte, eq, ZERO, lt} from "@prb/math/SD59x18.sol";
@@ -49,7 +49,7 @@ library Funding {
         bool flipsSign;
     }
 
-    function calculateDelta(Market _market, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function calculateDelta(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         view
         returns (int256 skew, int256 deltaRate)
@@ -68,14 +68,15 @@ library Funding {
 
     /// @dev Calculate the funding rate velocity
     /// @dev velocity units = % per second (18 dp)
-    function calculateVelocity(Market _market, int256 _skew) external view returns (int256 velocity) {
-        uint256 c = mulDiv(_market.maxFundingVelocity(), PRECISION, _market.skewScale());
+    function calculateVelocity(IMarket _market, int256 _skew) external view returns (int256 velocity) {
+        IMarket.FundingConfig memory funding = _market.getFundingConfig();
+        uint256 c = mulDiv(funding.maxVelocity, PRECISION, funding.skewScale);
         velocity = mulDivSigned(c.toInt256(), _skew, PRECISION.toInt256());
     }
 
     /// @dev Get the total funding fees accumulated for each side
     /// @notice For External Queries
-    function getTotalAccumulatedFees(Market _market)
+    function getTotalAccumulatedFees(IMarket _market)
         external
         view
         returns (uint256 longAccumulatedFees, uint256 shortAccumulatedFees)
@@ -89,7 +90,7 @@ library Funding {
     /// @dev Returns fees earned and fees owed in tokens
     /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
     /// to charge for a position need to go: index -> usd -> collateral
-    function getTotalPositionFees(Market _market, Position.Data memory _position)
+    function getTotalPositionFees(IMarket _market, Position.Data memory _position)
         external
         view
         returns (uint256 indexFeeEarned, uint256 indexFeeOwed)
@@ -124,7 +125,7 @@ library Funding {
     }
 
     // Rate to 18 D.P
-    function getCurrentRate(Market _market) external view returns (int256) {
+    function getCurrentRate(IMarket _market) external view returns (int256) {
         uint256 timeElapsed = block.timestamp - _market.lastFundingUpdate();
         int256 fundingRate = _market.fundingRate();
         int256 fundingRateVelocity = _market.fundingRateVelocity();
@@ -134,7 +135,7 @@ library Funding {
 
     /// @dev Get the funding fees earned and owed since the last market update
     /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
-    function getFeesSinceLastMarketUpdate(Market _market, bool _isLong)
+    function getFeesSinceLastMarketUpdate(IMarket _market, bool _isLong)
         public
         view
         returns (uint256 feesEarned, uint256 feesOwed)
@@ -152,8 +153,9 @@ library Funding {
 
     /// @dev Adjusts the total funding calculation when max or min limits are reached, or when the sign flips.
     /// @dev Mainly for external queries, as lastUpdate is updated before for position edits.
-    function _calculateAdjustedFees(Market _market) internal view returns (UD60x18 longFees, UD60x18 shortFees) {
+    function _calculateAdjustedFees(IMarket _market) internal view returns (UD60x18 longFees, UD60x18 shortFees) {
         FundingCache memory cache;
+        IMarket.FundingConfig memory funding = _market.getFundingConfig();
 
         uint256 timeElapsed = block.timestamp - _market.lastFundingUpdate();
         if (timeElapsed == 0) {
@@ -167,8 +169,8 @@ library Funding {
             gte(cache.fundingRate, ZERO) && lt(cache.finalFundingRate, ZERO)
                 || lt(cache.fundingRate, ZERO) && gte(cache.finalFundingRate, ZERO)
         );
-        cache.maxFundingRate = sd(_market.maxFundingRate());
-        cache.minFundingRate = sd(_market.minFundingRate());
+        cache.maxFundingRate = sd(funding.maxRate);
+        cache.minFundingRate = sd(funding.minRate);
         bool crossesBoundary =
             gt(cache.finalFundingRate, cache.maxFundingRate) || lt(cache.finalFundingRate, cache.minFundingRate);
         // Direct the calculation down a path depending on the case
