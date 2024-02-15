@@ -27,6 +27,7 @@ import {Pool} from "../liquidity/Pool.sol";
 import {Withdrawal} from "../liquidity/Withdrawal.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
@@ -35,7 +36,6 @@ library PriceImpact {
     using SafeCast for int256;
 
     uint256 public constant SCALAR = 1e18;
-    uint256 public constant MAX_PRICE_IMPACT = 0.33e18; // 33%
 
     struct Params {
         uint256 longTokenBalance;
@@ -50,7 +50,8 @@ library PriceImpact {
         uint256 shortBaseUnit;
     }
 
-    struct PositionCache {
+    struct ExecuteCache {
+        IMarket.ImpactConfig impact;
         uint256 longOI;
         uint256 shortOI;
         uint256 sizeDeltaUSD;
@@ -61,23 +62,19 @@ library PriceImpact {
         bool skewFlip;
     }
 
-    /////////////
-    // TRADING //
-    /////////////
-
-    function executeForPosition(
-        IMarket _market,
-        Position.Request memory _request,
-        uint256 _signedBlockPrice,
-        uint256 _indexBaseUnit
-    ) external view returns (uint256 impactedPrice) {
+    // Need:
+    // a) Max and Min price to handle different cases
+    function execute(IMarket market, Position.Request memory _request, uint256 _indexPrice, uint256 _indexBaseUnit)
+        external
+        returns (uint256 impactedPrice)
+    {
         // Construct the Cache
-        PositionCache memory cache;
-        IMarket.ImpactConfig memory impact = _market.getImpactConfig();
+        ExecuteCache memory cache;
 
-        cache.longOI = MarketUtils.getLongOpenInterestUSD(_market, _signedBlockPrice, _indexBaseUnit);
-        cache.shortOI = MarketUtils.getShortOpenInterestUSD(_market, _signedBlockPrice, _indexBaseUnit);
-        cache.sizeDeltaUSD = mulDiv(_request.input.sizeDelta, _signedBlockPrice, _indexBaseUnit);
+        cache.impact = market.getImpactConfig();
+        cache.longOI = MarketUtils.getLongOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
+        cache.shortOI = MarketUtils.getShortOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
+        cache.sizeDeltaUSD = mulDiv(_request.input.sizeDelta, _indexPrice, _indexBaseUnit);
         cache.startingSkewLong = cache.longOI > cache.shortOI;
         cache.skewBefore = cache.startingSkewLong ? cache.longOI - cache.shortOI : cache.shortOI - cache.longOI;
         if (_request.input.isIncrease) {
@@ -90,12 +87,22 @@ library PriceImpact {
         // Calculate the Price Impact
         if (cache.skewFlip) {
             cache.priceImpactUsd = _calculateSkewFlipImpactUsd(
-                cache.skewBefore, cache.skewAfter, impact.exponent, impact.positiveFactor, impact.negativeFactor
+                cache.skewBefore,
+                cache.skewAfter,
+                cache.impact.exponent,
+                cache.impact.positiveFactor,
+                cache.impact.negativeFactor
             );
         } else {
-            cache.priceImpactUsd =
-                _calculateImpactUsd(cache.skewBefore, cache.skewAfter, impact.exponent, impact.positiveFactor);
+            cache.priceImpactUsd = _calculateImpactUsd(
+                cache.skewBefore, cache.skewAfter, cache.impact.exponent, cache.impact.positiveFactor
+            );
         }
+
+        if (cache.priceImpactUsd > 0) {
+            cache.priceImpactUsd = _validateImpactDelta(market, cache.priceImpactUsd);
+        }
+
         // Execute the Price Impact
         impactedPrice = _calculateImpactedPrice(
             cache.sizeDeltaUSD,
@@ -106,8 +113,11 @@ library PriceImpact {
         );
         // Check Slippage on Negative Impact
         if (cache.priceImpactUsd < 0) {
-            checkSlippage(impactedPrice, _signedBlockPrice, _request.input.maxSlippage);
+            checkSlippage(impactedPrice, _indexPrice, _request.input.maxSlippage);
         }
+
+        // Update the Impact Pool
+        market.updateImpactPool(cache.priceImpactUsd);
     }
 
     function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) public pure {
@@ -146,42 +156,25 @@ library PriceImpact {
         impactUsd = unwrap(impactBefore).toInt256() - unwrap(impactAfter).toInt256();
     }
 
-    function _calculateTokenValues(Params memory _params)
-        internal
-        pure
-        returns (uint256 longTokenValue, uint256 shortTokenValue)
-    {
-        longTokenValue = mulDiv(_params.longTokenBalance, _params.longTokenPrice, _params.longBaseUnit);
-        shortTokenValue = mulDiv(_params.shortTokenBalance, _params.shortTokenPrice, _params.shortBaseUnit);
-    }
-
-    function _calculateSkewUsd(uint256 _longTokenValue, uint256 _shortTokenValue) internal pure returns (uint256) {
-        return
-            _longTokenValue > _shortTokenValue ? _longTokenValue - _shortTokenValue : _shortTokenValue - _longTokenValue;
-    }
-
-    // @audit - is this calculation correct?
     function _calculateImpactedPrice(
         uint256 _sizeDeltaUsd,
-        uint256 _absolutePriceImpactUsd,
+        uint256 _absPriceImpactUsd,
         uint256 _tokenUnit,
         uint256 _amountIn,
         int256 _priceImpactUsd
     ) internal pure returns (uint256) {
-        uint256 unsignedIndexTokenImpact = mulDiv(_absolutePriceImpactUsd, _tokenUnit, _sizeDeltaUsd);
-        int256 indexTokenImpact =
-            _priceImpactUsd < 0 ? (-1 * unsignedIndexTokenImpact.toInt256()) : unsignedIndexTokenImpact.toInt256();
-
-        uint256 indexTokensAfterImpact =
-            indexTokenImpact >= 0 ? _amountIn + indexTokenImpact.abs() : _amountIn - indexTokenImpact.abs();
+        uint256 absImpactAmount = mulDiv(_absPriceImpactUsd, _tokenUnit, _sizeDeltaUsd);
+        uint256 indexTokensAfterImpact = _priceImpactUsd > 0 ? _amountIn + absImpactAmount : _amountIn - absImpactAmount;
 
         return mulDiv(_sizeDeltaUsd, _tokenUnit, indexTokensAfterImpact);
     }
 
-    function _calculateSizeDeltaUsd(Params memory _params) internal pure returns (uint256 sizeDeltaUsd) {
-        // Inline calculation of sizeDeltaUsd
-        return _params.isLongToken
-            ? mulDiv(_params.amountIn, _params.longTokenPrice, _params.longBaseUnit)
-            : mulDiv(_params.amountIn, _params.shortTokenPrice, _params.shortBaseUnit);
+    function _validateImpactDelta(IMarket market, int256 _priceImpactUsd) internal view returns (int256) {
+        int256 impactPoolUsd = market.impactPoolUsd().toInt256();
+        if (_priceImpactUsd > impactPoolUsd) {
+            return impactPoolUsd;
+        } else {
+            return _priceImpactUsd;
+        }
     }
 }

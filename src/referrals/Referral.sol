@@ -8,13 +8,13 @@ import {mulDiv} from "@prb/math/Common.sol";
 library Referral {
     uint256 constant PRECISION = 1e18;
 
-    function calculateFeeDiscount(IReferralStorage _referralStorage, address _account, uint256 _fee)
+    function calculateFeeDiscount(IReferralStorage referralStorage, address _account, uint256 _fee)
         external
         view
         returns (uint256 discount, address codeOwner)
     {
-        uint256 discountPercentage = _referralStorage.getDiscountForUser(_account);
+        uint256 discountPercentage = referralStorage.getDiscountForUser(_account);
         discount = mulDiv(_fee, discountPercentage, PRECISION);
-        codeOwner = _referralStorage.getAffiliateFromUser(_account);
+        codeOwner = referralStorage.getAffiliateFromUser(_account);
     }
 }

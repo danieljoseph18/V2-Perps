@@ -24,7 +24,7 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Pricing} from "../libraries/Pricing.sol";
-import {Trade} from "../positions/Trade.sol";
+import {Order} from "../positions/Order.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
@@ -50,7 +50,6 @@ library Position {
         uint256 collateralAmount; // vs size = leverage
         uint256 positionSize; // position size in index tokens, value fluctuates in USD giving PnL
         bool isLong; // will determine token used
-        int256 realisedPnl;
         BorrowingParams borrowingParams;
         FundingParams fundingParams;
         PnLParams pnlParams;
@@ -263,7 +262,7 @@ library Position {
         });
     }
 
-    function generateNewPosition(Request memory _request, Trade.ExecuteCache memory _cache)
+    function generateNewPosition(Request memory _request, Order.ExecuteCache memory _cache)
         external
         view
         returns (Data memory position)
@@ -280,7 +279,6 @@ library Position {
             collateralAmount: _request.input.collateralDelta,
             positionSize: _request.input.sizeDelta,
             isLong: _request.input.isLong,
-            realisedPnl: 0,
             borrowingParams: BorrowingParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: FundingParams(0, 0, block.timestamp, longFundingFee, shortFundingFee),
             pnlParams: PnLParams(_cache.indexPrice, _cache.sizeDeltaUsd.abs()),
@@ -310,7 +308,7 @@ library Position {
         tradeValueUsd = mulDiv(_sizeDelta, _signedPrice, _baseUnit);
     }
 
-    function isLiquidatable(Position.Data memory _position, Trade.ExecuteCache memory _cache, uint256 liquidationFeeUsd)
+    function isLiquidatable(Position.Data memory _position, Order.ExecuteCache memory _cache, uint256 liquidationFeeUsd)
         public
         view
         returns (bool)
@@ -383,7 +381,7 @@ library Position {
         collateralAmount = mulDiv(indexUsd, PRECISION, _collateralPrice);
     }
 
-    function getTotalFeesOwedUsd(Data memory _position, Trade.ExecuteCache memory _cache)
+    function getTotalFeesOwedUsd(Data memory _position, Order.ExecuteCache memory _cache)
         public
         view
         returns (uint256 totalFeesOwedUsd)

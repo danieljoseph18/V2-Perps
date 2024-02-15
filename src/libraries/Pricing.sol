@@ -78,7 +78,7 @@ library Pricing {
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
-    function getPnl(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
+    function getPnl(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
         public
         view
         returns (int256 netPnl)
@@ -86,24 +86,24 @@ library Pricing {
         // Get OI in USD
         if (_isLong) {
             // get index value
-            uint256 indexValue = MarketUtils.getLongOpenInterestUSD(_market, _indexPrice, _indexBaseUnit);
+            uint256 indexValue = MarketUtils.getLongOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
             // get entry value
-            uint256 entryValue = MarketUtils.getTotalEntryValueUSD(_market, _indexBaseUnit, _isLong);
+            uint256 entryValue = MarketUtils.getTotalEntryValueUSD(market, _indexBaseUnit, _isLong);
             // return index value - entry value
             netPnl = indexValue.toInt256() - entryValue.toInt256();
         } else {
             // get entry value
-            uint256 entryValue = MarketUtils.getTotalEntryValueUSD(_market, _indexBaseUnit, _isLong);
+            uint256 entryValue = MarketUtils.getTotalEntryValueUSD(market, _indexBaseUnit, _isLong);
             // get index value
-            uint256 indexValue = MarketUtils.getShortOpenInterestUSD(_market, _indexPrice, _indexBaseUnit);
+            uint256 indexValue = MarketUtils.getShortOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
             // return entry value - index value
             netPnl = entryValue.toInt256() - indexValue.toInt256();
         }
     }
 
-    function getNetPnl(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit) external view returns (int256) {
-        int256 longPnl = getPnl(_market, _indexPrice, _indexBaseUnit, true);
-        int256 shortPnl = getPnl(_market, _indexPrice, _indexBaseUnit, false);
+    function getNetPnl(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit) external view returns (int256) {
+        int256 longPnl = getPnl(market, _indexPrice, _indexBaseUnit, true);
+        int256 shortPnl = getPnl(market, _indexPrice, _indexBaseUnit, false);
         return longPnl + shortPnl;
     }
 

@@ -30,7 +30,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Position} from "../positions/Position.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {Trade} from "./Trade.sol";
+import {Order} from "./Order.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -72,6 +72,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         priceFeed = IPriceFeed(_priceFeed);
     }
 
+    //////////////////////////////
+    // CONFIGURATIONS FUNCTIONS //
+    //////////////////////////////
+
     function initialise(
         uint256 _liquidationFee, // 5e18 = 5 USD
         uint256 _tradingFee, // 0.001e18 = 0.1%
@@ -86,6 +90,18 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         isInitialised = true;
         emit TradeStorageInitialised(_liquidationFee, _tradingFee, _executionFee);
     }
+
+    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
+        require(_liquidationFee <= MAX_LIQUIDATION_FEE && _liquidationFee != 0, "TS: Invalid Liquidation Fee");
+        require(_tradingFee <= MAX_TRADING_FEE && _tradingFee != 0, "TS: Invalid Trading Fee");
+        liquidationFeeUsd = _liquidationFee;
+        tradingFee = _tradingFee;
+        emit FeesSet(_liquidationFee, _tradingFee);
+    }
+
+    ////////////////////////////////
+    // REQUEST CREATION FUNCTIONS //
+    ////////////////////////////////
 
     /// @dev Adds Order to EnumerableSet
     // @audit - Need to distinguish between order key and position key
@@ -116,163 +132,140 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit OrderRequestCancelled(_orderKey);
     }
 
-    function executeCollateralIncrease(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+    //////////////////////////////////
+    // POSITION EXECUTION FUNCTIONS //
+    //////////////////////////////////
+
+    function executeCollateralIncrease(Position.Execution memory _params, Order.ExecuteCache memory _cache)
         external
         onlyProcessor
     {
-        /* Update Initial Storage */
-
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory position = openPositions[positionKey];
-
         require(Position.exists(position), "TS: Position Doesn't Exist");
-
-        // Delete the Orders from Storage
+        // Delete the Order from Storage
         _deleteOrder(positionKey, _params.request.input.isLimit);
-
-        /* Perform Execution in Library */
-        position = Trade.executeCollateralIncrease(position, _params, _cache);
-
-        /* Update Final Storage */
+        // Perform Execution in Library
+        uint256 fundingFee;
+        uint256 borrowFee;
+        (position, fundingFee, borrowFee) = Order.executeCollateralIncrease(position, _params, _cache);
+        // Pay Fees
+        _payFees(_params.request.user, fundingFee, borrowFee, position.isLong);
+        // Update Final Storage
         openPositions[positionKey] = position;
-
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    function executeCollateralDecrease(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+    function executeCollateralDecrease(Position.Execution memory _params, Order.ExecuteCache memory _cache)
         external
         onlyProcessor
     {
-        /* Update Initial Storage */
-
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory position = openPositions[positionKey];
-
         require(Position.exists(position), "TS: Position Doesn't Exist");
-
-        // Delete the Orders from Storage
+        // Delete the Order from Storage
         _deleteOrder(positionKey, _params.request.input.isLimit);
-
-        /* Perform Execution in Library */
-
-        position = Trade.executeCollateralDecrease(position, _params, _cache, minCollateralUsd, liquidationFeeUsd);
-
-        /* Update Final Storage */
+        // Perform Execution in Library
+        uint256 fundingFee;
+        uint256 borrowFee;
+        (position, fundingFee, borrowFee) =
+            Order.executeCollateralDecrease(position, _params, _cache, minCollateralUsd, liquidationFeeUsd);
+        // Pay Fees
+        _payFees(_params.request.user, fundingFee, borrowFee, position.isLong);
+        // Update Final Storage
         openPositions[positionKey] = position;
-
+        // Transfer Tokens to User
         liquidityVault.transferOutTokens(
-            address(position.market),
             _params.request.user,
             _params.request.input.collateralDelta,
-            _params.request.input.isLong
+            _params.request.input.isLong,
+            _params.request.input.shouldWrap // @audit - should unwrap
         );
+        // Fire Event
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    function createNewPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+    function createNewPosition(Position.Execution memory _params, Order.ExecuteCache memory _cache)
         external
         onlyProcessor
     {
-        /* Update Initial Storage */
-
+        // Check the Position doesn't exist
         bytes32 positionKey = Position.generateKey(_params.request);
-        // Make sure the Position doesn't exist
         require(!Position.exists(openPositions[positionKey]), "TS: Position Exists");
-        // Delete the Orders from Storage
+        // Delete the Order from Storage
         _deleteOrder(positionKey, _params.request.input.isLimit);
-
-        /* Perform Execution in the Library */
-        (Position.Data memory position, uint256 sizeUsd) = Trade.createNewPosition(_params, _cache, minCollateralUsd);
-
-        /* Update Final Storage */
-
+        // Perform Execution in the Library
+        (Position.Data memory position, uint256 sizeUsd) = Order.createNewPosition(_params, _cache, minCollateralUsd);
         // Reserve Liquidity Equal to the Position Size
-        _updateLiquidityReservation(
-            _params.request.user,
-            _params.request.input.sizeDelta,
-            sizeUsd,
-            _cache.collateralPrice,
-            position.positionSize,
-            true,
-            _params.request.input.isLong
-        );
+        _reserveLiquidity(_params.request.user, sizeUsd, _params.collateralPrice, _params.request.input.isLong);
+        // Update Final Storage
         openPositions[positionKey] = position;
         openPositionKeys[address(position.market)][position.isLong].add(positionKey);
-
         // Fire Event
         emit PositionCreated(positionKey, position);
     }
 
-    function increaseExistingPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+    function increaseExistingPosition(Position.Execution memory _params, Order.ExecuteCache memory _cache)
         external
         onlyProcessor
     {
-        /* Update Initial Storage */
-
-        bytes32 positionKey = Position.generateKey(_params.request);
         // Check the Position exists
+        bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory position = openPositions[positionKey];
         require(Position.exists(position), "TS: Position Doesn't Exist");
-        // Delete the Orders from Storage
+        // Delete the Order from Storage
         _deleteOrder(positionKey, _params.request.input.isLimit);
-
-        /* Perform Execution in the Library */
+        // Perform Execution in the Library
         uint256 sizeDelta;
         uint256 sizeDeltaUsd;
-        (position, sizeDelta, sizeDeltaUsd) = Trade.increaseExistingPosition(position, _params, _cache);
-
-        /* Update Final Storage */
+        uint256 fundingFee;
+        uint256 borrowFee;
+        (position, sizeDelta, sizeDeltaUsd, fundingFee, borrowFee) =
+            Order.increaseExistingPosition(position, _params, _cache);
+        // Pay Fees
+        _payFees(_params.request.user, fundingFee, borrowFee, position.isLong);
+        // Reserve Liquidity Equal to the Position Size
+        _reserveLiquidity(_params.request.user, sizeDeltaUsd, _params.collateralPrice, position.isLong);
+        // Update Final Storage
         openPositions[positionKey] = position;
-        _updateLiquidityReservation(
-            _params.request.user,
-            sizeDelta,
-            sizeDeltaUsd,
-            _params.collateralPrice,
-            position.positionSize,
-            true,
-            _params.request.input.isLong
-        );
     }
 
-    function decreaseExistingPosition(Position.Execution memory _params, Trade.ExecuteCache memory _cache)
+    // @audit - Need to Pay the Funding Fee
+    function decreaseExistingPosition(Position.Execution memory _params, Order.ExecuteCache memory _cache)
         external
         onlyProcessorOrAdl
     {
-        /* Update Initial Storage */
-
-        bytes32 positionKey = Position.generateKey(_params.request);
         // Check the Position exists
+        bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory position = openPositions[positionKey];
         require(Position.exists(position), "TS: Position Doesn't Exist");
-        // Delete the Orders from Storage
+        // Delete the Order from Storage
         _deleteOrder(positionKey, _params.request.input.isLimit);
-
-        /* Perform Execution in the Library */
-        Trade.DecreaseCache memory decreaseCache;
-        (position, decreaseCache) = Trade.decreaseExistingPosition(position, _params, _cache);
+        // Perform Execution in the Library
+        Order.DecreaseCache memory decreaseCache;
+        (position, decreaseCache) = Order.decreaseExistingPosition(position, _params, _cache);
+        // Pay Fees
+        _payFees(_params.request.user, decreaseCache.fundingFee, decreaseCache.borrowFee, position.isLong);
         // Cached to prevent multi conversion
         address market = address(position.market);
-
-        /* Update Final Storage */
-        openPositions[positionKey] = position;
-        _updateLiquidityReservation(
-            _params.request.user,
-            _params.request.input.sizeDelta,
-            _cache.sizeDeltaUsd.abs(),
-            _params.collateralPrice,
-            position.positionSize,
-            false,
-            position.isLong
+        // Reserve Liquidity Equal to the Position Size
+        _unreserveLiquidity(
+            _params.request.user, _params.request.input.sizeDelta, position.positionSize, position.isLong
         );
+        // Update Final Storage
+        openPositions[positionKey] = position;
+        // Delete the Position if Necessary
         if (position.positionSize == 0 || position.collateralAmount == 0) {
             _deletePosition(positionKey, market, position.isLong);
         }
+        // Accumulate the Borrow Fees
         if (decreaseCache.borrowFee > 0) {
             // accumulate borrow fee in liquidity vault
             liquidityVault.accumulateFees(decreaseCache.borrowFee, position.isLong);
         }
+        // Handle PNL
         if (decreaseCache.decreasePnl < 0) {
             // Loss scenario
             uint256 lossAmount = decreaseCache.decreasePnl.abs(); // Convert the negative decreaseCache.decreasePnl to a positive value for calculations
@@ -280,24 +273,27 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
             uint256 userAmount = decreaseCache.afterFeeAmount - lossAmount;
             liquidityVault.accumulateFees(lossAmount, position.isLong);
-            liquidityVault.transferOutTokens(market, _params.request.user, userAmount, _params.request.input.isLong);
+            liquidityVault.transferOutTokens(
+                _params.request.user, userAmount, _params.request.input.isLong, _params.request.input.shouldWrap
+            ); // @audit - should unwrap
         } else {
             // Profit scenario
-            liquidityVault.transferOutTokens(
-                market, _params.request.user, decreaseCache.afterFeeAmount, _params.request.input.isLong
-            );
             if (decreaseCache.decreasePnl > 0) {
-                liquidityVault.transferPositionProfit(
-                    _params.request.user, decreaseCache.decreasePnl.toUint256(), _params.request.input.isLong
-                );
+                decreaseCache.afterFeeAmount += decreaseCache.decreasePnl.abs();
             }
+            liquidityVault.transferOutTokens(
+                _params.request.user,
+                decreaseCache.afterFeeAmount,
+                _params.request.input.isLong,
+                _params.request.input.shouldWrap
+            );
         }
-        liquidityVault.swapFundingAmount(market, decreaseCache.fundingFee, position.isLong);
-
+        // Fire Event
         emit DecreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
-    function liquidatePosition(Trade.ExecuteCache memory _cache, bytes32 _positionKey, address _liquidator)
+    /// @dev - Borrowing Fees ignored as all liquidated collateral goes to LPs
+    function liquidatePosition(Order.ExecuteCache memory _cache, bytes32 _positionKey, address _liquidator)
         external
         onlyLiquidator
     {
@@ -306,15 +302,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         require(Position.exists(position), "TS: Position Doesn't Exist");
         require(Position.isLiquidatable(position, _cache, liquidationFeeUsd), "TS: Not Liquidatable");
 
-        // Get the position fees in index tokens
-        (, uint256 indexFundingFee) = Funding.getTotalPositionFees(position.market, position);
-        // Convert index funding fee to collateral
-        uint256 collateralfundingFee = Position.convertIndexAmountToCollateral(
-            indexFundingFee,
-            _cache.indexPrice,
-            _cache.indexBaseUnit,
-            position.isLong ? _cache.longMarketTokenPrice : _cache.shortMarketTokenPrice
-        );
+        // Calculate the Funding Fee and Pay off all Outstanding
 
         // Cached to prevent double conversion
         address market = address(position.market);
@@ -323,48 +311,57 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         delete openPositions[_positionKey];
         openPositionKeys[market][position.isLong].remove(_positionKey);
 
-        liquidityVault.liquidatePositionCollateral(
-            _liquidator,
-            Position.calculateLiquidationFee(liquidationFeeUsd, _cache.collateralPrice),
-            market,
-            position.collateralAmount,
-            collateralfundingFee,
-            position.isLong
-        );
+        // unreserve all of the position liquidity
+
+        // calculate the liquidation fee to send to the liquidator
+
+        // accumulate the rest of the position size as fees
+
+        // transfer the liquidation fee to the liquidator
 
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }
 
-    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
-        require(_liquidationFee <= MAX_LIQUIDATION_FEE && _liquidationFee != 0, "TS: Invalid Liquidation Fee");
-        require(_tradingFee <= MAX_TRADING_FEE && _tradingFee != 0, "TS: Invalid Trading Fee");
-        liquidationFeeUsd = _liquidationFee;
-        tradingFee = _tradingFee;
-        emit FeesSet(_liquidationFee, _tradingFee);
+    ////////////////////////
+    // INTERNAL FUNCTIONS //
+    ////////////////////////
+
+    function _deletePosition(bytes32 _positionKey, address _market, bool _isLong) internal {
+        delete openPositions[_positionKey];
+        openPositionKeys[_market][_isLong].remove(_positionKey);
     }
 
-    function claimFundingFees(bytes32 _positionKey) external {
-        // get the position
-        Position.Data memory position = openPositions[_positionKey];
-        // check that the position exists
-        require(position.user != address(0), "TS: Position Doesn't Exist");
-        // Check the user is the owner of the position
-        require(position.user == msg.sender, "TS: Not Position Owner");
-        // update the market for which the user is claiming fees
-        position.market.updateFundingRate();
-        // get the funding fees a user is eligible to claim for that position
-        _updateFeeParameters(_positionKey);
-        // if none, revert
-        uint256 claimable = position.fundingParams.feesEarned;
-        require(claimable != 0, "TS: No Fees To Claim");
-
-        // Realise all fees
-        openPositions[_positionKey].fundingParams.feesEarned = 0;
-
-        liquidityVault.claimFundingFees(address(position.market), position.user, claimable, position.isLong);
-
-        emit FundingFeesClaimed(position.user, claimable);
+    function _deleteOrder(bytes32 _orderKey, bool _isLimit) internal {
+        _isLimit ? limitOrderKeys.remove(_orderKey) : marketOrderKeys.remove(_orderKey);
+        delete orders[_orderKey];
     }
+
+    function _reserveLiquidity(address _user, uint256 _sizeDeltaUsd, uint256 _collateralPrice, bool _isLong) internal {
+        // Convert Size Delta USD to Collateral Tokens
+        uint256 collateralBaseUnit = _isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
+        uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, collateralBaseUnit, _collateralPrice));
+        liquidityVault.reserveLiquidity(_user, reserveDelta, _isLong);
+    }
+
+    function _unreserveLiquidity(address _user, uint256 _sizeDelta, uint256 _positionSize, bool _isLong) internal {
+        // Unreserve an equal proportion of the position's liquidity
+        uint256 reserved = liquidityVault.reservedAmounts(_user, _isLong);
+        uint256 reserveDelta = mulDiv(_sizeDelta, reserved, _positionSize);
+        liquidityVault.unreserveLiquidity(_user, reserveDelta, _isLong);
+    }
+
+    function _payFees(address _user, uint256 _fundingAmount, uint256 _borrowAmount, bool _isLong) internal {
+        // decrease the user's reserved amount
+        liquidityVault.unreserveLiquidity(_user, _fundingAmount + _borrowAmount, _isLong);
+        // increase the funding pool
+        liquidityVault.accumulateFundingFees(_fundingAmount, _isLong);
+        // Pay borrowing fees to LPs
+        liquidityVault.accumulateFees(_borrowAmount, _isLong);
+    }
+
+    //////////////////////
+    // GETTER FUNCTIONS //
+    //////////////////////
 
     function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory) {
         return openPositionKeys[_market][_isLong].values();
@@ -385,58 +382,5 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function getOrder(bytes32 _orderKey) external view returns (Position.Request memory) {
         return orders[_orderKey];
-    }
-
-    function _deletePosition(bytes32 _positionKey, address _market, bool _isLong) internal {
-        delete openPositions[_positionKey];
-        openPositionKeys[_market][_isLong].remove(_positionKey);
-    }
-
-    function _deleteOrder(bytes32 _orderKey, bool _isLimit) internal {
-        if (_isLimit) {
-            limitOrderKeys.remove(_orderKey);
-        } else {
-            marketOrderKeys.remove(_orderKey);
-        }
-        delete orders[_orderKey];
-    }
-
-    function _updateFeeParameters(bytes32 _positionKey) internal {
-        Position.Data storage position = openPositions[_positionKey];
-        IMarket market = IMarket(position.market);
-        // Borrowing Fees
-        position.borrowingParams.feesOwed = Borrowing.getTotalPositionFeesOwed(market, position);
-        position.borrowingParams.lastLongCumulativeBorrowFee = market.longCumulativeBorrowFees();
-        position.borrowingParams.lastShortCumulativeBorrowFee = market.shortCumulativeBorrowFees();
-        position.borrowingParams.lastBorrowUpdate = block.timestamp;
-        // Funding Fees
-        (position.fundingParams.feesEarned, position.fundingParams.feesOwed) =
-            Funding.getTotalPositionFees(market, position);
-        position.fundingParams.lastLongCumulativeFunding = market.longCumulativeFundingFees();
-        position.fundingParams.lastShortCumulativeFunding = market.shortCumulativeFundingFees();
-        position.fundingParams.lastFundingUpdate = block.timestamp;
-
-        emit BorrowingParamsUpdated(_positionKey, position.borrowingParams);
-        emit FundingParamsUpdated(_positionKey, position.fundingParams);
-    }
-
-    function _updateLiquidityReservation(
-        address _user,
-        uint256 _sizeDelta,
-        uint256 _sizeDeltaUsd,
-        uint256 _collateralPrice,
-        uint256 _positionSize,
-        bool _isIncrease,
-        bool _isLong
-    ) internal {
-        int256 reserveDelta;
-        if (_isIncrease) {
-            reserveDelta = (mulDiv(_sizeDelta, PRECISION, _collateralPrice)).toInt256();
-        } else {
-            uint256 reserved = liquidityVault.reservedAmounts(_user, _isLong);
-            uint256 realisedAmount = mulDiv(_sizeDeltaUsd, reserved, _positionSize);
-            reserveDelta = -1 * realisedAmount.toInt256();
-        }
-        liquidityVault.updateReservation(_user, reserveDelta, _isLong);
     }
 }

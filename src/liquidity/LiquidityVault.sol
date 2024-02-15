@@ -51,16 +51,23 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     uint256 public longTokenBalance;
     uint256 public shortTokenBalance;
+
     uint256 public longAccumulatedFees;
     uint256 public shortAccumulatedFees;
+
     uint256 public longTokensReserved;
     uint256 public shortTokensReserved;
+
     uint256 public executionFee; // in Wei
+
+    uint256 public longClaimableFunding;
+    uint256 public shortClaimableFunding;
 
     mapping(bytes32 => Deposit.Data) private depositRequests;
     EnumerableSet.Bytes32Set private depositKeys;
     mapping(bytes32 => Withdrawal.Data) private withdrawalRequests;
     EnumerableSet.Bytes32Set private withdrawalKeys;
+
     mapping(address user => mapping(bool isLong => uint256 reserved)) public reservedAmounts;
 
     mapping(address _market => uint256 _collateral) public longCollateral;
@@ -123,53 +130,28 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         IERC20(SHORT_TOKEN).safeTransfer(msg.sender, shortFees);
     }
 
-    ///////////////////////////////
-    // TRADING RELATED FUNCTIONS //
-    ///////////////////////////////
+    /////////////////////////////
+    // TOKEN RELATED FUNCTIONS //
+    /////////////////////////////
 
-    // @audit - CRITICAL -> Profit needs to be paid from a market's allocation
-    function transferPositionProfit(address _user, uint256 _amount, bool _isLong) external onlyTradeStorage {
-        require(_amount != 0, "LV: Invalid Profit Amount");
-        require(_user != address(0), "LV: Zero Address");
-        // check enough in pool to transfer position
-        // @audit - is this check correct?
-        if (_isLong) {
-            require(_amount <= longTokenBalance - longTokensReserved, "LV: Insufficient Funds");
-            longTokenBalance -= _amount;
-            IERC20(LONG_TOKEN).safeTransfer(_user, _amount);
-        } else {
-            require(_amount <= shortTokenBalance - shortTokensReserved, "LV: Insufficient Funds");
-            shortTokenBalance -= _amount;
-            IERC20(SHORT_TOKEN).safeTransfer(_user, _amount);
-        }
-        emit ProfitTransferred(_user, _amount, _isLong);
+    function mint(address _to, uint256 _amount) external onlyVault {
+        _mint(_to, _amount);
     }
 
-    function transferOutTokens(address _market, address _to, uint256 _collateralDelta, bool _isLong)
-        external
-        onlyTradeStorage
-    {
-        require(longCollateral[_market] != 0 || shortCollateral[_market] != 0, "TV: Incorrect Market Key");
-        require(_to != address(0), "TV: Zero Address");
-        require(_collateralDelta != 0, "TV: Zero Amount");
-        if (_isLong) {
-            require(longCollateral[_market] >= _collateralDelta, "TV: Insufficient Collateral");
-            longCollateral[_market] -= _collateralDelta;
-            IERC20(LONG_TOKEN).safeTransfer(_to, _collateralDelta);
-        } else {
-            require(shortCollateral[_market] >= _collateralDelta, "TV: Insufficient Collateral");
-            shortCollateral[_market] -= _collateralDelta;
-            IERC20(SHORT_TOKEN).safeTransfer(_to, _collateralDelta);
-        }
-        emit TransferOutTokens(_market, _to, _collateralDelta, _isLong);
+    function burn(uint256 _amount) external onlyVault {
+        _burn(address(this), _amount);
     }
+
+    //////////////////////////////
+    // TOKEN TRANSFER FUNCTIONS //
+    //////////////////////////////
 
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
         onlyVault
     {
         if (_shouldUnwrap) {
-            require(_isLongToken == true, "LiquidityVault: Unwrap Failed");
+            require(_isLongToken == true, "LiquidityVault: Invalid Unwrap Token");
             IWETH(LONG_TOKEN).withdraw(_amount);
             payable(_to).sendValue(_amount);
         } else {
@@ -177,133 +159,37 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         }
     }
 
-    function recordCollateralTransferIn(address _market, uint256 _collateralDelta, bool _isLong)
-        external
-        onlyTradeStorage
-    {
-        require(_collateralDelta != 0, "TV: Zero Amount");
-        if (_isLong) {
-            longCollateral[_market] += _collateralDelta;
-        } else {
-            shortCollateral[_market] += _collateralDelta;
-        }
-        emit TransferInCollateral(_market, _collateralDelta, _isLong);
-    }
-
-    function accumulateFees(uint256 _amount, bool _isLong) external onlyFeeAccumulator {
-        require(_amount != 0, "LV: Invalid Acc Fee");
-        if (_isLong) {
-            longAccumulatedFees += _amount;
-        } else {
-            shortAccumulatedFees += _amount;
-        }
-        emit FeesAccumulated(_amount, _isLong);
-    }
-
-    /// @dev Used to reserve / unreserve funds for open positions
-    // We need a reserve factor to cap reserves to a % of the available liquidity
-    function updateReservation(address _user, int256 _amount, bool _isLong) external onlyTradeStorage {
-        require(_amount != 0, "LV: Invalid Res Amount");
-        uint256 amt = _amount.abs();
-        if (_amount > 0) {
-            if (_isLong) {
-                require(amt <= longTokenBalance, "LV: Insufficient Long Liq");
-                longTokensReserved += amt;
-                reservedAmounts[_user][true] += amt;
-            } else {
-                require(amt <= shortTokenBalance, "LV: Insufficient Short Liq");
-                shortTokensReserved += amt;
-                reservedAmounts[_user][false] += amt;
-            }
-        } else {
-            if (_isLong) {
-                require(reservedAmounts[_user][true] >= amt, "LV: Insufficient Reserves");
-                require(longTokensReserved >= amt, "LV: Insufficient Long Liq");
-                longTokensReserved -= amt;
-                reservedAmounts[_user][true] -= amt;
-            } else {
-                require(reservedAmounts[_user][false] >= amt, "LV: Insufficient Reserves");
-                require(shortTokensReserved >= amt, "LV: Insufficient Short Liq");
-                shortTokensReserved -= amt;
-                reservedAmounts[_user][false] -= amt;
-            }
-        }
-        emit LiquidityReserved(_user, amt, _amount > 0, _isLong);
-    }
-
     function sendExecutionFee(address payable _processor, uint256 _executionFee) public onlyTradeStorage {
         _processor.sendValue(_executionFee);
     }
 
-    function swapFundingAmount(address _market, uint256 _amount, bool _isLong) external onlyTradeStorage {
-        _swapFundingAmount(_market, _amount, _isLong);
+    //////////////////////////////
+    // STORAGE UPDATE FUNCTIONS //
+    //////////////////////////////
+
+    function accumulateFees(uint256 _amount, bool _isLong) external onlyFeeAccumulator {
+        _isLong ? longAccumulatedFees += _amount : shortAccumulatedFees += _amount;
+        emit FeesAccumulated(_amount, _isLong);
     }
 
-    // @audit - Liq Fee needs to be measured in collateral token
-    function liquidatePositionCollateral(
-        address _liquidator,
-        uint256 _liqFee,
-        address _market,
-        uint256 _totalCollateral,
-        uint256 _collateralFundingOwed,
-        bool _isLong
-    ) external onlyTradeStorage {
-        // funding
-        if (_collateralFundingOwed > 0) {
-            _swapFundingAmount(_market, _collateralFundingOwed, _isLong);
-        }
-        // Funds remaining after paying funding and liquidation fee
-        uint256 remainingCollateral = _totalCollateral - _collateralFundingOwed - _liqFee;
-        if (remainingCollateral > 0) {
-            if (_isLong) {
-                longCollateral[_market] -= remainingCollateral;
-                longAccumulatedFees += remainingCollateral;
-                IERC20(LONG_TOKEN).safeTransfer(_liquidator, _liqFee);
-            } else {
-                shortCollateral[_market] -= remainingCollateral;
-                shortAccumulatedFees += remainingCollateral;
-                IERC20(SHORT_TOKEN).safeTransfer(_liquidator, _liqFee);
-            }
-        }
-        emit PositionCollateralLiquidated(
-            _liquidator, _liqFee, _market, _totalCollateral, _collateralFundingOwed, _isLong
-        );
-    }
-
-    // Funding fee needs to be measured in collateral token
-    function claimFundingFees(address _market, address _user, uint256 _claimed, bool _isLong)
-        external
-        onlyTradeStorage
-    {
+    function reserveLiquidity(address _user, uint256 _amount, bool _isLong) external onlyTradeStorage {
         if (_isLong) {
-            require(shortCollateral[_market] >= _claimed, "TV: Insufficient Claimable");
-            shortCollateral[_market] -= _claimed;
-            IERC20(SHORT_TOKEN).safeTransfer(_user, _claimed);
+            longTokensReserved += _amount;
+            reservedAmounts[_user][true] += _amount;
         } else {
-            require(longCollateral[_market] >= _claimed, "TV: Insufficient Claimable");
-            longCollateral[_market] -= _claimed;
-            IERC20(LONG_TOKEN).safeTransfer(_user, _claimed);
+            shortTokensReserved += _amount;
+            reservedAmounts[_user][false] += _amount;
         }
     }
 
-    function _swapFundingAmount(address _market, uint256 _amount, bool _isLong) internal {
+    function unreserveLiquidity(address _user, uint256 _amount, bool _isLong) external onlyTradeStorage {
         if (_isLong) {
-            longCollateral[_market] -= _amount;
-            shortCollateral[_market] += _amount;
+            longTokensReserved -= _amount;
+            reservedAmounts[_user][true] -= _amount;
         } else {
-            shortCollateral[_market] -= _amount;
-            longCollateral[_market] += _amount;
+            shortTokensReserved -= _amount;
+            reservedAmounts[_user][false] -= _amount;
         }
-    }
-
-    ///////////////////////
-    // DEPOSIT EXECUTION //
-    ///////////////////////
-
-    function executeDeposit(Deposit.ExecuteParams memory _params) external onlyProcessor 
-    // orderExists(_params.key, true)
-    {
-        Deposit.execute(_params);
     }
 
     function increasePoolBalance(uint256 _amount, bool _isLong) external onlyVault {
@@ -314,38 +200,9 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         _isLong ? longTokenBalance -= _amount : shortTokenBalance -= _amount;
     }
 
-    function mint(address _to, uint256 _amount) external onlyVault {
-        _mint(_to, _amount);
-    }
-
-    function deleteDeposit(bytes32 _key) external onlyVault {
-        depositKeys.remove(_key);
-        delete depositRequests[_key];
-    }
-
-    //////////////////////////
-    // WITHDRAWAL EXECUTION //
-    //////////////////////////
-
-    // @audit - review
-    function executeWithdrawal(Withdrawal.ExecuteParams memory _params) external onlyProcessor 
-    // orderExists(_params.key, false)
-    {
-        Withdrawal.execute(_params);
-    }
-
-    function burn(uint256 _amount) external onlyVault {
-        _burn(address(this), _amount);
-    }
-
-    function deleteWithdrawal(bytes32 _key) external onlyVault {
-        withdrawalKeys.remove(_key);
-        delete withdrawalRequests[_key];
-    }
-
-    //////////////////////
-    // DEPOSIT CREATION //
-    //////////////////////
+    ///////////////////////
+    // DEPOSIT FUNCTIONS //
+    ///////////////////////
 
     // Function to create a deposit request
     // Note -> need to add ability to create deposit in eth
@@ -362,8 +219,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
         Deposit.validateCancellation(deposit, _caller);
 
-        depositKeys.remove(_key);
-        delete depositRequests[_key];
+        _deleteDeposit(_key);
 
         // Transfer tokens back to user
         IERC20(deposit.input.tokenIn).safeTransfer(msg.sender, deposit.input.amountIn);
@@ -371,9 +227,21 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         emit DepositRequestCancelled(_key, deposit.input.owner, deposit.input.tokenIn, deposit.input.amountIn);
     }
 
-    /////////////////////////
-    // WITHDRAWAL CREATION //
-    /////////////////////////
+    function executeDeposit(Deposit.ExecuteParams memory _params)
+        external
+        onlyProcessor
+        orderExists(_params.key, true)
+    {
+        Deposit.execute(_params);
+    }
+
+    function deleteDeposit(bytes32 _key) external onlyVault {
+        _deleteDeposit(_key);
+    }
+
+    //////////////////////////
+    // WITHDRAWAL FUNCTIONS //
+    //////////////////////////
 
     // Function to create a withdrawal request
     function createWithdrawal(Withdrawal.Input memory _input) external payable onlyRouter {
@@ -392,12 +260,50 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
         Withdrawal.validateCancellation(withdrawal, _caller);
 
-        withdrawalKeys.remove(_key);
-        delete withdrawalRequests[_key];
+        _deleteWithdrawal(_key);
 
         emit WithdrawalRequestCancelled(
             _key, withdrawal.input.owner, withdrawal.input.tokenOut, withdrawal.input.marketTokenAmountIn
         );
+    }
+
+    // @audit - review
+    function executeWithdrawal(Withdrawal.ExecuteParams memory _params)
+        external
+        onlyProcessor
+        orderExists(_params.key, false)
+    {
+        Withdrawal.execute(_params);
+    }
+
+    function deleteWithdrawal(bytes32 _key) external onlyVault {
+        _deleteWithdrawal(_key);
+    }
+
+    /////////////
+    // FUNDING //
+    /////////////
+
+    function accumulateFundingFees(uint256 _amount, bool _isLong) external onlyTradeStorage {
+        _isLong ? longClaimableFunding += _amount : shortClaimableFunding += _amount;
+    }
+
+    function subtractFundingFees(uint256 _amount, bool _isLong) external onlyProcessor {
+        _isLong ? longClaimableFunding -= _amount : shortClaimableFunding -= _amount;
+    }
+
+    //////////////
+    // INTERNAL //
+    //////////////
+
+    function _deleteWithdrawal(bytes32 _key) internal {
+        withdrawalKeys.remove(_key);
+        delete withdrawalRequests[_key];
+    }
+
+    function _deleteDeposit(bytes32 _key) internal {
+        depositKeys.remove(_key);
+        delete depositRequests[_key];
     }
 
     /////////////

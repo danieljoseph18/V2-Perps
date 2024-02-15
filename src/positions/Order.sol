@@ -13,7 +13,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 // Library for Handling Trade related logic
-library Trade {
+library Order {
     using SignedMath for int256;
     using SafeCast for uint256;
 
@@ -50,13 +50,15 @@ library Trade {
         Position.Data memory _position,
         Position.Execution calldata _params,
         ExecuteCache memory _cache
-    ) external view returns (Position.Data memory) {
+    ) external view returns (Position.Data memory position, uint256 fundingFeeOwed, uint256 borrowFeeOwed) {
         // Update the Fee Parameters
-        _position = _updateFeeParameters(_position);
+        position = _updateFeeParameters(_position);
+        // Process any Outstanding Fees
+        (position,, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _cache);
         // Edit the Position for Increase
-        _position = _editPosition(_position, _cache, _params.request.input.collateralDelta, 0, true);
-        _position = _updateConditionals(_position, _params.request.input.conditionals);
-        return _position;
+        position = _editPosition(position, _cache, _params.request.input.collateralDelta, 0, true);
+        // Update the conditionals and return
+        position = _updateConditionals(position, _params.request.input.conditionals);
     }
 
     function executeCollateralDecrease(
@@ -65,25 +67,24 @@ library Trade {
         ExecuteCache memory _cache,
         uint256 _minCollateralUsd,
         uint256 _liquidationFeeUsd
-    ) external view returns (Position.Data memory) {
+    ) external view returns (Position.Data memory position, uint256 fundingFeeOwed, uint256 borrowFeeOwed) {
         // Update the Fee Parameters
         _position = _updateFeeParameters(_position);
-
-        _position.collateralAmount -= _params.request.input.collateralDelta;
-
+        // Process any Outstanding Fees
+        uint256 afterFeeAmount;
+        (position, afterFeeAmount, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _cache);
+        // Decrease the collateral amount - @audit
+        position.collateralAmount -= afterFeeAmount;
         // Check if the Decrease puts the position below the min collateral threshold
         require(
-            _checkMinCollateral(_position.collateralAmount, _cache.collateralPrice, _minCollateralUsd), "TS: Min Collat"
+            _checkMinCollateral(position.collateralAmount, _cache.collateralPrice, _minCollateralUsd), "TS: Min Collat"
         );
-
         // Check if the Decrease makes the Position Liquidatable
-        require(!_checkIsLiquidatable(_position, _cache, _liquidationFeeUsd), "TS: Liquidatable");
-
+        require(!_checkIsLiquidatable(position, _cache, _liquidationFeeUsd), "TS: Liquidatable");
         // Update the Position's conditionals
-        _position = _updateConditionals(_position, _params.request.input.conditionals);
-
+        position = _updateConditionals(position, _params.request.input.conditionals);
         // Edit the Position
-        return _editPosition(_position, _cache, _params.request.input.collateralDelta, 0, false);
+        position = _editPosition(position, _cache, _params.request.input.collateralDelta, 0, false);
     }
 
     function executeConditionalEdit(Position.Data memory _position, Position.Execution calldata _params)
@@ -118,55 +119,62 @@ library Trade {
         Position.Data memory _position,
         Position.Execution calldata _params,
         ExecuteCache memory _cache
-    ) external view returns (Position.Data memory, uint256 sizeDelta, uint256 sizeDeltaUsd) {
+    )
+        external
+        view
+        returns (
+            Position.Data memory position,
+            uint256 sizeDelta,
+            uint256 sizeDeltaUsd,
+            uint256 fundingFeeOwed,
+            uint256 borrowFeeOwed
+        )
+    {
         // Update the Fee Parameters
-        _position = _updateFeeParameters(_position);
-
-        uint256 newCollateralAmount = _position.collateralAmount + _params.request.input.collateralDelta;
+        position = _updateFeeParameters(_position);
+        // Process any Outstanding Fees
+        (position,, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _cache);
+        uint256 newCollateralAmount = position.collateralAmount + _params.request.input.collateralDelta;
         // Calculate the Size Delta to keep Leverage Consistent
-        sizeDelta = mulDiv(newCollateralAmount, _position.positionSize, _position.collateralAmount);
+        sizeDelta = mulDiv(newCollateralAmount, position.positionSize, position.collateralAmount);
 
         // Update the Position's conditionals
-        _position = _updateConditionals(_position, _params.request.input.conditionals);
+        position = _updateConditionals(position, _params.request.input.conditionals);
 
         // Update the Existing Position
-        _position = _editPosition(_position, _cache, _params.request.input.collateralDelta, sizeDelta, true);
+        position = _editPosition(position, _cache, _params.request.input.collateralDelta, sizeDelta, true);
 
-        return (_position, sizeDelta, _cache.sizeDeltaUsd.abs());
+        sizeDeltaUsd = _cache.sizeDeltaUsd.abs();
     }
 
     function decreaseExistingPosition(
         Position.Data memory _position,
         Position.Execution calldata _params,
         ExecuteCache memory _cache
-    ) external view returns (Position.Data memory, DecreaseCache memory) {
-        DecreaseCache memory decreaseCache;
+    ) external view returns (Position.Data memory position, DecreaseCache memory decreaseCache) {
+        position = _updateFeeParameters(_position);
 
-        _position = _updateFeeParameters(_position);
-
-        if (_params.request.input.collateralDelta == _position.collateralAmount) {
-            decreaseCache.sizeDelta = _position.positionSize;
+        if (_params.request.input.collateralDelta == position.collateralAmount) {
+            decreaseCache.sizeDelta = position.positionSize;
         } else {
             decreaseCache.sizeDelta =
-                mulDiv(_position.positionSize, _params.request.input.collateralDelta, _position.collateralAmount);
+                mulDiv(position.positionSize, _params.request.input.collateralDelta, position.collateralAmount);
         }
         decreaseCache.decreasePnl = Pricing.getDecreasePositionPnl(
             _cache.indexBaseUnit,
             decreaseCache.sizeDelta,
-            _position.pnlParams.weightedAvgEntryPrice,
+            position.pnlParams.weightedAvgEntryPrice,
             _params.indexPrice,
-            _position.isLong
+            position.isLong
         );
 
-        _position = _updateConditionals(_position, _params.request.input.conditionals);
+        position = _updateConditionals(position, _params.request.input.conditionals);
 
-        _position =
-            _editPosition(_position, _cache, _params.request.input.collateralDelta, decreaseCache.sizeDelta, false);
+        position =
+            _editPosition(position, _cache, _params.request.input.collateralDelta, decreaseCache.sizeDelta, false);
 
-        (_position, decreaseCache.afterFeeAmount, decreaseCache.fundingFee, decreaseCache.borrowFee) =
-            _processFees(_position, _params, _cache);
-
-        return (_position, decreaseCache);
+        (position, decreaseCache.afterFeeAmount, decreaseCache.fundingFee, decreaseCache.borrowFee) =
+            _processFees(position, _params, _cache);
     }
 
     ///////////////////////////////
@@ -308,32 +316,32 @@ library Trade {
     function _subtractFundingFee(Position.Data memory _position, ExecuteCache memory _cache, uint256 _collateralDelta)
         internal
         pure
-        returns (Position.Data memory, uint256 collateralFeesOwed)
+        returns (Position.Data memory, uint256 fundingAmountOwed)
     {
         uint256 feesOwedUsd = mulDiv(_position.fundingParams.feesOwed, _cache.indexPrice, _cache.indexBaseUnit);
-        collateralFeesOwed = mulDiv(feesOwedUsd, PRECISION, _cache.collateralPrice);
+        fundingAmountOwed = mulDiv(feesOwedUsd, PRECISION, _cache.collateralPrice);
 
-        require(collateralFeesOwed <= _collateralDelta, "TS: Fee > CollateralDelta");
+        require(fundingAmountOwed <= _collateralDelta, "TS: Fee > CollateralDelta");
 
         _position.fundingParams.feesOwed = 0;
 
-        return (_position, collateralFeesOwed);
+        return (_position, fundingAmountOwed);
     }
 
     /// @dev Returns borrow fee in collateral tokens (original value is in index tokens)
     function _subtractBorrowingFee(Position.Data memory _position, ExecuteCache memory _cache, uint256 _collateralDelta)
         internal
         view
-        returns (Position.Data memory, uint256 collateralFeesOwed)
+        returns (Position.Data memory, uint256 borrowingAmountOwed)
     {
         uint256 borrowFee = Borrowing.calculateFeeForPositionChange(_position.market, _position, _collateralDelta);
         _position.borrowingParams.feesOwed -= borrowFee;
         // convert borrow fee from index tokens to collateral tokens to subtract from collateral:
         uint256 borrowFeeUsd = mulDiv(borrowFee, _cache.indexPrice, _cache.indexBaseUnit);
-        collateralFeesOwed = mulDiv(borrowFeeUsd, PRECISION, _cache.collateralPrice);
+        borrowingAmountOwed = mulDiv(borrowFeeUsd, PRECISION, _cache.collateralPrice);
 
-        require(collateralFeesOwed <= _collateralDelta, "TS: Fee > CollateralDelta");
+        require(borrowingAmountOwed <= _collateralDelta, "TS: Fee > CollateralDelta");
 
-        return (_position, collateralFeesOwed);
+        return (_position, borrowingAmountOwed);
     }
 }

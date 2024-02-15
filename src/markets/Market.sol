@@ -98,6 +98,12 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     uint256 public longSizeSumUSD; // Σ All Position Sizes USD Long
     uint256 public shortSizeSumUSD; // Σ All Position Sizes USD Short
 
+    /////////////////////////////////////////////////////////////////
+    // Price Impact: Used to calculate the price impact of a trade //
+    /////////////////////////////////////////////////////////////////
+
+    uint256 public impactPoolUsd; // Virtual Pool for Price Impact Calculations
+
     constructor(address _priceFeed, address _liquidityVault, address _indexToken, address _roleStorage)
         RoleValidation(_roleStorage)
     {
@@ -230,6 +236,11 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
             _isLong ? longOpenInterest -= _indexTokenAmount : shortOpenInterest -= _indexTokenAmount;
         }
         emit OpenInterestUpdated(longOpenInterest, shortOpenInterest);
+    }
+
+    function updateImpactPool(int256 _priceImpactUsd) external onlyProcessor {
+        uint256 absImpact = _priceImpactUsd.abs();
+        _priceImpactUsd > 0 ? impactPoolUsd += absImpact : impactPoolUsd -= absImpact;
     }
 
     /////////////////

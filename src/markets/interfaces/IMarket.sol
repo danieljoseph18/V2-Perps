@@ -58,6 +58,7 @@ interface IMarket {
     function shortTotalWAEP() external view returns (uint256);
     function longSizeSumUSD() external view returns (uint256);
     function shortSizeSumUSD() external view returns (uint256);
+    function impactPoolUsd() external view returns (uint256);
 
     // Events
     event MarketInitialised(Config config);
@@ -83,6 +84,7 @@ interface IMarket {
         external;
     function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external;
     function updateOpenInterest(uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external;
+    function updateImpactPool(int256 _priceImpactUsd) external;
     function updateAllocation(uint256 _percentageAllocation) external;
     function getCumulativeFees()
         external

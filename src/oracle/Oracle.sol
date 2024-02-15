@@ -23,7 +23,7 @@ library Oracle {
         bytes32 priceId;
         uint256 baseUnit;
         uint256 heartbeatDuration;
-        uint256 maxPriceDeviation; // %
+        uint256 maxPriceDeviation;
         PriceProvider priceProvider;
         AssetType assetType;
     }
@@ -58,12 +58,12 @@ library Oracle {
     uint256 private constant PRICE_DECIMALS = 18;
     uint256 private constant CHAINLINK_PRICE_DECIMALS = 8;
 
-    function isValidAsset(IPriceFeed _priceFeed, address _token) external view returns (bool) {
-        return _priceFeed.getAsset(_token).isValid;
+    function isValidAsset(IPriceFeed priceFeed, address _token) external view returns (bool) {
+        return priceFeed.getAsset(_token).isValid;
     }
 
-    function isSequencerUp(IPriceFeed _priceFeed) external view {
-        address sequencerUptimeFeed = _priceFeed.sequencerUptimeFeed();
+    function isSequencerUp(IPriceFeed priceFeed) external view {
+        address sequencerUptimeFeed = priceFeed.sequencerUptimeFeed();
         if (sequencerUptimeFeed != address(0)) {
             IChainlinkFeed feed = IChainlinkFeed(sequencerUptimeFeed);
             (
@@ -86,11 +86,11 @@ library Oracle {
         }
     }
 
-    function validateTradingHours(IPriceFeed _priceFeed, address _token, TradingEnabled memory _isEnabled)
+    function validateTradingHours(IPriceFeed priceFeed, address _token, TradingEnabled memory _isEnabled)
         external
         view
     {
-        Asset memory asset = _priceFeed.getAsset(_token);
+        Asset memory asset = priceFeed.getAsset(_token);
         if (asset.assetType == AssetType.CRYPTO) {
             return;
         } else if (asset.assetType == AssetType.FX) {
@@ -127,28 +127,20 @@ library Oracle {
         confidence = _priceData.conf * (10 ** (PRICE_DECIMALS - absExponent));
     }
 
-    function getMaxPrice(IPriceFeed _priceFeed, address _token, uint256 _block)
-        public
-        view
-        returns (uint256 maxPrice)
-    {
-        maxPrice = _priceFeed.getPrice(_block, _token).max;
+    function getMaxPrice(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (uint256 maxPrice) {
+        maxPrice = priceFeed.getPrice(_block, _token).max;
     }
 
-    function getMinPrice(IPriceFeed _priceFeed, address _token, uint256 _block)
-        public
-        view
-        returns (uint256 minPrice)
-    {
-        minPrice = _priceFeed.getPrice(_block, _token).min;
+    function getMinPrice(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (uint256 minPrice) {
+        minPrice = priceFeed.getPrice(_block, _token).min;
     }
 
-    function getMarketTokenPrices(IPriceFeed _priceFeed, uint256 _blockNumber, bool _maximise)
+    function getMarketTokenPrices(IPriceFeed priceFeed, uint256 _blockNumber, bool _maximise)
         public
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
-        (Price memory longPrices, Price memory shortPrices) = getMarketTokenPrices(_priceFeed, _blockNumber);
+        (Price memory longPrices, Price memory shortPrices) = getMarketTokenPrices(priceFeed, _blockNumber);
         if (_maximise) {
             longPrice = longPrices.max;
             shortPrice = shortPrices.max;
@@ -159,25 +151,25 @@ library Oracle {
         require(longPrice > 0 && shortPrice > 0, "Oracle: invalid token prices");
     }
 
-    function getMarketTokenPrices(IPriceFeed _priceFeed, uint256 _blockNumber)
+    function getMarketTokenPrices(IPriceFeed priceFeed, uint256 _blockNumber)
         public
         view
         returns (Price memory _longPrices, Price memory _shortPrices)
     {
-        _longPrices = _priceFeed.getPrice(_blockNumber, _priceFeed.longToken());
-        _shortPrices = _priceFeed.getPrice(_blockNumber, _priceFeed.shortToken());
+        _longPrices = priceFeed.getPrice(_blockNumber, priceFeed.longToken());
+        _shortPrices = priceFeed.getPrice(_blockNumber, priceFeed.shortToken());
     }
 
     // Can just use getPriceUnsafe - where do we get the confidence interval?
-    function getLastMarketTokenPrices(IPriceFeed _priceFeed, bool _maximise)
+    function getLastMarketTokenPrices(IPriceFeed priceFeed, bool _maximise)
         external
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
-        Asset memory longToken = _priceFeed.getAsset(_priceFeed.longToken());
-        Asset memory shortToken = _priceFeed.getAsset(_priceFeed.shortToken());
-        (uint256 longBasePrice, uint256 longConfidence) = _priceFeed.getPriceUnsafe(longToken);
-        (uint256 shortBasePrice, uint256 shortConfidence) = _priceFeed.getPriceUnsafe(shortToken);
+        Asset memory longToken = priceFeed.getAsset(priceFeed.longToken());
+        Asset memory shortToken = priceFeed.getAsset(priceFeed.shortToken());
+        (uint256 longBasePrice, uint256 longConfidence) = priceFeed.getPriceUnsafe(longToken);
+        (uint256 shortBasePrice, uint256 shortConfidence) = priceFeed.getPriceUnsafe(shortToken);
         if (_maximise) {
             longPrice = longBasePrice + longConfidence;
             shortPrice = shortBasePrice + shortConfidence;
@@ -197,7 +189,7 @@ library Oracle {
 
     // Use chainlink price feed if available
     // @audit - What do we do if ref price is 0???
-    function getReferencePrice(IPriceFeed _priceFeed, Asset memory _asset)
+    function getReferencePrice(IPriceFeed priceFeed, Asset memory _asset)
         public
         view
         returns (uint256 referencePrice)
@@ -206,7 +198,7 @@ library Oracle {
         // if address = 0 -> return false, 0
         if (_asset.chainlinkPriceFeed == address(0)) {
             if (_asset.priceProvider == PriceProvider.PYTH) {
-                (referencePrice,) = _priceFeed.getPriceUnsafe(_asset);
+                (referencePrice,) = priceFeed.getPriceUnsafe(_asset);
                 return referencePrice;
             }
             return 0;
@@ -230,33 +222,33 @@ library Oracle {
         referencePrice = mulDiv(_price.toUint256(), _asset.baseUnit, 10 ** CHAINLINK_PRICE_DECIMALS);
     }
 
-    function getBaseUnit(IPriceFeed _priceFeed, address _token) public view returns (uint256) {
-        return _priceFeed.getAsset(_token).baseUnit;
+    function getBaseUnit(IPriceFeed priceFeed, address _token) public view returns (uint256) {
+        return priceFeed.getAsset(_token).baseUnit;
     }
 
-    function getLongBaseUnit(IPriceFeed _priceFeed) public view returns (uint256) {
-        return getBaseUnit(_priceFeed, _priceFeed.longToken());
+    function getLongBaseUnit(IPriceFeed priceFeed) public view returns (uint256) {
+        return getBaseUnit(priceFeed, priceFeed.longToken());
     }
 
-    function getShortBaseUnit(IPriceFeed _priceFeed) public view returns (uint256) {
-        return getBaseUnit(_priceFeed, _priceFeed.shortToken());
+    function getShortBaseUnit(IPriceFeed priceFeed) public view returns (uint256) {
+        return getBaseUnit(priceFeed, priceFeed.shortToken());
     }
 
     // @audit - where is this used? should we max or min the price?
-    function getNetPnl(IPriceFeed _priceFeed, IMarket _market, uint256 _blockNumber, bool _maximise)
+    function getNetPnl(IPriceFeed priceFeed, IMarket market, uint256 _blockNumber, bool _maximise)
         public
         view
         returns (int256 netPnl)
     {
-        address indexToken = _market.indexToken();
+        address indexToken = market.indexToken();
         uint256 indexPrice;
         if (_maximise) {
-            indexPrice = getMaxPrice(_priceFeed, indexToken, _blockNumber);
+            indexPrice = getMaxPrice(priceFeed, indexToken, _blockNumber);
         } else {
-            indexPrice = getMinPrice(_priceFeed, indexToken, _blockNumber);
+            indexPrice = getMinPrice(priceFeed, indexToken, _blockNumber);
         }
         require(indexPrice != 0, "Oracle: Invalid Index Price");
-        uint256 indexBaseUnit = getBaseUnit(_priceFeed, indexToken);
-        netPnl = Pricing.getNetPnl(_market, indexPrice, indexBaseUnit);
+        uint256 indexBaseUnit = getBaseUnit(priceFeed, indexToken);
+        netPnl = Pricing.getNetPnl(market, indexPrice, indexBaseUnit);
     }
 }

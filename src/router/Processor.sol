@@ -31,7 +31,7 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
-import {Trade} from "../positions/Trade.sol";
+import {Order} from "../positions/Order.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
@@ -98,42 +98,42 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
     function executeDeposit(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
-        // uint256 initialGas = gasleft();
-        // require(_key != bytes32(0), "E: Invalid Key");
-        // // Fetch the request
-        // Deposit.ExecuteParams memory params;
-        // params.data = liquidityVault.getDepositRequest(_key);
-        // params.key = _key;
-        // params.cumulativePnl = _cumulativePnl;
-        // try liquidityVault.executeDeposit(params) {}
-        // catch {
-        //     revert("Processor: Execute Deposit Failed");
-        // }
-        // // Send Execution Fee + Rebate
-        // Gas.payExecutionFee(
-        //     this, params.data.input.executionFee, initialGas, payable(params.data.input.owner), payable(msg.sender)
-        // );
+        uint256 initialGas = gasleft();
+        require(_key != bytes32(0), "E: Invalid Key");
+        // Fetch the request
+        Deposit.ExecuteParams memory params;
+        params.data = liquidityVault.getDepositRequest(_key);
+        params.key = _key;
+        params.cumulativePnl = _cumulativePnl;
+        try liquidityVault.executeDeposit(params) {}
+        catch {
+            revert("Processor: Execute Deposit Failed");
+        }
+        // Send Execution Fee + Rebate
+        Gas.payExecutionFee(
+            this, params.data.input.executionFee, initialGas, payable(params.data.input.owner), payable(msg.sender)
+        );
     }
 
     // @audit - keeper needs to pass in cumulative net pnl
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
     function executeWithdrawal(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
-        // uint256 initialGas = gasleft();
-        // require(_key != bytes32(0), "E: Invalid Key");
-        // // Fetch the request
-        // Withdrawal.ExecuteParams memory params;
-        // params.data = liquidityVault.getWithdrawalRequest(_key);
-        // params.key = _key;
-        // params.cumulativePnl = _cumulativePnl;
-        // try liquidityVault.executeWithdrawal(params) {}
-        // catch {
-        //     revert("Processor: Execute Withdrawal Failed");
-        // }
-        // // Send Execution Fee + Rebate
-        // Gas.payExecutionFee(
-        //     this, params.data.input.executionFee, initialGas, payable(params.data.input.owner), payable(msg.sender)
-        // );
+        uint256 initialGas = gasleft();
+        require(_key != bytes32(0), "E: Invalid Key");
+        // Fetch the request
+        Withdrawal.ExecuteParams memory params;
+        params.data = liquidityVault.getWithdrawalRequest(_key);
+        params.key = _key;
+        params.cumulativePnl = _cumulativePnl;
+        try liquidityVault.executeWithdrawal(params) {}
+        catch {
+            revert("Processor: Execute Withdrawal Failed");
+        }
+        // Send Execution Fee + Rebate
+        Gas.payExecutionFee(
+            this, params.data.input.executionFee, initialGas, payable(params.data.input.owner), payable(msg.sender)
+        );
     }
 
     // Used to transfer intermediary tokens to the vault from deposits
@@ -174,7 +174,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         Oracle.TradingEnabled memory _isTradingEnabled
     ) external nonReentrant onlyKeeperOrSelf {
         uint256 initialGas = gasleft();
-        Trade.ExecuteCache memory cache;
+        Order.ExecuteCache memory cache;
         // Fetch and validate request from key
         Position.Request memory request = tradeStorage.getOrder(_orderKey);
         require(request.user != address(0), "E: Request Key");
@@ -191,12 +191,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Execute Price Impact
         cache.market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
         cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, request.input.indexToken);
-        cache.impactedPrice =
-            PriceImpact.executeForPosition(cache.market, request, cache.indexPrice, cache.indexBaseUnit);
+        cache.impactedPrice = PriceImpact.execute(cache.market, request, cache.indexPrice, cache.indexBaseUnit);
 
         (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) = request.input.isLong
-            ? Oracle.getLastMarketTokenPrices(priceFeed, false)
-            : Oracle.getLastMarketTokenPrices(priceFeed, true);
+            ? Oracle.getMarketTokenPrices(priceFeed, request.requestBlock, true)
+            : Oracle.getMarketTokenPrices(priceFeed, request.requestBlock, false);
 
         // Update Market State
         cache.sizeDeltaUsd = _calculateSizeDeltaUsd(
@@ -275,7 +274,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         onlyKeeper
     {
         // need to construct ExecuteCache
-        Trade.ExecuteCache memory cache;
+        Order.ExecuteCache memory cache;
         // fetch position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         cache.market = position.market;
@@ -283,16 +282,20 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // fetch prices, base units, calculate sizeDeltaUsd, no fee / discount, no ref, no impact
         priceFeed.signPriceData{value: _priceUpdateFee}(position.indexToken, _priceData);
 
-        cache.indexPrice = position.isLong
-            ? Oracle.getMaxPrice(priceFeed, position.indexToken, block.number)
-            : Oracle.getMinPrice(priceFeed, position.indexToken, block.number);
+        if (position.isLong) {
+            cache.indexPrice = Oracle.getMaxPrice(priceFeed, position.indexToken, block.number);
+            (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) = Oracle.getLastMarketTokenPrices(priceFeed, true);
+            cache.collateralPrice = cache.longMarketTokenPrice;
+        } else {
+            cache.indexPrice = Oracle.getMinPrice(priceFeed, position.indexToken, block.number);
+            (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) =
+                Oracle.getLastMarketTokenPrices(priceFeed, false);
+            cache.collateralPrice = cache.shortMarketTokenPrice;
+        }
 
         cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, position.indexToken);
         cache.impactedPrice = cache.indexPrice;
-        (cache.longMarketTokenPrice,) = priceFeed.getPriceUnsafe(priceFeed.getAsset(priceFeed.longToken()));
-        (cache.shortMarketTokenPrice,) = priceFeed.getPriceUnsafe(priceFeed.getAsset(priceFeed.shortToken()));
         cache.sizeDeltaUsd = _calculateSizeDeltaUsd(position.positionSize, cache.indexPrice, cache.indexBaseUnit, false);
-        cache.collateralPrice = position.isLong ? cache.longMarketTokenPrice : cache.shortMarketTokenPrice;
 
         // call _updateMarketState
         _updateMarketState(
@@ -324,7 +327,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
     // @audit - Streamline / Improve
     function _handleTokenTransfers(
-        Trade.ExecuteCache memory _cache,
+        Order.ExecuteCache memory _cache,
         Position.Request memory _request,
         uint256 _fee,
         uint256 _feeDiscount,
@@ -341,8 +344,9 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             // Transfer Fee Discount to Referral Storage
             IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), _feeDiscount);
         }
-        // Increment LiquidityVault Collateral Balance
-        liquidityVault.recordCollateralTransferIn(address(_cache.market), _request.input.collateralDelta, _isLong);
+        // Update Liquidity Vault Balance to Store the Collateral transferred in
+        // @here
+
         // Transfer Collateral to LiquidityVault
         IERC20(_request.input.collateralToken).safeTransfer(address(liquidityVault), _request.input.collateralDelta);
     }
@@ -363,7 +367,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     }
 
     function _updateMarketState(
-        IMarket _market,
+        IMarket market,
         uint256 _sizeDelta,
         uint256 _impactedIndexPrice,
         uint256 _signedIndexPrice,
@@ -373,11 +377,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         bool _isLong,
         bool _isIncrease
     ) internal {
-        _market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
-        _market.updateFundingRate();
-        _market.updateBorrowingRate(_signedIndexPrice, _longTokenPrice, _shortTokenPrice, _isLong);
+        market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
+        market.updateFundingRate();
+        market.updateBorrowingRate(_signedIndexPrice, _longTokenPrice, _shortTokenPrice, _isLong);
         if (_sizeDeltaUsd != 0) {
-            _market.updateTotalWAEP(_impactedIndexPrice, _sizeDeltaUsd, _isLong);
+            market.updateTotalWAEP(_impactedIndexPrice, _sizeDeltaUsd, _isLong);
         }
     }
 }

@@ -7,7 +7,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Position} from "../positions/Position.sol";
-import {Trade} from "../positions/Trade.sol";
+import {Order} from "../positions/Order.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -60,7 +60,7 @@ contract Adl is RoleValidation {
         external
         onlyAdlKeeper
     {
-        Trade.ExecuteCache memory cache;
+        Order.ExecuteCache memory cache;
         IMarket.AdlConfig memory adl = market.getAdlConfig();
         // Check ADL is enabled for the market and for the side
         if (_isLong) {

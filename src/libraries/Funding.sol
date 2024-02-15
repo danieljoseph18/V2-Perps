@@ -49,57 +49,57 @@ library Funding {
         bool flipsSign;
     }
 
-    function calculateDelta(IMarket _market, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function calculateDelta(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         view
         returns (int256 skew, int256 deltaRate)
     {
-        uint256 longOI = MarketUtils.getLongOpenInterestUSD(_market, _indexPrice, _indexBaseUnit);
-        uint256 shortOI = MarketUtils.getShortOpenInterestUSD(_market, _indexPrice, _indexBaseUnit);
+        uint256 longOI = MarketUtils.getLongOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
+        uint256 shortOI = MarketUtils.getShortOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
 
         skew = longOI.toInt256() - shortOI.toInt256();
 
         // Calculate time since last funding update
-        uint256 timeElapsed = block.timestamp - _market.lastFundingUpdate();
+        uint256 timeElapsed = block.timestamp - market.lastFundingUpdate();
 
         // Add the previous velocity to the funding rate
-        deltaRate = _market.fundingRateVelocity() * timeElapsed.toInt256();
+        deltaRate = market.fundingRateVelocity() * timeElapsed.toInt256();
     }
 
     /// @dev Calculate the funding rate velocity
     /// @dev velocity units = % per second (18 dp)
-    function calculateVelocity(IMarket _market, int256 _skew) external view returns (int256 velocity) {
-        IMarket.FundingConfig memory funding = _market.getFundingConfig();
+    function calculateVelocity(IMarket market, int256 _skew) external view returns (int256 velocity) {
+        IMarket.FundingConfig memory funding = market.getFundingConfig();
         uint256 c = mulDiv(funding.maxVelocity, PRECISION, funding.skewScale);
         velocity = mulDivSigned(c.toInt256(), _skew, PRECISION.toInt256());
     }
 
     /// @dev Get the total funding fees accumulated for each side
     /// @notice For External Queries
-    function getTotalAccumulatedFees(IMarket _market)
+    function getTotalAccumulatedFees(IMarket market)
         external
         view
         returns (uint256 longAccumulatedFees, uint256 shortAccumulatedFees)
     {
-        (UD60x18 longFundingSinceUpdate, UD60x18 shortFundingSinceUpdate) = _calculateAdjustedFees(_market);
+        (UD60x18 longFundingSinceUpdate, UD60x18 shortFundingSinceUpdate) = _calculateAdjustedFees(market);
 
-        longAccumulatedFees = _market.longCumulativeFundingFees() + unwrap(longFundingSinceUpdate);
-        shortAccumulatedFees = _market.shortCumulativeFundingFees() + unwrap(shortFundingSinceUpdate);
+        longAccumulatedFees = market.longCumulativeFundingFees() + unwrap(longFundingSinceUpdate);
+        shortAccumulatedFees = market.shortCumulativeFundingFees() + unwrap(shortFundingSinceUpdate);
     }
 
     /// @dev Returns fees earned and fees owed in tokens
     /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
     /// to charge for a position need to go: index -> usd -> collateral
-    function getTotalPositionFees(IMarket _market, Position.Data memory _position)
+    function getTotalPositionFees(IMarket market, Position.Data memory _position)
         external
         view
         returns (uint256 indexFeeEarned, uint256 indexFeeOwed)
     {
         // Get the fees accumulated since the last position update
         uint256 shortAccumulatedFees =
-            _market.shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
+            market.shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
         uint256 longAccumulatedFees =
-            _market.longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
+            market.longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
         // Separate Short and Long Fees to Earned and Owed
         uint256 accumulatedFundingEarned;
         uint256 accumulatedFundingOwed;
@@ -115,9 +115,9 @@ library Funding {
         indexFeeOwed =
             _position.fundingParams.feesOwed + mulDiv(accumulatedFundingOwed, _position.positionSize, PRECISION);
         // Flag avoids unnecessary heavy computation
-        if (_market.lastFundingUpdate() != block.timestamp) {
+        if (market.lastFundingUpdate() != block.timestamp) {
             (uint256 feesEarnedSinceUpdate, uint256 feesOwedSinceUpdate) =
-                getFeesSinceLastMarketUpdate(_market, _position.isLong);
+                getFeesSinceLastMarketUpdate(market, _position.isLong);
             // Calculate the Total Fees Earned and Owed
             indexFeeEarned += feesEarnedSinceUpdate;
             indexFeeOwed += feesOwedSinceUpdate;
@@ -125,22 +125,22 @@ library Funding {
     }
 
     // Rate to 18 D.P
-    function getCurrentRate(IMarket _market) external view returns (int256) {
-        uint256 timeElapsed = block.timestamp - _market.lastFundingUpdate();
-        int256 fundingRate = _market.fundingRate();
-        int256 fundingRateVelocity = _market.fundingRateVelocity();
+    function getCurrentRate(IMarket market) external view returns (int256) {
+        uint256 timeElapsed = block.timestamp - market.lastFundingUpdate();
+        int256 fundingRate = market.fundingRate();
+        int256 fundingRateVelocity = market.fundingRateVelocity();
         // currentRate = prevRate + (velocity * timeElapsed)
         return fundingRate + (fundingRateVelocity * int256(timeElapsed));
     }
 
     /// @dev Get the funding fees earned and owed since the last market update
     /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
-    function getFeesSinceLastMarketUpdate(IMarket _market, bool _isLong)
+    function getFeesSinceLastMarketUpdate(IMarket market, bool _isLong)
         public
         view
         returns (uint256 feesEarned, uint256 feesOwed)
     {
-        (UD60x18 longFees, UD60x18 shortFees) = _calculateAdjustedFees(_market);
+        (UD60x18 longFees, UD60x18 shortFees) = _calculateAdjustedFees(market);
 
         if (_isLong) {
             feesEarned = unwrap(shortFees);
@@ -153,16 +153,16 @@ library Funding {
 
     /// @dev Adjusts the total funding calculation when max or min limits are reached, or when the sign flips.
     /// @dev Mainly for external queries, as lastUpdate is updated before for position edits.
-    function _calculateAdjustedFees(IMarket _market) internal view returns (UD60x18 longFees, UD60x18 shortFees) {
+    function _calculateAdjustedFees(IMarket market) internal view returns (UD60x18 longFees, UD60x18 shortFees) {
         FundingCache memory cache;
-        IMarket.FundingConfig memory funding = _market.getFundingConfig();
+        IMarket.FundingConfig memory funding = market.getFundingConfig();
 
-        uint256 timeElapsed = block.timestamp - _market.lastFundingUpdate();
+        uint256 timeElapsed = block.timestamp - market.lastFundingUpdate();
         if (timeElapsed == 0) {
             return (UD_ZERO, UD_ZERO);
         }
-        cache.fundingRate = sd(_market.fundingRate());
-        cache.velocity = sd(_market.fundingRateVelocity());
+        cache.fundingRate = sd(market.fundingRate());
+        cache.velocity = sd(market.fundingRateVelocity());
         // Calculate which logical path to follow
         cache.finalFundingRate = cache.fundingRate + (cache.velocity.mul(sd(timeElapsed.toInt256())));
         cache.flipsSign = (

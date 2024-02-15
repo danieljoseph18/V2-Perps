@@ -46,9 +46,9 @@ contract GlobalMarketConfig is RoleValidation {
     /**
      * ========================= Market Config =========================
      */
-    function setMarketConfig(IMarket _market, IMarket.Config memory _config) external onlyModerator {
-        require(address(_market) != address(0), "Market does not exist");
-        _market.updateConfig(_config);
+    function setMarketConfig(IMarket market, IMarket.Config memory _config) external onlyModerator {
+        require(address(market) != address(0), "Market does not exist");
+        market.updateConfig(_config);
     }
 
     /**

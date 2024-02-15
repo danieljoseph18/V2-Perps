@@ -18,22 +18,11 @@ interface ILiquidityVault {
     function updateFees(uint256 _executionFee, uint256 _feeScale) external;
 
     // Trading related functions
-    function transferPositionProfit(address _user, uint256 _amount, bool _isLong) external;
-    function updateReservation(address _user, int256 _amount, bool _isLong) external;
+    function reserveLiquidity(address _user, uint256 _amount, bool _isLong) external;
+    function unreserveLiquidity(address _user, uint256 _amount, bool _isLong) external;
     function accumulateFees(uint256 _amount, bool _isLong) external;
     function sendExecutionFee(address payable _processor, uint256 _executionFee) external;
-    function transferOutTokens(address _market, address _to, uint256 _collateralDelta, bool _isLong) external;
-    function liquidatePositionCollateral(
-        address _liquidator,
-        uint256 _liqFee,
-        address _market,
-        uint256 _totalCollateral,
-        uint256 _collateralFundingOwed,
-        bool _isLong
-    ) external;
-    function claimFundingFees(address _market, address _user, uint256 _claimed, bool _isLong) external;
-    function swapFundingAmount(address _market, uint256 _amount, bool _isLong) external;
-    function recordCollateralTransferIn(address _market, uint256 _collateralDelta, bool _isLong) external;
+    function accumulateFundingFees(uint256 _amount, bool _isLong) external;
     function decreasePoolBalance(uint256 _amount, bool _isLong) external;
     function increasePoolBalance(uint256 _amount, bool _isLong) external;
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) external;
