@@ -49,13 +49,12 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     // Users will be charged a % of this fee based on the skew of the market
     uint256 public feeScale; // 3% = 0.03e18
 
-    uint256 private longTokenBalance;
-    uint256 private shortTokenBalance;
-    uint256 private longAccumulatedFees;
-    uint256 private shortAccumulatedFees;
-    uint256 private longTokensReserved;
-    uint256 private shortTokensReserved;
-
+    uint256 public longTokenBalance;
+    uint256 public shortTokenBalance;
+    uint256 public longAccumulatedFees;
+    uint256 public shortAccumulatedFees;
+    uint256 public longTokensReserved;
+    uint256 public shortTokensReserved;
     uint256 public executionFee; // in Wei
 
     mapping(bytes32 => Deposit.Data) private depositRequests;
@@ -411,5 +410,9 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     function getWithdrawalRequest(bytes32 _key) external view returns (Withdrawal.Data memory) {
         return withdrawalRequests[_key];
+    }
+
+    function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total) {
+        total = _isLong ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
     }
 }

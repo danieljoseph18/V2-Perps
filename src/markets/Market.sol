@@ -31,6 +31,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {MarketUtils} from "./MarketUtils.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 
 // @audit - CRITICAL -> Profit needs to be paid from a market's allocation
 contract Market is IMarket, ReentrancyGuard, RoleValidation {
@@ -41,6 +42,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     uint256 public constant SCALING_FACTOR = 1e18;
 
     IPriceFeed public priceFeed;
+    ILiquidityVault public liquidityVault;
 
     address public indexToken;
 
@@ -84,8 +86,8 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     // ALLOCATION: For Allocating Liquidity to Markets //
     /////////////////////////////////////////////////////
 
-    uint256 public longTokenAllocation;
-    uint256 public shortTokenAllocation;
+    // Percentage the same for Long / Short tokens due to goal of balanced markets
+    uint256 public percentageAllocation; // 2 D.P: 10000 = 100%
 
     //////////////////////////////////////////////////
     // PNL: Values for Calculating PNL of Positions //
@@ -96,9 +98,12 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     uint256 public longSizeSumUSD; // Σ All Position Sizes USD Long
     uint256 public shortSizeSumUSD; // Σ All Position Sizes USD Short
 
-    constructor(IPriceFeed _priceFeed, address _indexToken, address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(address _priceFeed, address _liquidityVault, address _indexToken, address _roleStorage)
+        RoleValidation(_roleStorage)
+    {
         indexToken = _indexToken;
-        priceFeed = _priceFeed;
+        priceFeed = IPriceFeed(_priceFeed);
+        liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
     /// @dev All values need 18 decimals => e.g 0.0003e18 = 0.03%
@@ -180,8 +185,9 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         uint256 openInterestUSD = _isLong
             ? MarketUtils.getLongOpenInterestUSD(this, _indexPrice, indexBaseUnit)
             : MarketUtils.getShortOpenInterestUSD(this, _indexPrice, indexBaseUnit);
-        uint256 poolBalance =
-            MarketUtils.getPoolBalanceUSD(this, _longTokenPrice, _shortTokenPrice, longBaseUnit, shortBaseUnit);
+        uint256 poolBalance = MarketUtils.getTotalPoolBalanceUSD(
+            this, liquidityVault, _longTokenPrice, _shortTokenPrice, longBaseUnit, shortBaseUnit
+        );
 
         uint256 rate = unwrap(
             (ud(config.borrowing.factor).mul(ud(openInterestUSD).powu(config.borrowing.exponent))).div(ud(poolBalance))
@@ -238,10 +244,9 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
      * @dev -> Don't use a for loop here.
      * @dev -> Need to store allocations for long and shorts
      */
-    function updateAllocation(uint256 _longTokenAllocation, uint256 _shortTokenAllocation) external onlyStateUpdater {
-        longTokenAllocation = _longTokenAllocation;
-        shortTokenAllocation = _shortTokenAllocation;
-        emit AllocationUpdated(address(this), _longTokenAllocation, _shortTokenAllocation);
+    function updateAllocation(uint256 _percentageAllocation) external onlyStateUpdater {
+        percentageAllocation = _percentageAllocation;
+        emit AllocationUpdated(address(this), _percentageAllocation);
     }
 
     /////////////
@@ -280,5 +285,9 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
     function getAdlConfig() external view returns (AdlConfig memory) {
         return config.adl;
+    }
+
+    function getReserveFactor() external view returns (uint256) {
+        return config.reserveFactor;
     }
 }

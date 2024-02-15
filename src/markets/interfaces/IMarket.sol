@@ -5,6 +5,9 @@ interface IMarket {
     struct Config {
         uint32 maxLeverage; // 2 D.P -> 100 = 1x, 200 = 2x
         bool feeForSmallerSide;
+        // 0.3e18 = 30%
+        uint256 reserveFactor; // % of liquiditythat can't be allocated to positions
+        // reserves should be higher for more volatile markets
         FundingConfig funding;
         BorrowingConfig borrowing;
         ImpactConfig impact;
@@ -50,8 +53,7 @@ interface IMarket {
     function shortCumulativeBorrowFees() external view returns (uint256);
     function longOpenInterest() external view returns (uint256);
     function shortOpenInterest() external view returns (uint256);
-    function longTokenAllocation() external view returns (uint256);
-    function shortTokenAllocation() external view returns (uint256);
+    function percentageAllocation() external view returns (uint256);
     function longTotalWAEP() external view returns (uint256);
     function shortTotalWAEP() external view returns (uint256);
     function longSizeSumUSD() external view returns (uint256);
@@ -69,7 +71,7 @@ interface IMarket {
     event BorrowingUpdated(bool isLong, uint256 rate);
     event TotalWAEPUpdated(uint256 longTotalWAEP, uint256 shortTotalWAEP);
     event OpenInterestUpdated(uint256 longOpenInterest, uint256 shortOpenInterest);
-    event AllocationUpdated(address market, uint256 longTokenAllocation, uint256 shortTokenAllocation);
+    event AllocationUpdated(address market, uint256 percentageAllocation);
     event AdlStateUpdated(bool adlState);
 
     // Functions
@@ -81,7 +83,7 @@ interface IMarket {
         external;
     function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external;
     function updateOpenInterest(uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external;
-    function updateAllocation(uint256 _longTokenAllocation, uint256 _shortTokenAllocation) external;
+    function updateAllocation(uint256 _percentageAllocation) external;
     function getCumulativeFees()
         external
         view
@@ -96,4 +98,5 @@ interface IMarket {
     function getFundingConfig() external view returns (FundingConfig memory);
     function getImpactConfig() external view returns (ImpactConfig memory);
     function getAdlConfig() external view returns (AdlConfig memory);
+    function getReserveFactor() external view returns (uint256);
 }

@@ -35,6 +35,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     IPriceFeed priceFeed;
+    address liquidityVault;
 
     EnumerableSet.AddressSet private markets;
     mapping(address indexToken => address market) public tokenToMarkets;
@@ -44,9 +45,13 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
 
     constructor(address _roleStorage) RoleValidation(_roleStorage) {}
 
-    function initialise(IMarket.Config memory _defaultConfig, address _priceFeed) external onlyAdmin {
+    function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _liquidityVault)
+        external
+        onlyAdmin
+    {
         require(!isInitialised, "MS: Already Initialised");
         priceFeed = IPriceFeed(_priceFeed);
+        liquidityVault = _liquidityVault;
         defaultConfig = _defaultConfig;
         isInitialised = true;
         emit MarketMakerInitialised(_priceFeed);
@@ -74,7 +79,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Set Up Price Oracle
         priceFeed.supportAsset(_indexToken, _asset);
         // Create new Market contract
-        Market market = new Market(priceFeed, _indexToken, address(roleStorage));
+        Market market = new Market(address(priceFeed), liquidityVault, _indexToken, address(roleStorage));
         // Initialize
         market.initialise(defaultConfig);
         // Cache

@@ -6,56 +6,42 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 
 library MarketUtils {
     using SignedMath for int256;
     using SafeCast for uint256;
 
     uint256 public constant SCALAR = 1e18;
+    uint256 public constant MAX_ALLOCATION = 10000;
 
-    struct Config {
-        uint256 maxFundingVelocity;
-        uint256 skewScale;
-        uint256 maxFundingRate;
-        uint256 minFundingRate;
-        uint256 borrowingFactor;
-        uint256 borrowingExponent;
-        uint256 priceImpactFactor;
-        uint256 priceImpactExponent;
-        uint256 maxPnlFactor;
-        uint256 targetPnlFactor;
-        bool feeForSmallerSide;
-        bool adlFlaggedLong;
-        bool adlFlaggedShort;
-    }
-
-    function getLongOpenInterestUSD(IMarket _market, uint256 _price, uint256 _baseUnit)
+    function getLongOpenInterestUSD(IMarket market, uint256 _price, uint256 _baseUnit)
         external
         view
         returns (uint256 longOIUSD)
     {
-        return mulDiv(_market.longOpenInterest(), _price, _baseUnit);
+        return mulDiv(market.longOpenInterest(), _price, _baseUnit);
     }
 
-    function getShortOpenInterestUSD(IMarket _market, uint256 _price, uint256 _baseUnit)
+    function getShortOpenInterestUSD(IMarket market, uint256 _price, uint256 _baseUnit)
         external
         view
         returns (uint256 shortOIUSD)
     {
-        return mulDiv(_market.shortOpenInterest(), _price, _baseUnit);
+        return mulDiv(market.shortOpenInterest(), _price, _baseUnit);
     }
 
-    function getTotalOpenInterestUSD(IMarket _market, uint256 _price, uint256 _baseUnit)
+    function getTotalOpenInterestUSD(IMarket market, uint256 _price, uint256 _baseUnit)
         public
         view
         returns (uint256 totalOIUSD)
     {
-        uint256 longOIUSD = mulDiv(_market.longOpenInterest(), _price, _baseUnit);
-        uint256 shortOIUSD = mulDiv(_market.shortOpenInterest(), _price, _baseUnit);
+        uint256 longOIUSD = mulDiv(market.longOpenInterest(), _price, _baseUnit);
+        uint256 shortOIUSD = mulDiv(market.shortOpenInterest(), _price, _baseUnit);
         return longOIUSD + shortOIUSD;
     }
 
-    function getTotalEntryValueUSD(IMarket _market, uint256 _indexBaseUnit, bool _isLong)
+    function getTotalEntryValueUSD(IMarket market, uint256 _indexBaseUnit, bool _isLong)
         external
         view
         returns (uint256 entryValueUsd)
@@ -63,58 +49,83 @@ library MarketUtils {
         uint256 totalWAEP;
         uint256 indexOI;
         if (_isLong) {
-            totalWAEP = _market.longTotalWAEP();
-            indexOI = _market.longOpenInterest();
+            totalWAEP = market.longTotalWAEP();
+            indexOI = market.longOpenInterest();
         } else {
-            totalWAEP = _market.shortTotalWAEP();
-            indexOI = _market.shortOpenInterest();
+            totalWAEP = market.shortTotalWAEP();
+            indexOI = market.shortOpenInterest();
         }
 
         entryValueUsd = mulDiv(totalWAEP, indexOI, _indexBaseUnit);
     }
 
-    function getPoolBalanceUSD(
-        IMarket _market,
+    function getTotalPoolBalanceUSD(
+        IMarket market,
+        ILiquidityVault liquidityVault,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice,
         uint256 _longBaseUnit,
         uint256 _shortBaseUnit
-    ) public view returns (uint256 poolBalanceUSD) {
-        uint256 longBalanceUSD = mulDiv(_market.longTokenAllocation(), _longTokenPrice, _longBaseUnit);
-        uint256 shortBalance = mulDiv(_market.shortTokenAllocation(), _shortTokenPrice, _shortBaseUnit);
-        poolBalanceUSD = longBalanceUSD + shortBalance;
+    ) public view returns (uint256 poolBalanceUsd) {
+        uint256 longPoolUsd = getPoolBalanceUsd(market, liquidityVault, _longTokenPrice, _longBaseUnit, true);
+        uint256 shortPoolUsd = getPoolBalanceUsd(market, liquidityVault, _shortTokenPrice, _shortBaseUnit, false);
+        poolBalanceUsd = longPoolUsd + shortPoolUsd;
     }
 
-    function getPoolAmount(IMarket _market, bool _isLong) public view returns (uint256 poolAmount) {
-        if (_isLong) {
-            poolAmount = _market.longTokenAllocation();
-        } else {
-            poolAmount = _market.shortTokenAllocation();
-        }
-    }
-
-    function getPoolUsd(IMarket _market, uint256 _price, uint256 _baseUnit, bool _isLong)
+    function getPoolBalance(IMarket market, ILiquidityVault liquidityVault, bool _isLong)
         public
         view
-        returns (uint256 poolUsd)
+        returns (uint256 poolAmount)
     {
-        uint256 poolAmount = getPoolAmount(_market, _isLong);
-        poolUsd = mulDiv(poolAmount, _price, _baseUnit);
+        // get the allocation percentage
+        uint256 allocationPercentage = market.percentageAllocation();
+        // get the total liquidity available for that side
+        uint256 totalAvailableLiquidity = liquidityVault.totalAvailableLiquidity(_isLong);
+        // calculate liquidity allocated to the market for that side
+        poolAmount = mulDiv(totalAvailableLiquidity, allocationPercentage, MAX_ALLOCATION);
+    }
+
+    function getPoolBalanceUsd(
+        IMarket market,
+        ILiquidityVault liquidityVault,
+        uint256 _tokenPrice,
+        uint256 _tokenBaseUnits,
+        bool _isLong
+    ) public view returns (uint256 poolUsd) {
+        // get the liquidity allocated to the market for that side
+        uint256 allocationInTokens = getPoolBalance(market, liquidityVault, _isLong);
+        // convert to usd
+        poolUsd = mulDiv(allocationInTokens, _tokenPrice, _tokenBaseUnits);
+    }
+
+    function getMaxOpenInterestUsd(
+        IMarket market,
+        ILiquidityVault liquidityVault,
+        uint256 _tokenPrice,
+        uint256 _tokenBaseUnit,
+        bool _isLong
+    ) external view returns (uint256 maxOI) {
+        // get the allocation and subtract by the markets reserveFactor
+        uint256 allocationUsd = getPoolBalanceUsd(market, liquidityVault, _tokenPrice, _tokenBaseUnit, _isLong);
+        uint256 reserveFactor = market.getReserveFactor();
+        maxOI = allocationUsd - mulDiv(allocationUsd, reserveFactor, SCALAR);
     }
 
     // The pnl factor is the ratio of the pnl to the pool usd
-    function getPnlFactor(IMarket _market, uint256 _price, uint256 _baseUnit, bool _isLong)
-        external
-        view
-        returns (int256 pnlFactor)
-    {
+    function getPnlFactor(
+        IMarket market,
+        ILiquidityVault liquidityVault,
+        uint256 _price,
+        uint256 _baseUnit,
+        bool _isLong
+    ) external view returns (int256 pnlFactor) {
         // get pool usd ( if 0 return 0)
-        uint256 poolUsd = getPoolUsd(_market, _price, _baseUnit, _isLong);
+        uint256 poolUsd = getPoolBalanceUsd(market, liquidityVault, _price, _baseUnit, _isLong);
         if (poolUsd == 0) {
             return 0;
         }
         // get pnl
-        int256 pnl = Pricing.getPnl(_market, _price, _baseUnit, _isLong);
+        int256 pnl = Pricing.getPnl(market, _price, _baseUnit, _isLong);
 
         uint256 factor = mulDiv(pnl.abs(), SCALAR, poolUsd);
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;

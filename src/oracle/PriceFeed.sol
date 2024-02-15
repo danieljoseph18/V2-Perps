@@ -13,7 +13,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     IPyth pyth;
 
     uint256 public constant PRICE_PRECISION = 1e18;
-    // uint256(~0) is 256 bits of 1s
+
     // shift the 1s by (256 - 32) to get (256 - 32) 0s followed by 32 1s
     uint256 public constant BITMASK_32 = type(uint256).max >> (256 - 32);
 
@@ -169,6 +169,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         }
     }
 
+    // @audit - gas
     function setPricesWithBits(uint256[] calldata _priceBits, uint256 _block) external onlyKeeper {
         uint256 len = alternativeAssets.length;
         uint256 loops = Math.ceilDiv(len, 4);

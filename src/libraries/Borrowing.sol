@@ -23,6 +23,7 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
@@ -37,9 +38,11 @@ library Borrowing {
         UD60x18 borrowingFactor;
     }
 
+    // @audit - correct use of OI / PB here?
     function calculateRate(
-        IMarket _market,
-        IPriceFeed _priceFeed,
+        IMarket market,
+        ILiquidityVault liquidityVault,
+        IPriceFeed priceFeed,
         uint256 _indexPrice,
         address _indexToken,
         uint256 _longTokenPrice,
@@ -49,12 +52,12 @@ library Borrowing {
     ) external view returns (uint256 rate) {
         BorrowingCache memory cache;
         // Calculate the new Borrowing Rate
-        cache.config = _market.getBorrowingConfig();
+        cache.config = market.getBorrowingConfig();
         cache.openInterest =
-            ud(MarketUtils.getTotalOpenInterestUSD(_market, _indexPrice, Oracle.getBaseUnit(_priceFeed, _indexToken)));
+            ud(MarketUtils.getTotalOpenInterestUSD(market, _indexPrice, Oracle.getBaseUnit(priceFeed, _indexToken)));
         cache.poolBalance = ud(
-            MarketUtils.getPoolBalanceUSD(
-                _market, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
+            MarketUtils.getTotalPoolBalanceUSD(
+                market, liquidityVault, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
             )
         );
         cache.exponentiatedOI = cache.openInterest.powu(cache.config.exponent);
@@ -68,36 +71,36 @@ library Borrowing {
     }
 
     /// @dev Gets the Total Fee To Charge For a Position Change in Tokens
-    function calculateFeeForPositionChange(IMarket _market, Position.Data calldata _position, uint256 _collateralDelta)
+    function calculateFeeForPositionChange(IMarket market, Position.Data calldata _position, uint256 _collateralDelta)
         external
         view
         returns (uint256 indexFee)
     {
-        indexFee = mulDiv(getTotalPositionFeesOwed(_market, _position), _collateralDelta, _position.collateralAmount);
+        indexFee = mulDiv(getTotalPositionFeesOwed(market, _position), _collateralDelta, _position.collateralAmount);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
-    function getTotalPositionFeesOwed(IMarket _market, Position.Data calldata _position)
+    function getTotalPositionFeesOwed(IMarket market, Position.Data calldata _position)
         public
         view
         returns (uint256 indexTotalFeesOwed)
     {
-        uint256 feeSinceUpdate = getFeesSinceLastPositionUpdate(_market, _position);
+        uint256 feeSinceUpdate = getFeesSinceLastPositionUpdate(market, _position);
         indexTotalFeesOwed = feeSinceUpdate + _position.borrowingParams.feesOwed;
     }
 
     /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
     /// @dev Units: Fees in Tokens (% of fees applied to position size)
-    function getFeesSinceLastPositionUpdate(IMarket _market, Position.Data calldata _position)
+    function getFeesSinceLastPositionUpdate(IMarket market, Position.Data calldata _position)
         public
         view
         returns (uint256 indexFeesSinceUpdate)
     {
         // get cumulative borrowing fees since last update
         uint256 borrowFee = _position.isLong
-            ? _market.longCumulativeBorrowFees() - _position.borrowingParams.lastLongCumulativeBorrowFee
-            : _market.shortCumulativeBorrowFees() - _position.borrowingParams.lastShortCumulativeBorrowFee;
-        borrowFee += _calculatePendingFees(_market, _position.isLong);
+            ? market.longCumulativeBorrowFees() - _position.borrowingParams.lastLongCumulativeBorrowFee
+            : market.shortCumulativeBorrowFees() - _position.borrowingParams.lastShortCumulativeBorrowFee;
+        borrowFee += _calculatePendingFees(market, _position.isLong);
         if (borrowFee == 0) {
             indexFeesSinceUpdate = 0;
         } else {
@@ -107,10 +110,10 @@ library Borrowing {
 
     /// @dev Units: Fees as a percentage (e.g 0.03e18 = 3%)
     /// @dev Gets fees since last time the cumulative market rate was updated
-    function _calculatePendingFees(IMarket _market, bool _isLong) internal view returns (uint256 pendingFees) {
-        uint256 borrowRate = _isLong ? _market.longBorrowingRate() : _market.shortBorrowingRate();
+    function _calculatePendingFees(IMarket market, bool _isLong) internal view returns (uint256 pendingFees) {
+        uint256 borrowRate = _isLong ? market.longBorrowingRate() : market.shortBorrowingRate();
         if (borrowRate == 0) return 0;
-        uint256 timeElapsed = block.timestamp - _market.lastBorrowUpdate();
+        uint256 timeElapsed = block.timestamp - market.lastBorrowUpdate();
         if (timeElapsed == 0) return 0;
         pendingFees = borrowRate * timeElapsed;
     }

@@ -65,6 +65,13 @@ interface ILiquidityVault {
     function BASE_FEE() external view returns (uint256);
     function getDepositRequest(bytes32 _key) external view returns (Deposit.Data memory);
     function getWithdrawalRequest(bytes32 _key) external view returns (Withdrawal.Data memory);
+    function longTokenBalance() external view returns (uint256);
+    function shortTokenBalance() external view returns (uint256);
+    function longAccumulatedFees() external view returns (uint256);
+    function shortAccumulatedFees() external view returns (uint256);
+    function longTokensReserved() external view returns (uint256);
+    function shortTokensReserved() external view returns (uint256);
+    function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total);
 
     event DepositRequestCreated(
         bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 blockNumber
@@ -81,16 +88,6 @@ interface ILiquidityVault {
     );
     event WithdrawalRequestCancelled(
         bytes32 indexed key, address indexed owner, address indexed tokenOut, uint256 marketTokenAmountIn
-    );
-    event DepositExecuted(
-        bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 mintAmount
-    );
-    event WithdrawalExecuted(
-        bytes32 indexed key,
-        address indexed owner,
-        address indexed tokenOut,
-        uint256 marketTokenAmountIn,
-        uint256 amountOut
     );
     event ProfitTransferred(address indexed user, uint256 amount, bool isLong);
     event LiquidityReserved(address indexed user, uint256 amount, bool isIncrease, bool isLong);
