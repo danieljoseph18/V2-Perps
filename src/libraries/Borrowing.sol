@@ -54,7 +54,7 @@ library Borrowing {
         // Calculate the new Borrowing Rate
         cache.config = market.getBorrowingConfig();
         cache.openInterest =
-            ud(MarketUtils.getTotalOpenInterestUSD(market, _indexPrice, Oracle.getBaseUnit(priceFeed, _indexToken)));
+            ud(MarketUtils.getTotalOpenInterestUsd(market, _indexPrice, Oracle.getBaseUnit(priceFeed, _indexToken)));
         cache.poolBalance = ud(
             MarketUtils.getTotalPoolBalanceUSD(
                 market, liquidityVault, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit

@@ -11,6 +11,14 @@ import {Pricing} from "../libraries/Pricing.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {Oracle} from "../oracle/Oracle.sol";
+import {Fee} from "../libraries/Fee.sol";
+import {Referral} from "../referrals/Referral.sol";
+import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {PriceImpact} from "../libraries/PriceImpact.sol";
+import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 
 // Library for Handling Trade related logic
 library Order {
@@ -36,10 +44,61 @@ library Order {
         uint256 longMarketTokenPrice;
         uint256 shortMarketTokenPrice;
         int256 sizeDeltaUsd;
+        int256 collateralDeltaUsd;
+        int256 priceImpactUsd;
         uint256 collateralPrice;
+        uint256 collateralBaseUnit;
         uint256 fee;
         uint256 feeDiscount;
         address referrer;
+    }
+
+    ////////////////////////////
+    // CONSTRUCTION FUNCTIONS //
+    ////////////////////////////
+
+    function constructExecuteParams(
+        ITradeStorage tradeStorage,
+        IMarketMaker marketMaker,
+        IPriceFeed priceFeed,
+        ILiquidityVault liquidityVault,
+        bytes32 _orderKey,
+        address _feeReceiver,
+        bool _isLimitOrder,
+        Oracle.TradingEnabled memory _isTradingEnabled
+    ) external view returns (ExecuteCache memory cache, Position.Request memory request) {
+        // Fetch and validate request from key
+        request = tradeStorage.getOrder(_orderKey);
+        require(request.user != address(0), "Order: Request Key");
+        require(_feeReceiver != address(0), "Order: Fee Receiver");
+        // Get the asset and validate trading is enabled
+        Oracle.validateTradingHours(priceFeed, request.input.indexToken, _isTradingEnabled);
+        // Fetch and validate price
+        cache = fetchTokenValues(priceFeed, cache, request.input.indexToken, request.requestBlock, request.input.isLong);
+
+        if (_isLimitOrder) Position.checkLimitPrice(cache.indexPrice, request.input);
+
+        // Cache Variables
+        cache.market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
+        // Execute Price Impact
+        (cache.impactedPrice, cache.priceImpactUsd) =
+            PriceImpact.execute(cache.market, request, cache.indexPrice, cache.indexBaseUnit);
+        // Cache Size Delta USD
+        cache.sizeDeltaUsd =
+            _calculateValueUsd(request.input.sizeDelta, cache.indexPrice, cache.indexBaseUnit, request.input.isIncrease);
+        cache.collateralDeltaUsd = _calculateValueUsd(
+            request.input.collateralDelta, cache.collateralPrice, cache.collateralBaseUnit, request.input.isIncrease
+        );
+        MarketUtils.validateAllocation(
+            cache.market,
+            liquidityVault,
+            cache.sizeDeltaUsd.abs(),
+            cache.collateralPrice,
+            cache.indexPrice,
+            cache.collateralBaseUnit,
+            cache.indexBaseUnit,
+            request.input.isLong
+        );
     }
 
     //////////////////////////////
@@ -110,7 +169,7 @@ library Order {
         Position.Data memory position = Position.generateNewPosition(_params.request, _cache);
         // Check the Position's Leverage is Valid
         uint256 absSizeDelta = _cache.sizeDeltaUsd.abs();
-        Position.checkLeverage(_cache.market, _cache.collateralPrice, absSizeDelta, position.collateralAmount);
+        Position.checkLeverage(_cache.market, absSizeDelta, _cache.collateralDeltaUsd.abs());
         // Return the Position
         return (position, absSizeDelta);
     }
@@ -164,7 +223,7 @@ library Order {
             _cache.indexBaseUnit,
             decreaseCache.sizeDelta,
             position.pnlParams.weightedAvgEntryPrice,
-            _params.indexPrice,
+            _cache.indexPrice,
             position.isLong
         );
 
@@ -261,7 +320,7 @@ library Order {
         returns (Position.Data memory)
     {
         // If Conditionals are Valid, Update the Position
-        try Position.validateConditionals(_conditionals, _position.pnlParams.weightedAvgEntryPrice) {
+        try Position.validateConditionals(_conditionals, _position.pnlParams.weightedAvgEntryPrice, _position.isLong) {
             _position.conditionals = _conditionals;
         } catch {}
         // Return the Updated Position
@@ -343,5 +402,45 @@ library Order {
         require(borrowingAmountOwed <= _collateralDelta, "TS: Fee > CollateralDelta");
 
         return (_position, borrowingAmountOwed);
+    }
+
+    function _calculateValueUsd(uint256 _tokenAmount, uint256 _tokenPrice, uint256 _tokenBaseUnit, bool _isIncrease)
+        internal
+        pure
+        returns (int256 valueUsd)
+    {
+        // Flip sign if decreasing position
+        uint256 absValueUsd = Position.getTradeValueUsd(_tokenAmount, _tokenPrice, _tokenBaseUnit);
+        if (_isIncrease) {
+            valueUsd = absValueUsd.toInt256();
+        } else {
+            valueUsd = -1 * absValueUsd.toInt256();
+        }
+    }
+
+    // @audit - do we need a validation step for each price?
+    // What if the price wasn't signed, or is incorrect, or is stale?
+    function fetchTokenValues(
+        IPriceFeed priceFeed,
+        ExecuteCache memory _cache,
+        address _indexToken,
+        uint256 _requestBlock,
+        bool _isLong
+    ) public view returns (ExecuteCache memory) {
+        if (_isLong) {
+            _cache.indexPrice = Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock);
+            _cache.longMarketTokenPrice = Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock);
+            _cache.shortMarketTokenPrice = Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock);
+            _cache.collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
+            _cache.collateralPrice = _cache.longMarketTokenPrice;
+        } else {
+            _cache.indexPrice = Oracle.getMinPrice(priceFeed, _indexToken, _requestBlock);
+            _cache.longMarketTokenPrice = Oracle.getMinPrice(priceFeed, _indexToken, _requestBlock);
+            _cache.shortMarketTokenPrice = Oracle.getMinPrice(priceFeed, _indexToken, _requestBlock);
+            _cache.collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
+            _cache.collateralPrice = _cache.shortMarketTokenPrice;
+        }
+        _cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexToken);
+        return _cache;
     }
 }

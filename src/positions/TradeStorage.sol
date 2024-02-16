@@ -151,7 +151,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         uint256 borrowFee;
         (position, fundingFee, borrowFee) = Order.executeCollateralIncrease(position, _params, _cache);
         // Pay Fees
-        _payFees(_params.request.user, fundingFee, borrowFee, position.isLong);
+        _payFees(fundingFee, borrowFee, position.isLong);
         // Update Final Storage
         openPositions[positionKey] = position;
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
@@ -173,7 +173,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         (position, fundingFee, borrowFee) =
             Order.executeCollateralDecrease(position, _params, _cache, minCollateralUsd, liquidationFeeUsd);
         // Pay Fees
-        _payFees(_params.request.user, fundingFee, borrowFee, position.isLong);
+        _payFees(fundingFee, borrowFee, position.isLong);
         // Update Final Storage
         openPositions[positionKey] = position;
         // Transfer Tokens to User
@@ -197,9 +197,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Delete the Order from Storage
         _deleteOrder(positionKey, _params.request.input.isLimit);
         // Perform Execution in the Library
-        (Position.Data memory position, uint256 sizeUsd) = Order.createNewPosition(_params, _cache, minCollateralUsd);
+        (Position.Data memory position, uint256 absSizeDelta) =
+            Order.createNewPosition(_params, _cache, minCollateralUsd);
         // Reserve Liquidity Equal to the Position Size
-        _reserveLiquidity(_params.request.user, sizeUsd, _params.collateralPrice, _params.request.input.isLong);
+        _reserveLiquidity(absSizeDelta, _cache.collateralPrice, _cache.collateralBaseUnit, _params.request.input.isLong);
         // Update Final Storage
         openPositions[positionKey] = position;
         openPositionKeys[address(position.market)][position.isLong].add(positionKey);
@@ -225,9 +226,9 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         (position, sizeDelta, sizeDeltaUsd, fundingFee, borrowFee) =
             Order.increaseExistingPosition(position, _params, _cache);
         // Pay Fees
-        _payFees(_params.request.user, fundingFee, borrowFee, position.isLong);
+        _payFees(fundingFee, borrowFee, position.isLong);
         // Reserve Liquidity Equal to the Position Size
-        _reserveLiquidity(_params.request.user, sizeDeltaUsd, _params.collateralPrice, position.isLong);
+        _reserveLiquidity(sizeDeltaUsd, _cache.collateralPrice, _cache.collateralBaseUnit, position.isLong);
         // Update Final Storage
         openPositions[positionKey] = position;
     }
@@ -235,7 +236,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     // @audit - Need to Pay the Funding Fee
     function decreaseExistingPosition(Position.Execution memory _params, Order.ExecuteCache memory _cache)
         external
-        onlyProcessorOrAdl
+        onlyProcessor
     {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
@@ -247,12 +248,12 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         Order.DecreaseCache memory decreaseCache;
         (position, decreaseCache) = Order.decreaseExistingPosition(position, _params, _cache);
         // Pay Fees
-        _payFees(_params.request.user, decreaseCache.fundingFee, decreaseCache.borrowFee, position.isLong);
+        _payFees(decreaseCache.fundingFee, decreaseCache.borrowFee, position.isLong);
         // Cached to prevent multi conversion
         address market = address(position.market);
         // Reserve Liquidity Equal to the Position Size
         _unreserveLiquidity(
-            _params.request.user, _params.request.input.sizeDelta, position.positionSize, position.isLong
+            _cache.sizeDeltaUsd.abs(), _cache.collateralPrice, _cache.collateralBaseUnit, position.isLong
         );
         // Update Final Storage
         openPositions[positionKey] = position;
@@ -302,23 +303,53 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         require(Position.exists(position), "TS: Position Doesn't Exist");
         require(Position.isLiquidatable(position, _cache, liquidationFeeUsd), "TS: Not Liquidatable");
 
+        uint256 remainingCollateral = position.collateralAmount;
+
         // Calculate the Funding Fee and Pay off all Outstanding
+        (uint256 indexFeeEarned, uint256 indexFeeOwed) = Funding.getTotalPositionFees(_cache.market, position);
+
+        uint256 feeEarnedUsd = mulDiv(indexFeeEarned, _cache.indexPrice, _cache.indexBaseUnit);
+        uint256 feeOwedUsd = mulDiv(indexFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
+
+        // Pay fees in collateral tokens
+        uint256 fundingOwed = mulDiv(feeOwedUsd, _cache.collateralPrice, _cache.collateralBaseUnit);
+        // Earn fees in counterparty tokens
+        uint256 fundingEarned;
+        if (position.isLong) {
+            // funding earned is in short tokens -> convert from usd
+            fundingEarned = mulDiv(feeEarnedUsd, _cache.shortMarketTokenPrice, Oracle.getShortBaseUnit(priceFeed));
+        } else {
+            // funding earned is in long tokens -> convert from usd
+            fundingEarned = mulDiv(feeEarnedUsd, _cache.longMarketTokenPrice, Oracle.getLongBaseUnit(priceFeed));
+        }
+
+        // Pay off Outstanding Funding Fees
+        remainingCollateral -= fundingOwed;
+        // Pay off Outstanding Funding Fees to Opposite Side
+        liquidityVault.accumulateFundingFees(fundingOwed, !position.isLong);
+        // Accumulate earned Funding Fees from Opposite Side
+        liquidityVault.increaseUserClaimableFunding(fundingEarned, !position.isLong);
 
         // Cached to prevent double conversion
-        address market = address(position.market);
+        address market = address(_cache.market);
 
         // delete the position from storage
         delete openPositions[_positionKey];
         openPositionKeys[market][position.isLong].remove(_positionKey);
 
         // unreserve all of the position liquidity
+        _unreserveLiquidity(
+            _cache.sizeDeltaUsd.abs(), _cache.collateralPrice, _cache.collateralBaseUnit, position.isLong
+        );
 
         // calculate the liquidation fee to send to the liquidator
-
+        uint256 liqFee =
+            Position.calculateLiquidationFee(_cache.collateralPrice, _cache.collateralBaseUnit, liquidationFeeUsd);
+        remainingCollateral -= liqFee;
         // accumulate the rest of the position size as fees
-
+        liquidityVault.accumulateFees(remainingCollateral, position.isLong);
         // transfer the liquidation fee to the liquidator
-
+        liquidityVault.transferOutTokens(_liquidator, liqFee, position.isLong, false);
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }
 
@@ -336,23 +367,32 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         delete orders[_orderKey];
     }
 
-    function _reserveLiquidity(address _user, uint256 _sizeDeltaUsd, uint256 _collateralPrice, bool _isLong) internal {
+    function _reserveLiquidity(
+        uint256 _sizeDeltaUsd,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) internal {
         // Convert Size Delta USD to Collateral Tokens
-        uint256 collateralBaseUnit = _isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
-        uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, collateralBaseUnit, _collateralPrice));
-        liquidityVault.reserveLiquidity(_user, reserveDelta, _isLong);
+        uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice));
+        liquidityVault.reserveLiquidity(reserveDelta, _isLong);
     }
 
-    function _unreserveLiquidity(address _user, uint256 _sizeDelta, uint256 _positionSize, bool _isLong) internal {
-        // Unreserve an equal proportion of the position's liquidity
-        uint256 reserved = liquidityVault.reservedAmounts(_user, _isLong);
-        uint256 reserveDelta = mulDiv(_sizeDelta, reserved, _positionSize);
-        liquidityVault.unreserveLiquidity(_user, reserveDelta, _isLong);
+    function _unreserveLiquidity(
+        uint256 _sizeDeltaUsd,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) internal {
+        // Convert Size Delta USD to Collateral Tokens
+        uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice));
+        liquidityVault.unreserveLiquidity(reserveDelta, _isLong);
     }
 
-    function _payFees(address _user, uint256 _fundingAmount, uint256 _borrowAmount, bool _isLong) internal {
+    // funding and borrow amounts should be in collateral tokens
+    function _payFees(uint256 _fundingAmount, uint256 _borrowAmount, bool _isLong) internal {
         // decrease the user's reserved amount
-        liquidityVault.unreserveLiquidity(_user, _fundingAmount + _borrowAmount, _isLong);
+        liquidityVault.unreserveLiquidity(_fundingAmount + _borrowAmount, _isLong);
         // increase the funding pool
         liquidityVault.accumulateFundingFees(_fundingAmount, _isLong);
         // Pay borrowing fees to LPs

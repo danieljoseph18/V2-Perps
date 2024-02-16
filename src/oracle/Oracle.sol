@@ -187,6 +187,11 @@ library Oracle {
         require(_price.min >= _refPrice - maxPriceDeviation, "Oracle: Price too low");
     }
 
+    function getReferencePrice(IPriceFeed priceFeed, address _token) public view returns (uint256 referencePrice) {
+        Asset memory asset = priceFeed.getAsset(_token);
+        return getReferencePrice(priceFeed, asset);
+    }
+
     // Use chainlink price feed if available
     // @audit - What do we do if ref price is 0???
     function getReferencePrice(IPriceFeed priceFeed, Asset memory _asset)

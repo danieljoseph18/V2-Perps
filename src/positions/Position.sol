@@ -26,6 +26,8 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {Order} from "../positions/Order.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {Oracle} from "../oracle/Oracle.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -35,6 +37,7 @@ library Position {
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant LEVERAGE_PRECISION = 100;
     uint256 public constant PRECISION = 1e18;
+    // Margin of Error for Limit Order Prices
     uint256 public constant PRICE_MARGIN = 0.005e18; // 0.5%
 
     ///////////////////////////
@@ -121,8 +124,6 @@ library Position {
     // Executed Request
     struct Execution {
         Request request;
-        uint256 indexPrice;
-        uint256 collateralPrice;
         address feeReceiver;
         bool isAdl;
     }
@@ -181,8 +182,10 @@ library Position {
 
     function checkLimitPrice(uint256 _price, Input memory _request) external pure {
         if (_request.isLong) {
+            // Increase Probability of a new order
             require(_price <= _request.limitPrice, "Position: Limit Price");
         } else {
+            // Increase Probability of a new order
             require(_price >= _request.limitPrice, "Position: Limit Price");
         }
     }
@@ -192,15 +195,12 @@ library Position {
     }
 
     // 1x = 100
-    function checkLeverage(IMarket _market, uint256 _collateralPrice, uint256 _sizeUsd, uint256 _collateral)
-        external
-        view
-    {
-        IMarket.Config memory config = _market.getConfig();
-        uint256 collateralUsd = mulDiv(_collateral, _collateralPrice, PRECISION);
-        require(collateralUsd <= _sizeUsd, "Position: cUSD > sUSD");
-        uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, collateralUsd);
-        require(leverage >= MIN_LEVERAGE && leverage <= config.maxLeverage, "Position: Leverage");
+    function checkLeverage(IMarket market, uint256 _sizeUsd, uint256 _collateralUsd) external view {
+        uint256 maxLeverage = market.getMaxLeverage();
+        require(_collateralUsd <= _sizeUsd, "Position: collateral exceeds size");
+        uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
+        require(leverage >= MIN_LEVERAGE, "Position: Below Min Leverage");
+        require(leverage <= maxLeverage, "Position: Over Max Leverage");
     }
 
     function createRequest(Input calldata _trade, address _market, address _user, RequestType _requestType)
@@ -328,15 +328,15 @@ library Position {
     }
 
     // Calculates the liquidation fee in Collateral Tokens
-    function calculateLiquidationFee(uint256 _collateralPrice, uint256 _liquidationFeeUsd)
+    function calculateLiquidationFee(uint256 _collateralPrice, uint256 _collateralBaseUnit, uint256 _liquidationFeeUsd)
         external
         pure
         returns (uint256 liquidationFee)
     {
-        liquidationFee = mulDiv(_liquidationFeeUsd, PRECISION, _collateralPrice);
+        liquidationFee = mulDiv(_liquidationFeeUsd, _collateralBaseUnit, _collateralPrice);
     }
 
-    function createAdlOrder(Data memory _position, uint256 _sizeDelta, uint256 _indexPrice, uint256 _collateralPrice)
+    function createAdlOrder(Data memory _position, uint256 _sizeDelta)
         external
         view
         returns (Execution memory request)
@@ -364,8 +364,6 @@ library Position {
                 requestBlock: block.number,
                 requestType: RequestType.POSITION_DECREASE
             }),
-            indexPrice: _indexPrice,
-            collateralPrice: _collateralPrice,
             feeReceiver: address(0),
             isAdl: true
         });
@@ -400,15 +398,26 @@ library Position {
     }
 
     // Sizes must be valid percentages
-    function validateConditionals(Conditionals memory _conditionals, uint256 _referencePrice) external pure {
+    function validateConditionals(Conditionals memory _conditionals, uint256 _referencePrice, bool _isLong)
+        external
+        pure
+    {
         uint256 priceMargin = mulDiv(_referencePrice, PRICE_MARGIN, PRECISION);
         if (_conditionals.stopLossSet) {
-            require(_conditionals.stopLossPercentage > 0, "Position: SL %");
-            require(_conditionals.stopLossPrice <= _referencePrice - priceMargin, "Position: SL Price");
+            require(_conditionals.stopLossPercentage > 0, "Position: StopLoss %");
+            if (_isLong) {
+                require(_conditionals.stopLossPrice <= _referencePrice - priceMargin, "Position: StopLoss Price");
+            } else {
+                require(_conditionals.stopLossPrice >= _referencePrice + priceMargin, "Position: StopLoss Price");
+            }
         }
         if (_conditionals.takeProfitSet) {
-            require(_conditionals.takeProfitPercentage > 0, "Position: TP %");
-            require(_conditionals.takeProfitPrice >= _referencePrice + priceMargin, "Position: TP Price");
+            require(_conditionals.takeProfitPercentage > 0, "Position: TakeProfit %");
+            if (_isLong) {
+                require(_conditionals.takeProfitPrice >= _referencePrice + priceMargin, "Position: TakeProfit Price");
+            } else {
+                require(_conditionals.takeProfitPrice <= _referencePrice - priceMargin, "Position: TakeProfit Price");
+            }
         }
     }
 }

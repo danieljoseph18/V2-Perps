@@ -86,16 +86,16 @@ library Pricing {
         // Get OI in USD
         if (_isLong) {
             // get index value
-            uint256 indexValue = MarketUtils.getLongOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
+            uint256 indexValue = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, true);
             // get entry value
-            uint256 entryValue = MarketUtils.getTotalEntryValueUSD(market, _indexBaseUnit, _isLong);
+            uint256 entryValue = MarketUtils.getTotalEntryValueUsd(market, _indexBaseUnit, _isLong);
             // return index value - entry value
             netPnl = indexValue.toInt256() - entryValue.toInt256();
         } else {
             // get entry value
-            uint256 entryValue = MarketUtils.getTotalEntryValueUSD(market, _indexBaseUnit, _isLong);
+            uint256 entryValue = MarketUtils.getTotalEntryValueUsd(market, _indexBaseUnit, _isLong);
             // get index value
-            uint256 indexValue = MarketUtils.getShortOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
+            uint256 indexValue = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, false);
             // return entry value - index value
             netPnl = entryValue.toInt256() - indexValue.toInt256();
         }

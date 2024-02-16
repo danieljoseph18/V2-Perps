@@ -54,8 +54,8 @@ library Funding {
         view
         returns (int256 skew, int256 deltaRate)
     {
-        uint256 longOI = MarketUtils.getLongOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
-        uint256 shortOI = MarketUtils.getShortOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
+        uint256 longOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, true);
+        uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, false);
 
         skew = longOI.toInt256() - shortOI.toInt256();
 

@@ -18,8 +18,8 @@ interface ILiquidityVault {
     function updateFees(uint256 _executionFee, uint256 _feeScale) external;
 
     // Trading related functions
-    function reserveLiquidity(address _user, uint256 _amount, bool _isLong) external;
-    function unreserveLiquidity(address _user, uint256 _amount, bool _isLong) external;
+    function reserveLiquidity(uint256 _amount, bool _isLong) external;
+    function unreserveLiquidity(uint256 _amount, bool _isLong) external;
     function accumulateFees(uint256 _amount, bool _isLong) external;
     function sendExecutionFee(address payable _processor, uint256 _executionFee) external;
     function accumulateFundingFees(uint256 _amount, bool _isLong) external;
@@ -36,19 +36,19 @@ interface ILiquidityVault {
     // Deposit creation
     function createDeposit(Deposit.Input memory _params) external payable;
     function cancelDeposit(bytes32 _key, address _caller) external;
-    function deleteDeposit(bytes32 _key) external;
 
     // Withdrawal creation
     function createWithdrawal(Withdrawal.Input memory _params) external payable;
     function cancelWithdrawal(bytes32 _key, address _caller) external;
-    function deleteWithdrawal(bytes32 _key) external;
 
     // Mint and Burn
     function mint(address _user, uint256 _amount) external;
     function burn(uint256 _amount) external;
 
+    // Funding
+    function increaseUserClaimableFunding(uint256 _amount, bool _isLong) external;
+
     // Getter
-    function reservedAmounts(address _user, bool _isLong) external view returns (uint256);
     function executionFee() external view returns (uint256);
     function feeScale() external view returns (uint256);
     function BASE_FEE() external view returns (uint256);
@@ -68,6 +68,9 @@ interface ILiquidityVault {
     event DepositRequestCancelled(
         bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn
     );
+    event DepositExecuted(
+        bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 mintAmount
+    );
     event WithdrawalRequestCreated(
         bytes32 indexed key,
         address indexed owner,
@@ -77,6 +80,13 @@ interface ILiquidityVault {
     );
     event WithdrawalRequestCancelled(
         bytes32 indexed key, address indexed owner, address indexed tokenOut, uint256 marketTokenAmountIn
+    );
+    event WithdrawalExecuted(
+        bytes32 indexed key,
+        address indexed owner,
+        address indexed tokenOut,
+        uint256 marketTokenAmountIn,
+        uint256 amountOut
     );
     event ProfitTransferred(address indexed user, uint256 amount, bool isLong);
     event LiquidityReserved(address indexed user, uint256 amount, bool isIncrease, bool isLong);

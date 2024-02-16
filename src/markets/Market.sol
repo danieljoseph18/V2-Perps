@@ -102,7 +102,9 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     // Price Impact: Used to calculate the price impact of a trade //
     /////////////////////////////////////////////////////////////////
 
-    uint256 public impactPoolUsd; // Virtual Pool for Price Impact Calculations
+    // Virtual Pool for Price Impact Calculations
+    uint256 public longImpactPoolUsd;
+    uint256 public shortImpactPoolUsd;
 
     constructor(address _priceFeed, address _liquidityVault, address _indexToken, address _roleStorage)
         RoleValidation(_roleStorage)
@@ -189,8 +191,8 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
         // Calculate the new Borrowing Rate
         uint256 openInterestUSD = _isLong
-            ? MarketUtils.getLongOpenInterestUSD(this, _indexPrice, indexBaseUnit)
-            : MarketUtils.getShortOpenInterestUSD(this, _indexPrice, indexBaseUnit);
+            ? MarketUtils.getOpenInterestUsd(this, _indexPrice, indexBaseUnit, true)
+            : MarketUtils.getOpenInterestUsd(this, _indexPrice, indexBaseUnit, false);
         uint256 poolBalance = MarketUtils.getTotalPoolBalanceUSD(
             this, liquidityVault, _longTokenPrice, _shortTokenPrice, longBaseUnit, shortBaseUnit
         );
@@ -238,9 +240,13 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         emit OpenInterestUpdated(longOpenInterest, shortOpenInterest);
     }
 
-    function updateImpactPool(int256 _priceImpactUsd) external onlyProcessor {
+    function updateImpactPool(int256 _priceImpactUsd, bool _isLong) external onlyProcessor {
         uint256 absImpact = _priceImpactUsd.abs();
-        _priceImpactUsd > 0 ? impactPoolUsd += absImpact : impactPoolUsd -= absImpact;
+        if (_isLong) {
+            _priceImpactUsd > 0 ? longImpactPoolUsd += absImpact : longImpactPoolUsd -= absImpact;
+        } else {
+            _priceImpactUsd > 0 ? shortImpactPoolUsd += absImpact : shortImpactPoolUsd -= absImpact;
+        }
     }
 
     /////////////////
@@ -300,5 +306,13 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
     function getReserveFactor() external view returns (uint256) {
         return config.reserveFactor;
+    }
+
+    function getMaxLeverage() external view returns (uint32) {
+        return config.maxLeverage;
+    }
+
+    function getMaxPnlFactor() external view returns (uint256) {
+        return config.adl.maxPnlFactor;
     }
 }

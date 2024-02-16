@@ -47,7 +47,7 @@ library Deposit {
         bool isLongToken;
     }
 
-    struct InternalExecutionCache {
+    struct ExecuteCache {
         Oracle.Price longPrices;
         Oracle.Price shortPrices;
         Fee.Params feeParams;
@@ -55,10 +55,6 @@ library Deposit {
         uint256 afterFeeAmount;
         uint256 mintAmount;
     }
-
-    event DepositExecuted(
-        bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 mintAmount
-    );
 
     function validateCancellation(Data memory _data, address _caller) internal view {
         require(_data.input.owner == _caller, "Deposit: invalid owner");
@@ -80,10 +76,7 @@ library Deposit {
         key = _generateKey(_input.owner, _input.tokenIn, _input.amountIn, blockNumber);
     }
 
-    function execute(ExecuteParams memory _params) external {
-        InternalExecutionCache memory cache;
-        // Delete Deposit Request
-        _params.liquidityVault.deleteDeposit(_params.key);
+    function execute(ExecuteParams memory _params) external view returns (ExecuteCache memory cache) {
         // Get token price and calculate price impact directly to reduce local variables
         (cache.longPrices, cache.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
 
@@ -106,25 +99,6 @@ library Deposit {
         cache.mintAmount = Pool.depositTokensToMarketTokens(
             _params.values, cache.longPrices, cache.shortPrices, cache.afterFeeAmount, _params.isLongToken
         );
-
-        // update storage
-        _params.liquidityVault.accumulateFees(cache.fee, _params.isLongToken);
-        _params.liquidityVault.increasePoolBalance(cache.afterFeeAmount, _params.isLongToken);
-
-        // Transfer tokens into the market
-        _params.processor.transferDepositTokens(_params.data.input.tokenIn, _params.data.input.amountIn);
-
-        // Invariant checks
-        // @audit - what invariants checks do we need here?
-        emit DepositExecuted(
-            _params.key,
-            _params.data.input.owner,
-            _params.data.input.tokenIn,
-            _params.data.input.amountIn,
-            cache.mintAmount
-        );
-        // mint tokens to user
-        _params.liquidityVault.mint(_params.data.input.owner, cache.mintAmount);
     }
 
     function _generateKey(address owner, address tokenIn, uint256 amountIn, uint256 blockNumber)

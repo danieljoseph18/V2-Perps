@@ -43,7 +43,7 @@ library Withdrawal {
         bool shouldUnwrap;
     }
 
-    struct InternalExecutionCache {
+    struct ExecuteCache {
         Oracle.Price longPrices;
         Oracle.Price shortPrices;
         Fee.Params feeParams;
@@ -80,14 +80,7 @@ library Withdrawal {
         key = _generateKey(_input.owner, _input.tokenOut, _input.marketTokenAmountIn, blockNumber);
     }
 
-    function execute(ExecuteParams memory _params) external {
-        InternalExecutionCache memory cache;
-        // Transfer in Market Tokens
-        _params.processor.transferDepositTokens(address(_params.liquidityVault), _params.data.input.marketTokenAmountIn);
-        // Burn Market Tokens
-        _params.liquidityVault.burn(_params.data.input.marketTokenAmountIn);
-        // Delete the WIthdrawal from Storage
-        _params.liquidityVault.deleteWithdrawal(_params.key);
+    function execute(ExecuteParams memory _params) external view returns (ExecuteCache memory cache) {
         // get price signed to the block number of the request
         (cache.longPrices, cache.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
         // Calculate amountOut
@@ -113,24 +106,6 @@ library Withdrawal {
 
         // calculate amount remaining after fee and price impact
         cache.amountOut = cache.totalTokensOut - cache.fee;
-
-        // accumulate the fee
-        _params.liquidityVault.accumulateFees(cache.fee, _params.isLongToken);
-        // decrease the pool
-        _params.liquidityVault.decreasePoolBalance(cache.totalTokensOut, _params.isLongToken);
-
-        // @audit - add invariant checks
-        emit WithdrawalExecuted(
-            _params.key,
-            _params.data.input.owner,
-            _params.data.input.tokenOut,
-            _params.data.input.marketTokenAmountIn,
-            cache.amountOut
-        );
-        // transfer tokens to user
-        _params.liquidityVault.transferOutTokens(
-            _params.data.input.owner, cache.amountOut, _params.isLongToken, _params.shouldUnwrap
-        );
     }
 
     /////////////////////////////////////////////////////////

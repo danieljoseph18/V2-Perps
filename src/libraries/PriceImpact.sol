@@ -37,19 +37,6 @@ library PriceImpact {
 
     uint256 public constant SCALAR = 1e18;
 
-    struct Params {
-        uint256 longTokenBalance;
-        uint256 shortTokenBalance;
-        uint256 longTokenPrice;
-        uint256 shortTokenPrice;
-        uint256 amountIn;
-        uint256 maxSlippage;
-        bool isIncrease;
-        bool isLongToken;
-        uint256 longBaseUnit;
-        uint256 shortBaseUnit;
-    }
-
     struct ExecuteCache {
         IMarket.ImpactConfig impact;
         uint256 longOI;
@@ -62,18 +49,17 @@ library PriceImpact {
         bool skewFlip;
     }
 
-    // Need:
-    // a) Max and Min price to handle different cases
     function execute(IMarket market, Position.Request memory _request, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
-        returns (uint256 impactedPrice)
+        view
+        returns (uint256 impactedPrice, int256 priceImpactUsd)
     {
         // Construct the Cache
         ExecuteCache memory cache;
 
         cache.impact = market.getImpactConfig();
-        cache.longOI = MarketUtils.getLongOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
-        cache.shortOI = MarketUtils.getShortOpenInterestUSD(market, _indexPrice, _indexBaseUnit);
+        cache.longOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, true);
+        cache.shortOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, false);
         cache.sizeDeltaUSD = mulDiv(_request.input.sizeDelta, _indexPrice, _indexBaseUnit);
         cache.startingSkewLong = cache.longOI > cache.shortOI;
         cache.skewBefore = cache.startingSkewLong ? cache.longOI - cache.shortOI : cache.shortOI - cache.longOI;
@@ -86,7 +72,7 @@ library PriceImpact {
         cache.skewFlip = cache.longOI > cache.shortOI != cache.startingSkewLong;
         // Calculate the Price Impact
         if (cache.skewFlip) {
-            cache.priceImpactUsd = _calculateSkewFlipImpactUsd(
+            priceImpactUsd = _calculateSkewFlipImpactUsd(
                 cache.skewBefore,
                 cache.skewAfter,
                 cache.impact.exponent,
@@ -94,33 +80,30 @@ library PriceImpact {
                 cache.impact.negativeFactor
             );
         } else {
-            cache.priceImpactUsd = _calculateImpactUsd(
+            priceImpactUsd = _calculateImpactUsd(
                 cache.skewBefore, cache.skewAfter, cache.impact.exponent, cache.impact.positiveFactor
             );
         }
 
-        if (cache.priceImpactUsd > 0) {
-            cache.priceImpactUsd = _validateImpactDelta(market, cache.priceImpactUsd);
+        if (priceImpactUsd > 0) {
+            priceImpactUsd = _validateImpactDelta(market, priceImpactUsd, _request.input.isLong);
         }
 
         // Execute the Price Impact
         impactedPrice = _calculateImpactedPrice(
-            cache.sizeDeltaUSD,
-            cache.priceImpactUsd.abs(),
-            _indexBaseUnit,
-            _request.input.sizeDelta,
-            cache.priceImpactUsd
+            cache.sizeDeltaUSD, priceImpactUsd.abs(), _indexBaseUnit, _request.input.sizeDelta, priceImpactUsd
         );
         // Check Slippage on Negative Impact
-        if (cache.priceImpactUsd < 0) {
-            checkSlippage(impactedPrice, _indexPrice, _request.input.maxSlippage);
+        if (priceImpactUsd < 0) {
+            _checkSlippage(impactedPrice, _indexPrice, _request.input.maxSlippage);
         }
-
-        // Update the Impact Pool
-        market.updateImpactPool(cache.priceImpactUsd);
     }
 
-    function checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) public pure {
+    ///////////////////////////////
+    // INTERNAL HELPER FUNCTIONS //
+    ///////////////////////////////
+
+    function _checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) internal pure {
         uint256 impactDelta =
             _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
         uint256 slippage = mulDiv(impactDelta, SCALAR, _signedPrice);
@@ -169,8 +152,12 @@ library PriceImpact {
         return mulDiv(_sizeDeltaUsd, _tokenUnit, indexTokensAfterImpact);
     }
 
-    function _validateImpactDelta(IMarket market, int256 _priceImpactUsd) internal view returns (int256) {
-        int256 impactPoolUsd = market.impactPoolUsd().toInt256();
+    function _validateImpactDelta(IMarket market, int256 _priceImpactUsd, bool _isLong)
+        internal
+        view
+        returns (int256)
+    {
+        int256 impactPoolUsd = _isLong ? market.longImpactPoolUsd().toInt256() : market.shortImpactPoolUsd().toInt256();
         if (_priceImpactUsd > impactPoolUsd) {
             return impactPoolUsd;
         } else {

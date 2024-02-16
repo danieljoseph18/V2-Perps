@@ -34,6 +34,7 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IProcessor} from "./interfaces/IProcessor.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
@@ -41,18 +42,18 @@ contract Router is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
 
-    ITradeStorage tradeStorage;
-    ILiquidityVault liquidityVault;
-    IMarketMaker marketMaker;
-    IPriceFeed priceFeed;
-    IERC20 immutable USDC;
-    IWETH immutable WETH;
-    IProcessor processor;
+    ITradeStorage private tradeStorage;
+    ILiquidityVault private liquidityVault;
+    IMarketMaker private marketMaker;
+    IPriceFeed private priceFeed;
+    IERC20 private immutable USDC;
+    IWETH private immutable WETH;
+    IProcessor private processor;
 
-    uint256 constant PRECISION = 1e18;
-    uint256 constant COLLATERAL_MULTIPLIER = 1e12;
-    uint256 constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
-    uint256 constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
+    uint256 private constant PRECISION = 1e18;
+    uint256 private constant COLLATERAL_MULTIPLIER = 1e12;
+    uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
+    uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
 
     constructor(
         address _tradeStorage,
@@ -71,27 +72,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         USDC = IERC20(_usdc);
         WETH = IWETH(_weth);
         processor = IProcessor(_processor);
-    }
-
-    /* 
-        - User needs to pay for trade execution and pricing 
-        - Execution Fee - how can we estimate this? Or do we hardcode?
-        - Price Fee - if pyth,  the user needs to send an update fee while requesting price
-        If secondary, the user needs to send a fee for updating the price
-    */
-
-    modifier requestOraclePricing(address _token) {
-        Oracle.Asset memory asset = priceFeed.getAsset(_token);
-        require(asset.isValid, "Router: Invalid Asset");
-        // get fee
-        if (asset.priceProvider == Oracle.PriceProvider.PYTH) {
-            // request pyth price
-        } else {
-            // request secondary price
-        }
-        // check fee
-        // request price
-        _;
     }
 
     modifier validExecutionFee(Gas.Action _action) {
@@ -119,7 +99,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     /////////////////////////
 
     // @audit - need to request signed price here
-    function createDeposit(Deposit.Input memory _input)
+    function createDeposit(Deposit.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
@@ -137,6 +117,7 @@ contract Router is ReentrancyGuard, RoleValidation {
             IERC20(_input.tokenIn).safeTransferFrom(_input.owner, address(processor), _input.amountIn);
         }
         liquidityVault.createDeposit(_input);
+        _requestOraclePricing(_input.tokenIn, _priceUpdateData);
         _sendExecutionFee(msg.value);
     }
 
@@ -146,7 +127,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     // @audit - need to request signed price here
-    function createWithdrawal(Withdrawal.Input memory _input)
+    function createWithdrawal(Withdrawal.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
         validExecutionFee(Gas.Action.WITHDRAW)
@@ -161,6 +142,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         }
         IERC20(address(liquidityVault)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
         liquidityVault.createWithdrawal(_input);
+        _requestOraclePricing(_input.tokenOut, _priceUpdateData);
         _sendExecutionFee(msg.value);
     }
 
@@ -173,12 +155,8 @@ contract Router is ReentrancyGuard, RoleValidation {
     // TRADING //
     /////////////
 
-    /// @dev collateralDelta always in USDC
-    // @audit - Update function so:
-    // If Long -> User collateral is ETH
-    // If Short -> User collateral is USDC
     // @audit - need to request signed price here
-    function createTradeRequest(Position.Input calldata _trade)
+    function createTradeRequest(Position.Input calldata _trade, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
@@ -186,31 +164,56 @@ contract Router is ReentrancyGuard, RoleValidation {
     {
         require(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
         require(_trade.collateralDelta != 0, "Router: Collateral Delta");
-        require(
-            _trade.collateralToken == address(USDC) || _trade.collateralToken == address(WETH),
-            "Router: Collateral Token"
-        );
-        // Check if Market exists
+
+        uint256 collateralRefPrice;
+        if (_trade.isLong) {
+            require(_trade.collateralToken == address(WETH), "Router: Invalid Collateral Token");
+            (collateralRefPrice,) = Oracle.getLastMarketTokenPrices(priceFeed, true);
+        } else {
+            require(_trade.collateralToken == address(USDC), "Router: Invalid Collateral Token");
+            (, collateralRefPrice) = Oracle.getLastMarketTokenPrices(priceFeed, false);
+        }
+
+        require(collateralRefPrice > 0, "Router: Invalid Collateral Ref Price");
+
         address market = marketMaker.tokenToMarkets(_trade.indexToken);
         require(market != address(0), "Router: Market Doesn't Exist");
-        // Create a Pointer to the Position
+
         bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
-        Position.Data memory position = tradeStorage.getPosition(positionKey);
-        // Get Reference Price
-        uint256 refPrice = Oracle.getReferencePrice(priceFeed, priceFeed.getAsset(_trade.indexToken));
-        // Validate Conditionals
-        if (refPrice != 0) {
-            Position.validateConditionals(_trade.conditionals, refPrice);
+
+        uint256 indexRefPrice = Oracle.getReferencePrice(priceFeed, priceFeed.getAsset(_trade.indexToken));
+        require(indexRefPrice > 0, "Router: Invalid Index Ref Price");
+
+        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.indexToken);
+        uint256 sizeDeltaUsd = mulDiv(_trade.sizeDelta, indexRefPrice, indexBaseUnit);
+
+        if (sizeDeltaUsd > 0) {
+            uint256 collateralBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.collateralToken);
+            uint256 collateralDeltaUsd = mulDiv(_trade.collateralDelta, collateralRefPrice, collateralBaseUnit);
+            Position.checkLeverage(IMarket(market), sizeDeltaUsd, collateralDeltaUsd);
         }
-        // Calculate Request Type
-        Position.RequestType requestType = Position.getRequestType(_trade, position, _trade.collateralDelta);
-        // Construct Request
+
+        if (_trade.isLimit) {
+            if (_trade.isLong) {
+                require(_trade.limitPrice > indexRefPrice, "Router: mark price > limit price");
+            } else {
+                require(_trade.limitPrice < indexRefPrice, "Router: mark price < limit price");
+            }
+        }
+
+        Position.validateConditionals(_trade.conditionals, indexRefPrice, _trade.isLong);
+
+        Position.RequestType requestType =
+            Position.getRequestType(_trade, tradeStorage.getPosition(positionKey), _trade.collateralDelta);
+
         Position.Request memory request = Position.createRequest(_trade, market, msg.sender, requestType);
-        // Send Constructed Request to Storage
+
         tradeStorage.createOrderRequest(request);
-        // Handle Transfer of Tokens to Designated Areas
+
+        _requestOraclePricing(_trade.indexToken, _priceUpdateData);
+
         _handleTokenTransfers(_trade);
-        // Send Fee for Execution to Vault to be sent to whoever executes the request
+
         _sendExecutionFee(msg.value);
     }
 
@@ -251,6 +254,20 @@ contract Router is ReentrancyGuard, RoleValidation {
     // INTERNAL FUNCTIONS //
     ////////////////////////
 
+    // How can we estimate the update fee and add it to the execution fee?
+    function _requestOraclePricing(address _token, bytes[] memory _priceUpdateData) private {
+        Oracle.Asset memory asset = priceFeed.getAsset(_token);
+        require(asset.isValid, "Router: Invalid Asset");
+        if (asset.priceProvider == Oracle.PriceProvider.PYTH) {
+            uint256 fee = priceFeed.getPrimaryUpdateFee(_priceUpdateData);
+            priceFeed.signPriceData{value: fee}(_token, _priceUpdateData);
+        } else {
+            uint256 fee = priceFeed.secondaryPriceFee();
+            (bool success,) = address(priceFeed).call{value: fee}("");
+            require(success, "Router: Price Fee Transfer");
+        }
+    }
+
     // @audit - need to update collateral balance wherever collateral is stored
     // @audit - decrease requests won't have any transfer in
     function _handleTokenTransfers(Position.Input calldata _trade) private {
@@ -267,6 +284,6 @@ contract Router is ReentrancyGuard, RoleValidation {
     // Send Fee to Processor
     function _sendExecutionFee(uint256 _executionFee) private {
         (bool success,) = address(processor).call{value: _executionFee}("");
-        require(success, "Router: Fee Transfer Failed");
+        require(success, "Router: Execution Fee Transfer");
     }
 }
