@@ -45,12 +45,46 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
         _;
     }
 
-    constructor(uint256 _validTimePeriod, uint256 _singleUpdateFeeInWei)
-        MockPyth(_validTimePeriod, _singleUpdateFeeInWei)
-    {}
+    /**
+     * address _pythContract,
+     *     address _longToken,
+     *     address _shortToken,
+     *     Oracle.Asset memory _longAsset,
+     *     Oracle.Asset memory _shortAsset,
+     *     address _sequencerUptimeFeed,
+     *     address _roleStorage
+     */
+    constructor(
+        uint256 _validTimePeriod,
+        uint256 _singleUpdateFeeInWei,
+        address _longToken,
+        address _shortToken,
+        Oracle.Asset memory _longAsset,
+        Oracle.Asset memory _shortAsset
+    ) MockPyth(_validTimePeriod, _singleUpdateFeeInWei) {
+        longToken = _longToken;
+        assets[_longToken] = _longAsset;
+        priceFeeds[_longAsset.priceId] = PythStructs.PriceFeed({
+            id: _longAsset.priceId,
+            price: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0}),
+            emaPrice: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0})
+        });
+        shortToken = _shortToken;
+        assets[_shortToken] = _shortAsset;
+        priceFeeds[_shortAsset.priceId] = PythStructs.PriceFeed({
+            id: _shortAsset.priceId,
+            price: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0}),
+            emaPrice: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0})
+        });
+    }
 
     function supportAsset(address _token, Oracle.Asset memory _asset) external {
         assets[_token] = _asset;
+        priceFeeds[_asset.priceId] = PythStructs.PriceFeed({
+            id: _asset.priceId,
+            price: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0}),
+            emaPrice: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0})
+        });
     }
 
     function unsupportAsset(address _token) external {
@@ -121,6 +155,33 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
     function getPriceUnsafe(Oracle.Asset memory _asset) external view returns (uint256 price, uint256 confidence) {
         PythStructs.Price memory data = queryPriceFeed(_asset.priceId).price;
         (price, confidence) = Oracle.convertPythParams(data);
+    }
+
+    function createPriceFeedUpdateData(
+        bytes32 id,
+        int64 price,
+        uint64 conf,
+        int32 expo,
+        int64 emaPrice,
+        uint64 emaConf,
+        uint64 publishTime,
+        uint64 prevPublishTime
+    ) public pure override(IPriceFeed, MockPyth) returns (bytes memory priceFeedData) {
+        PythStructs.PriceFeed memory priceFeed;
+
+        priceFeed.id = id;
+
+        priceFeed.price.price = price;
+        priceFeed.price.conf = conf;
+        priceFeed.price.expo = expo;
+        priceFeed.price.publishTime = publishTime;
+
+        priceFeed.emaPrice.price = emaPrice;
+        priceFeed.emaPrice.conf = emaConf;
+        priceFeed.emaPrice.expo = expo;
+        priceFeed.emaPrice.publishTime = publishTime;
+
+        priceFeedData = abi.encode(priceFeed, prevPublishTime);
     }
 
     ////////////////////////

@@ -51,7 +51,7 @@ library Gas {
         }
 
         // Send the execution fee to the executor
-        processor.sendExecutionFee(_executor, feeForExecutor);
+        if (feeForExecutor > 0) processor.sendExecutionFee(_executor, feeForExecutor);
 
         // Calculate the amount to refund to the refund receiver
         uint256 feeToRefund = _executionFee - feeForExecutor;

@@ -17,7 +17,6 @@ library Pool {
         uint256 marketTokenSupply;
         uint256 longBaseUnit;
         uint256 shortBaseUnit;
-        int256 cumulativePnl;
     }
 
     function calculateUsdValue(
@@ -39,12 +38,13 @@ library Pool {
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
         uint256 _amountIn,
+        int256 _cumulativePnl,
         bool _isLongToken
     ) external pure returns (uint256 marketTokenAmount) {
         uint256 valueUsd = _isLongToken
             ? mulDiv(_amountIn, _longPrices.min, _values.longBaseUnit)
             : mulDiv(_amountIn, _shortPrices.min, _values.shortBaseUnit);
-        uint256 marketTokenPrice = getMarketTokenPrice(_values, _longPrices.max, _shortPrices.max);
+        uint256 marketTokenPrice = getMarketTokenPrice(_values, _longPrices.max, _shortPrices.max, _cumulativePnl);
         return marketTokenPrice == 0 ? valueUsd : mulDiv(valueUsd, SCALING_FACTOR, marketTokenPrice);
     }
 
@@ -53,9 +53,10 @@ library Pool {
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
         uint256 _marketTokenAmountIn,
+        int256 _cumulativePnl,
         bool _isLongToken
     ) external pure returns (uint256 tokenAmount) {
-        uint256 marketTokenPrice = getMarketTokenPrice(_values, _longPrices.min, _shortPrices.min);
+        uint256 marketTokenPrice = getMarketTokenPrice(_values, _longPrices.min, _shortPrices.min, _cumulativePnl);
         uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALING_FACTOR);
         if (_isLongToken) {
             tokenAmount = mulDiv(valueUsd, _values.longBaseUnit, _longPrices.max);
@@ -64,13 +65,14 @@ library Pool {
         }
     }
 
-    function getMarketTokenPrice(Values memory _values, uint256 _longTokenPrice, uint256 _shortTokenPrice)
-        public
-        pure
-        returns (uint256 lpTokenPrice)
-    {
+    function getMarketTokenPrice(
+        Values memory _values,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice,
+        int256 _cumulativePnl
+    ) public pure returns (uint256 lpTokenPrice) {
         // market token price = (worth of market pool in USD) / total supply
-        uint256 aum = getAum(_values, _longTokenPrice, _shortTokenPrice);
+        uint256 aum = getAum(_values, _longTokenPrice, _shortTokenPrice, _cumulativePnl);
         if (aum == 0 || _values.marketTokenSupply == 0) {
             lpTokenPrice = 0;
         } else {
@@ -79,7 +81,7 @@ library Pool {
     }
 
     // @audit - probably need to account for some fees
-    function getAum(Values memory _values, uint256 _longTokenPrice, uint256 _shortTokenPrice)
+    function getAum(Values memory _values, uint256 _longTokenPrice, uint256 _shortTokenPrice, int256 _cumulativePnl)
         public
         pure
         returns (uint256 aum)
@@ -89,8 +91,8 @@ library Pool {
         uint256 shortTokenValue = mulDiv(_values.shortTokenBalance, _shortTokenPrice, _values.shortBaseUnit);
 
         // Calculate AUM
-        aum = _values.cumulativePnl >= 0
-            ? longTokenValue + shortTokenValue + _values.cumulativePnl.abs()
-            : longTokenValue + shortTokenValue - _values.cumulativePnl.abs();
+        aum = _cumulativePnl >= 0
+            ? longTokenValue + shortTokenValue + _cumulativePnl.abs()
+            : longTokenValue + shortTokenValue - _cumulativePnl.abs();
     }
 }

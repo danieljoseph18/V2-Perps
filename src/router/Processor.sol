@@ -87,7 +87,13 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         priceFeed = IPriceFeed(_priceFeed);
     }
 
-    function updateGasLimits(uint256 _deposit, uint256 _withdrawal, uint256 _position) external onlyAdmin {
+    receive() external payable {}
+
+    function updateGasLimits(uint256 _base, uint256 _deposit, uint256 _withdrawal, uint256 _position)
+        external
+        onlyAdmin
+    {
+        baseGasLimit = _base;
         depositGasLimit = _deposit;
         withdrawalGasLimit = _withdrawal;
         positionGasLimit = _position;
@@ -106,9 +112,13 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         require(_key != bytes32(0), "E: Invalid Key");
         // Fetch the request
         Deposit.ExecuteParams memory params;
+        params.liquidityVault = liquidityVault;
+        params.processor = this;
+        params.priceFeed = priceFeed;
         params.data = liquidityVault.getDepositRequest(_key);
         params.key = _key;
         params.cumulativePnl = _cumulativePnl;
+        params.isLongToken = params.data.input.tokenIn == liquidityVault.LONG_TOKEN();
         try liquidityVault.executeDeposit(params) {}
         catch {
             revert("Processor: Execute Deposit Failed");
@@ -127,9 +137,14 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         require(_key != bytes32(0), "E: Invalid Key");
         // Fetch the request
         Withdrawal.ExecuteParams memory params;
+        params.liquidityVault = liquidityVault;
+        params.processor = this;
+        params.priceFeed = priceFeed;
         params.data = liquidityVault.getWithdrawalRequest(_key);
         params.key = _key;
         params.cumulativePnl = _cumulativePnl;
+        params.isLongToken = params.data.input.tokenOut == liquidityVault.LONG_TOKEN();
+        params.shouldUnwrap = params.data.input.shouldUnwrap;
         try liquidityVault.executeWithdrawal(params) {}
         catch {
             revert("Processor: Execute Withdrawal Failed");

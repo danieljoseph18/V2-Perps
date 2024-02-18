@@ -61,6 +61,10 @@ interface ILiquidityVault {
     function longTokensReserved() external view returns (uint256);
     function shortTokensReserved() external view returns (uint256);
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total);
+    function LONG_TOKEN() external view returns (address);
+    function SHORT_TOKEN() external view returns (address);
+    function getDepositRequestAtIndex(uint256 _index) external view returns (Deposit.Data memory);
+    function getWithdrawalRequestAtIndex(uint256 _index) external view returns (Withdrawal.Data memory);
 
     event DepositRequestCreated(
         bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 blockNumber

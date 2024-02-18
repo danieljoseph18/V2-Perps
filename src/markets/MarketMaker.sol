@@ -65,14 +65,14 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     /// @dev Only MarketFactory
     // q -> Do we want to use indexToken? This will require a new token for each market
     // We need to enable the use of synthetic markets
-    function createNewMarket(address _indexToken, bytes32 _priceId, uint256 _baseUnit, Oracle.Asset memory _asset)
+    function createNewMarket(address _indexToken, bytes32 _priceId, Oracle.Asset memory _asset)
         external
         onlyAdmin
         returns (address marketAddress)
     {
         require(_indexToken != address(0), "MM: Invalid Address");
         require(_priceId != bytes32(0), "MM: Invalid Price Id");
-        require(_baseUnit == 1e18 || _baseUnit == 1e8 || _baseUnit == 1e6, "MF: Invalid Base Unit");
+        require(_asset.baseUnit == 1e18 || _asset.baseUnit == 1e8 || _asset.baseUnit == 1e6, "MF: Invalid Base Unit");
         // Check if market already exists
         require(!markets.contains(_indexToken), "MM: Market Exists");
 

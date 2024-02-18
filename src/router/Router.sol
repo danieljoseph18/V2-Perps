@@ -74,6 +74,8 @@ contract Router is ReentrancyGuard, RoleValidation {
         processor = IProcessor(_processor);
     }
 
+    receive() external payable {}
+
     modifier validExecutionFee(Gas.Action _action) {
         uint256 expGasLimit = Gas.getLimitForAction(processor, _action);
         require(msg.value >= Gas.getMinExecutionFee(processor, expGasLimit), "Router: Execution Fee");
@@ -108,7 +110,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         require(msg.sender == _input.owner, "Router: Invalid Owner");
         require(_input.maxSlippage >= MIN_SLIPPAGE && _input.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
         if (_input.shouldWrap) {
-            require(_input.amountIn == msg.value - _input.executionFee, "Router: Invalid Amount In");
+            require(_input.amountIn <= msg.value - _input.executionFee, "Router: Invalid Amount In");
             require(_input.tokenIn == address(WETH), "Router: Invalid Token In");
             WETH.deposit{value: _input.amountIn}();
             WETH.safeTransfer(address(processor), _input.amountIn);
@@ -118,7 +120,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         }
         liquidityVault.createDeposit(_input);
         _requestOraclePricing(_input.tokenIn, _priceUpdateData);
-        _sendExecutionFee(msg.value);
+        _sendExecutionFee(_input.executionFee);
     }
 
     function cancelDeposit(bytes32 _key) external nonReentrant {
@@ -143,7 +145,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         IERC20(address(liquidityVault)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
         liquidityVault.createWithdrawal(_input);
         _requestOraclePricing(_input.tokenOut, _priceUpdateData);
-        _sendExecutionFee(msg.value);
+        _sendExecutionFee(_input.executionFee);
     }
 
     function cancelWithdrawal(bytes32 _key) external nonReentrant {
@@ -214,7 +216,7 @@ contract Router is ReentrancyGuard, RoleValidation {
 
         _handleTokenTransfers(_trade);
 
-        _sendExecutionFee(msg.value);
+        _sendExecutionFee(_trade.executionFee);
     }
 
     // @audit - need to check X blocks have passed
@@ -227,27 +229,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         require(msg.sender == request.user, "Router: Not Position Owner");
         // Cancel the Request
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
-    }
-
-    // Stop Loss or Take Profit
-    // @audit - review, is necesssary?
-    function createEditOrder(
-        bytes32 _positionKey,
-        uint256 _executionPrice,
-        uint256 _percentage,
-        uint256 _maxSlippage,
-        bool _isStopLoss
-    ) external payable nonReentrant validExecutionFee(Gas.Action.POSITION) {
-        Position.Data memory position = tradeStorage.getPosition(_positionKey);
-        require(position.user == msg.sender, "Router: Invalid Position Owner");
-        require(_percentage > 0 && _percentage < PRECISION, "Router: Invalid Percentage");
-        // create a decrease position request limit order for the specified percentage
-        Position.Request memory request =
-            Position.createEditOrder(position, _executionPrice, _percentage, _maxSlippage, msg.value, _isStopLoss);
-        // Send Constructed Request to Storage
-        tradeStorage.createOrderRequest(request);
-        // Send Fee for Execution to Vault to be sent to whoever executes the request
-        _sendExecutionFee(msg.value);
     }
 
     ////////////////////////
@@ -283,7 +264,7 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     // Send Fee to Processor
     function _sendExecutionFee(uint256 _executionFee) private {
-        (bool success,) = address(processor).call{value: _executionFee}("");
+        (bool success,) = payable(address(processor)).call{value: _executionFee}("");
         require(success, "Router: Execution Fee Transfer");
     }
 }

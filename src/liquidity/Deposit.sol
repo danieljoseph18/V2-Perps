@@ -34,6 +34,7 @@ library Deposit {
         Input input;
         uint256 blockNumber;
         uint48 expirationTimestamp;
+        bytes32 key;
     }
 
     struct ExecuteParams {
@@ -61,19 +62,14 @@ library Deposit {
         require(_data.expirationTimestamp < block.timestamp, "Deposit: deposit not expired");
     }
 
-    function create(Input memory _input, uint48 _minTimeToExpiration)
-        external
-        view
-        returns (Data memory data, bytes32 key)
-    {
+    function create(Input memory _input, uint48 _minTimeToExpiration) external view returns (Data memory data) {
         uint256 blockNumber = block.number;
         data = Data({
             input: _input,
             blockNumber: blockNumber,
-            expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration
+            expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration,
+            key: _generateKey(_input.owner, _input.tokenIn, _input.amountIn, blockNumber)
         });
-
-        key = _generateKey(_input.owner, _input.tokenIn, _input.amountIn, blockNumber);
     }
 
     function execute(ExecuteParams memory _params) external view returns (ExecuteCache memory cache) {
@@ -97,7 +93,12 @@ library Deposit {
 
         // Calculate Mint amount with the remaining amount
         cache.mintAmount = Pool.depositTokensToMarketTokens(
-            _params.values, cache.longPrices, cache.shortPrices, cache.afterFeeAmount, _params.isLongToken
+            _params.values,
+            cache.longPrices,
+            cache.shortPrices,
+            cache.afterFeeAmount,
+            _params.cumulativePnl,
+            _params.isLongToken
         );
     }
 

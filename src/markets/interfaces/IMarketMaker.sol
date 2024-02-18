@@ -11,7 +11,7 @@ interface IMarketMaker {
 
     function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _liquidityVault) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
-    function createNewMarket(address _indexToken, bytes32 _priceId, uint256 _baseUnit, Oracle.Asset memory _asset)
+    function createNewMarket(address _indexToken, bytes32 _priceId, Oracle.Asset memory _asset)
         external
         returns (address market);
 

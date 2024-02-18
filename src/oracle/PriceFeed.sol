@@ -148,6 +148,33 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         (price, confidence) = Oracle.convertPythParams(data);
     }
 
+    function createPriceFeedUpdateData(
+        bytes32 id,
+        int64 price,
+        uint64 conf,
+        int32 expo,
+        int64 emaPrice,
+        uint64 emaConf,
+        uint64 publishTime,
+        uint64 prevPublishTime
+    ) public pure returns (bytes memory priceFeedData) {
+        PythStructs.PriceFeed memory priceFeed;
+
+        priceFeed.id = id;
+
+        priceFeed.price.price = price;
+        priceFeed.price.conf = conf;
+        priceFeed.price.expo = expo;
+        priceFeed.price.publishTime = publishTime;
+
+        priceFeed.emaPrice.price = emaPrice;
+        priceFeed.emaPrice.conf = emaConf;
+        priceFeed.emaPrice.expo = expo;
+        priceFeed.emaPrice.publishTime = publishTime;
+
+        priceFeedData = abi.encode(priceFeed, prevPublishTime);
+    }
+
     ////////////////////////
     // ALTERNATIVE ASSETS //
     ////////////////////////

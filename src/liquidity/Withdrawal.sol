@@ -29,6 +29,7 @@ library Withdrawal {
         Input input;
         uint256 blockNumber;
         uint48 expirationTimestamp;
+        bytes32 key;
     }
 
     struct ExecuteParams {
@@ -65,19 +66,14 @@ library Withdrawal {
         require(_data.expirationTimestamp < block.timestamp, "Withdrawal: deposit not expired");
     }
 
-    function create(Input memory _input, uint48 _minTimeToExpiration)
-        external
-        view
-        returns (Data memory data, bytes32 key)
-    {
+    function create(Input memory _input, uint48 _minTimeToExpiration) external view returns (Data memory data) {
         uint256 blockNumber = block.number;
         data = Data({
             input: _input,
             blockNumber: blockNumber,
-            expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration
+            expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration,
+            key: _generateKey(_input.owner, _input.tokenOut, _input.marketTokenAmountIn, blockNumber)
         });
-
-        key = _generateKey(_input.owner, _input.tokenOut, _input.marketTokenAmountIn, blockNumber);
     }
 
     function execute(ExecuteParams memory _params) external view returns (ExecuteCache memory cache) {
@@ -89,6 +85,7 @@ library Withdrawal {
             cache.longPrices,
             cache.shortPrices,
             _params.data.input.marketTokenAmountIn,
+            _params.cumulativePnl,
             _params.isLongToken
         );
 

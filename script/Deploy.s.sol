@@ -15,6 +15,7 @@ import {Processor} from "../src/router/Processor.sol";
 import {Router} from "../src/router/Router.sol";
 import {IMarket} from "../src/markets/interfaces/IMarket.sol";
 import {Roles} from "../src/access/Roles.sol";
+import {Oracle} from "../src/oracle/Oracle.sol";
 
 contract Deploy is Script {
     HelperConfig public helperConfig;
@@ -35,11 +36,13 @@ contract Deploy is Script {
 
     address public usdc;
     address public weth;
+    bytes32 public ethPriceId;
+    bytes32 public usdcPriceId;
 
     function run() external returns (Contracts memory contracts) {
         helperConfig = new HelperConfig();
         IPriceFeed priceFeed;
-        (priceFeed, usdc, weth) = helperConfig.activeNetworkConfig();
+        (priceFeed, weth, usdc, ethPriceId, usdcPriceId) = helperConfig.activeNetworkConfig();
 
         vm.startBroadcast();
 
@@ -52,8 +55,8 @@ contract Deploy is Script {
             priceFeed,
             TradeStorage(address(0)),
             ReferralStorage(address(0)),
-            Processor(address(0)),
-            Router(address(0)),
+            Processor(payable(address(0))),
+            Router(payable(address(0))),
             msg.sender
         );
 
@@ -103,7 +106,7 @@ contract Deploy is Script {
          * ============ Set Up Contracts ============
          */
         contracts.liquidityVault.initialise(
-            address(contracts.priceFeed), address(contracts.processor), 1 minutes, 300 gwei, 0.01e18
+            address(contracts.priceFeed), address(contracts.processor), 1 minutes, 180000 gwei, 0.01e18
         );
 
         IMarket.Config memory defaultMarketConfig = IMarket.Config({
@@ -127,9 +130,9 @@ contract Deploy is Script {
             defaultMarketConfig, address(contracts.priceFeed), address(contracts.liquidityVault)
         );
 
-        contracts.tradeStorage.initialise(5e18, 0.001e18, 300 gwei, 2e18);
+        contracts.tradeStorage.initialise(5e18, 0.001e18, 180000 gwei, 2e18);
 
-        contracts.processor.updateGasLimits(300 gwei, 300 gwei, 300 gwei);
+        contracts.processor.updateGasLimits(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);
 
         // Set Up Roles
         contracts.roleStorage.grantRole(Roles.VAULT, address(contracts.liquidityVault));

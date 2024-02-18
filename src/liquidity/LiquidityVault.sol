@@ -192,10 +192,10 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     // Function to create a deposit request
     // Note -> need to add ability to create deposit in eth
     function createDeposit(Deposit.Input memory _input) external payable onlyRouter {
-        (Deposit.Data memory deposit, bytes32 key) = Deposit.create(_input, minTimeToExpiration);
-        depositKeys.add(key);
-        depositRequests[key] = deposit;
-        emit DepositRequestCreated(key, _input.owner, _input.tokenIn, _input.amountIn, deposit.blockNumber);
+        Deposit.Data memory deposit = Deposit.create(_input, minTimeToExpiration);
+        depositKeys.add(deposit.key);
+        depositRequests[deposit.key] = deposit;
+        emit DepositRequestCreated(deposit.key, _input.owner, _input.tokenIn, _input.amountIn, deposit.blockNumber);
     }
 
     // Request must be expired for a user to cancel it
@@ -219,6 +219,14 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     {
         // Delete Deposit Request
         _deleteDeposit(_params.key);
+        // Get Pool Values
+        _params.values = Pool.Values({
+            longTokenBalance: longTokenBalance,
+            shortTokenBalance: shortTokenBalance,
+            marketTokenSupply: totalSupply(),
+            longBaseUnit: LONG_BASE_UNIT,
+            shortBaseUnit: SHORT_BASE_UNIT
+        });
         // Execute Deposit
         Deposit.ExecuteCache memory cache = Deposit.execute(_params);
         // update storage
@@ -245,13 +253,13 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     // Function to create a withdrawal request
     function createWithdrawal(Withdrawal.Input memory _input) external payable onlyRouter {
-        (Withdrawal.Data memory withdrawal, bytes32 key) = Withdrawal.create(_input, minTimeToExpiration);
+        Withdrawal.Data memory withdrawal = Withdrawal.create(_input, minTimeToExpiration);
 
-        withdrawalKeys.add(key);
-        withdrawalRequests[key] = withdrawal;
+        withdrawalKeys.add(withdrawal.key);
+        withdrawalRequests[withdrawal.key] = withdrawal;
 
         emit WithdrawalRequestCreated(
-            key, _input.owner, _input.tokenOut, _input.marketTokenAmountIn, withdrawal.blockNumber
+            withdrawal.key, _input.owner, _input.tokenOut, _input.marketTokenAmountIn, withdrawal.blockNumber
         );
     }
 
@@ -362,12 +370,20 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     // GETTERS //
     /////////////
 
+    function getDepositRequestAtIndex(uint256 _index) external view returns (Deposit.Data memory) {
+        return depositRequests[depositKeys.at(_index)];
+    }
+
     function getDepositRequest(bytes32 _key) external view returns (Deposit.Data memory) {
         return depositRequests[_key];
     }
 
     function getWithdrawalRequest(bytes32 _key) external view returns (Withdrawal.Data memory) {
         return withdrawalRequests[_key];
+    }
+
+    function getWithdrawalRequestAtIndex(uint256 _index) external view returns (Withdrawal.Data memory) {
+        return withdrawalRequests[withdrawalKeys.at(_index)];
     }
 
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total) {

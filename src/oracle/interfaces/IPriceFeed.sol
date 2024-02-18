@@ -20,4 +20,14 @@ interface IPriceFeed {
     function getPrimaryUpdateFee(bytes[] calldata _priceUpdateData) external view returns (uint256);
     function sequencerUptimeFeed() external view returns (address);
     function getPriceUnsafe(Oracle.Asset memory _asset) external view returns (uint256 price, uint256 confidence);
+    function createPriceFeedUpdateData(
+        bytes32 id,
+        int64 price,
+        uint64 conf,
+        int32 expo,
+        int64 emaPrice,
+        uint64 emaConf,
+        uint64 publishTime,
+        uint64 prevPublishTime
+    ) external pure returns (bytes memory priceFeedData);
 }
