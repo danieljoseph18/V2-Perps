@@ -160,6 +160,14 @@ library Oracle {
         _shortPrices = priceFeed.getPrice(_blockNumber, priceFeed.shortToken());
     }
 
+    function getLastMarketTokenPrices(IPriceFeed priceFeed)
+        external
+        view
+        returns (Price memory longPrices, Price memory shortPrices)
+    {
+        return priceFeed.getAssetPricesUnsafe();
+    }
+
     // Can just use getPriceUnsafe - where do we get the confidence interval?
     function getLastMarketTokenPrices(IPriceFeed priceFeed, bool _maximise)
         external
@@ -237,6 +245,10 @@ library Oracle {
 
     function getShortBaseUnit(IPriceFeed priceFeed) public view returns (uint256) {
         return getBaseUnit(priceFeed, priceFeed.shortToken());
+    }
+
+    function priceWasSigned(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (bool) {
+        return priceFeed.getPrice(_block, _token).max != 0;
     }
 
     // @audit - where is this used? should we max or min the price?

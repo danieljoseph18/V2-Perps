@@ -108,10 +108,10 @@ contract Router is ReentrancyGuard, RoleValidation {
         validExecutionFee(Gas.Action.DEPOSIT)
     {
         require(msg.sender == _input.owner, "Router: Invalid Owner");
-        require(_input.maxSlippage >= MIN_SLIPPAGE && _input.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
+        require(_input.amountIn > 0, "Router: Invalid Amount In");
         if (_input.shouldWrap) {
             require(_input.amountIn <= msg.value - _input.executionFee, "Router: Invalid Amount In");
-            require(_input.tokenIn == address(WETH), "Router: Invalid Token In");
+            require(_input.tokenIn == address(WETH), "Router: Can't Wrap USDC");
             WETH.deposit{value: _input.amountIn}();
             WETH.safeTransfer(address(processor), _input.amountIn);
         } else {
@@ -136,7 +136,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         nonReentrant
     {
         require(msg.sender == _input.owner, "Router: Invalid Owner");
-        require(_input.maxSlippage >= MIN_SLIPPAGE && _input.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
+        require(_input.marketTokenAmountIn > 0, "Router: Invalid Amount In");
         if (_input.shouldUnwrap) {
             require(_input.tokenOut == address(WETH), "Router: Invalid Token Out");
         } else {

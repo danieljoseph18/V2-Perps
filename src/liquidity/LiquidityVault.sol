@@ -94,6 +94,8 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         SHORT_BASE_UNIT = _shortBaseUnit;
     }
 
+    receive() external payable {}
+
     function initialise(
         address _priceFeed,
         address _processor,
@@ -190,7 +192,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     ///////////////////////
 
     // Function to create a deposit request
-    // Note -> need to add ability to create deposit in eth
     function createDeposit(Deposit.Input memory _input) external payable onlyRouter {
         Deposit.Data memory deposit = Deposit.create(_input, minTimeToExpiration);
         depositKeys.add(deposit.key);
@@ -283,6 +284,14 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     {
         // Transfer in Market Tokens
         _params.processor.transferDepositTokens(address(_params.liquidityVault), _params.data.input.marketTokenAmountIn);
+        // Get Pool Values
+        _params.values = Pool.Values({
+            longTokenBalance: longTokenBalance,
+            shortTokenBalance: shortTokenBalance,
+            marketTokenSupply: totalSupply(), // Before Burn
+            longBaseUnit: LONG_BASE_UNIT,
+            shortBaseUnit: SHORT_BASE_UNIT
+        });
         // Burn Market Tokens
         _burn(address(this), _params.data.input.marketTokenAmountIn);
         // Delete the WIthdrawal from Storage

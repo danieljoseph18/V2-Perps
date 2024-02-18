@@ -148,6 +148,17 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         (price, confidence) = Oracle.convertPythParams(data);
     }
 
+    function getAssetPricesUnsafe()
+        external
+        view
+        returns (Oracle.Price memory longPrice, Oracle.Price memory shortPrice)
+    {
+        PythStructs.Price memory longData = pyth.getPriceUnsafe(assets[longToken].priceId);
+        PythStructs.Price memory shortData = pyth.getPriceUnsafe(assets[shortToken].priceId);
+        longPrice = Oracle.deconstructPythPrice(longData);
+        shortPrice = Oracle.deconstructPythPrice(shortData);
+    }
+
     function createPriceFeedUpdateData(
         bytes32 id,
         int64 price,

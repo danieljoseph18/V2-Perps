@@ -184,6 +184,17 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
         priceFeedData = abi.encode(priceFeed, prevPublishTime);
     }
 
+    function getAssetPricesUnsafe()
+        external
+        view
+        returns (Oracle.Price memory longPrice, Oracle.Price memory shortPrice)
+    {
+        PythStructs.Price memory longData = queryPriceFeed(assets[longToken].priceId).price;
+        PythStructs.Price memory shortData = queryPriceFeed(assets[shortToken].priceId).price;
+        longPrice = Oracle.deconstructPythPrice(longData);
+        shortPrice = Oracle.deconstructPythPrice(shortData);
+    }
+
     ////////////////////////
     // ALTERNATIVE ASSETS //
     ////////////////////////

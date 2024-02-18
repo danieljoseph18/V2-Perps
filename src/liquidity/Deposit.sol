@@ -26,7 +26,6 @@ library Deposit {
         address tokenIn;
         uint256 amountIn;
         uint256 executionFee;
-        uint256 maxSlippage;
         bool shouldWrap;
     }
 
@@ -73,8 +72,13 @@ library Deposit {
     }
 
     function execute(ExecuteParams memory _params) external view returns (ExecuteCache memory cache) {
-        // Get token price and calculate price impact directly to reduce local variables
-        (cache.longPrices, cache.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
+        // If prices were signed, return for the block, else, return cached prices
+        if (Oracle.priceWasSigned(_params.priceFeed, _params.data.input.tokenIn, _params.data.blockNumber)) {
+            (cache.longPrices, cache.shortPrices) =
+                Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
+        } else {
+            (cache.longPrices, cache.shortPrices) = Oracle.getLastMarketTokenPrices(_params.priceFeed);
+        }
 
         // Calculate Fee
         cache.feeParams = Fee.constructFeeParams(
@@ -87,6 +91,7 @@ library Deposit {
             true
         );
         cache.fee = Fee.calculateForMarketAction(cache.feeParams);
+        require(cache.fee > 0, "Deposit: zero fee");
 
         // Calculate remaining after fee
         cache.afterFeeAmount = _params.data.input.amountIn - cache.fee;

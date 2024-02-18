@@ -30,4 +30,8 @@ interface IPriceFeed {
         uint64 publishTime,
         uint64 prevPublishTime
     ) external pure returns (bytes memory priceFeedData);
+    function getAssetPricesUnsafe()
+        external
+        view
+        returns (Oracle.Price memory longPrice, Oracle.Price memory shortPrice);
 }

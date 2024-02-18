@@ -21,7 +21,6 @@ library Withdrawal {
         address tokenOut;
         uint256 marketTokenAmountIn;
         uint256 executionFee;
-        uint256 maxSlippage;
         bool shouldUnwrap;
     }
 
@@ -78,7 +77,12 @@ library Withdrawal {
 
     function execute(ExecuteParams memory _params) external view returns (ExecuteCache memory cache) {
         // get price signed to the block number of the request
-        (cache.longPrices, cache.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
+        if (Oracle.priceWasSigned(_params.priceFeed, _params.data.input.tokenOut, _params.data.blockNumber)) {
+            (cache.longPrices, cache.shortPrices) =
+                Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
+        } else {
+            (cache.longPrices, cache.shortPrices) = Oracle.getLastMarketTokenPrices(_params.priceFeed);
+        }
         // Calculate amountOut
         cache.totalTokensOut = Pool.withdrawMarketTokensToTokens(
             _params.values,
@@ -88,6 +92,12 @@ library Withdrawal {
             _params.cumulativePnl,
             _params.isLongToken
         );
+
+        if (_params.isLongToken) {
+            require(cache.totalTokensOut <= _params.values.longTokenBalance, "Withdrawal: insufficient balance");
+        } else {
+            require(cache.totalTokensOut <= _params.values.shortTokenBalance, "Withdrawal: insufficient balance");
+        }
 
         // Calculate Fee
         cache.feeParams = Fee.constructFeeParams(
@@ -104,10 +114,6 @@ library Withdrawal {
         // calculate amount remaining after fee and price impact
         cache.amountOut = cache.totalTokensOut - cache.fee;
     }
-
-    /////////////////////////////////////////////////////////
-    // INTERNAL FUNCTIONS: To Prevent Stack Too Deep Error //
-    /////////////////////////////////////////////////////////
 
     function _generateKey(address owner, address tokenOut, uint256 marketTokenAmountIn, uint256 blockNumber)
         internal

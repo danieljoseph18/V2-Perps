@@ -102,31 +102,6 @@ library Order {
         );
     }
 
-    /**
-     * struct Input {
-     *     address indexToken;
-     *     address collateralToken;
-     *     uint256 collateralDelta;
-     *     uint256 sizeDelta;
-     *     uint256 limitPrice;
-     *     uint256 maxSlippage;
-     *     uint256 executionFee;
-     *     bool isLong;
-     *     bool isLimit;
-     *     bool isIncrease;
-     *     bool shouldWrap;
-     *     Conditionals conditionals;
-     * }
-     *
-     * // Request -> Constructed by Router
-     * struct Request {
-     *     Input input;
-     *     address market;
-     *     address user;
-     *     uint256 requestBlock;
-     *     RequestType requestType;
-     * }
-     */
     function constructConditionalOrders(
         Position.Data memory _position,
         Position.Conditionals memory _conditionals,
@@ -482,8 +457,6 @@ library Order {
         }
     }
 
-    // @audit - do we need a validation step for each price?
-    // What if the price wasn't signed, or is incorrect, or is stale?
     function fetchTokenValues(
         IPriceFeed priceFeed,
         ExecuteCache memory _cache,
@@ -491,6 +464,7 @@ library Order {
         uint256 _requestBlock,
         bool _isLong
     ) public view returns (ExecuteCache memory) {
+        require(!Oracle.priceWasSigned(priceFeed, _indexToken, _requestBlock), "Order: Price Not Signed");
         if (_isLong) {
             _cache.indexPrice = Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock);
             _cache.longMarketTokenPrice = Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock);

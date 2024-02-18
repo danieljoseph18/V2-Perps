@@ -106,7 +106,7 @@ contract Deploy is Script {
          * ============ Set Up Contracts ============
          */
         contracts.liquidityVault.initialise(
-            address(contracts.priceFeed), address(contracts.processor), 1 minutes, 180000 gwei, 0.01e18
+            address(contracts.priceFeed), address(contracts.processor), 1 minutes, 180000 gwei, 0.03e18
         );
 
         IMarket.Config memory defaultMarketConfig = IMarket.Config({

@@ -69,17 +69,30 @@ library Fee {
             ? mulDiv(_params.sizeDelta, _params.longPrices.max, _params.values.longBaseUnit)
             : mulDiv(_params.sizeDelta, _params.shortPrices.max, _params.values.shortBaseUnit);
 
+        // If Size Delta * Price < Base Unit -> Action has no effect on skew
+        if (cache.sizeDeltaUsd == 0) {
+            revert("Fee: Size Delta Too Small");
+        }
+
         // Calculate pool balances before and minimise value of pool to maximise the effect on the skew
         cache.longTokenValue =
             mulDiv(_params.values.longTokenBalance, _params.longPrices.min, _params.values.longBaseUnit);
         cache.shortTokenValue =
             mulDiv(_params.values.shortTokenBalance, _params.shortPrices.min, _params.values.shortBaseUnit);
 
+        // Don't want to disincentivise deposits on empty pool
+        if (cache.longTokenValue == 0 && cache.shortTokenValue == 0) {
+            return cache.baseFee;
+        }
+
         // get the skew of the market
-        cache.longSkewBefore = cache.longTokenValue > cache.shortTokenValue;
-        cache.skewBefore = cache.longSkewBefore
-            ? cache.longTokenValue - cache.shortTokenValue
-            : cache.shortTokenValue - cache.longTokenValue;
+        if (cache.longTokenValue > cache.shortTokenValue) {
+            cache.longSkewBefore = true;
+            cache.skewBefore = cache.longTokenValue - cache.shortTokenValue;
+        } else {
+            cache.longSkewBefore = false;
+            cache.skewBefore = cache.shortTokenValue - cache.longTokenValue;
+        }
 
         // Adjust long or short token value based on the operation
         if (_params.isLongToken) {
@@ -92,19 +105,27 @@ library Fee {
                 : cache.shortTokenValue -= cache.sizeDeltaUsd;
         }
 
-        cache.longSkewAfter = cache.longTokenValue > cache.shortTokenValue;
+        if (cache.longTokenValue > cache.shortTokenValue) {
+            cache.longSkewAfter = true;
+            cache.skewAfter = cache.longTokenValue - cache.shortTokenValue;
+        } else {
+            cache.longSkewAfter = false;
+            cache.skewAfter = cache.shortTokenValue - cache.longTokenValue;
+        }
         cache.skewFlip = cache.longSkewAfter != cache.longSkewBefore;
-        cache.skewAfter = cache.longSkewAfter
-            ? cache.longTokenValue - cache.shortTokenValue
-            : cache.shortTokenValue - cache.longTokenValue;
 
         // Calculate the additional fee if necessary
         if (cache.skewFlip || cache.skewAfter > cache.skewBefore) {
             // Get the Delta to Charge the Fee on
+            // For Skew Flips, the delta is the skew after the flip -> skew before improved market balance
             cache.skewDelta = cache.skewFlip ? cache.skewAfter : cache.sizeDeltaUsd;
             // Calculate the additional fee
-            cache.feeAdditionUsd =
-                mulDiv(cache.skewDelta, _params.liquidityVault.feeScale(), cache.longTokenValue + cache.shortTokenValue);
+            // Uses the original value for LTV + STV so SkewDelta is never > LTV + STV
+            cache.feeAdditionUsd = mulDiv(
+                cache.skewDelta,
+                _params.liquidityVault.feeScale(),
+                cache.longTokenValue + cache.shortTokenValue + cache.sizeDeltaUsd
+            );
 
             // Convert the additional fee to index tokens
             cache.indexFee = _params.isLongToken
