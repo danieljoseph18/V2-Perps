@@ -1,45 +1,49 @@
-// // SPDX-License-Identifier: BUSL-1.1
-// pragma solidity 0.8.23;
+// SPDX-License-Identifier: BUSL-1.1
+pragma solidity 0.8.23;
 
-// import {Script} from "forge-std/Script.sol";
-// import {MockUSDC} from "../test/mocks/MockUSDC.sol";
-// import {MockPriceOracle} from "../test/mocks/MockPriceOracle.sol";
+import {Script} from "forge-std/Script.sol";
+import {MockUSDC} from "../test/mocks/MockUSDC.sol";
+import {MockPriceFeed} from "../test/mocks/MockPriceFeed.sol";
+import {IPriceFeed} from "../src/oracle/interfaces/IPriceFeed.sol";
+import {WETH} from "../src/tokens/WETH.sol";
 
-// contract HelperConfig is Script {
-//     NetworkConfig public activeNetworkConfig;
+contract HelperConfig is Script {
+    NetworkConfig public activeNetworkConfig;
 
-//     struct NetworkConfig {
-//         address priceOracle;
-//         address usdc;
-//         uint256 deployerKey;
-//     }
+    struct NetworkConfig {
+        IPriceFeed priceFeed;
+        address weth;
+        address usdc;
+    }
 
-//     uint256 public constant DEFAULT_ANVIL_PRIVATE_KEY =
-//         0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
+    uint256 public constant DEFAULT_ANVIL_PRIVATE_KEY =
+        0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
 
-//     constructor() {
-//         if (block.chainid == 11155111) {
-//             activeNetworkConfig = getSepoliaConfig();
-//         } else {
-//             activeNetworkConfig = getOrCreateAnvilConfig();
-//         }
-//     }
+    constructor() {
+        if (block.chainid == 84532) {
+            activeNetworkConfig = getBaseSepoliaConfig();
+        } else if (block.chainid == 8453) {
+            activeNetworkConfig = getBaseConfig();
+        } else {
+            activeNetworkConfig = getOrCreateAnvilConfig();
+        }
+    }
 
-//     function getSepoliaConfig() public view returns (NetworkConfig memory sepoliaConfig) {
-//         sepoliaConfig = NetworkConfig({
-//             priceOracle: 0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d,
-//             usdc: 0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d,
-//             deployerKey: vm.envUint("PRIVATE_KEY")
-//         });
-//     }
+    function getBaseSepoliaConfig() public view returns (NetworkConfig memory sepoliaConfig) {
+        // Need to configurate Price Feed for Sepolia and return
+    }
 
-//     function getOrCreateAnvilConfig() public returns (NetworkConfig memory anvilConfig) {
-//         MockUSDC usdc = new MockUSDC(1_000_000_000000);
-//         MockPriceOracle priceOracle = new MockPriceOracle();
-//         anvilConfig = NetworkConfig({
-//             priceOracle: address(priceOracle),
-//             usdc: address(usdc),
-//             deployerKey: DEFAULT_ANVIL_PRIVATE_KEY
-//         });
-//     }
-// }
+    function getBaseConfig() public view returns (NetworkConfig memory baseConfig) {
+        // Need to configurate Price Feed for Base and return
+    }
+
+    function getOrCreateAnvilConfig() public returns (NetworkConfig memory anvilConfig) {
+        // Create a mock price feed and return
+        MockPriceFeed mockPriceFeed = new MockPriceFeed(10, 1);
+        MockUSDC mockUSDC = new MockUSDC();
+        WETH weth = new WETH();
+
+        anvilConfig =
+            NetworkConfig({priceFeed: IPriceFeed(address(mockPriceFeed)), weth: address(weth), usdc: address(mockUSDC)});
+    }
+}

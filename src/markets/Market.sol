@@ -129,7 +129,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         emit MarketConfigUpdated(_config);
     }
 
-    function updateAdlState(bool _isFlaggedForAdl, bool _isLong) external onlyAdlController {
+    function updateAdlState(bool _isFlaggedForAdl, bool _isLong) external onlyProcessor {
         _isLong ? config.adl.flaggedLong = _isFlaggedForAdl : config.adl.flaggedShort = _isFlaggedForAdl;
         emit AdlStateUpdated(_isFlaggedForAdl);
     }
@@ -138,7 +138,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     // Rate can be lagging if lack of updates to positions
     // @audit -> Should only be called for execution, not requests
     // Pricing data must be accurate
-    function updateFundingRate() external nonReentrant {
+    function updateFundingRate() external nonReentrant onlyProcessor {
         // If time elapsed = 0, return
         uint48 lastUpdate = lastFundingUpdate;
         if (block.timestamp == lastUpdate) return;
@@ -179,7 +179,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     function updateBorrowingRate(uint256 _indexPrice, uint256 _longTokenPrice, uint256 _shortTokenPrice, bool _isLong)
         external
         nonReentrant
-        onlyTradeStorage
+        onlyProcessor
     {
         // If time elapsed = 0, return
         uint256 lastUpdate = lastBorrowUpdate;

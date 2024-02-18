@@ -199,11 +199,30 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Perform Execution in the Library
         (Position.Data memory position, uint256 absSizeDelta) =
             Order.createNewPosition(_params, _cache, minCollateralUsd);
+        // If Request has conditionals, create the SL / TP
+        (Position.Request memory stopLoss, Position.Request memory takeProfit) =
+            Order.constructConditionalOrders(position, _params.request.input.conditionals, _cache.indexPrice);
+        // If stop loss set, create and store the order
+        if (_params.request.input.conditionals.stopLossSet) {
+            bytes32 stopLossKey = Position.generateOrderKey(stopLoss);
+            limitOrderKeys.add(stopLossKey);
+            orders[stopLossKey] = stopLoss;
+            // add the key to the position
+            position.stopLossKey = stopLossKey;
+        }
+        // If take profit set, create and store the order
+        if (_params.request.input.conditionals.takeProfitSet) {
+            bytes32 takeProfitKey = Position.generateOrderKey(takeProfit);
+            limitOrderKeys.add(takeProfitKey);
+            orders[takeProfitKey] = takeProfit;
+            // add the key to the position
+            position.takeProfitKey = takeProfitKey;
+        }
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(absSizeDelta, _cache.collateralPrice, _cache.collateralBaseUnit, _params.request.input.isLong);
         // Update Final Storage
         openPositions[positionKey] = position;
-        openPositionKeys[address(position.market)][position.isLong].add(positionKey);
+        openPositionKeys[_params.request.market][position.isLong].add(positionKey);
         // Fire Event
         emit PositionCreated(positionKey, position);
     }
@@ -244,6 +263,12 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         require(Position.exists(position), "TS: Position Doesn't Exist");
         // Delete the Order from Storage
         _deleteOrder(positionKey, _params.request.input.isLimit);
+        // If SL / TP, clear from the position
+        if (_params.request.requestType == Position.RequestType.STOP_LOSS) {
+            position.stopLossKey = bytes32(0);
+        } else if (_params.request.requestType == Position.RequestType.TAKE_PROFIT) {
+            position.takeProfitKey = bytes32(0);
+        }
         // Perform Execution in the Library
         Order.DecreaseCache memory decreaseCache;
         (position, decreaseCache) = Order.decreaseExistingPosition(position, _params, _cache);
@@ -296,7 +321,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     /// @dev - Borrowing Fees ignored as all liquidated collateral goes to LPs
     function liquidatePosition(Order.ExecuteCache memory _cache, bytes32 _positionKey, address _liquidator)
         external
-        onlyLiquidator
+        onlyProcessor
     {
         /* Update Initial Storage */
         Position.Data memory position = openPositions[_positionKey];

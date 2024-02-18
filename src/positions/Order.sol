@@ -26,6 +26,7 @@ library Order {
     using SafeCast for uint256;
 
     uint256 internal constant PRECISION = 1e18;
+    uint256 public constant MAX_SLIPPAGE = 0.33e18;
 
     struct DecreaseCache {
         uint256 sizeDelta;
@@ -101,6 +102,100 @@ library Order {
         );
     }
 
+    /**
+     * struct Input {
+     *     address indexToken;
+     *     address collateralToken;
+     *     uint256 collateralDelta;
+     *     uint256 sizeDelta;
+     *     uint256 limitPrice;
+     *     uint256 maxSlippage;
+     *     uint256 executionFee;
+     *     bool isLong;
+     *     bool isLimit;
+     *     bool isIncrease;
+     *     bool shouldWrap;
+     *     Conditionals conditionals;
+     * }
+     *
+     * // Request -> Constructed by Router
+     * struct Request {
+     *     Input input;
+     *     address market;
+     *     address user;
+     *     uint256 requestBlock;
+     *     RequestType requestType;
+     * }
+     */
+    function constructConditionalOrders(
+        Position.Data memory _position,
+        Position.Conditionals memory _conditionals,
+        uint256 _referencePrice
+    ) external view returns (Position.Request memory stopLossOrder, Position.Request memory takeProfitOrder) {
+        // Validate the Conditionals
+        Position.validateConditionals(_conditionals, _referencePrice, _position.isLong);
+        // Construct the stop loss based on the values
+        if (_conditionals.stopLossSet) {
+            stopLossOrder = Position.Request({
+                input: Position.Input({
+                    indexToken: _position.indexToken,
+                    collateralToken: _position.collateralToken,
+                    collateralDelta: mulDiv(_position.collateralAmount, _conditionals.stopLossPercentage, PRECISION),
+                    sizeDelta: mulDiv(_position.positionSize, _conditionals.stopLossPercentage, PRECISION),
+                    limitPrice: _conditionals.stopLossPrice,
+                    maxSlippage: MAX_SLIPPAGE,
+                    executionFee: 0, // @audit - how do we get user to pay for execution?
+                    isLong: !_position.isLong,
+                    isLimit: true,
+                    isIncrease: false,
+                    shouldWrap: true,
+                    conditionals: Position.Conditionals({
+                        stopLossSet: false,
+                        stopLossPrice: 0,
+                        stopLossPercentage: 0,
+                        takeProfitSet: false,
+                        takeProfitPrice: 0,
+                        takeProfitPercentage: 0
+                    })
+                }),
+                market: address(_position.market),
+                user: _position.user,
+                requestBlock: block.number,
+                requestType: Position.RequestType.POSITION_DECREASE
+            });
+        }
+        // Construct the Take profit based on the values
+        if (_conditionals.takeProfitSet) {
+            takeProfitOrder = Position.Request({
+                input: Position.Input({
+                    indexToken: _position.indexToken,
+                    collateralToken: _position.collateralToken,
+                    collateralDelta: mulDiv(_position.collateralAmount, _conditionals.takeProfitPercentage, PRECISION),
+                    sizeDelta: mulDiv(_position.positionSize, _conditionals.takeProfitPercentage, PRECISION),
+                    limitPrice: _conditionals.takeProfitPrice,
+                    maxSlippage: MAX_SLIPPAGE,
+                    executionFee: 0, // @audit - how do we get user to pay for execution?
+                    isLong: !_position.isLong,
+                    isLimit: true,
+                    isIncrease: false,
+                    shouldWrap: true,
+                    conditionals: Position.Conditionals({
+                        stopLossSet: false,
+                        stopLossPrice: 0,
+                        stopLossPercentage: 0,
+                        takeProfitSet: false,
+                        takeProfitPrice: 0,
+                        takeProfitPercentage: 0
+                    })
+                }),
+                market: address(_position.market),
+                user: _position.user,
+                requestBlock: block.number,
+                requestType: Position.RequestType.POSITION_DECREASE
+            });
+        }
+    }
+
     //////////////////////////////
     // MAIN EXECUTION FUNCTIONS //
     //////////////////////////////
@@ -116,8 +211,6 @@ library Order {
         (position,, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _cache);
         // Edit the Position for Increase
         position = _editPosition(position, _cache, _params.request.input.collateralDelta, 0, true);
-        // Update the conditionals and return
-        position = _updateConditionals(position, _params.request.input.conditionals);
     }
 
     function executeCollateralDecrease(
@@ -140,19 +233,8 @@ library Order {
         );
         // Check if the Decrease makes the Position Liquidatable
         require(!_checkIsLiquidatable(position, _cache, _liquidationFeeUsd), "TS: Liquidatable");
-        // Update the Position's conditionals
-        position = _updateConditionals(position, _params.request.input.conditionals);
         // Edit the Position
         position = _editPosition(position, _cache, _params.request.input.collateralDelta, 0, false);
-    }
-
-    function executeConditionalEdit(Position.Data memory _position, Position.Execution calldata _params)
-        external
-        pure
-        returns (Position.Data memory)
-    {
-        // Update the Position's conditionals
-        return _updateConditionals(_position, _params.request.input.conditionals);
     }
 
     function createNewPosition(
@@ -197,9 +279,6 @@ library Order {
         // Calculate the Size Delta to keep Leverage Consistent
         sizeDelta = mulDiv(newCollateralAmount, position.positionSize, position.collateralAmount);
 
-        // Update the Position's conditionals
-        position = _updateConditionals(position, _params.request.input.conditionals);
-
         // Update the Existing Position
         position = _editPosition(position, _cache, _params.request.input.collateralDelta, sizeDelta, true);
 
@@ -226,8 +305,6 @@ library Order {
             _cache.indexPrice,
             position.isLong
         );
-
-        position = _updateConditionals(position, _params.request.input.conditionals);
 
         position =
             _editPosition(position, _cache, _params.request.input.collateralDelta, decreaseCache.sizeDelta, false);
@@ -312,19 +389,6 @@ library Order {
         );
         position.pnlParams.sigmaIndexSizeUSD -= sizeDeltaUsd;
         return position;
-    }
-
-    function _updateConditionals(Position.Data memory _position, Position.Conditionals memory _conditionals)
-        internal
-        pure
-        returns (Position.Data memory)
-    {
-        // If Conditionals are Valid, Update the Position
-        try Position.validateConditionals(_conditionals, _position.pnlParams.weightedAvgEntryPrice, _position.isLong) {
-            _position.conditionals = _conditionals;
-        } catch {}
-        // Return the Updated Position
-        return _position;
     }
 
     // Checks if a position meets the minimum collateral threshold

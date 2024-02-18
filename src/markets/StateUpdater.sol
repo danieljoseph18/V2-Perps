@@ -17,34 +17,33 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
-import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 
 /// @dev needs StateUpdater Role
-contract StateUpdater is RoleValidation, ReentrancyGuard {
+contract StateUpdater is RoleValidation {
     using EnumerableSet for EnumerableSet.AddressSet;
-
-    ILiquidityVault public liquidityVault;
-    IMarketMaker public marketMaker;
-    ITradeStorage public tradeStorage;
 
     uint256 public constant BITMASK_16 = type(uint256).max >> (256 - 16);
     uint256 public constant TOTAL_ALLOCATION = 10000;
 
     IMarket[] private markets;
 
-    constructor(address _liquidityVault, address _marketMaker, address _tradeStorage, address _roleStorage)
-        RoleValidation(_roleStorage)
-    {
-        liquidityVault = ILiquidityVault(_liquidityVault);
-        marketMaker = IMarketMaker(_marketMaker);
-        tradeStorage = ITradeStorage(_tradeStorage);
+    constructor(address _roleStorage) RoleValidation(_roleStorage) {}
+
+    function setMarkets(IMarket[] calldata _markets) external onlyAdmin {
+        markets = _markets;
+    }
+
+    function addMarket(IMarket _market) external onlyAdmin {
+        markets.push(_market);
+    }
+
+    function removeMarket(IMarket _market, uint256 _index) external onlyAdmin {
+        require(markets[_index] == _market, "StateUpdater: Invalid index");
+        markets[_index] = markets[markets.length - 1];
+        markets.pop();
     }
 
     // Each allocation is a number between 0 and 10000 -> can fit in 16 bits

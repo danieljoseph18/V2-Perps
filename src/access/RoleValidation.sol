@@ -24,21 +24,8 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyLiquidator() {
-        if (!roleStorage.hasRole(Roles.LIQUIDATOR, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
     modifier onlyProcessor() {
         if (!roleStorage.hasRole(Roles.PROCESSOR, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
-    modifier onlyProcessorOrAdl() {
-        if (!roleStorage.hasRole(Roles.PROCESSOR, msg.sender) && !roleStorage.hasRole(Roles.ADL_CONTROLLER, msg.sender))
-        {
-            revert RoleValidation_AccessDenied();
-        }
         _;
     }
 
@@ -77,11 +64,6 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyMarketStorage() {
-        if (!roleStorage.hasRole(Roles.MARKET_STORAGE, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
     modifier onlyFeeAccumulator() {
         if (!roleStorage.hasRole(Roles.FEE_ACCUMULATOR, msg.sender)) revert RoleValidation_AccessDenied();
         _;
@@ -101,8 +83,8 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyAdlController() {
-        if (!roleStorage.hasRole(Roles.ADL_CONTROLLER, msg.sender)) revert RoleValidation_AccessDenied();
+    modifier onlyLiquidationKeeper() {
+        if (!roleStorage.hasRole(Roles.LIQUIDATOR, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 

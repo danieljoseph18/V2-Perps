@@ -50,7 +50,7 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
         emit SetReferrerTier(_referrer, _tierId);
     }
 
-    function setTraderReferralCode(address _account, bytes32 _code) external override onlyHandler {
+    function setTraderReferralCode(address _account, bytes32 _code) external override onlyAdmin {
         _setTraderReferralCode(_account, _code);
     }
 
@@ -66,7 +66,7 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
         emit RegisterCode(msg.sender, _code);
     }
 
-    function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount) external onlyRouter {
+    function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount) external onlyProcessor {
         affiliateRewards[_account][_isLongToken] += _amount;
     }
 

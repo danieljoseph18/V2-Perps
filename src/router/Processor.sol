@@ -241,7 +241,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // need to store who flagged and liquidated
     // let the liquidator claim liquidation rewards from the tradestorage contract
     // Need to update prices for Index Token, Long Token, Short Token
-    function liquidatePosition(bytes32 _positionKey, bytes[] memory _priceData) external payable onlyKeeper {
+    function liquidatePosition(bytes32 _positionKey, bytes[] memory _priceData)
+        external
+        payable
+        onlyLiquidationKeeper
+    {
         // need to construct ExecuteCache
         Order.ExecuteCache memory cache;
         // fetch position

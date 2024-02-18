@@ -56,7 +56,8 @@ library Position {
         BorrowingParams borrowingParams;
         FundingParams fundingParams;
         PnLParams pnlParams;
-        Conditionals conditionals;
+        bytes32 stopLossKey;
+        bytes32 takeProfitKey;
     }
 
     // Borrow Component of an Open Position
@@ -282,7 +283,8 @@ library Position {
             borrowingParams: BorrowingParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: FundingParams(0, 0, block.timestamp, longFundingFee, shortFundingFee),
             pnlParams: PnLParams(_cache.indexPrice, _cache.sizeDeltaUsd.abs()),
-            conditionals: _request.input.conditionals
+            stopLossKey: bytes32(0),
+            takeProfitKey: bytes32(0)
         });
     }
 
