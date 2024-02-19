@@ -61,4 +61,5 @@ interface ITradeStorage {
     function executionFee() external view returns (uint256);
     function getOrder(bytes32 _key) external view returns (Position.Request memory _order);
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory);
+    function getOrderAtIndex(uint256 _index, bool _isLimit) external view returns (bytes32);
 }

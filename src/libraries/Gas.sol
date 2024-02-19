@@ -31,6 +31,7 @@ library Gas {
         minExecutionFee = (baseGasLimit + _expectedGasLimit) * tx.gasprice;
     }
 
+    // @audit - is this vulnerable?
     function payExecutionFee(
         IProcessor processor,
         uint256 _executionFee,

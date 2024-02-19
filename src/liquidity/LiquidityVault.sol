@@ -147,7 +147,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
-        onlyVault
+        onlyTradeStorage
     {
         _transferOutTokens(_to, _amount, _isLongToken, _shouldUnwrap);
     }
@@ -179,11 +179,11 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         }
     }
 
-    function increasePoolBalance(uint256 _amount, bool _isLong) external onlyVault {
+    function increasePoolBalance(uint256 _amount, bool _isLong) external onlyProcessor {
         _increasePoolBalance(_amount, _isLong);
     }
 
-    function decreasePoolBalance(uint256 _amount, bool _isLong) external onlyVault {
+    function decreasePoolBalance(uint256 _amount, bool _isLong) external onlyProcessor {
         _decreasePoolBalance(_amount, _isLong);
     }
 

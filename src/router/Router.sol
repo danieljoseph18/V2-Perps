@@ -158,7 +158,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     /////////////
 
     // @audit - need to request signed price here
-    function createTradeRequest(Position.Input calldata _trade, bytes[] memory _priceUpdateData)
+    function createPositionRequest(Position.Input calldata _trade, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
@@ -254,7 +254,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     function _handleTokenTransfers(Position.Input calldata _trade) private {
         if (_trade.shouldWrap) {
             require(_trade.collateralToken == address(WETH), "Router: Invalid Collateral Token");
-            require(_trade.collateralDelta == msg.value - _trade.executionFee, "Router: Invalid Collateral Delta");
+            require(_trade.collateralDelta <= msg.value - _trade.executionFee, "Router: Invalid Collateral Delta");
             WETH.deposit{value: _trade.collateralDelta}();
             WETH.safeTransfer(address(processor), _trade.collateralDelta);
         } else {

@@ -148,7 +148,7 @@ contract Deploy is Script {
         contracts.roleStorage.grantRole(Roles.KEEPER, contracts.owner);
         contracts.roleStorage.grantRole(Roles.LIQUIDATOR, contracts.owner);
         contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.tradeStorage));
-        contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.router));
+        contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.processor));
 
         vm.stopBroadcast();
 

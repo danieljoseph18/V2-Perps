@@ -49,7 +49,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         external
         onlyAdmin
     {
-        require(!isInitialised, "MS: Already Initialised");
+        require(!isInitialised, "MarketMaker: Already Initialised");
         priceFeed = IPriceFeed(_priceFeed);
         liquidityVault = _liquidityVault;
         defaultConfig = _defaultConfig;
@@ -70,11 +70,14 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         onlyAdmin
         returns (address marketAddress)
     {
-        require(_indexToken != address(0), "MM: Invalid Address");
-        require(_priceId != bytes32(0), "MM: Invalid Price Id");
-        require(_asset.baseUnit == 1e18 || _asset.baseUnit == 1e8 || _asset.baseUnit == 1e6, "MF: Invalid Base Unit");
+        require(_indexToken != address(0), "MarketMaker: Invalid Address");
+        require(_priceId != bytes32(0), "MarketMaker: Invalid Price Id");
+        require(
+            _asset.baseUnit == 1e18 || _asset.baseUnit == 1e8 || _asset.baseUnit == 1e6,
+            "MarketMaker: Invalid Base Unit"
+        );
         // Check if market already exists
-        require(!markets.contains(_indexToken), "MM: Market Exists");
+        require(!markets.contains(_indexToken), "MarketMaker: Market Exists");
 
         // Set Up Price Oracle
         priceFeed.supportAsset(_indexToken, _asset);
@@ -86,6 +89,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         marketAddress = address(market);
         // Add to Storage
         markets.add(marketAddress);
+        tokenToMarkets[_indexToken] = marketAddress;
         // Fire Event
         emit MarketCreated(marketAddress, _indexToken, _priceId);
     }

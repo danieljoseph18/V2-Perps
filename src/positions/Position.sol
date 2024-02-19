@@ -125,6 +125,7 @@ library Position {
     // Executed Request
     struct Execution {
         Request request;
+        bytes32 orderKey;
         address feeReceiver;
         bool isAdl;
     }
@@ -147,25 +148,25 @@ library Position {
     {
         // Case 1: Position doesn't exist (Create Position)
         if (_position.user == address(0)) {
-            require(_trade.isIncrease, "RR: Invalid Decrease");
-            require(_trade.sizeDelta != 0, "RR: Size Delta");
+            require(_trade.isIncrease, "Position: Invalid Decrease");
+            require(_trade.sizeDelta != 0, "Position: Size Delta");
             requestType = RequestType.CREATE_POSITION;
         } else if (_trade.sizeDelta == 0) {
             // Case 2: Position exists but sizeDelta is 0 (Collateral Increase / Decrease)
             if (_trade.isIncrease) {
                 requestType = RequestType.COLLATERAL_INCREASE;
             } else {
-                require(_position.collateralAmount >= _collateralDelta, "RR: CD > CA");
+                require(_position.collateralAmount >= _collateralDelta, "Position: Delta > Collateral");
                 requestType = RequestType.COLLATERAL_DECREASE;
             }
         } else {
             // Case 3: Position exists and sizeDelta is not 0 (Position Increase / Decrease)
-            require(_trade.sizeDelta != 0, "RR: Size Delta");
+            require(_trade.sizeDelta != 0, "Position: Size Delta");
             if (_trade.isIncrease) {
                 requestType = RequestType.POSITION_INCREASE;
             } else {
-                require(_position.positionSize >= _trade.sizeDelta, "RR: PS < SD");
-                require(_position.collateralAmount >= _collateralDelta, "RR: CD > CA");
+                require(_position.positionSize >= _trade.sizeDelta, "Position: Size < SizeDelta");
+                require(_position.collateralAmount >= _collateralDelta, "Position: Delta > Collateral");
                 requestType = RequestType.POSITION_DECREASE;
             }
         }
@@ -176,7 +177,7 @@ library Position {
     }
 
     // Include the request type to differentiate between types like SL/TP
-    function generateOrderKey(Request memory _request) external pure returns (bytes32 orderKey) {
+    function generateOrderKey(Request memory _request) public pure returns (bytes32 orderKey) {
         orderKey =
             keccak256(abi.encode(_request.input.indexToken, _request.user, _request.input.isLong, _request.requestType));
     }
@@ -338,47 +339,47 @@ library Position {
         liquidationFee = mulDiv(_liquidationFeeUsd, _collateralBaseUnit, _collateralPrice);
     }
 
+    // @audit - wrong order key
     function createAdlOrder(Data memory _position, uint256 _sizeDelta)
         external
         view
-        returns (Execution memory request)
+        returns (Execution memory execution)
     {
         // calculate collateral delta from size delta
         uint256 collateralDelta = mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
-        request = Execution({
-            request: Request({
-                input: Input({
-                    indexToken: _position.indexToken,
-                    collateralToken: _position.collateralToken,
-                    collateralDelta: collateralDelta,
-                    sizeDelta: _sizeDelta,
-                    limitPrice: 0,
-                    maxSlippage: 0,
-                    executionFee: 0,
-                    isLong: _position.isLong,
-                    isLimit: false,
-                    isIncrease: false,
-                    shouldWrap: false,
-                    conditionals: Conditionals(false, false, 0, 0, 0, 0)
-                }),
-                market: address(_position.market),
-                user: _position.user,
-                requestBlock: block.number,
-                requestType: RequestType.POSITION_DECREASE
+        Request memory request = Request({
+            input: Input({
+                indexToken: _position.indexToken,
+                collateralToken: _position.collateralToken,
+                collateralDelta: collateralDelta,
+                sizeDelta: _sizeDelta,
+                limitPrice: 0,
+                maxSlippage: 0,
+                executionFee: 0,
+                isLong: _position.isLong,
+                isLimit: false,
+                isIncrease: false,
+                shouldWrap: false,
+                conditionals: Conditionals(false, false, 0, 0, 0, 0)
             }),
-            feeReceiver: address(0),
-            isAdl: true
+            market: address(_position.market),
+            user: _position.user,
+            requestBlock: block.number,
+            requestType: RequestType.POSITION_DECREASE
         });
+        execution =
+            Execution({request: request, orderKey: generateOrderKey(request), feeReceiver: address(0), isAdl: true});
     }
 
     function convertIndexAmountToCollateral(
         uint256 _indexAmount,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
-        uint256 _collateralPrice
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit
     ) public pure returns (uint256 collateralAmount) {
         uint256 indexUsd = mulDiv(_indexAmount, _indexPrice, _indexBaseUnit);
-        collateralAmount = mulDiv(indexUsd, PRECISION, _collateralPrice);
+        collateralAmount = mulDiv(indexUsd, _collateralBaseUnit, _collateralPrice);
     }
 
     function getTotalFeesOwedUsd(Data memory _position, Order.ExecuteCache memory _cache)

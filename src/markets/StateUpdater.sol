@@ -54,9 +54,8 @@ contract StateUpdater is RoleValidation {
     // majority of validation will be done off-chain
     // simply need to update the computed values on-chain
     // @audit - test with max length (10,000)
-    function setAllocationsWithBits(uint256[] calldata _allocations) external onlyStateUpdater {
+    function setAllocationsWithBits(uint256[] calldata _allocations) external onlyStateKeeper {
         uint256 marketLen = markets.length;
-        require(_allocations.length == marketLen, "StateUpdater: Invalid length");
 
         uint256 total = 0;
         uint256 allocationIndex = 0;
@@ -67,11 +66,16 @@ contract StateUpdater is RoleValidation {
                     break;
                 }
 
-                uint256 startBit = bitIndex * 16;
+                // Calculate the bit position for the current allocation
+                uint256 startBit = 240 - (bitIndex * 16);
                 uint256 allocation = (_allocations[i] >> startBit) & BITMASK_16;
                 total += allocation;
-                markets[allocationIndex].updateAllocation(allocation);
-                ++allocationIndex;
+
+                // Ensure that the allocationIndex does not exceed the bounds of the markets array
+                if (allocationIndex < markets.length) {
+                    markets[allocationIndex].updateAllocation(allocation);
+                    ++allocationIndex;
+                }
             }
         }
 

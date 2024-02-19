@@ -66,7 +66,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
     error OrderProcessor_InvalidRequestType();
 
-    event ExecuteTradeOrder(bytes32 indexed _orderKey, Position.Request _request, uint256 _fee, uint256 _feeDiscount);
+    event ExecutePosition(bytes32 indexed _orderKey, Position.Request _request, uint256 _fee, uint256 _feeDiscount);
     event GasLimitsUpdated(
         uint256 indexed depositGasLimit, uint256 indexed withdrawalGasLimit, uint256 indexed positionGasLimit
     );
@@ -164,7 +164,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // TRADING //
     /////////////
 
-    function executeTradeOrders(address _feeReceiver, Oracle.TradingEnabled memory _isTradingEnabled)
+    function executePositions(address _feeReceiver, Oracle.TradingEnabled memory _isTradingEnabled)
         external
         onlyKeeper
     {
@@ -172,7 +172,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint32 len = uint32(marketOrders.length);
         for (uint256 i = 0; i < len;) {
             bytes32 _key = marketOrders[i];
-            try this.executeTradeOrder(_key, _feeReceiver, false, _isTradingEnabled) {}
+            try this.executePosition(_key, _feeReceiver, false, _isTradingEnabled) {}
             catch {
                 try tradeStorage.cancelOrderRequest(_key, false) {} catch {}
             }
@@ -186,7 +186,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // @audit - Need a step to validate the trade doesn't put the market over its
     // allocation (_validateAllocation)
     /// @param _isTradingEnabled: Flag for disabling trading of asset types outside of trading hours
-    function executeTradeOrder(
+    function executePosition(
         bytes32 _orderKey,
         address _feeReceiver,
         bool _isLimitOrder,
@@ -218,7 +218,13 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
         // Calculate Fee
         cache.fee = Fee.calculateForPosition(
-            tradeStorage, request.input.sizeDelta, cache.indexPrice, cache.indexBaseUnit, cache.collateralPrice
+            tradeStorage,
+            request.input.sizeDelta,
+            request.input.collateralDelta,
+            cache.indexPrice,
+            cache.indexBaseUnit,
+            cache.collateralPrice,
+            cache.collateralBaseUnit
         );
         // Calculate & Apply Fee Discount for Referral Code
         (cache.fee, cache.feeDiscount, cache.referrer) =
@@ -226,28 +232,29 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
         // Execute Trade
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            tradeStorage.createNewPosition(Position.Execution(request, _feeReceiver, false), cache);
+            tradeStorage.createNewPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
         } else if (request.requestType == Position.RequestType.POSITION_DECREASE) {
-            tradeStorage.decreaseExistingPosition(Position.Execution(request, _feeReceiver, false), cache);
+            tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
         } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
-            tradeStorage.increaseExistingPosition(Position.Execution(request, _feeReceiver, false), cache);
+            tradeStorage.increaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
         } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
-            tradeStorage.executeCollateralDecrease(Position.Execution(request, _feeReceiver, false), cache);
+            tradeStorage.executeCollateralDecrease(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
         } else if (request.requestType == Position.RequestType.COLLATERAL_INCREASE) {
-            tradeStorage.executeCollateralIncrease(Position.Execution(request, _feeReceiver, false), cache);
+            tradeStorage.executeCollateralIncrease(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
         } else if (request.requestType == Position.RequestType.TAKE_PROFIT) {
-            tradeStorage.decreaseExistingPosition(Position.Execution(request, _feeReceiver, false), cache);
+            tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
         } else if (request.requestType == Position.RequestType.STOP_LOSS) {
-            tradeStorage.decreaseExistingPosition(Position.Execution(request, _feeReceiver, false), cache);
+            tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
         } else {
             revert OrderProcessor_InvalidRequestType();
         }
 
-        /* Handle Token Transfers */
-        _handleTokenTransfers(cache, request, cache.fee, cache.feeDiscount, request.input.isLong);
+        if (request.input.isIncrease) {
+            _transferTokensForIncrease(cache, request, cache.fee, cache.feeDiscount, request.input.isLong);
+        }
 
         // Emit Trade Executed Event
-        emit ExecuteTradeOrder(_orderKey, request, cache.fee, cache.feeDiscount);
+        emit ExecutePosition(_orderKey, request, cache.fee, cache.feeDiscount);
 
         // Send Execution Fee + Rebate
         Gas.payExecutionFee(this, request.input.executionFee, initialGas, payable(_feeReceiver), payable(msg.sender));
@@ -408,8 +415,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // INTERNAL HELPER FUNCTIONS //
     ///////////////////////////////
 
-    // @audit - Streamline / Improve
-    function _handleTokenTransfers(
+    function _transferTokensForIncrease(
         Order.ExecuteCache memory _cache,
         Position.Request memory _request,
         uint256 _fee,
@@ -427,11 +433,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             // Transfer Fee Discount to Referral Storage
             IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), _feeDiscount);
         }
-        // Update Liquidity Vault Balance to Store the Collateral transferred in
-        // @here
 
         // Transfer Collateral to LiquidityVault
-        IERC20(_request.input.collateralToken).safeTransfer(address(liquidityVault), _request.input.collateralDelta);
+        uint256 afterFeeAmount = _request.input.collateralDelta - _fee;
+        liquidityVault.increasePoolBalance(afterFeeAmount, _isLong);
+        IERC20(_request.input.collateralToken).safeTransfer(address(liquidityVault), afterFeeAmount);
     }
 
     function _calculateValueUsd(uint256 _tokenAmount, uint256 _tokenPrice, uint256 _tokenBaseUnit, bool _isIncrease)
@@ -459,15 +465,19 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         bool _isLong,
         bool _isIncrease
     ) internal {
-        market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
-        market.updateFundingRate();
-        market.updateBorrowingRate(_signedIndexPrice, _longTokenPrice, _shortTokenPrice, _isLong);
         if (_sizeDeltaUsd != 0) {
+            market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
             market.updateTotalWAEP(_impactedIndexPrice, _sizeDeltaUsd, _isLong);
         }
+        market.updateFundingRate();
+        market.updateBorrowingRate(_signedIndexPrice, _longTokenPrice, _shortTokenPrice, _isLong);
     }
 
     function _updateImpactPool(IMarket market, int256 _priceImpactUsd, bool _isLong) internal {
-        market.updateImpactPool(_priceImpactUsd, _isLong);
+        // If Price Impact is Negative, add to the impact Pool
+        // If Price Impact is Positive, Subtract from the Impact Pool
+        // Impact Pool Delta = -1 * Price Impact
+        if (_priceImpactUsd == 0) return;
+        market.updateImpactPool(-_priceImpactUsd, _isLong);
     }
 }

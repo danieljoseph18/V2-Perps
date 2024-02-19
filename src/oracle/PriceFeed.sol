@@ -45,7 +45,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     uint256 public tokenPrecision;
 
     modifier validFee(bytes[] calldata _priceUpdateData) {
-        require(msg.value >= pyth.getUpdateFee(_priceUpdateData), "Oracle: Insufficient fee");
+        require(msg.value >= pyth.getUpdateFee(_priceUpdateData), "PriceFeed: Insufficient fee");
         _;
     }
 

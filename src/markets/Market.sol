@@ -120,6 +120,9 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     function initialise(Config memory _config) external onlyMarketMaker {
         require(!isInitialised, "Market: already initialised");
         config = _config;
+        // Set initial timestamps so != 0
+        lastBorrowUpdate = uint48(block.timestamp);
+        lastFundingUpdate = uint48(block.timestamp);
         isInitialised = true;
         emit MarketInitialised(_config);
     }

@@ -143,15 +143,22 @@ library Fee {
     function calculateForPosition(
         ITradeStorage tradeStorage,
         uint256 _sizeDelta,
+        uint256 _collateralDelta,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
-        uint256 _collateralPrice
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit
     ) external view returns (uint256 fee) {
         uint256 feePercentage = tradeStorage.tradingFee();
         // convert index amount to collateral amount
-        uint256 sizeInCollateral =
-            Position.convertIndexAmountToCollateral(_sizeDelta, _indexPrice, _indexBaseUnit, _collateralPrice);
-        // calculate fee
-        fee = mulDiv(sizeInCollateral, feePercentage, SCALING_FACTOR);
+        if (_sizeDelta != 0) {
+            uint256 sizeInCollateral = Position.convertIndexAmountToCollateral(
+                _sizeDelta, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit
+            );
+            // calculate fee
+            fee = mulDiv(sizeInCollateral, feePercentage, SCALING_FACTOR);
+        } else {
+            fee = mulDiv(_collateralDelta, feePercentage, SCALING_FACTOR);
+        }
     }
 }
