@@ -26,7 +26,7 @@ library MarketUtils {
     }
 
     function getTotalOpenInterestUsd(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit)
-        public
+        external
         view
         returns (uint256 totalOIUSD)
     {
@@ -60,7 +60,7 @@ library MarketUtils {
         uint256 _shortTokenPrice,
         uint256 _longBaseUnit,
         uint256 _shortBaseUnit
-    ) public view returns (uint256 poolBalanceUsd) {
+    ) external view returns (uint256 poolBalanceUsd) {
         uint256 longPoolUsd = getPoolBalanceUsd(market, liquidityVault, _longTokenPrice, _longBaseUnit, true);
         uint256 shortPoolUsd = getPoolBalanceUsd(market, liquidityVault, _shortTokenPrice, _shortBaseUnit, false);
         poolBalanceUsd = longPoolUsd + shortPoolUsd;

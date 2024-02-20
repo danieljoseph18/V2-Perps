@@ -100,10 +100,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         emit GasLimitsUpdated(_deposit, _withdrawal, _position);
     }
 
-    /////////////////////////
-    // MARKET INTERACTIONS //
-    /////////////////////////
-
     // @audit - keeper needs to pass in cumulative net pnl
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
@@ -159,10 +155,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     function transferDepositTokens(address _token, uint256 _amount) external onlyVault {
         IERC20(_token).safeTransfer(address(liquidityVault), _amount);
     }
-
-    /////////////
-    // TRADING //
-    /////////////
 
     function executePositions(address _feeReceiver, Oracle.TradingEnabled memory _isTradingEnabled)
         external
@@ -314,10 +306,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         }
     }
 
-    ///////////////////
-    // ADL FUNCTIONS //
-    ///////////////////
-
     function flagForAdl(IMarket market, bool _isLong) external onlyAdlKeeper {
         require(market != IMarket(address(0)), "ADL: Invalid market");
         // get current price
@@ -412,10 +400,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     function sendExecutionFee(address payable _to, uint256 _amount) external onlyProcessor {
         _to.sendValue(_amount);
     }
-
-    ///////////////////////////////
-    // INTERNAL HELPER FUNCTIONS //
-    ///////////////////////////////
 
     function _transferTokensForIncrease(
         Order.ExecuteCache memory _cache,

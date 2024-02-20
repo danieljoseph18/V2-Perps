@@ -168,7 +168,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         uint64 emaConf,
         uint64 publishTime,
         uint64 prevPublishTime
-    ) public pure returns (bytes memory priceFeedData) {
+    ) external pure returns (bytes memory priceFeedData) {
         PythStructs.PriceFeed memory priceFeed;
 
         priceFeed.id = id;
@@ -185,10 +185,6 @@ contract PriceFeed is IPriceFeed, RoleValidation {
 
         priceFeedData = abi.encode(priceFeed, prevPublishTime);
     }
-
-    ////////////////////////
-    // ALTERNATIVE ASSETS //
-    ////////////////////////
 
     function setAlternativeAssets(address[] memory _alternativeAssets) external onlyAdmin {
         alternativeAssets = _alternativeAssets;
@@ -249,10 +245,6 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         Oracle.Price memory price = Oracle.Price({max: _maxPrice, min: _minPrice});
         prices[_token][_block] = price;
     }
-
-    /////////////
-    // GETTERS //
-    /////////////
 
     function getPrice(uint256 _block, address _token) external view returns (Oracle.Price memory) {
         return prices[_token][_block];

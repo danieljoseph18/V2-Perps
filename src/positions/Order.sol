@@ -205,9 +205,9 @@ library Order {
         require(_trade.collateralDelta != 0, "Order: Collateral Delta");
 
         if (_trade.isLong) {
-            (cache.collateralRefPrice,) = Oracle.getLastMarketTokenPrices(priceFeed, true);
+            cache.collateralRefPrice = Oracle.getLongReferencePrice(priceFeed);
         } else {
-            (, cache.collateralRefPrice) = Oracle.getLastMarketTokenPrices(priceFeed, false);
+            cache.collateralRefPrice = Oracle.getShortReferencePrice(priceFeed);
         }
 
         require(cache.collateralRefPrice > 0, "Order: Invalid Collateral Ref Price");

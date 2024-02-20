@@ -107,7 +107,7 @@ library Oracle {
     }
 
     function deconstructPythPrice(PythStructs.Price memory _priceData)
-        public
+        external
         pure
         returns (Price memory deconstructedPrice)
     {
@@ -136,7 +136,7 @@ library Oracle {
     }
 
     function getMarketTokenPrices(IPriceFeed priceFeed, uint256 _blockNumber, bool _maximise)
-        public
+        external
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
@@ -200,8 +200,17 @@ library Oracle {
         return getReferencePrice(priceFeed, asset);
     }
 
+    function getLongReferencePrice(IPriceFeed priceFeed) external view returns (uint256 referencePrice) {
+        return getReferencePrice(priceFeed, priceFeed.longToken());
+    }
+
+    function getShortReferencePrice(IPriceFeed priceFeed) external view returns (uint256 referencePrice) {
+        return getReferencePrice(priceFeed, priceFeed.shortToken());
+    }
+
     // Use chainlink price feed if available
     // @audit - What do we do if ref price is 0???
+    // @audit - What do we do if secondary?
     function getReferencePrice(IPriceFeed priceFeed, Asset memory _asset)
         public
         view
@@ -239,21 +248,21 @@ library Oracle {
         return priceFeed.getAsset(_token).baseUnit;
     }
 
-    function getLongBaseUnit(IPriceFeed priceFeed) public view returns (uint256) {
+    function getLongBaseUnit(IPriceFeed priceFeed) external view returns (uint256) {
         return getBaseUnit(priceFeed, priceFeed.longToken());
     }
 
-    function getShortBaseUnit(IPriceFeed priceFeed) public view returns (uint256) {
+    function getShortBaseUnit(IPriceFeed priceFeed) external view returns (uint256) {
         return getBaseUnit(priceFeed, priceFeed.shortToken());
     }
 
-    function priceWasSigned(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (bool) {
+    function priceWasSigned(IPriceFeed priceFeed, address _token, uint256 _block) external view returns (bool) {
         return priceFeed.getPrice(_block, _token).max != 0;
     }
 
     // @audit - where is this used? should we max or min the price?
     function getNetPnl(IPriceFeed priceFeed, IMarket market, uint256 _blockNumber, bool _maximise)
-        public
+        external
         view
         returns (int256 netPnl)
     {

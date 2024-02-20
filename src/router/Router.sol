@@ -76,16 +76,6 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     receive() external payable {}
 
-    modifier validExecutionFee(Gas.Action _action) {
-        uint256 expGasLimit = Gas.getLimitForAction(processor, _action);
-        require(msg.value >= Gas.getMinExecutionFee(processor, expGasLimit), "Router: Execution Fee");
-        _;
-    }
-
-    /////////////
-    // Setters //
-    /////////////
-
     function updateConfig(address _tradeStorage, address _liquidityVault, address _marketMaker, address _processor)
         external
         onlyAdmin
@@ -96,17 +86,14 @@ contract Router is ReentrancyGuard, RoleValidation {
         processor = IProcessor(_processor);
     }
 
-    /////////////////////////
-    // MARKET INTERACTIONS //
-    /////////////////////////
-
     // @audit - need to request signed price here
     function createDeposit(Deposit.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
-        validExecutionFee(Gas.Action.DEPOSIT)
     {
+        Gas.validateExecutionFee(processor, _input.executionFee, msg.value, Gas.Action.DEPOSIT);
+
         require(msg.sender == _input.owner, "Router: Invalid Owner");
         require(_input.amountIn > 0, "Router: Invalid Amount In");
         if (_input.shouldWrap) {
@@ -132,9 +119,9 @@ contract Router is ReentrancyGuard, RoleValidation {
     function createWithdrawal(Withdrawal.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
-        validExecutionFee(Gas.Action.WITHDRAW)
         nonReentrant
     {
+        Gas.validateExecutionFee(processor, _input.executionFee, msg.value, Gas.Action.WITHDRAW);
         require(msg.sender == _input.owner, "Router: Invalid Owner");
         require(_input.marketTokenAmountIn > 0, "Router: Invalid Amount In");
         if (_input.shouldUnwrap) {
@@ -153,17 +140,14 @@ contract Router is ReentrancyGuard, RoleValidation {
         liquidityVault.cancelWithdrawal(_key, msg.sender);
     }
 
-    /////////////
-    // TRADING //
-    /////////////
-
     // @audit - need to request signed price here
     function createPositionRequest(Position.Input memory _trade, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
-        validExecutionFee(Gas.Action.POSITION)
     {
+        Gas.validateExecutionFee(processor, _trade.executionFee, msg.value, Gas.Action.POSITION);
+
         Order.CreateCache memory cache = Order.validateInitialParameters(marketMaker, tradeStorage, priceFeed, _trade);
 
         Position.Data memory position = tradeStorage.getPosition(cache.positionKey);
@@ -195,10 +179,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
     }
 
-    ////////////////////////
-    // INTERNAL FUNCTIONS //
-    ////////////////////////
-
     // How can we estimate the update fee and add it to the execution fee?
     function _requestOraclePricing(address _token, bytes[] memory _priceUpdateData) private {
         Oracle.Asset memory asset = priceFeed.getAsset(_token);
@@ -218,7 +198,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     function _handleTokenTransfers(Position.Input memory _trade) private {
         if (_trade.shouldWrap) {
             require(_trade.collateralToken == address(WETH), "Router: Invalid Collateral Token");
-            require(_trade.collateralDelta <= msg.value - _trade.executionFee, "Router: Invalid Collateral Delta");
+            require(_trade.collateralDelta <= msg.value - _trade.executionFee, "Router: Invalid Amount In");
             WETH.deposit{value: _trade.collateralDelta}();
             WETH.safeTransfer(address(processor), _trade.collateralDelta);
         } else {

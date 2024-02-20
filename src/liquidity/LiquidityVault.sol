@@ -129,10 +129,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         IERC20(SHORT_TOKEN).safeTransfer(msg.sender, shortFees);
     }
 
-    /////////////////////////////
-    // TOKEN RELATED FUNCTIONS //
-    /////////////////////////////
-
     function mint(address _to, uint256 _amount) external onlyVault {
         _mint(_to, _amount);
     }
@@ -141,10 +137,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         _burn(address(this), _amount);
     }
 
-    //////////////////////////////
-    // TOKEN TRANSFER FUNCTIONS //
-    //////////////////////////////
-
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
         onlyTradeStorage
@@ -152,13 +144,9 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         _transferOutTokens(_to, _amount, _isLongToken, _shouldUnwrap);
     }
 
-    function sendExecutionFee(address payable _processor, uint256 _executionFee) public onlyTradeStorage {
+    function sendExecutionFee(address payable _processor, uint256 _executionFee) external onlyTradeStorage {
         _processor.sendValue(_executionFee);
     }
-
-    //////////////////////////////
-    // STORAGE UPDATE FUNCTIONS //
-    //////////////////////////////
 
     function accumulateFees(uint256 _amount, bool _isLong) external onlyFeeAccumulator {
         _accumulateFees(_amount, _isLong);
@@ -186,10 +174,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     function decreasePoolBalance(uint256 _amount, bool _isLong) external onlyProcessor {
         _decreasePoolBalance(_amount, _isLong);
     }
-
-    ///////////////////////
-    // DEPOSIT FUNCTIONS //
-    ///////////////////////
 
     // Function to create a deposit request
     function createDeposit(Deposit.Input memory _input) external payable onlyRouter {
@@ -247,10 +231,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         // mint tokens to user
         _mint(_params.data.input.owner, cache.mintAmount);
     }
-
-    //////////////////////////
-    // WITHDRAWAL FUNCTIONS //
-    //////////////////////////
 
     // Function to create a withdrawal request
     function createWithdrawal(Withdrawal.Input memory _input) external payable onlyRouter {
@@ -315,10 +295,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         _transferOutTokens(_params.data.input.owner, cache.amountOut, _params.isLongToken, _params.shouldUnwrap);
     }
 
-    /////////////
-    // FUNDING //
-    /////////////
-
     function accumulateFundingFees(uint256 _amount, bool _isLong) external onlyTradeStorage {
         _isLong ? longClaimableFunding += _amount : shortClaimableFunding += _amount;
     }
@@ -338,10 +314,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         _isLong ? longClaimableFunding -= amount : shortClaimableFunding -= amount;
         _transferOutTokens(msg.sender, amount, _isLong, false);
     }
-
-    //////////////
-    // INTERNAL //
-    //////////////
 
     function _deleteWithdrawal(bytes32 _key) internal {
         withdrawalKeys.remove(_key);
@@ -374,10 +346,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
             IERC20(_isLongToken ? LONG_TOKEN : SHORT_TOKEN).safeTransfer(_to, _amount);
         }
     }
-
-    /////////////
-    // GETTERS //
-    /////////////
 
     function getDepositRequestAtIndex(uint256 _index) external view returns (Deposit.Data memory) {
         return depositRequests[depositKeys.at(_index)];

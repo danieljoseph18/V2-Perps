@@ -29,6 +29,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {Test, console} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -220,6 +221,8 @@ library Position {
 
     // 1x = 100
     function checkLeverage(IMarket market, uint256 _sizeUsd, uint256 _collateralUsd) external view {
+        console.log("Size: ", _sizeUsd);
+        console.log("Collateral: ", _collateralUsd);
         uint256 maxLeverage = market.getMaxLeverage();
         require(_collateralUsd <= _sizeUsd, "Position: collateral exceeds size");
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
@@ -326,7 +329,7 @@ library Position {
 
     /// @dev Need to adjust for decimals
     function getTradeValueUsd(uint256 _sizeDelta, uint256 _signedPrice, uint256 _baseUnit)
-        public
+        external
         pure
         returns (uint256 tradeValueUsd)
     {
@@ -334,7 +337,7 @@ library Position {
     }
 
     function isLiquidatable(Position.Data memory _position, Order.ExecuteCache memory _cache, uint256 liquidationFeeUsd)
-        public
+        external
         view
         returns (bool)
     {
@@ -399,7 +402,7 @@ library Position {
         uint256 _indexBaseUnit,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit
-    ) public pure returns (uint256 collateralAmount) {
+    ) external pure returns (uint256 collateralAmount) {
         uint256 indexUsd = mulDiv(_indexAmount, _indexPrice, _indexBaseUnit);
         collateralAmount = mulDiv(indexUsd, _collateralBaseUnit, _collateralPrice);
     }

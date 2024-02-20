@@ -72,10 +72,6 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         priceFeed = IPriceFeed(_priceFeed);
     }
 
-    //////////////////////////////
-    // CONFIGURATIONS FUNCTIONS //
-    //////////////////////////////
-
     function initialise(
         uint256 _liquidationFee, // 5e18 = 5 USD
         uint256 _tradingFee, // 0.001e18 = 0.1%
@@ -98,10 +94,6 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         tradingFee = _tradingFee;
         emit FeesSet(_liquidationFee, _tradingFee);
     }
-
-    ////////////////////////////////
-    // REQUEST CREATION FUNCTIONS //
-    ////////////////////////////////
 
     /// @dev Adds Order to EnumerableSet
     // @audit - Need to distinguish between order key and position key
@@ -131,10 +123,6 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Fire Event
         emit OrderRequestCancelled(_orderKey);
     }
-
-    //////////////////////////////////
-    // POSITION EXECUTION FUNCTIONS //
-    //////////////////////////////////
 
     function executeCollateralIncrease(Position.Execution memory _params, Order.ExecuteCache memory _cache)
         external
@@ -372,10 +360,6 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }
 
-    ////////////////////////
-    // INTERNAL FUNCTIONS //
-    ////////////////////////
-
     function _deletePosition(bytes32 _positionKey, address _market, bool _isLong) internal {
         delete openPositions[_positionKey];
         openPositionKeys[_market][_isLong].remove(_positionKey);
@@ -417,10 +401,6 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Pay borrowing fees to LPs
         liquidityVault.accumulateFees(_borrowAmount, _isLong);
     }
-
-    //////////////////////
-    // GETTER FUNCTIONS //
-    //////////////////////
 
     function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory) {
         return openPositionKeys[_market][_isLong].values();
