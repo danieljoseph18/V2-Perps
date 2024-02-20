@@ -25,6 +25,7 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {Test, console} from "forge-std/Test.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
@@ -76,7 +77,12 @@ library Borrowing {
         view
         returns (uint256 indexFee)
     {
-        indexFee = mulDiv(getTotalPositionFeesOwed(market, _position), _collateralDelta, _position.collateralAmount);
+        if (_position.collateralAmount == 0) {
+            // For Close
+            indexFee = getTotalPositionFeesOwed(market, _position);
+        } else {
+            indexFee = mulDiv(getTotalPositionFeesOwed(market, _position), _collateralDelta, _position.collateralAmount);
+        }
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens

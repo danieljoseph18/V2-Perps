@@ -28,6 +28,7 @@ import {Order} from "../positions/Order.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -141,7 +142,7 @@ library Position {
         TAKE_PROFIT
     }
 
-    function getRequestType(Input calldata _trade, Data memory _position, uint256 _collateralDelta)
+    function getRequestType(Input calldata _trade, Data memory _position)
         external
         pure
         returns (RequestType requestType)
@@ -156,7 +157,7 @@ library Position {
             if (_trade.isIncrease) {
                 requestType = RequestType.COLLATERAL_INCREASE;
             } else {
-                require(_position.collateralAmount >= _collateralDelta, "Position: Delta > Collateral");
+                require(_position.collateralAmount >= _trade.collateralDelta, "Position: Delta > Collateral");
                 requestType = RequestType.COLLATERAL_DECREASE;
             }
         } else {
@@ -166,20 +167,41 @@ library Position {
                 requestType = RequestType.POSITION_INCREASE;
             } else {
                 require(_position.positionSize >= _trade.sizeDelta, "Position: Size < SizeDelta");
-                require(_position.collateralAmount >= _collateralDelta, "Position: Delta > Collateral");
+                require(_position.collateralAmount >= _trade.collateralDelta, "Position: Delta > Collateral");
                 requestType = RequestType.POSITION_DECREASE;
             }
         }
+    }
+
+    function validateCreatePosition(
+        ITradeStorage tradeStorage,
+        Input memory _trade,
+        uint256 _indexRefPrice,
+        uint256 _sizeDeltaUsd,
+        uint256 _collateralRefPrice,
+        uint256 _collateralBaseUnit,
+        uint256 _collateralDeltaUsd
+    ) external view {
+        uint256 minCollateralUsd = tradeStorage.minCollateralUsd();
+        validateConditionals(_trade.conditionals, _indexRefPrice, _trade.isLong);
+        Order.checkMinCollateral(_trade.collateralDelta, _collateralRefPrice, _collateralBaseUnit, minCollateralUsd);
+        require(_collateralDeltaUsd >= _sizeDeltaUsd, "Router: Collateral Delta < Size Delta");
     }
 
     function generateKey(Request memory _request) external pure returns (bytes32 positionKey) {
         positionKey = keccak256(abi.encode(_request.input.indexToken, _request.user, _request.input.isLong));
     }
 
-    // Include the request type to differentiate between types like SL/TP
     function generateOrderKey(Request memory _request) public pure returns (bytes32 orderKey) {
-        orderKey =
-            keccak256(abi.encode(_request.input.indexToken, _request.user, _request.input.isLong, _request.requestType));
+        orderKey = keccak256(
+            abi.encode(
+                _request.input.indexToken,
+                _request.user,
+                _request.input.isLong,
+                _request.input.isIncrease, // Enables separate SL / TP Orders
+                _request.input.limitPrice // Enables multiple limit orders
+            )
+        );
     }
 
     function checkLimitPrice(uint256 _price, Input memory _request) external pure {
@@ -402,7 +424,7 @@ library Position {
 
     // Sizes must be valid percentages
     function validateConditionals(Conditionals memory _conditionals, uint256 _referencePrice, bool _isLong)
-        external
+        public
         pure
     {
         uint256 priceMargin = mulDiv(_referencePrice, PRICE_MARGIN, PRECISION);

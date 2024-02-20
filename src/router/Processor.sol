@@ -209,6 +209,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             request.input.sizeDelta,
             cache.impactedPrice,
             cache.indexPrice,
+            cache.indexBaseUnit,
             cache.longMarketTokenPrice,
             cache.shortMarketTokenPrice,
             cache.sizeDeltaUsd,
@@ -299,6 +300,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             position.positionSize,
             cache.impactedPrice,
             cache.indexPrice,
+            cache.indexBaseUnit,
             cache.longMarketTokenPrice,
             cache.shortMarketTokenPrice,
             cache.sizeDeltaUsd,
@@ -458,7 +460,8 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         IMarket market,
         uint256 _sizeDelta,
         uint256 _impactedIndexPrice,
-        uint256 _signedIndexPrice,
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice,
         int256 _sizeDeltaUsd,
@@ -467,10 +470,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     ) internal {
         if (_sizeDeltaUsd != 0) {
             market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
+            // Use Impacted Price for Entry
             market.updateTotalWAEP(_impactedIndexPrice, _sizeDeltaUsd, _isLong);
         }
-        market.updateFundingRate();
-        market.updateBorrowingRate(_signedIndexPrice, _longTokenPrice, _shortTokenPrice, _isLong);
+        market.updateFundingRate(_indexPrice, _indexBaseUnit);
+        market.updateBorrowingRate(_indexPrice, _indexBaseUnit, _longTokenPrice, _shortTokenPrice, _isLong);
     }
 
     function _updateImpactPool(IMarket market, int256 _priceImpactUsd, bool _isLong) internal {

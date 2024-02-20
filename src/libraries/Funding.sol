@@ -49,21 +49,15 @@ library Funding {
         bool flipsSign;
     }
 
-    function calculateDelta(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function calculateSkewUsd(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         view
-        returns (int256 skew, int256 deltaRate)
+        returns (int256 skewUsd)
     {
         uint256 longOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, true);
         uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, false);
 
-        skew = longOI.toInt256() - shortOI.toInt256();
-
-        // Calculate time since last funding update
-        uint256 timeElapsed = block.timestamp - market.lastFundingUpdate();
-
-        // Add the previous velocity to the funding rate
-        deltaRate = market.fundingRateVelocity() * timeElapsed.toInt256();
+        skewUsd = longOI.toInt256() - shortOI.toInt256();
     }
 
     /// @dev Calculate the funding rate velocity
@@ -76,6 +70,7 @@ library Funding {
 
     /// @dev Get the total funding fees accumulated for each side
     /// @notice For External Queries
+    // @audit - math
     function getTotalAccumulatedFees(IMarket market)
         external
         view

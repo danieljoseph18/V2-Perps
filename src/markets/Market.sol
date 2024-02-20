@@ -141,13 +141,12 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     // Rate can be lagging if lack of updates to positions
     // @audit -> Should only be called for execution, not requests
     // Pricing data must be accurate
-    function updateFundingRate() external nonReentrant onlyProcessor {
+    function updateFundingRate(uint256 _indexPrice, uint256 _indexBaseUnit) external nonReentrant onlyProcessor {
         // If time elapsed = 0, return
         uint48 lastUpdate = lastFundingUpdate;
         if (block.timestamp == lastUpdate) return;
 
-        // Replace with Funding.calculateDelta
-        int256 skew = longOpenInterest.toInt256() - shortOpenInterest.toInt256();
+        int256 skew = Funding.calculateSkewUsd(this, _indexPrice, _indexBaseUnit);
 
         // Calculate time since last funding update
         uint256 timeElapsed = block.timestamp - lastUpdate;
@@ -179,26 +178,29 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
      */
     /// @dev Call every time OI is updated (trade open / close)
     // Needs fix -> Should be for both sides
-    function updateBorrowingRate(uint256 _indexPrice, uint256 _longTokenPrice, uint256 _shortTokenPrice, bool _isLong)
-        external
-        nonReentrant
-        onlyProcessor
-    {
+    function updateBorrowingRate(
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice,
+        bool _isLong
+    ) external nonReentrant onlyProcessor {
         // If time elapsed = 0, return
         uint256 lastUpdate = lastBorrowUpdate;
-        if (block.timestamp == lastUpdate) return;
+        if (block.timestamp == lastUpdate) return; // No update
 
-        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, indexToken);
         uint256 longBaseUnit = Oracle.getLongBaseUnit(priceFeed);
         uint256 shortBaseUnit = Oracle.getShortBaseUnit(priceFeed);
 
         // Calculate the new Borrowing Rate
         uint256 openInterestUSD = _isLong
-            ? MarketUtils.getOpenInterestUsd(this, _indexPrice, indexBaseUnit, true)
-            : MarketUtils.getOpenInterestUsd(this, _indexPrice, indexBaseUnit, false);
+            ? MarketUtils.getOpenInterestUsd(this, _indexPrice, _indexBaseUnit, true)
+            : MarketUtils.getOpenInterestUsd(this, _indexPrice, _indexBaseUnit, false);
         uint256 poolBalance = MarketUtils.getTotalPoolBalanceUSD(
             this, liquidityVault, _longTokenPrice, _shortTokenPrice, longBaseUnit, shortBaseUnit
         );
+
+        if (poolBalance == 0 || openInterestUSD == 0) return;
 
         uint256 rate = unwrap(
             (ud(config.borrowing.factor).mul(ud(openInterestUSD).powu(config.borrowing.exponent))).div(ud(poolBalance))

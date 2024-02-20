@@ -35,6 +35,7 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IProcessor} from "./interfaces/IProcessor.sol";
 import {mulDiv} from "@prb/math/Common.sol";
+import {Order} from "../positions/Order.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
@@ -51,7 +52,6 @@ contract Router is ReentrancyGuard, RoleValidation {
     IProcessor private processor;
 
     uint256 private constant PRECISION = 1e18;
-    uint256 private constant COLLATERAL_MULTIPLIER = 1e12;
     uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
 
@@ -158,63 +158,27 @@ contract Router is ReentrancyGuard, RoleValidation {
     /////////////
 
     // @audit - need to request signed price here
-    function createPositionRequest(Position.Input calldata _trade, bytes[] memory _priceUpdateData)
+    function createPositionRequest(Position.Input memory _trade, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
         validExecutionFee(Gas.Action.POSITION)
     {
-        require(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE, "Router: Slippage");
-        require(_trade.collateralDelta != 0, "Router: Collateral Delta");
+        Order.CreateCache memory cache = Order.validateInitialParameters(marketMaker, tradeStorage, priceFeed, _trade);
 
-        uint256 collateralRefPrice;
-        if (_trade.isLong) {
-            require(_trade.collateralToken == address(WETH), "Router: Invalid Collateral Token");
-            (collateralRefPrice,) = Oracle.getLastMarketTokenPrices(priceFeed, true);
-        } else {
-            require(_trade.collateralToken == address(USDC), "Router: Invalid Collateral Token");
-            (, collateralRefPrice) = Oracle.getLastMarketTokenPrices(priceFeed, false);
-        }
+        Position.Data memory position = tradeStorage.getPosition(cache.positionKey);
 
-        require(collateralRefPrice > 0, "Router: Invalid Collateral Ref Price");
+        cache.requestType = Position.getRequestType(_trade, position);
 
-        address market = marketMaker.tokenToMarkets(_trade.indexToken);
-        require(market != address(0), "Router: Market Doesn't Exist");
+        Order.validateParamsForType(_trade, cache, position.collateralAmount, position.positionSize);
 
-        bytes32 positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
-
-        uint256 indexRefPrice = Oracle.getReferencePrice(priceFeed, priceFeed.getAsset(_trade.indexToken));
-        require(indexRefPrice > 0, "Router: Invalid Index Ref Price");
-
-        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.indexToken);
-        uint256 sizeDeltaUsd = mulDiv(_trade.sizeDelta, indexRefPrice, indexBaseUnit);
-
-        if (sizeDeltaUsd > 0) {
-            uint256 collateralBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.collateralToken);
-            uint256 collateralDeltaUsd = mulDiv(_trade.collateralDelta, collateralRefPrice, collateralBaseUnit);
-            Position.checkLeverage(IMarket(market), sizeDeltaUsd, collateralDeltaUsd);
-        }
-
-        if (_trade.isLimit) {
-            if (_trade.isLong) {
-                require(_trade.limitPrice > indexRefPrice, "Router: mark price > limit price");
-            } else {
-                require(_trade.limitPrice < indexRefPrice, "Router: mark price < limit price");
-            }
-        }
-
-        Position.validateConditionals(_trade.conditionals, indexRefPrice, _trade.isLong);
-
-        Position.RequestType requestType =
-            Position.getRequestType(_trade, tradeStorage.getPosition(positionKey), _trade.collateralDelta);
-
-        Position.Request memory request = Position.createRequest(_trade, market, msg.sender, requestType);
+        Position.Request memory request = Position.createRequest(_trade, cache.market, msg.sender, cache.requestType);
 
         tradeStorage.createOrderRequest(request);
 
         _requestOraclePricing(_trade.indexToken, _priceUpdateData);
 
-        _handleTokenTransfers(_trade);
+        if (_trade.isIncrease) _handleTokenTransfers(_trade);
 
         _sendExecutionFee(_trade.executionFee);
     }
@@ -251,7 +215,7 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     // @audit - need to update collateral balance wherever collateral is stored
     // @audit - decrease requests won't have any transfer in
-    function _handleTokenTransfers(Position.Input calldata _trade) private {
+    function _handleTokenTransfers(Position.Input memory _trade) private {
         if (_trade.shouldWrap) {
             require(_trade.collateralToken == address(WETH), "Router: Invalid Collateral Token");
             require(_trade.collateralDelta <= msg.value - _trade.executionFee, "Router: Invalid Collateral Delta");

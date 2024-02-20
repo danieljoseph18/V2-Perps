@@ -26,7 +26,8 @@ library Order {
     using SafeCast for uint256;
 
     uint256 internal constant PRECISION = 1e18;
-    uint256 public constant MAX_SLIPPAGE = 0.33e18;
+    uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
+    uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
 
     struct DecreaseCache {
         uint256 sizeDelta;
@@ -52,6 +53,21 @@ library Order {
         uint256 fee;
         uint256 feeDiscount;
         address referrer;
+    }
+
+    struct CreateCache {
+        uint256 collateralRefPrice;
+        address market;
+        bytes32 positionKey;
+        uint256 indexRefPrice;
+        uint256 indexBaseUnit;
+        uint256 sizeDeltaUsd;
+        uint256 collateralDeltaUsd;
+        uint256 collateralBaseUnit;
+        uint256 minCollateralUsd;
+        uint256 collateralAmountUsd;
+        uint256 positionSizeUsd;
+        Position.RequestType requestType;
     }
 
     ////////////////////////////
@@ -105,6 +121,7 @@ library Order {
         }
     }
 
+    // SL / TP are just Decrease Orders
     function constructConditionalOrders(
         Position.Data memory _position,
         Position.Conditionals memory _conditionals,
@@ -139,7 +156,7 @@ library Order {
                 market: address(_position.market),
                 user: _position.user,
                 requestBlock: block.number,
-                requestType: Position.RequestType.POSITION_DECREASE
+                requestType: Position.RequestType.STOP_LOSS
             });
         }
         // Construct the Take profit based on the values
@@ -169,9 +186,113 @@ library Order {
                 market: address(_position.market),
                 user: _position.user,
                 requestBlock: block.number,
-                requestType: Position.RequestType.POSITION_DECREASE
+                requestType: Position.RequestType.TAKE_PROFIT
             });
         }
+    }
+
+    //////////////////////////
+    // VALIDATION FUNCTIONS //
+    //////////////////////////
+
+    function validateInitialParameters(
+        IMarketMaker marketMaker,
+        ITradeStorage tradeStorage,
+        IPriceFeed priceFeed,
+        Position.Input memory _trade
+    ) external view returns (CreateCache memory cache) {
+        require(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE, "Order: Slippage");
+        require(_trade.collateralDelta != 0, "Order: Collateral Delta");
+
+        if (_trade.isLong) {
+            (cache.collateralRefPrice,) = Oracle.getLastMarketTokenPrices(priceFeed, true);
+        } else {
+            (, cache.collateralRefPrice) = Oracle.getLastMarketTokenPrices(priceFeed, false);
+        }
+
+        require(cache.collateralRefPrice > 0, "Order: Invalid Collateral Ref Price");
+
+        cache.market = marketMaker.tokenToMarkets(_trade.indexToken);
+        require(cache.market != address(0), "Order: Market Doesn't Exist");
+
+        cache.positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
+
+        cache.indexRefPrice = Oracle.getReferencePrice(priceFeed, priceFeed.getAsset(_trade.indexToken));
+        require(cache.indexRefPrice > 0, "Order: Invalid Index Ref Price");
+
+        cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.indexToken);
+        cache.sizeDeltaUsd = mulDiv(_trade.sizeDelta, cache.indexRefPrice, cache.indexBaseUnit);
+
+        if (_trade.isLimit) {
+            if (_trade.isLong) {
+                require(_trade.limitPrice > cache.indexRefPrice, "Order: mark price > limit price");
+            } else {
+                require(_trade.limitPrice < cache.indexRefPrice, "Order: mark price < limit price");
+            }
+        }
+
+        cache.collateralBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.collateralToken);
+        cache.collateralDeltaUsd = mulDiv(_trade.collateralDelta, cache.collateralRefPrice, cache.collateralBaseUnit);
+        cache.minCollateralUsd = tradeStorage.minCollateralUsd();
+    }
+
+    function validateParamsForType(
+        Position.Input memory _trade,
+        CreateCache memory _cache,
+        uint256 _collateralAmount,
+        uint256 _positionSize
+    ) external view returns (CreateCache memory) {
+        // Validate for each request type
+        if (_cache.requestType == Position.RequestType.CREATE_POSITION) {
+            Position.validateConditionals(_trade.conditionals, _cache.indexRefPrice, _trade.isLong);
+            checkMinCollateral(
+                _trade.collateralDelta, _cache.collateralRefPrice, _cache.collateralBaseUnit, _cache.minCollateralUsd
+            );
+            Position.checkLeverage(IMarket(_cache.market), _cache.sizeDeltaUsd, _cache.collateralDeltaUsd);
+        } else if (_cache.requestType == Position.RequestType.POSITION_INCREASE) {
+            // Clear the Conditionals
+            _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
+        } else if (_cache.requestType == Position.RequestType.POSITION_DECREASE) {
+            checkMinCollateral(
+                _collateralAmount - _trade.collateralDelta,
+                _cache.collateralRefPrice,
+                _cache.collateralBaseUnit,
+                _cache.minCollateralUsd
+            );
+            // Clear the Conditionals
+            _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
+        } else if (_cache.requestType == Position.RequestType.COLLATERAL_INCREASE) {
+            // convert existing collateral amount to usd
+            _cache.collateralAmountUsd = mulDiv(_collateralAmount, _cache.collateralRefPrice, _cache.collateralBaseUnit);
+            // conver position size to usd
+            _cache.positionSizeUsd = mulDiv(_positionSize, _cache.indexRefPrice, _cache.indexBaseUnit);
+            // subtract collateral delta usd
+            _cache.collateralAmountUsd += _cache.collateralDeltaUsd;
+            // chcek it doesnt go below min leverage
+            Position.checkLeverage(IMarket(_cache.market), _cache.positionSizeUsd, _cache.collateralAmountUsd);
+            // Clear the Conditionals
+            _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
+        } else if (_cache.requestType == Position.RequestType.COLLATERAL_DECREASE) {
+            checkMinCollateral(
+                _collateralAmount - _trade.collateralDelta,
+                _cache.collateralRefPrice,
+                _cache.collateralBaseUnit,
+                _cache.minCollateralUsd
+            );
+            // convert existing collateral amount to usd
+            _cache.collateralAmountUsd = mulDiv(_collateralAmount, _cache.collateralRefPrice, _cache.collateralBaseUnit);
+            // conver position size to usd
+            _cache.positionSizeUsd = mulDiv(_positionSize, _cache.indexRefPrice, _cache.indexBaseUnit);
+            // subtract collateral delta usd
+            _cache.collateralAmountUsd -= _cache.collateralDeltaUsd;
+            // chcek it doesnt go below min leverage
+            Position.checkLeverage(IMarket(_cache.market), _cache.positionSizeUsd, _cache.collateralAmountUsd);
+            // Clear the Conditionals
+            _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
+        } else {
+            revert("Order: Invalid Request Type");
+        }
+        return _cache;
     }
 
     //////////////////////////////
@@ -212,19 +333,17 @@ library Order {
         position = _updateFeeParameters(_position);
         // Process any Outstanding Fees
         (position,, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _cache);
-        // Decrease the collateral amount - @audit
-        position.collateralAmount -= _params.request.input.collateralDelta;
+        // Edit the Position
+        position = _editPosition(position, _cache, _params.request.input.collateralDelta, 0, false);
         // Check if the Decrease puts the position below the min collateral threshold
         require(
-            _checkMinCollateral(
+            checkMinCollateral(
                 position.collateralAmount, _cache.collateralPrice, _cache.collateralBaseUnit, _minCollateralUsd
             ),
             "Order: Min Collat"
         );
         // Check if the Decrease makes the Position Liquidatable
         require(!_checkIsLiquidatable(position, _cache, _liquidationFeeUsd), "Order: Liquidatable");
-        // Edit the Position
-        position = _editPosition(position, _cache, _params.request.input.collateralDelta, 0, false);
         // Check the Leverage
         Position.checkLeverage(
             _cache.market,
@@ -240,7 +359,7 @@ library Order {
     ) external view returns (Position.Data memory, uint256 sizeUsd) {
         // Check that the Position meets the minimum collateral threshold
         require(
-            _checkMinCollateral(
+            checkMinCollateral(
                 _params.request.input.collateralDelta,
                 _cache.collateralPrice,
                 _cache.collateralBaseUnit,
@@ -264,32 +383,33 @@ library Order {
     )
         external
         view
-        returns (
-            Position.Data memory position,
-            uint256 sizeDelta,
-            uint256 sizeDeltaUsd,
-            uint256 fundingFeeOwed,
-            uint256 borrowFeeOwed
-        )
+        returns (Position.Data memory position, uint256 sizeDeltaUsd, uint256 fundingFeeOwed, uint256 borrowFeeOwed)
     {
         // Update the Fee Parameters
         position = _updateFeeParameters(_position);
         // Process any Outstanding Fees
         (position,, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _cache);
-        uint256 newCollateralAmount = position.collateralAmount + _params.request.input.collateralDelta;
-        // Calculate the Size Delta to keep Leverage Consistent
-        sizeDelta = mulDiv(newCollateralAmount, position.positionSize, position.collateralAmount);
 
         // Update the Existing Position
-        position = _editPosition(position, _cache, _params.request.input.collateralDelta, sizeDelta, true);
+        position = _editPosition(
+            position, _cache, _params.request.input.collateralDelta, _params.request.input.sizeDelta, true
+        );
 
         sizeDeltaUsd = _cache.sizeDeltaUsd.abs();
+        // Check the Leverage
+        Position.checkLeverage(
+            _cache.market,
+            mulDiv(position.positionSize, _cache.indexPrice, _cache.indexBaseUnit),
+            mulDiv(position.collateralAmount, _cache.collateralPrice, _cache.collateralBaseUnit)
+        );
     }
 
     function decreaseExistingPosition(
         Position.Data memory _position,
         Position.Execution calldata _params,
-        ExecuteCache memory _cache
+        ExecuteCache memory _cache,
+        uint256 _minCollateralUsd,
+        uint256 _liquidationFeeUsd
     ) external view returns (Position.Data memory position, DecreaseCache memory decreaseCache) {
         position = _updateFeeParameters(_position);
 
@@ -312,6 +432,34 @@ library Order {
 
         (position, decreaseCache.afterFeeAmount, decreaseCache.fundingFee, decreaseCache.borrowFee) =
             _processFees(position, _params, _cache);
+
+        // Check if the Decrease puts the position below the min collateral threshold
+        // Only check these if it's not a full decrease
+        if (position.collateralAmount != 0) {
+            require(
+                checkMinCollateral(
+                    position.collateralAmount, _cache.collateralPrice, _cache.collateralBaseUnit, _minCollateralUsd
+                ),
+                "Order: Min Collat"
+            );
+            // Check if the Decrease makes the Position Liquidatable
+            require(!_checkIsLiquidatable(position, _cache, _liquidationFeeUsd), "Order: Liquidatable");
+        }
+    }
+
+    // Checks if a position meets the minimum collateral threshold
+    function checkMinCollateral(
+        uint256 _collateralAmount,
+        uint256 _collateralPriceUsd,
+        uint256 _collateralBaseUnit,
+        uint256 _minCollateralUsd
+    ) public pure returns (bool isValid) {
+        uint256 requestCollateralUsd = mulDiv(_collateralAmount, _collateralPriceUsd, _collateralBaseUnit);
+        if (requestCollateralUsd < _minCollateralUsd) {
+            isValid = false;
+        } else {
+            isValid = true;
+        }
     }
 
     ///////////////////////////////
@@ -374,6 +522,7 @@ library Order {
         return _position;
     }
 
+    // @audit - cache variables for gas savings
     function _updatePositionForDecrease(
         Position.Data memory position,
         uint256 _sizeDelta,
@@ -390,21 +539,6 @@ library Order {
         );
         position.pnlParams.sigmaIndexSizeUSD -= sizeDeltaUsd;
         return position;
-    }
-
-    // Checks if a position meets the minimum collateral threshold
-    function _checkMinCollateral(
-        uint256 _collateralAmount,
-        uint256 _collateralPriceUsd,
-        uint256 _collateralBaseUnit,
-        uint256 _minCollateralUsd
-    ) internal pure returns (bool isValid) {
-        uint256 requestCollateralUsd = mulDiv(_collateralAmount, _collateralPriceUsd, _collateralBaseUnit);
-        if (requestCollateralUsd < _minCollateralUsd) {
-            isValid = false;
-        } else {
-            isValid = true;
-        }
     }
 
     function _checkIsLiquidatable(
@@ -431,13 +565,17 @@ library Order {
         Position.Data memory _position,
         Position.Execution calldata _params,
         ExecuteCache memory _cache
-    ) internal view returns (Position.Data memory, uint256 afterFeeAmount, uint256 fundingFee, uint256 borrowFee) {
-        (_position, fundingFee) = _subtractFundingFee(_position, _cache, _params.request.input.collateralDelta);
+    )
+        internal
+        view
+        returns (Position.Data memory position, uint256 afterFeeAmount, uint256 fundingFee, uint256 borrowFee)
+    {
+        (position, fundingFee) = _subtractFundingFee(_position, _cache, _params.request.input.collateralDelta);
 
-        (_position, borrowFee) = _subtractBorrowingFee(_position, _cache, _params.request.input.collateralDelta);
+        (position, borrowFee) = _subtractBorrowingFee(position, _cache, _params.request.input.collateralDelta);
         afterFeeAmount = _params.request.input.collateralDelta - fundingFee - borrowFee;
 
-        return (_position, afterFeeAmount, fundingFee, borrowFee);
+        return (position, afterFeeAmount, fundingFee, borrowFee);
     }
 
     function _subtractFundingFee(Position.Data memory _position, ExecuteCache memory _cache, uint256 _collateralDelta)

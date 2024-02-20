@@ -80,9 +80,14 @@ interface IMarket {
     function initialise(Config memory _config) external;
     function updateConfig(Config memory _config) external;
     function updateAdlState(bool _isFlaggedForAdl, bool _isLong) external;
-    function updateFundingRate() external;
-    function updateBorrowingRate(uint256 _indexPrice, uint256 _longTokenPrice, uint256 _shortTokenPrice, bool _isLong)
-        external;
+    function updateFundingRate(uint256 _indexPrice, uint256 _indexBaseUnit) external;
+    function updateBorrowingRate(
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice,
+        bool _isLong
+    ) external;
     function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external;
     function updateOpenInterest(uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external;
     function updateImpactPool(int256 _priceImpactUsd, bool _isLong) external;

@@ -298,7 +298,7 @@ contract TestPositions is Test {
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
         processor.executePosition(key, OWNER, false, tradingEnabled);
         router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
-        key = tradeStorage.getOrderAtIndex(1, false);
+        key = tradeStorage.getOrderAtIndex(0, false);
         processor.executePosition(key, OWNER, false, tradingEnabled);
         vm.stopPrank();
     }
@@ -536,5 +536,126 @@ contract TestPositions is Test {
         key = tradeStorage.getOrderAtIndex(0, false);
         processor.executePosition(key, OWNER, false, tradingEnabled);
         vm.stopPrank();
+    }
+
+    function testFullExecuteDecreasePositionLong() public setUpMarkets {
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 2 ether, // 4x leverage
+            limitPrice: 0, // Market Order
+            maxSlippage: 0.03e18, // 0.3%
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
+        Oracle.TradingEnabled memory tradingEnabled =
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        processor.executePosition(key, OWNER, false, tradingEnabled);
+        input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 2 ether, // 4x leverage
+            limitPrice: 0, // Market Order
+            maxSlippage: 0.03e18, // 0.3%
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: false,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
+        key = tradeStorage.getOrderAtIndex(0, false);
+        processor.executePosition(key, OWNER, false, tradingEnabled);
+        vm.stopPrank();
+        // Check the position was removed from storage
+        bytes32 positionKey = keccak256(abi.encode(input.indexToken, OWNER, input.isLong));
+        Position.Data memory position = tradeStorage.getPosition(positionKey);
+        assertEq(position.positionSize, 0);
+    }
+
+    function testPartialExecuteDecreasePositionLong() public setUpMarkets {
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 2 ether, // 4x leverage
+            limitPrice: 0, // Market Order
+            maxSlippage: 0.03e18, // 0.3%
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
+        Oracle.TradingEnabled memory tradingEnabled =
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        processor.executePosition(key, OWNER, false, tradingEnabled);
+        input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.25 ether,
+            sizeDelta: 1 ether, // 4x leverage
+            limitPrice: 0, // Market Order
+            maxSlippage: 0.03e18, // 0.3%
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: false,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
+        key = tradeStorage.getOrderAtIndex(0, false);
+        uint256 balanceBeforeDecrease = OWNER.balance;
+        processor.executePosition(key, OWNER, false, tradingEnabled);
+        vm.stopPrank();
+        bytes32 positionKey = keccak256(abi.encode(input.indexToken, OWNER, input.isLong));
+        Position.Data memory position = tradeStorage.getPosition(positionKey);
+        uint256 balanceAfterDecrease = OWNER.balance;
+        assertEq(position.collateralAmount, 0.25 ether);
+        assertEq(position.positionSize, 1 ether);
+        assertGt(balanceAfterDecrease, balanceBeforeDecrease);
     }
 }

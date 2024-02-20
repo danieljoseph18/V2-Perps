@@ -238,12 +238,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in the Library
-        uint256 sizeDelta;
         uint256 sizeDeltaUsd;
         uint256 fundingFee;
         uint256 borrowFee;
-        (position, sizeDelta, sizeDeltaUsd, fundingFee, borrowFee) =
-            Order.increaseExistingPosition(position, _params, _cache);
+        (position, sizeDeltaUsd, fundingFee, borrowFee) = Order.increaseExistingPosition(position, _params, _cache);
         // Pay Fees
         _payFees(fundingFee, borrowFee, position.isLong);
         // Reserve Liquidity Equal to the Position Size
@@ -271,7 +269,8 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         }
         // Perform Execution in the Library
         Order.DecreaseCache memory decreaseCache;
-        (position, decreaseCache) = Order.decreaseExistingPosition(position, _params, _cache);
+        (position, decreaseCache) =
+            Order.decreaseExistingPosition(position, _params, _cache, minCollateralUsd, liquidationFeeUsd);
         // Pay Fees
         _payFees(decreaseCache.fundingFee, decreaseCache.borrowFee, position.isLong);
         // Cached to prevent multi conversion
@@ -282,14 +281,9 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         );
         // Update Final Storage
         openPositions[positionKey] = position;
-        // Delete the Position if Necessary
+        // Delete the Position if Full Decrease
         if (position.positionSize == 0 || position.collateralAmount == 0) {
             _deletePosition(positionKey, market, position.isLong);
-        }
-        // Accumulate the Borrow Fees
-        if (decreaseCache.borrowFee > 0) {
-            // accumulate borrow fee in liquidity vault
-            liquidityVault.accumulateFees(decreaseCache.borrowFee, position.isLong);
         }
         // Handle PNL
         if (decreaseCache.decreasePnl < 0) {

@@ -20,7 +20,7 @@ pragma solidity 0.8.23;
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Position} from "../positions/Position.sol";
-import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
+import {ud, UD60x18, unwrap, ZERO} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
@@ -65,6 +65,10 @@ library Pricing {
         UD60x18 prevSISU = ud(_prevSISU);
         UD60x18 sizeDeltaUsd = ud(_sizeDeltaUsd.abs());
         UD60x18 price = ud(_price);
+
+        if (prevSISU.sub(sizeDeltaUsd) == ZERO && _sizeDeltaUsd < 0) {
+            return 0;
+        }
 
         UD60x18 newWAEP;
 
