@@ -120,6 +120,10 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         processor = _processor;
     }
 
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
+        priceFeed = _priceFeed;
+    }
+
     function processFees() external onlyAdmin {
         uint256 longFees = longAccumulatedFees;
         uint256 shortFees = shortAccumulatedFees;

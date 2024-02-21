@@ -64,14 +64,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     uint256 public withdrawalGasLimit;
     uint256 public positionGasLimit;
 
-    error OrderProcessor_InvalidRequestType();
-
-    event ExecutePosition(bytes32 indexed _orderKey, Position.Request _request, uint256 _fee, uint256 _feeDiscount);
-    event GasLimitsUpdated(
-        uint256 indexed depositGasLimit, uint256 indexed withdrawalGasLimit, uint256 indexed positionGasLimit
-    );
-    event AdlExecuted(IMarket indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
-
     constructor(
         address _marketMaker,
         address _tradeStorage,
@@ -98,6 +90,10 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         withdrawalGasLimit = _withdrawal;
         positionGasLimit = _position;
         emit GasLimitsUpdated(_deposit, _withdrawal, _position);
+    }
+
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
+        priceFeed = _priceFeed;
     }
 
     // @audit - keeper needs to pass in cumulative net pnl
@@ -203,7 +199,9 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             cache.indexPrice,
             cache.indexBaseUnit,
             cache.longMarketTokenPrice,
+            Oracle.getLongBaseUnit(priceFeed),
             cache.shortMarketTokenPrice,
+            Oracle.getShortBaseUnit(priceFeed),
             request.input.isLong,
             request.input.isIncrease
         );
@@ -293,7 +291,9 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             cache.indexPrice,
             cache.indexBaseUnit,
             cache.longMarketTokenPrice,
+            Oracle.getLongBaseUnit(priceFeed),
             cache.shortMarketTokenPrice,
+            Oracle.getShortBaseUnit(priceFeed),
             position.isLong,
             false
         );
@@ -445,19 +445,23 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _longTokenPrice,
+        uint256 _longBaseUnit,
         uint256 _shortTokenPrice,
+        uint256 _shortBaseUnit,
         bool _isLong,
         bool _isIncrease
     ) internal {
         if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
             int256 signedSizeDelta = _isIncrease ? _sizeDelta.toInt256() : -_sizeDelta.toInt256();
-            market.updateTotalWAEP(_impactedIndexPrice, signedSizeDelta, _isLong);
-            // WAEP relies on OI, so must be updated first
+            market.updateAverageEntryPrice(_impactedIndexPrice, signedSizeDelta, _isLong);
+            // Average Entry Price relies on OI, so it must be updated before this
             market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
         }
         market.updateFundingRate(_indexPrice, _indexBaseUnit);
-        market.updateBorrowingRate(_indexPrice, _indexBaseUnit, _longTokenPrice, _shortTokenPrice, _isLong);
+        market.updateBorrowingRate(
+            _indexPrice, _indexBaseUnit, _longTokenPrice, _longBaseUnit, _shortTokenPrice, _shortBaseUnit, _isLong
+        );
     }
 
     function _updateImpactPool(IMarket market, int256 _priceImpactUsd) internal {

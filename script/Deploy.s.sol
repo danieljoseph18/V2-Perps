@@ -78,10 +78,6 @@ contract Deploy is Script {
 
         contracts.referralStorage = new ReferralStorage(weth, usdc, address(contracts.roleStorage));
 
-        contracts.globalMarketConfig = new GlobalMarketConfig(
-            address(contracts.liquidityVault), address(contracts.tradeStorage), address(contracts.roleStorage)
-        );
-
         contracts.processor = new Processor(
             address(contracts.marketMaker),
             address(contracts.tradeStorage),
@@ -99,6 +95,16 @@ contract Deploy is Script {
             usdc,
             weth,
             address(contracts.processor),
+            address(contracts.roleStorage)
+        );
+
+        contracts.globalMarketConfig = new GlobalMarketConfig(
+            payable(address(contracts.liquidityVault)),
+            address(contracts.tradeStorage),
+            address(contracts.marketMaker),
+            payable(address(contracts.processor)),
+            payable(address(contracts.router)),
+            payable(address(contracts.priceFeed)),
             address(contracts.roleStorage)
         );
 

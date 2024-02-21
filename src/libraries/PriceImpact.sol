@@ -61,15 +61,15 @@ library PriceImpact {
         cache.longOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, true);
         cache.shortOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, false);
         cache.sizeDeltaUSD = mulDiv(_request.input.sizeDelta, _indexPrice, _indexBaseUnit);
-        cache.startingSkewLong = cache.longOI > cache.shortOI;
+        cache.startingSkewLong = cache.longOI >= cache.shortOI;
         cache.skewBefore = cache.startingSkewLong ? cache.longOI - cache.shortOI : cache.shortOI - cache.longOI;
         if (_request.input.isIncrease) {
             _request.input.isLong ? cache.longOI += cache.sizeDeltaUSD : cache.shortOI += cache.sizeDeltaUSD;
         } else {
             _request.input.isLong ? cache.longOI -= cache.sizeDeltaUSD : cache.shortOI -= cache.sizeDeltaUSD;
         }
-        cache.skewAfter = cache.longOI > cache.shortOI ? cache.longOI - cache.shortOI : cache.shortOI - cache.longOI;
-        cache.skewFlip = cache.longOI > cache.shortOI != cache.startingSkewLong;
+        cache.skewAfter = cache.longOI >= cache.shortOI ? cache.longOI - cache.shortOI : cache.shortOI - cache.longOI;
+        cache.skewFlip = cache.longOI >= cache.shortOI != cache.startingSkewLong;
         // Calculate the Price Impact
         if (cache.skewFlip) {
             priceImpactUsd = _calculateSkewFlipImpactUsd(
@@ -81,7 +81,10 @@ library PriceImpact {
             );
         } else {
             priceImpactUsd = _calculateImpactUsd(
-                cache.skewBefore, cache.skewAfter, cache.impact.exponent, cache.impact.positiveFactor
+                cache.skewBefore,
+                cache.skewAfter,
+                cache.impact.exponent,
+                cache.skewAfter >= cache.skewBefore ? cache.impact.negativeFactor : cache.impact.positiveFactor
             );
         }
 

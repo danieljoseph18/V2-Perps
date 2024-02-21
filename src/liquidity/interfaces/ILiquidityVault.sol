@@ -3,6 +3,7 @@ pragma solidity 0.8.23;
 
 import {Deposit} from "../../liquidity/Deposit.sol";
 import {Withdrawal} from "../../liquidity/Withdrawal.sol";
+import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface ILiquidityVault {
     // Constructor is not included in the interface
@@ -65,6 +66,7 @@ interface ILiquidityVault {
     function SHORT_TOKEN() external view returns (address);
     function getDepositRequestAtIndex(uint256 _index) external view returns (Deposit.Data memory);
     function getWithdrawalRequestAtIndex(uint256 _index) external view returns (Withdrawal.Data memory);
+    function updatePriceFeed(IPriceFeed _priceFeed) external;
 
     event DepositRequestCreated(
         bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 blockNumber

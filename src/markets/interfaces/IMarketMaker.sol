@@ -3,6 +3,7 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "./IMarket.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
+import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface IMarketMaker {
     event MarketMakerInitialised(address priceStorage);
@@ -11,6 +12,7 @@ interface IMarketMaker {
 
     function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _liquidityVault) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
+    function updatePriceFeed(IPriceFeed _priceFeed) external;
     function createNewMarket(address _indexToken, bytes32 _priceId, Oracle.Asset memory _asset)
         external
         returns (address market);

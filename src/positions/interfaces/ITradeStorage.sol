@@ -3,6 +3,7 @@ pragma solidity 0.8.23;
 
 import {Position} from "../../positions/Position.sol";
 import {Order} from "../Order.sol";
+import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface ITradeStorage {
     event OrderRequestCreated(bytes32 indexed _orderKey, Position.Request indexed _request);
@@ -43,6 +44,7 @@ interface ITradeStorage {
 
     function initialise(uint256 _liquidationFee, uint256 _tradingFee, uint256 _executionFee, uint256 _minCollateralUsd)
         external;
+    function updatePriceFeed(IPriceFeed _priceFeed) external;
     function createOrderRequest(Position.Request calldata _request) external;
     function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;

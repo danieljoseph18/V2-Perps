@@ -40,17 +40,17 @@ library MarketUtils {
         view
         returns (uint256 entryValueUsd)
     {
-        uint256 totalWAEP;
+        uint256 averageEntryPrice;
         uint256 indexOI;
         if (_isLong) {
-            totalWAEP = market.longTotalWAEP();
+            averageEntryPrice = market.longAverageEntryPrice();
             indexOI = market.longOpenInterest();
         } else {
-            totalWAEP = market.shortTotalWAEP();
+            averageEntryPrice = market.shortAverageEntryPrice();
             indexOI = market.shortOpenInterest();
         }
 
-        entryValueUsd = mulDiv(totalWAEP, indexOI, _indexBaseUnit);
+        entryValueUsd = mulDiv(averageEntryPrice, indexOI, _indexBaseUnit);
     }
 
     function getTotalPoolBalanceUSD(

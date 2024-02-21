@@ -54,8 +54,8 @@ interface IMarket {
     function longOpenInterest() external view returns (uint256);
     function shortOpenInterest() external view returns (uint256);
     function percentageAllocation() external view returns (uint256);
-    function longTotalWAEP() external view returns (uint256);
-    function shortTotalWAEP() external view returns (uint256);
+    function longAverageEntryPrice() external view returns (uint256);
+    function shortAverageEntryPrice() external view returns (uint256);
     function impactPoolUsd() external view returns (uint256);
 
     // Events
@@ -68,7 +68,7 @@ interface IMarket {
         uint256 shortCumulativeFundingFees
     );
     event BorrowingUpdated(bool isLong, uint256 rate);
-    event TotalWAEPUpdated(uint256 longTotalWAEP, uint256 shortTotalWAEP);
+    event AverageEntryPriceUpdated(uint256 longAverageEntryPrice, uint256 shortAverageEntryPrice);
     event OpenInterestUpdated(uint256 longOpenInterest, uint256 shortOpenInterest);
     event AllocationUpdated(address market, uint256 percentageAllocation);
     event AdlStateUpdated(bool adlState);
@@ -82,10 +82,12 @@ interface IMarket {
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _longTokenPrice,
+        uint256 _longBaseUnit,
         uint256 _shortTokenPrice,
+        uint256 _shortBaseUnit,
         bool _isLong
     ) external;
-    function updateTotalWAEP(uint256 _price, int256 _sizeDelta, bool _isLong) external;
+    function updateAverageEntryPrice(uint256 _price, int256 _sizeDelta, bool _isLong) external;
     function updateOpenInterest(uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd) external;
     function updateImpactPool(int256 _priceImpactUsd) external;
     function updateAllocation(uint256 _percentageAllocation) external;

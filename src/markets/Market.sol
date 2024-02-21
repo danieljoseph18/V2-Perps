@@ -28,12 +28,9 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {Oracle} from "../oracle/Oracle.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 
-// @audit - CRITICAL -> Profit needs to be paid from a market's allocation
 contract Market is IMarket, ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
@@ -41,7 +38,6 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
     uint256 public constant SCALING_FACTOR = 1e18;
 
-    IPriceFeed public priceFeed;
     ILiquidityVault public liquidityVault;
 
     address public indexToken;
@@ -88,8 +84,8 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     /**
      *  =========================  PNL  =========================
      */
-    uint256 public longTotalWAEP; // long total weighted average entry price
-    uint256 public shortTotalWAEP; // short total weighted average entry price
+    uint256 public longAverageEntryPrice; // long total weighted average entry price
+    uint256 public shortAverageEntryPrice; // short total weighted average entry price
 
     /**
      *  ========================= Price Impact  =========================
@@ -101,11 +97,8 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     /**
      *  ========================= Constructor  =========================
      */
-    constructor(address _priceFeed, address _liquidityVault, address _indexToken, address _roleStorage)
-        RoleValidation(_roleStorage)
-    {
+    constructor(address _liquidityVault, address _indexToken, address _roleStorage) RoleValidation(_roleStorage) {
         indexToken = _indexToken;
-        priceFeed = IPriceFeed(_priceFeed);
         liquidityVault = ILiquidityVault(_liquidityVault);
     }
 
@@ -173,29 +166,29 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     // Function to calculate borrowing fees per second
     /*
         borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
-     */
+    */
+
     /// @dev Call every time OI is updated (trade open / close)
     // Needs fix -> Should be for both sides
     function updateBorrowingRate(
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _longTokenPrice,
+        uint256 _longBaseUnit,
         uint256 _shortTokenPrice,
+        uint256 _shortBaseUnit,
         bool _isLong
     ) external nonReentrant onlyProcessor {
         // If time elapsed = 0, return
         uint48 lastUpdate = lastBorrowUpdate;
         if (block.timestamp == lastUpdate) return; // No update
 
-        uint256 longBaseUnit = Oracle.getLongBaseUnit(priceFeed);
-        uint256 shortBaseUnit = Oracle.getShortBaseUnit(priceFeed);
-
         // Calculate the new Borrowing Rate
         uint256 openInterestUSD = _isLong
             ? MarketUtils.getOpenInterestUsd(this, _indexPrice, _indexBaseUnit, true)
             : MarketUtils.getOpenInterestUsd(this, _indexPrice, _indexBaseUnit, false);
         uint256 poolBalance = MarketUtils.getTotalPoolBalanceUSD(
-            this, liquidityVault, _longTokenPrice, _shortTokenPrice, longBaseUnit, shortBaseUnit
+            this, liquidityVault, _longTokenPrice, _shortTokenPrice, _longBaseUnit, _shortBaseUnit
         );
 
         if (poolBalance == 0 || openInterestUSD == 0) return;
@@ -218,18 +211,19 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     }
 
     /// @dev Updates Weighted Average Entry Price => Used to Track PNL For a Market
-    function updateTotalWAEP(uint256 _price, int256 _sizeDelta, bool _isLong) external onlyProcessor {
+    function updateAverageEntryPrice(uint256 _price, int256 _sizeDelta, bool _isLong) external onlyProcessor {
         require(_price != 0, "Market: Price is 0");
         if (_sizeDelta == 0) return; // No Change
 
         if (_isLong) {
-            longTotalWAEP =
-                Pricing.calculateWeightedAverageEntryPrice(longTotalWAEP, longOpenInterest, _sizeDelta, _price);
+            longAverageEntryPrice =
+                Pricing.calculateWeightedAverageEntryPrice(longAverageEntryPrice, longOpenInterest, _sizeDelta, _price);
         } else {
-            shortTotalWAEP =
-                Pricing.calculateWeightedAverageEntryPrice(shortTotalWAEP, shortOpenInterest, _sizeDelta, _price);
+            shortAverageEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
+                shortAverageEntryPrice, shortOpenInterest, _sizeDelta, _price
+            );
         }
-        emit TotalWAEPUpdated(longTotalWAEP, shortTotalWAEP);
+        emit AverageEntryPriceUpdated(longAverageEntryPrice, shortAverageEntryPrice);
     }
 
     /// @dev Only Order Processor

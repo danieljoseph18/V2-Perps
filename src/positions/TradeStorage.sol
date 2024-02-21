@@ -87,6 +87,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit TradeStorageInitialised(_liquidationFee, _tradingFee, _executionFee);
     }
 
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
+        priceFeed = _priceFeed;
+    }
+
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
         require(_liquidationFee <= MAX_LIQUIDATION_FEE && _liquidationFee != 0, "TradeStorage: Invalid Liquidation Fee");
         require(_tradingFee <= MAX_TRADING_FEE && _tradingFee != 0, "TradeStorage: Invalid Trading Fee");

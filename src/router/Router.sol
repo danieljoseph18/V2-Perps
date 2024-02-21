@@ -86,6 +86,10 @@ contract Router is ReentrancyGuard, RoleValidation {
         processor = IProcessor(_processor);
     }
 
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
+        priceFeed = _priceFeed;
+    }
+
     function createDeposit(Deposit.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable

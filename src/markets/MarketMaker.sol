@@ -62,6 +62,10 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         emit DefaultConfigSet(_defaultConfig);
     }
 
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
+        priceFeed = _priceFeed;
+    }
+
     /// @dev Only MarketFactory
     // q -> Do we want to use indexToken? This will require a new token for each market
     // We need to enable the use of synthetic markets
@@ -82,7 +86,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Set Up Price Oracle
         priceFeed.supportAsset(_indexToken, _asset);
         // Create new Market contract
-        Market market = new Market(address(priceFeed), liquidityVault, _indexToken, address(roleStorage));
+        Market market = new Market(liquidityVault, _indexToken, address(roleStorage));
         // Initialize
         market.initialise(defaultConfig);
         // Cache

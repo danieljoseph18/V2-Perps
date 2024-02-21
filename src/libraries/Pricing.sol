@@ -53,17 +53,17 @@ library Pricing {
      * WAEP = ∑(Position Size in Index Tokens) / ∑(Entry Price * Position Size in Index Tokens)
      */
     function calculateWeightedAverageEntryPrice(
-        uint256 _prevWAEP,
+        uint256 _prevAverageEntryPrice,
         uint256 _totalOpenInterest, // Total Index Tokens in Position / Market
         int256 _sizeDelta,
         uint256 _indexPrice
     ) external pure returns (uint256) {
         uint256 absSizeDelta = _sizeDelta.abs();
         if (_sizeDelta <= 0) {
-            // If full close, WAEP is reset to 0
+            // If full close, Avg Entry Price is reset to 0
             if (absSizeDelta == _totalOpenInterest) return 0;
-            // Else, WAEP doesn't change for decrease
-            else return _prevWAEP;
+            // Else, Avg Entry Price doesn't change for decrease
+            else return _prevAverageEntryPrice;
         }
 
         uint256 nextOpenInterest;
@@ -71,7 +71,7 @@ library Pricing {
 
         // Increasing position size
         nextOpenInterest = _totalOpenInterest + absSizeDelta;
-        nextTotalEntryValue = (_prevWAEP * _totalOpenInterest) + (_indexPrice * absSizeDelta);
+        nextTotalEntryValue = (_prevAverageEntryPrice * _totalOpenInterest) + (_indexPrice * absSizeDelta);
 
         return nextTotalEntryValue / nextOpenInterest;
     }
@@ -112,14 +112,14 @@ library Pricing {
     function getDecreasePositionPnl(
         uint256 _indexBaseUnit,
         uint256 _sizeDelta,
-        uint256 _positionWAEP,
+        uint256 _averageEntryPrice,
         uint256 _indexPrice,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external pure returns (int256 decreasePositionPnl) {
         // only realise a percentage equivalent to the percentage of the position being closed
-        uint256 entryValue = mulDiv(_sizeDelta, _positionWAEP, _indexBaseUnit);
+        uint256 entryValue = mulDiv(_sizeDelta, _averageEntryPrice, _indexBaseUnit);
         uint256 exitValue = mulDiv(_sizeDelta, _indexPrice, _indexBaseUnit);
         // if long, > 0 is profit, < 0 is loss
         // if short, > 0 is loss, < 0 is profit

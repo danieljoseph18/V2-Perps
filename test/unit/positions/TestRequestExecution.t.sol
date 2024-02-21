@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
@@ -23,6 +23,7 @@ import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
 import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
+import {Funding} from "../../../src/libraries/Funding.sol";
 
 contract TestRequestExecution is Test {
     RoleStorage roleStorage;
@@ -44,6 +45,8 @@ contract TestRequestExecution is Test {
 
     bytes[] tokenUpdateData;
     uint256[] allocations;
+
+    address USER = makeAddr("USER");
 
     function setUp() public {
         // Pass some time so block timestamp isn't 0
@@ -82,6 +85,8 @@ contract TestRequestExecution is Test {
     modifier setUpMarkets() {
         vm.deal(OWNER, 1_000_000 ether);
         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
+        vm.deal(USER, 1_000_000 ether);
+        MockUSDC(usdc).mint(USER, 1_000_000_000e6);
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 50 ether}();
         Oracle.Asset memory wethData = Oracle.Asset({
@@ -438,5 +443,123 @@ contract TestRequestExecution is Test {
         uint256 expectedAmountOut = 0.5 ether;
         assertLt(balanceAfter - balanceBefore, expectedAmountOut);
         console.log("Amount Out: ", balanceAfter - balanceBefore);
+    }
+
+    function testMarketStateIsUpdatedForEachPositionExecution() public setUpMarkets {
+        // Pass some time
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+        // create a request
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.004 ether,
+            sizeDelta: 0.04 ether,
+            limitPrice: 0,
+            maxSlippage: 0.01e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 0.014 ether}(input, tokenUpdateData);
+        // execute the request
+        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
+        Oracle.TradingEnabled memory tradingEnabled =
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        // pass some time
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+        // check the market parameters
+        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+        uint256 longOpenInterest = market.longOpenInterest();
+        assertEq(longOpenInterest, 0.04 ether);
+        uint256 longAverageEntryPrice = market.longAverageEntryPrice();
+        assertNotEq(longAverageEntryPrice, 0);
+        // Update the Price
+        bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 230000, 50, -2, 230000, 50, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        // Create usdc update data with a price of 1.05
+        bytes memory usdcUpdateData = priceFeed.createPriceFeedUpdateData(
+            usdcPriceId, 95, 0, -2, 95, 0, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        tokenUpdateData[0] = wethUpdateData;
+        tokenUpdateData[1] = usdcUpdateData;
+        // create a request
+        vm.prank(USER);
+        router.createPositionRequest{value: 0.014 ether}(input, tokenUpdateData);
+        // execute the request
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        console2.log("Funding Velocity Before: ", market.fundingRateVelocity());
+        console2.log("Funding Rate Before: ", market.fundingRate());
+        (uint256 predictedLongFees, uint256 predictedShortFees) = Funding.getTotalAccumulatedFees(market);
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        // check the market parameters
+        longOpenInterest = market.longOpenInterest();
+        assertEq(longOpenInterest, 0.08 ether);
+        uint256 newLongWaep = market.longAverageEntryPrice();
+        assertNotEq(newLongWaep, longAverageEntryPrice);
+        uint256 lastBorrowingUpdate = market.lastBorrowUpdate();
+        assertEq(lastBorrowingUpdate, block.timestamp);
+        uint256 lastFundingUpdate = market.lastFundingUpdate();
+        assertEq(lastFundingUpdate, block.timestamp);
+        int256 fundingRate = market.fundingRate();
+        console2.log("Funding Rate After: ", fundingRate);
+        assertNotEq(fundingRate, 0);
+        int256 fundingVelocity = market.fundingRateVelocity();
+        console2.log("Funding Velocity After: ", fundingVelocity);
+        assertNotEq(fundingVelocity, 0);
+        uint256 longBorrowingRate = market.longBorrowingRate();
+        assertNotEq(longBorrowingRate, 0);
+        assertEq(predictedLongFees, market.longCumulativeFundingFees());
+        assertEq(predictedShortFees, market.shortCumulativeFundingFees());
+    }
+
+    function testPositionFeesAreCalculatedCorrectly() public setUpMarkets {
+        // create a position
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.01e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        // predict the fee owed
+        uint256 sizeInCollateral = Position.convertIndexAmountToCollateral(4 ether, 2500.5e18, 1e18, 1e18, 1e6);
+        assertEq(sizeInCollateral, 1.0002e10);
+        uint256 predictedFee = (sizeInCollateral * 0.001e18) / 1e18;
+        // compare it with the fee owed from the contract
+        uint256 fee = Fee.calculateForPosition(tradeStorage, 4 ether, 0.5 ether, 2500.5e18, 1e18, 1e18, 1e6);
+        assertEq(predictedFee, fee);
     }
 }
