@@ -35,13 +35,16 @@ interface ITradeStorage {
     event BorrowingFeesProcessed(address indexed _user, uint256 indexed _borrowingFee);
     event BorrowingParamsUpdated(bytes32 indexed _positionKey, Position.BorrowingParams indexed _borrowingParams);
     event TakeProfitSet(
-        bytes32 indexed _positionKey, uint256 indexed _takeProfitPrice, uint256 indexed _takeProfitSize
+        bytes32 indexed _positionKey, uint256 indexed _takeProfitPrice, uint256 indexed _takeProfitPercentage
     );
-    event StopLossSet(bytes32 indexed _positionKey, uint256 indexed _stopLossPrice, uint256 indexed _stopLossSize);
+    event StopLossSet(
+        bytes32 indexed _positionKey, uint256 indexed _stopLossPrice, uint256 indexed _stopLossPercentage
+    );
 
     function initialise(uint256 _liquidationFee, uint256 _tradingFee, uint256 _executionFee, uint256 _minCollateralUsd)
         external;
     function createOrderRequest(Position.Request calldata _request) external;
+    function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
     function executeCollateralIncrease(Position.Execution memory _params, Order.ExecuteCache memory _cache) external;
     function executeCollateralDecrease(Position.Execution memory _params, Order.ExecuteCache memory _cache) external;

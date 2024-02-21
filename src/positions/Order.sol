@@ -29,6 +29,9 @@ library Order {
     uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
 
+    /**
+     * ========================= Data Structures =========================
+     */
     struct DecreaseCache {
         uint256 sizeDelta;
         int256 decreasePnl;
@@ -70,10 +73,9 @@ library Order {
         Position.RequestType requestType;
     }
 
-    ////////////////////////////
-    // CONSTRUCTION FUNCTIONS //
-    ////////////////////////////
-
+    /**
+     * ========================= Construction Functions =========================
+     */
     function constructExecuteParams(
         ITradeStorage tradeStorage,
         IMarketMaker marketMaker,
@@ -121,7 +123,7 @@ library Order {
         }
     }
 
-    // SL / TP are just Decrease Orders
+    // SL / TP are Decrease Orders tied to a Position
     function constructConditionalOrders(
         Position.Data memory _position,
         Position.Conditionals memory _conditionals,
@@ -191,10 +193,9 @@ library Order {
         }
     }
 
-    //////////////////////////
-    // VALIDATION FUNCTIONS //
-    //////////////////////////
-
+    /**
+     * ========================= Validation Functions =========================
+     */
     function validateInitialParameters(
         IMarketMaker marketMaker,
         ITradeStorage tradeStorage,
@@ -210,15 +211,12 @@ library Order {
             cache.collateralRefPrice = Oracle.getShortReferencePrice(priceFeed);
         }
 
-        require(cache.collateralRefPrice > 0, "Order: Invalid Collateral Ref Price");
-
         cache.market = marketMaker.tokenToMarkets(_trade.indexToken);
         require(cache.market != address(0), "Order: Market Doesn't Exist");
 
         cache.positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
 
         cache.indexRefPrice = Oracle.getReferencePrice(priceFeed, priceFeed.getAsset(_trade.indexToken));
-        require(cache.indexRefPrice > 0, "Order: Invalid Index Ref Price");
 
         cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.indexToken);
         cache.sizeDeltaUsd = mulDiv(_trade.sizeDelta, cache.indexRefPrice, cache.indexBaseUnit);
@@ -295,9 +293,9 @@ library Order {
         return _cache;
     }
 
-    //////////////////////////////
-    // MAIN EXECUTION FUNCTIONS //
-    //////////////////////////////
+    /**
+     * ========================= Main Execution Functions =========================
+     */
 
     // @audit - check the position isn't put below min leverage
     // @audit - should we process fees before updating the fee parameters?
@@ -464,10 +462,9 @@ library Order {
         }
     }
 
-    ///////////////////////////////
-    // INTERNAL HELPER FUNCTIONS //
-    ///////////////////////////////
-
+    /**
+     * ========================= Internal Helper Functions =========================
+     */
     function _updateFeeParameters(Position.Data memory _position) internal view returns (Position.Data memory) {
         // Borrowing Fees
         _position.borrowingParams.feesOwed = Borrowing.getTotalPositionFeesOwed(_position.market, _position);

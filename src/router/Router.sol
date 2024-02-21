@@ -86,7 +86,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         processor = IProcessor(_processor);
     }
 
-    // @audit - need to request signed price here
     function createDeposit(Deposit.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
@@ -115,7 +114,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         liquidityVault.cancelDeposit(_key, msg.sender);
     }
 
-    // @audit - need to request signed price here
     function createWithdrawal(Withdrawal.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
@@ -140,7 +138,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         liquidityVault.cancelWithdrawal(_key, msg.sender);
     }
 
-    // @audit - need to request signed price here
     function createPositionRequest(Position.Input memory _trade, bytes[] memory _priceUpdateData)
         external
         payable
@@ -165,6 +162,18 @@ contract Router is ReentrancyGuard, RoleValidation {
         if (_trade.isIncrease) _handleTokenTransfers(_trade);
 
         _sendExecutionFee(_trade.executionFee);
+    }
+
+    function createEditOrder(Position.Conditionals memory _conditionals, uint256 _executionFee, bytes32 _positionKey)
+        external
+        payable
+        nonReentrant
+    {
+        Gas.validateExecutionFee(processor, _executionFee, msg.value, Gas.Action.POSITION);
+
+        tradeStorage.createEditOrder(_conditionals, _positionKey);
+
+        _sendExecutionFee(_executionFee);
     }
 
     // @audit - need to check X blocks have passed

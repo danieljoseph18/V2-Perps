@@ -211,6 +211,7 @@ library Oracle {
     // Use chainlink price feed if available
     // @audit - What do we do if ref price is 0???
     // @audit - What do we do if secondary?
+    // @audit - VERY SENSITIVE - needs to ALWAYS return a valid price
     function getReferencePrice(IPriceFeed priceFeed, Asset memory _asset)
         public
         view
@@ -221,6 +222,7 @@ library Oracle {
         if (_asset.chainlinkPriceFeed == address(0)) {
             if (_asset.priceProvider == PriceProvider.PYTH) {
                 (referencePrice,) = priceFeed.getPriceUnsafe(_asset);
+                require(referencePrice > 0, "Oracle: Invalid Pyth Price");
                 return referencePrice;
             }
             return 0;

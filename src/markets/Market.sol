@@ -48,16 +48,14 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
     bool private isInitialised;
 
-    ///////////////////////////////////////////////////////
-    // CONFIG: All Constants Used in Market Calculations //
-    ///////////////////////////////////////////////////////
-
+    /**
+     *  ========================= Market Config  =========================
+     */
     Config private config;
 
-    ///////////////////////////////////////////////////
-    // FUNDING: Updateable Funding-Related variables //
-    ///////////////////////////////////////////////////
-
+    /**
+     *  =========================  Funding Fees  =========================
+     */
     uint48 public lastFundingUpdate;
     // positive rate = longs pay shorts, negative rate = shorts pay longs
     int256 public fundingRate; // RATE PER SECOND Stored as a fixed-point number 1 = 1e18
@@ -65,45 +63,44 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     uint256 public longCumulativeFundingFees; // how much longs have owed shorts per token, 18 decimals
     uint256 public shortCumulativeFundingFees; // how much shorts have owed longs per token, 18 decimals
 
-    ///////////////////////////////////////////////////////
-    // BORROWING: Updateable Borrowing-Related variables //
-    ///////////////////////////////////////////////////////
-
+    /**
+     *  ========================= Borrowing Fees  =========================
+     */
     uint48 public lastBorrowUpdate;
     uint256 public longBorrowingRate; // borrow fee per second for longs per second (0.0001e18 = 0.01%)
     uint256 public longCumulativeBorrowFees;
     uint256 public shortBorrowingRate; // borrow fee per second for shorts per second
     uint256 public shortCumulativeBorrowFees;
 
-    //////////////////////////////////////////////////////
-    // OPEN INTEREST: Open Interest Data for the Market //
-    //////////////////////////////////////////////////////
-
+    /**
+     *  =========================  Open Interest  =========================
+     */
     uint256 public longOpenInterest; // in index tokens
     uint256 public shortOpenInterest; // in index tokens
 
-    /////////////////////////////////////////////////////
-    // ALLOCATION: For Allocating Liquidity to Markets //
-    /////////////////////////////////////////////////////
+    /**
+     *  =========================  Allocations  =========================
+     */
 
     // Percentage the same for Long / Short tokens due to goal of balanced markets
     uint256 public percentageAllocation; // 2 D.P: 10000 = 100%
 
-    //////////////////////////////////////////////////
-    // PNL: Values for Calculating PNL of Positions //
-    //////////////////////////////////////////////////
-
+    /**
+     *  =========================  PNL  =========================
+     */
     uint256 public longTotalWAEP; // long total weighted average entry price
     uint256 public shortTotalWAEP; // short total weighted average entry price
 
-    /////////////////////////////////////////////////////////////////
-    // Price Impact: Used to calculate the price impact of a trade //
-    /////////////////////////////////////////////////////////////////
+    /**
+     *  ========================= Price Impact  =========================
+     */
 
     // Virtual Pool for Price Impact Calculations
-    uint256 public longImpactPoolUsd;
-    uint256 public shortImpactPoolUsd;
+    uint256 public impactPoolUsd;
 
+    /**
+     *  ========================= Constructor  =========================
+     */
     constructor(address _priceFeed, address _liquidityVault, address _indexToken, address _roleStorage)
         RoleValidation(_roleStorage)
     {
@@ -119,12 +116,15 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         require(!isInitialised, "Market: already initialised");
         config = _config;
         // Set initial timestamps so != 0
-        lastBorrowUpdate = uint48(block.timestamp);
-        lastFundingUpdate = uint48(block.timestamp);
+        lastBorrowUpdate = block.timestamp.toUint48();
+        lastFundingUpdate = block.timestamp.toUint48();
         isInitialised = true;
         emit MarketInitialised(_config);
     }
 
+    /**
+     *  ========================= Market State Functions  =========================
+     */
     function updateConfig(Config memory _config) external onlyConfigurator {
         config = _config;
         emit MarketConfigUpdated(_config);
@@ -184,7 +184,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         bool _isLong
     ) external nonReentrant onlyProcessor {
         // If time elapsed = 0, return
-        uint256 lastUpdate = lastBorrowUpdate;
+        uint48 lastUpdate = lastBorrowUpdate;
         if (block.timestamp == lastUpdate) return; // No update
 
         uint256 longBaseUnit = Oracle.getLongBaseUnit(priceFeed);
@@ -242,36 +242,21 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
         emit OpenInterestUpdated(longOpenInterest, shortOpenInterest);
     }
 
-    function updateImpactPool(int256 _priceImpactUsd, bool _isLong) external onlyProcessor {
-        uint256 absImpact = _priceImpactUsd.abs();
-        if (_isLong) {
-            _priceImpactUsd > 0 ? longImpactPoolUsd += absImpact : longImpactPoolUsd -= absImpact;
-        } else {
-            _priceImpactUsd > 0 ? shortImpactPoolUsd += absImpact : shortImpactPoolUsd -= absImpact;
-        }
+    function updateImpactPool(int256 _priceImpactUsd) external onlyProcessor {
+        _priceImpactUsd > 0 ? impactPoolUsd += _priceImpactUsd.abs() : impactPoolUsd -= _priceImpactUsd.abs();
     }
 
-    /////////////////
-    // Allocations //
-    /////////////////
-
     /**
-     * Markets will be allocated liquidity based on risk score + open interest (demand)
-     * Higher risk markets will get reduced allocations
-     * Markets with higher demand will get higher allocations
-     * Allocations will be stored as maxOpenInterestUSD
-     * @dev -> Don't use a for loop here.
-     * @dev -> Need to store allocations for long and shorts
+     *  =========================  Allocation Functions  =========================
      */
     function updateAllocation(uint256 _percentageAllocation) external onlyStateUpdater {
         percentageAllocation = _percentageAllocation;
         emit AllocationUpdated(address(this), _percentageAllocation);
     }
 
-    /////////////
-    // GETTERS //
-    /////////////
-
+    /**
+     *  ========================= Getters  =========================
+     */
     function getCumulativeFees()
         external
         view

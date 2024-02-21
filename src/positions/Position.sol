@@ -227,51 +227,6 @@ library Position {
         });
     }
 
-    function createEditOrder(
-        Data memory _position,
-        uint256 _executionPrice,
-        uint256 _percentage,
-        uint256 _maxSlippage,
-        uint256 _executionFee,
-        bool _isStopLoss
-    ) external view returns (Request memory request) {
-        RequestType requestType;
-        // Require SL/TP Orders to be a certain % away
-        // WAEP is used as the reference price
-        uint256 priceMargin = mulDiv(_position.weightedAvgEntryPrice, PRICE_MARGIN, PRECISION);
-
-        Conditionals memory conditionals;
-        if (_isStopLoss) {
-            require(_executionPrice <= _position.weightedAvgEntryPrice - priceMargin, "Position: SL Price");
-            conditionals.stopLossPrice = _executionPrice;
-            conditionals.stopLossPercentage = _percentage;
-        } else {
-            require(_executionPrice >= _position.weightedAvgEntryPrice + priceMargin, "Position: TP Price");
-            conditionals.takeProfitPrice = _executionPrice;
-            conditionals.takeProfitPercentage = _percentage;
-        }
-        request = Request({
-            input: Input({
-                indexToken: _position.indexToken,
-                collateralToken: _position.collateralToken,
-                collateralDelta: mulDiv(_position.collateralAmount, _percentage, PRECISION),
-                sizeDelta: mulDiv(_position.positionSize, _percentage, PRECISION),
-                limitPrice: _executionPrice,
-                maxSlippage: _maxSlippage,
-                executionFee: _executionFee,
-                isLong: _position.isLong,
-                isLimit: true,
-                isIncrease: false,
-                shouldWrap: false,
-                conditionals: conditionals
-            }),
-            market: address(_position.market),
-            user: _position.user,
-            requestBlock: block.number,
-            requestType: requestType
-        });
-    }
-
     function generateNewPosition(Request memory _request, Order.ExecuteCache memory _cache)
         external
         view

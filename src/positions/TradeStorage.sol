@@ -112,6 +112,39 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         emit OrderRequestCreated(orderKey, _request);
     }
 
+    /// @dev Create a SL / TP Order or update an existing one
+    function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external onlyRouter {
+        Position.Data memory position = openPositions[_positionKey];
+        require(Position.exists(position), "TradeStorage: Position Doesn't Exist");
+        // construct the SL / TP orders
+        // Uses WAEP as ref price
+        (Position.Request memory stopLoss, Position.Request memory takeProfit) =
+            Order.constructConditionalOrders(position, _conditionals, position.weightedAvgEntryPrice);
+        // if the position already has a SL / TP, delete them
+        // add them to storage
+        if (_conditionals.stopLossSet) {
+            // If Setting a SL, delete the existing SL
+            if (position.stopLossKey != bytes32(0)) {
+                _deleteOrder(position.stopLossKey, true);
+            }
+            // Create and Set SL
+            openPositions[_positionKey].stopLossKey = _createStopLoss(stopLoss);
+
+            emit StopLossSet(_positionKey, _conditionals.stopLossPrice, _conditionals.stopLossPercentage);
+        }
+
+        if (_conditionals.takeProfitSet) {
+            // If Setting a TP, delete the existing TP
+            if (position.takeProfitKey != bytes32(0)) {
+                _deleteOrder(position.takeProfitKey, true);
+            }
+            // Create and Set TP
+            openPositions[_positionKey].takeProfitKey = _createTakeProfit(takeProfit);
+
+            emit TakeProfitSet(_positionKey, _conditionals.takeProfitPrice, _conditionals.takeProfitPercentage);
+        }
+    }
+
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyRouterOrProcessor {
         // Create a Storage Pointer to the Order Set
         EnumerableSet.Bytes32Set storage orderKeys = _isLimit ? limitOrderKeys : marketOrderKeys;
@@ -191,21 +224,9 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         (Position.Request memory stopLoss, Position.Request memory takeProfit) =
             Order.constructConditionalOrders(position, _params.request.input.conditionals, _cache.indexPrice);
         // If stop loss set, create and store the order
-        if (_params.request.input.conditionals.stopLossSet) {
-            bytes32 stopLossKey = Position.generateOrderKey(stopLoss);
-            limitOrderKeys.add(stopLossKey);
-            orders[stopLossKey] = stopLoss;
-            // add the key to the position
-            position.stopLossKey = stopLossKey;
-        }
+        if (_params.request.input.conditionals.stopLossSet) position.stopLossKey = _createStopLoss(stopLoss);
         // If take profit set, create and store the order
-        if (_params.request.input.conditionals.takeProfitSet) {
-            bytes32 takeProfitKey = Position.generateOrderKey(takeProfit);
-            limitOrderKeys.add(takeProfitKey);
-            orders[takeProfitKey] = takeProfit;
-            // add the key to the position
-            position.takeProfitKey = takeProfitKey;
-        }
+        if (_params.request.input.conditionals.takeProfitSet) position.takeProfitKey = _createTakeProfit(takeProfit);
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(absSizeDelta, _cache.collateralPrice, _cache.collateralBaseUnit, _params.request.input.isLong);
         // Update Final Storage
@@ -358,6 +379,18 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // transfer the liquidation fee to the liquidator
         liquidityVault.transferOutTokens(_liquidator, liqFee, position.isLong, false);
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
+    }
+
+    function _createStopLoss(Position.Request memory _stopLoss) internal returns (bytes32 stopLossKey) {
+        stopLossKey = Position.generateOrderKey(_stopLoss);
+        limitOrderKeys.add(stopLossKey);
+        orders[stopLossKey] = _stopLoss;
+    }
+
+    function _createTakeProfit(Position.Request memory _takeProfit) internal returns (bytes32 takeProfitKey) {
+        takeProfitKey = Position.generateOrderKey(_takeProfit);
+        limitOrderKeys.add(takeProfitKey);
+        orders[takeProfitKey] = _takeProfit;
     }
 
     function _deletePosition(bytes32 _positionKey, address _market, bool _isLong) internal {

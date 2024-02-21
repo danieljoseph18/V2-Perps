@@ -195,7 +195,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             _isLimitOrder,
             _isTradingEnabled
         );
-        _updateImpactPool(cache.market, cache.priceImpactUsd, request.input.isLong);
+        _updateImpactPool(cache.market, cache.priceImpactUsd);
         _updateMarketState(
             cache.market,
             request.input.sizeDelta,
@@ -460,11 +460,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         market.updateBorrowingRate(_indexPrice, _indexBaseUnit, _longTokenPrice, _shortTokenPrice, _isLong);
     }
 
-    function _updateImpactPool(IMarket market, int256 _priceImpactUsd, bool _isLong) internal {
+    function _updateImpactPool(IMarket market, int256 _priceImpactUsd) internal {
         // If Price Impact is Negative, add to the impact Pool
         // If Price Impact is Positive, Subtract from the Impact Pool
         // Impact Pool Delta = -1 * Price Impact
         if (_priceImpactUsd == 0) return;
-        market.updateImpactPool(-_priceImpactUsd, _isLong);
+        market.updateImpactPool(-_priceImpactUsd);
     }
 }

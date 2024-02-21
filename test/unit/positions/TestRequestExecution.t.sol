@@ -210,11 +210,11 @@ contract TestRequestExecution is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         // Get the size of the impact pool before the position is executed
-        uint256 impactPoolBefore = IMarket(marketMaker.tokenToMarkets(weth)).longImpactPoolUsd();
+        uint256 impactPoolBefore = IMarket(marketMaker.tokenToMarkets(weth)).impactPoolUsd();
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, false, tradingEnabled);
         // Get the size of the impact pool after the position is executed
-        uint256 impactPoolAfter = IMarket(marketMaker.tokenToMarkets(weth)).longImpactPoolUsd();
+        uint256 impactPoolAfter = IMarket(marketMaker.tokenToMarkets(weth)).impactPoolUsd();
         // Check that the impact pool has been updated
         assertGt(impactPoolAfter, impactPoolBefore);
     }
@@ -355,5 +355,88 @@ contract TestRequestExecution is Test {
         // Check that the user receives profit
         assertGt(balanceAfter, balanceBefore);
         console.log("Profit Received: ", balanceAfter - balanceBefore);
+    }
+
+    function testAUserAccruesLossesIfClosingAnUnprofitablePosition() public setUpMarkets {
+        // Create a request
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.01e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        // Execute the position
+        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
+        Oracle.TradingEnabled memory tradingEnabled =
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+
+        // Update the Price
+        bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 230000, 50, -2, 230000, 50, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        // Create usdc update data with a price of 1.05
+        bytes memory usdcUpdateData = priceFeed.createPriceFeedUpdateData(
+            usdcPriceId, 95, 0, -2, 95, 0, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        tokenUpdateData[0] = wethUpdateData;
+        tokenUpdateData[1] = usdcUpdateData;
+        vm.prank(OWNER);
+        priceFeed.signPriceData{value: 2 gwei}(weth, tokenUpdateData);
+        // Create a close position request
+        Position.Input memory closeInput = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.01e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: false,
+            shouldWrap: true, // Receive Ether
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 0.01 ether}(closeInput, tokenUpdateData);
+        // Execute the close position request
+        bytes32 closeOrderKey = tradeStorage.getOrderAtIndex(0, false);
+        uint256 balanceBefore = OWNER.balance;
+        vm.prank(OWNER);
+        processor.executePosition(closeOrderKey, OWNER, false, tradingEnabled);
+        uint256 balanceAfter = OWNER.balance;
+        // Check that the user accrues losses
+        uint256 expectedAmountOut = 0.5 ether;
+        assertLt(balanceAfter - balanceBefore, expectedAmountOut);
+        console.log("Amount Out: ", balanceAfter - balanceBefore);
     }
 }

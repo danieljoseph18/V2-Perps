@@ -85,9 +85,7 @@ library PriceImpact {
             );
         }
 
-        if (priceImpactUsd > 0) {
-            priceImpactUsd = _validateImpactDelta(market, priceImpactUsd, _request.input.isLong);
-        }
+        if (priceImpactUsd > 0) priceImpactUsd = _validateImpactDelta(market, priceImpactUsd);
 
         // Execute the Price Impact
         impactedPrice = _calculateImpactedPrice(
@@ -152,12 +150,8 @@ library PriceImpact {
         return mulDiv(_sizeDeltaUsd, _tokenUnit, indexTokensAfterImpact);
     }
 
-    function _validateImpactDelta(IMarket market, int256 _priceImpactUsd, bool _isLong)
-        internal
-        view
-        returns (int256)
-    {
-        int256 impactPoolUsd = _isLong ? market.longImpactPoolUsd().toInt256() : market.shortImpactPoolUsd().toInt256();
+    function _validateImpactDelta(IMarket market, int256 _priceImpactUsd) internal view returns (int256) {
+        int256 impactPoolUsd = market.impactPoolUsd().toInt256();
         if (_priceImpactUsd > impactPoolUsd) {
             return impactPoolUsd;
         } else {
