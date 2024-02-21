@@ -422,8 +422,10 @@ library Order {
         decreaseCache.decreasePnl = Pricing.getDecreasePositionPnl(
             _cache.indexBaseUnit,
             decreaseCache.sizeDelta,
-            position.pnlParams.weightedAvgEntryPrice,
-            _cache.indexPrice,
+            position.weightedAvgEntryPrice,
+            _cache.impactedPrice,
+            _cache.collateralPrice,
+            _cache.collateralBaseUnit,
             position.isLong
         );
 
@@ -493,51 +495,39 @@ library Order {
             // Increase the Position's collateral
             _position.collateralAmount += _collateralDelta;
             if (_sizeDelta > 0) {
-                _position =
-                    _updatePositionForIncrease(_position, _sizeDelta, _cache.sizeDeltaUsd.abs(), _cache.indexPrice);
+                _position = _updatePositionForIncrease(_position, _sizeDelta, _cache.impactedPrice);
             }
         } else {
             _position.collateralAmount -= _collateralDelta;
             if (_sizeDelta > 0) {
-                _position = _updatePositionForDecrease(_position, _sizeDelta, _cache.indexPrice, _cache.indexBaseUnit);
+                _position = _updatePositionForDecrease(_position, _sizeDelta, _cache.impactedPrice);
             }
         }
         return _position;
     }
 
-    function _updatePositionForIncrease(
-        Position.Data memory _position,
-        uint256 _sizeDelta,
-        uint256 _sizeDeltaUsd,
-        uint256 _price
-    ) internal pure returns (Position.Data memory) {
-        _position.positionSize += _sizeDelta;
-        _position.pnlParams.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
-            _position.pnlParams.weightedAvgEntryPrice,
-            _position.pnlParams.sigmaIndexSizeUSD,
-            _sizeDeltaUsd.toInt256(),
-            _price
+    function _updatePositionForIncrease(Position.Data memory _position, uint256 _sizeDelta, uint256 _price)
+        internal
+        pure
+        returns (Position.Data memory)
+    {
+        _position.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
+            _position.weightedAvgEntryPrice, _position.positionSize, _sizeDelta.toInt256(), _price
         );
-        _position.pnlParams.sigmaIndexSizeUSD += _sizeDeltaUsd;
+        _position.positionSize += _sizeDelta;
         return _position;
     }
 
     // @audit - cache variables for gas savings
-    function _updatePositionForDecrease(
-        Position.Data memory position,
-        uint256 _sizeDelta,
-        uint256 _price,
-        uint256 _baseUnit
-    ) internal pure returns (Position.Data memory) {
-        position.positionSize -= _sizeDelta;
-        uint256 sizeDeltaUsd = Position.getTradeValueUsd(_sizeDelta, _price, _baseUnit);
-        position.pnlParams.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
-            position.pnlParams.weightedAvgEntryPrice,
-            position.pnlParams.sigmaIndexSizeUSD,
-            -1 * sizeDeltaUsd.toInt256(),
-            _price
+    function _updatePositionForDecrease(Position.Data memory position, uint256 _sizeDelta, uint256 _price)
+        internal
+        pure
+        returns (Position.Data memory)
+    {
+        position.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
+            position.weightedAvgEntryPrice, position.positionSize, -_sizeDelta.toInt256(), _price
         );
-        position.pnlParams.sigmaIndexSizeUSD -= sizeDeltaUsd;
+        position.positionSize -= _sizeDelta;
         return position;
     }
 
@@ -624,6 +614,7 @@ library Order {
         }
     }
 
+    // @audit - We're giving the position extra size by using max price
     function fetchTokenValues(
         IPriceFeed priceFeed,
         ExecuteCache memory _cache,

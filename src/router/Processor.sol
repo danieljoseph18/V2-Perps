@@ -204,7 +204,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             cache.indexBaseUnit,
             cache.longMarketTokenPrice,
             cache.shortMarketTokenPrice,
-            cache.sizeDeltaUsd,
             request.input.isLong,
             request.input.isIncrease
         );
@@ -295,7 +294,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             cache.indexBaseUnit,
             cache.longMarketTokenPrice,
             cache.shortMarketTokenPrice,
-            cache.sizeDeltaUsd,
             position.isLong,
             false
         );
@@ -448,14 +446,15 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint256 _indexBaseUnit,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice,
-        int256 _sizeDeltaUsd,
         bool _isLong,
         bool _isIncrease
     ) internal {
-        if (_sizeDeltaUsd != 0) {
-            market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
+        if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
-            market.updateTotalWAEP(_impactedIndexPrice, _sizeDeltaUsd, _isLong);
+            int256 signedSizeDelta = _isIncrease ? _sizeDelta.toInt256() : -_sizeDelta.toInt256();
+            market.updateTotalWAEP(_impactedIndexPrice, signedSizeDelta, _isLong);
+            // WAEP relies on OI, so must be updated first
+            market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
         }
         market.updateFundingRate(_indexPrice, _indexBaseUnit);
         market.updateBorrowingRate(_indexPrice, _indexBaseUnit, _longTokenPrice, _shortTokenPrice, _isLong);

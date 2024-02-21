@@ -210,6 +210,38 @@ contract TestRequestCreation is Test {
         router.createPositionRequest{value: 4 ether + _executionFee}(input, tokenUpdateData);
     }
 
+    function testFuzzingValidExecutionFeesShort(uint256 _executionFee) public setUpMarkets {
+        vm.txGasPrice(1e3);
+        uint256 expGasLimit = Gas.getLimitForAction(processor, Gas.Action.POSITION);
+        uint256 minFee = Gas.getMinExecutionFee(processor, expGasLimit);
+        _executionFee = bound(_executionFee, minFee, 1 ether);
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 10_000e6,
+            sizeDelta: 40 ether,
+            limitPrice: 0,
+            maxSlippage: 0.003e18,
+            executionFee: _executionFee,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: _executionFee}(input, tokenUpdateData);
+        vm.stopPrank();
+    }
+
     function testFuzzingInvalidExecutionFees(uint256 _executionFee) public setUpMarkets {
         // Set the Gas Price so min fee != 0
         vm.txGasPrice(1e9);
@@ -274,6 +306,36 @@ contract TestRequestCreation is Test {
         router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
     }
 
+    function testFuzzingInvalidLimitPricesShort(uint256 _limitPrice) public setUpMarkets {
+        vm.assume(_limitPrice > 2500e18);
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 10_000e6,
+            sizeDelta: 40 ether,
+            limitPrice: _limitPrice,
+            maxSlippage: 0.003e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: true,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        vm.expectRevert();
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+    }
+
     function testFuzzingLimitPriceWithinBounds(uint256 _limitPrice) public setUpMarkets {
         vm.assume(_limitPrice > 2500e18);
         Position.Input memory input = Position.Input({
@@ -299,6 +361,35 @@ contract TestRequestCreation is Test {
         });
         vm.prank(OWNER);
         router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+    }
+
+    function testFuzzingLimitPriceWithinBoundsShort(uint256 _limitPrice) public setUpMarkets {
+        vm.assume(_limitPrice < 2500e18);
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 10_000e6,
+            sizeDelta: 40 ether,
+            limitPrice: _limitPrice,
+            maxSlippage: 0.003e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
     }
 
     ////////////////
@@ -388,6 +479,35 @@ contract TestRequestCreation is Test {
         router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
     }
 
+    function testFuzzingSizeDeltaWithinBoundsShort(uint256 _sizeDelta) public setUpMarkets {
+        _sizeDelta = bound(_sizeDelta, 4 ether, 400 ether);
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 10_000e6,
+            sizeDelta: _sizeDelta,
+            limitPrice: 0,
+            maxSlippage: 0.003e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+    }
+
     //////////////////////
     // COLLATERAL DELTA //
     //////////////////////
@@ -418,6 +538,36 @@ contract TestRequestCreation is Test {
         vm.prank(OWNER);
         vm.expectRevert();
         router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input, tokenUpdateData);
+    }
+
+    function testFuzzingCollateralDeltaBelowBoundShort(uint256 _collateralDelta) public setUpMarkets {
+        vm.assume(_collateralDelta < 100e6);
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: _collateralDelta,
+            sizeDelta: 4 ether, // 10k
+            limitPrice: 0,
+            maxSlippage: 0.003e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        vm.expectRevert();
+        router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
     }
 
     function testFuzzingCollateralDeltaAboveBound(uint256 _collateralDelta) public setUpMarkets {
@@ -474,6 +624,36 @@ contract TestRequestCreation is Test {
         });
         vm.prank(OWNER);
         router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input, tokenUpdateData);
+    }
+
+    function testFuzzingCollateralDeltaWithinBounsShort(uint256 _collateralDelta) public setUpMarkets {
+        // Bound the input between 1 and 4 ether
+        _collateralDelta = bound(_collateralDelta, 100e6, 10_000e6);
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: _collateralDelta,
+            sizeDelta: 4 ether, // 10k
+            limitPrice: 0,
+            maxSlippage: 0.003e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
     }
 
     function testCreatingAPositionWithInvalidIndexToken(address _randomToken) public setUpMarkets {

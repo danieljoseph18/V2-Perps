@@ -29,7 +29,6 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {Test, console} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -42,10 +41,6 @@ library Position {
     // Margin of Error for Limit Order Prices
     uint256 public constant PRICE_MARGIN = 0.005e18; // 0.5%
 
-    ///////////////////////////
-    // OPEN POSITION STRUCTS //
-    ///////////////////////////
-
     // Data for an Open Position
     struct Data {
         IMarket market;
@@ -54,10 +49,10 @@ library Position {
         address collateralToken; // WETH long, USDC short
         uint256 collateralAmount; // vs size = leverage
         uint256 positionSize; // position size in index tokens, value fluctuates in USD giving PnL
+        uint256 weightedAvgEntryPrice;
         bool isLong; // will determine token used
         BorrowingParams borrowingParams;
         FundingParams fundingParams;
-        PnLParams pnlParams;
         bytes32 stopLossKey;
         bytes32 takeProfitKey;
     }
@@ -80,12 +75,6 @@ library Position {
         uint256 lastShortCumulativeFunding;
     }
 
-    // PnL Component of a Position
-    struct PnLParams {
-        uint256 weightedAvgEntryPrice;
-        uint256 sigmaIndexSizeUSD; // Sum of all increases and decreases in index size USD
-    }
-
     struct Conditionals {
         bool stopLossSet;
         bool takeProfitSet;
@@ -94,10 +83,6 @@ library Position {
         uint256 stopLossPercentage;
         uint256 takeProfitPercentage;
     }
-
-    /////////////////////
-    // REQUEST STRUCTS //
-    /////////////////////
 
     // Trade Request -> Sent by user
     struct Input {
@@ -221,8 +206,6 @@ library Position {
 
     // 1x = 100
     function checkLeverage(IMarket market, uint256 _sizeUsd, uint256 _collateralUsd) external view {
-        console.log("Size: ", _sizeUsd);
-        console.log("Collateral: ", _collateralUsd);
         uint256 maxLeverage = market.getMaxLeverage();
         require(_collateralUsd <= _sizeUsd, "Position: collateral exceeds size");
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
@@ -255,15 +238,15 @@ library Position {
         RequestType requestType;
         // Require SL/TP Orders to be a certain % away
         // WAEP is used as the reference price
-        uint256 priceMargin = mulDiv(_position.pnlParams.weightedAvgEntryPrice, PRICE_MARGIN, PRECISION);
+        uint256 priceMargin = mulDiv(_position.weightedAvgEntryPrice, PRICE_MARGIN, PRECISION);
 
         Conditionals memory conditionals;
         if (_isStopLoss) {
-            require(_executionPrice <= _position.pnlParams.weightedAvgEntryPrice - priceMargin, "Position: SL Price");
+            require(_executionPrice <= _position.weightedAvgEntryPrice - priceMargin, "Position: SL Price");
             conditionals.stopLossPrice = _executionPrice;
             conditionals.stopLossPercentage = _percentage;
         } else {
-            require(_executionPrice >= _position.pnlParams.weightedAvgEntryPrice + priceMargin, "Position: TP Price");
+            require(_executionPrice >= _position.weightedAvgEntryPrice + priceMargin, "Position: TP Price");
             conditionals.takeProfitPrice = _executionPrice;
             conditionals.takeProfitPercentage = _percentage;
         }
@@ -305,10 +288,10 @@ library Position {
             user: _request.user,
             collateralAmount: _request.input.collateralDelta,
             positionSize: _request.input.sizeDelta,
+            weightedAvgEntryPrice: _cache.impactedPrice,
             isLong: _request.input.isLong,
             borrowingParams: BorrowingParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: FundingParams(0, 0, block.timestamp, longFundingFee, shortFundingFee),
-            pnlParams: PnLParams(_cache.indexPrice, _cache.sizeDeltaUsd.abs()),
             stopLossKey: bytes32(0),
             takeProfitKey: bytes32(0)
         });
@@ -316,7 +299,7 @@ library Position {
 
     function getPnl(Data memory _position, uint256 _price, uint256 _baseUnit) external pure returns (int256 pnl) {
         // Get the Entry Value (WAEP * Position Size)
-        uint256 entryValue = mulDiv(_position.pnlParams.weightedAvgEntryPrice, _position.positionSize, _baseUnit);
+        uint256 entryValue = mulDiv(_position.weightedAvgEntryPrice, _position.positionSize, _baseUnit);
         // Get the Current Value (Price * Position Size)
         uint256 currentValue = mulDiv(_price, _position.positionSize, _baseUnit);
         // Return the difference

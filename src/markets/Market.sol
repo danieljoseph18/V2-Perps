@@ -95,8 +95,6 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
 
     uint256 public longTotalWAEP; // long total weighted average entry price
     uint256 public shortTotalWAEP; // short total weighted average entry price
-    uint256 public longSizeSumUSD; // Σ All Position Sizes USD Long
-    uint256 public shortSizeSumUSD; // Σ All Position Sizes USD Short
 
     /////////////////////////////////////////////////////////////////
     // Price Impact: Used to calculate the price impact of a trade //
@@ -220,17 +218,16 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     }
 
     /// @dev Updates Weighted Average Entry Price => Used to Track PNL For a Market
-    function updateTotalWAEP(uint256 _price, int256 _sizeDeltaUsd, bool _isLong) external onlyProcessor {
-        if (_price == 0) return;
-        if (_sizeDeltaUsd == 0) return;
+    function updateTotalWAEP(uint256 _price, int256 _sizeDelta, bool _isLong) external onlyProcessor {
+        require(_price != 0, "Market: Price is 0");
+        if (_sizeDelta == 0) return; // No Change
+
         if (_isLong) {
             longTotalWAEP =
-                Pricing.calculateWeightedAverageEntryPrice(longTotalWAEP, longSizeSumUSD, _sizeDeltaUsd, _price);
-            _sizeDeltaUsd > 0 ? longSizeSumUSD += _sizeDeltaUsd.abs() : longSizeSumUSD -= _sizeDeltaUsd.abs();
+                Pricing.calculateWeightedAverageEntryPrice(longTotalWAEP, longOpenInterest, _sizeDelta, _price);
         } else {
             shortTotalWAEP =
-                Pricing.calculateWeightedAverageEntryPrice(shortTotalWAEP, shortSizeSumUSD, _sizeDeltaUsd, _price);
-            _sizeDeltaUsd > 0 ? shortSizeSumUSD += _sizeDeltaUsd.abs() : shortSizeSumUSD -= _sizeDeltaUsd.abs();
+                Pricing.calculateWeightedAverageEntryPrice(shortTotalWAEP, shortOpenInterest, _sizeDelta, _price);
         }
         emit TotalWAEPUpdated(longTotalWAEP, shortTotalWAEP);
     }

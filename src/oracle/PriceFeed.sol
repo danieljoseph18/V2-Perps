@@ -82,6 +82,9 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     // @audit - how do we check the validity of price update data
     // who can call?
     // if status is unknown, invalidate
+    // @audit - Should we use 30 decimals of precision for prices?
+    // @audit - Or Do we round prices to the nearest valid decimal, e.g 2000.99?
+    // Need to avoid precision loss
     function signPriceData(address _token, bytes[] calldata _priceUpdateData)
         external
         payable
