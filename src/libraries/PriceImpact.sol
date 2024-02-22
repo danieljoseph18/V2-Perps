@@ -147,7 +147,8 @@ library PriceImpact {
         uint256 _amountIn,
         int256 _priceImpactUsd
     ) internal pure returns (uint256) {
-        uint256 absImpactAmount = mulDiv(_absPriceImpactUsd, _tokenUnit, _sizeDeltaUsd);
+        uint256 impactPercentage = mulDiv(_absPriceImpactUsd, _tokenUnit, _sizeDeltaUsd);
+        uint256 absImpactAmount = mulDiv(_amountIn, impactPercentage, SCALAR);
         uint256 indexTokensAfterImpact = _priceImpactUsd > 0 ? _amountIn + absImpactAmount : _amountIn - absImpactAmount;
 
         return mulDiv(_sizeDeltaUsd, _tokenUnit, indexTokensAfterImpact);
