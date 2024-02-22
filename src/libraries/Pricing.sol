@@ -73,6 +73,7 @@ library Pricing {
         nextOpenInterest = _totalOpenInterest + absSizeDelta;
         nextTotalEntryValue = (_prevAverageEntryPrice * _totalOpenInterest) + (_indexPrice * absSizeDelta);
 
+        // @audit - precision
         return nextTotalEntryValue / nextOpenInterest;
     }
 

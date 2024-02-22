@@ -133,30 +133,26 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     // @audit -> Should only be called for execution, not requests
     // Pricing data must be accurate
     function updateFundingRate(uint256 _indexPrice, uint256 _indexBaseUnit) external nonReentrant onlyProcessor {
-        // If time elapsed = 0, return
-        uint48 lastUpdate = lastFundingUpdate;
-        if (block.timestamp == lastUpdate) return;
-
-        int256 skew = Funding.calculateSkewUsd(this, _indexPrice, _indexBaseUnit);
-
         // Calculate time since last funding update
-        uint256 timeElapsed = block.timestamp - lastUpdate;
-
-        // Update Cumulative Fees
-        (longCumulativeFundingFees, shortCumulativeFundingFees) = Funding.getTotalAccumulatedFees(this);
+        uint256 timeElapsed = block.timestamp - lastFundingUpdate;
 
         // Add the previous velocity to the funding rate
-        int256 deltaRate = fundingRateVelocity * timeElapsed.toInt256();
-        // if funding rate addition puts it above / below limit, set to limit
-        if (fundingRate + deltaRate >= config.funding.maxRate) {
-            fundingRate = config.funding.maxRate;
-        } else if (fundingRate + deltaRate <= config.funding.minRate) {
-            fundingRate = config.funding.minRate;
-        } else {
-            fundingRate += deltaRate;
+        if (timeElapsed > 0) {
+            // Update Cumulative Fees
+            (longCumulativeFundingFees, shortCumulativeFundingFees) = Funding.getTotalAccumulatedFees(this);
+            int256 deltaRate = fundingRateVelocity * timeElapsed.toInt256();
+            // if funding rate addition puts it above / below limit, set to limit
+            if (fundingRate + deltaRate >= config.funding.maxRate) {
+                fundingRate = config.funding.maxRate;
+            } else if (fundingRate + deltaRate <= config.funding.minRate) {
+                fundingRate = config.funding.minRate;
+            } else {
+                fundingRate += deltaRate;
+            }
         }
 
         // Calculate the new velocity
+        int256 skew = Funding.calculateSkewUsd(this, _indexPrice, _indexBaseUnit);
         fundingRateVelocity = Funding.calculateVelocity(this, skew);
         lastFundingUpdate = block.timestamp.toUint48();
 
@@ -181,6 +177,7 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     ) external nonReentrant onlyProcessor {
         // If time elapsed = 0, return
         uint48 lastUpdate = lastBorrowUpdate;
+        // @audit - Wrong?? Can be updated multiple times in 1 block
         if (block.timestamp == lastUpdate) return; // No update
 
         // Calculate the new Borrowing Rate
