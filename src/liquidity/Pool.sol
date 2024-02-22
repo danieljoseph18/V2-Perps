@@ -41,10 +41,17 @@ library Pool {
         int256 _cumulativePnl,
         bool _isLongToken
     ) external pure returns (uint256 marketTokenAmount) {
+        // Minimise
         uint256 valueUsd = _isLongToken
-            ? mulDiv(_amountIn, _longPrices.min, _values.longBaseUnit)
-            : mulDiv(_amountIn, _shortPrices.min, _values.shortBaseUnit);
-        uint256 marketTokenPrice = getMarketTokenPrice(_values, _longPrices.max, _shortPrices.max, _cumulativePnl);
+            ? mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, _values.longBaseUnit)
+            : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, _values.shortBaseUnit);
+        // Maximise
+        uint256 marketTokenPrice = getMarketTokenPrice(
+            _values,
+            _longPrices.price + _longPrices.confidence,
+            _shortPrices.price + _shortPrices.confidence,
+            _cumulativePnl
+        );
         return marketTokenPrice == 0 ? valueUsd : mulDiv(valueUsd, SCALING_FACTOR, marketTokenPrice);
     }
 
@@ -56,12 +63,17 @@ library Pool {
         int256 _cumulativePnl,
         bool _isLongToken
     ) external pure returns (uint256 tokenAmount) {
-        uint256 marketTokenPrice = getMarketTokenPrice(_values, _longPrices.min, _shortPrices.min, _cumulativePnl);
+        uint256 marketTokenPrice = getMarketTokenPrice(
+            _values,
+            _longPrices.price - _longPrices.confidence,
+            _shortPrices.price - _shortPrices.confidence,
+            _cumulativePnl
+        );
         uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALING_FACTOR);
         if (_isLongToken) {
-            tokenAmount = mulDiv(valueUsd, _values.longBaseUnit, _longPrices.max);
+            tokenAmount = mulDiv(valueUsd, _values.longBaseUnit, _longPrices.price + _longPrices.confidence);
         } else {
-            tokenAmount = mulDiv(valueUsd, _values.shortBaseUnit, _shortPrices.max);
+            tokenAmount = mulDiv(valueUsd, _values.shortBaseUnit, _shortPrices.price + _shortPrices.confidence);
         }
     }
 

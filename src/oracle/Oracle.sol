@@ -19,18 +19,19 @@ library Oracle {
 
     struct Asset {
         bool isValid;
-        address chainlinkPriceFeed;
-        bytes32 priceId;
-        uint256 baseUnit;
-        uint256 heartbeatDuration;
-        uint256 maxPriceDeviation;
+        address chainlinkPriceFeed; // Chainlink Price Feed Address
+        bytes32 priceId; // Pyth Price ID
+        uint256 baseUnit; // 1 Unit of the Token e.g 1e18 for ETH
+        uint256 heartbeatDuration; // Duration after which the price is considered stale
+        uint256 maxPriceDeviation; // Max Price Deviation from Reference Price
+        uint256 priceSpread; // Spread to Apply to Price if Alternative Asset (e.g $0.1 = 0.1e18)
         PriceProvider priceProvider;
         AssetType assetType;
     }
 
     struct Price {
-        uint256 max;
-        uint256 min;
+        uint256 price;
+        uint256 confidence;
     }
 
     enum PriceProvider {
@@ -111,9 +112,7 @@ library Oracle {
         pure
         returns (Price memory deconstructedPrice)
     {
-        (uint256 price, uint256 confidence) = convertPythParams(_priceData);
-        deconstructedPrice.max = price + confidence;
-        deconstructedPrice.min = price - confidence;
+        (deconstructedPrice.price, deconstructedPrice.confidence) = convertPythParams(_priceData);
     }
 
     function convertPythParams(PythStructs.Price memory _priceData)
@@ -127,12 +126,18 @@ library Oracle {
         confidence = _priceData.conf * (10 ** (PRICE_DECIMALS - absExponent));
     }
 
+    function getPrice(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (uint256 price) {
+        return priceFeed.getPrice(_block, _token).price;
+    }
+
     function getMaxPrice(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (uint256 maxPrice) {
-        maxPrice = priceFeed.getPrice(_block, _token).max;
+        Price memory priceData = priceFeed.getPrice(_block, _token);
+        maxPrice = priceData.price + priceData.confidence;
     }
 
     function getMinPrice(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (uint256 minPrice) {
-        minPrice = priceFeed.getPrice(_block, _token).min;
+        Price memory priceData = priceFeed.getPrice(_block, _token);
+        minPrice = priceData.price - priceData.confidence;
     }
 
     function getMarketTokenPrices(IPriceFeed priceFeed, uint256 _blockNumber, bool _maximise)
@@ -142,11 +147,11 @@ library Oracle {
     {
         (Price memory longPrices, Price memory shortPrices) = getMarketTokenPrices(priceFeed, _blockNumber);
         if (_maximise) {
-            longPrice = longPrices.max;
-            shortPrice = shortPrices.max;
+            longPrice = longPrices.price + longPrices.confidence;
+            shortPrice = shortPrices.price + shortPrices.confidence;
         } else {
-            longPrice = longPrices.min;
-            shortPrice = shortPrices.min;
+            longPrice = longPrices.price - longPrices.confidence;
+            shortPrice = shortPrices.price - shortPrices.confidence;
         }
         require(longPrice > 0 && shortPrice > 0, "Oracle: invalid token prices");
     }
@@ -188,11 +193,11 @@ library Oracle {
         require(longPrice > 0 && shortPrice > 0, "Oracle: invalid token prices");
     }
 
-    function validatePriceRange(Asset memory _asset, Price memory _price, uint256 _refPrice) external pure {
+    function validatePriceRange(Asset memory _asset, Price memory _priceData, uint256 _refPrice) external pure {
         // check the price is within the range
         uint256 maxPriceDeviation = mulDiv(_refPrice, _asset.maxPriceDeviation, MAX_PERCENTAGE);
-        require(_price.max <= _refPrice + maxPriceDeviation, "Oracle: Price too high");
-        require(_price.min >= _refPrice - maxPriceDeviation, "Oracle: Price too low");
+        require(_priceData.price + _priceData.confidence <= _refPrice + maxPriceDeviation, "Oracle: Price too high");
+        require(_priceData.price - _priceData.confidence >= _refPrice - maxPriceDeviation, "Oracle: Price too low");
     }
 
     function getReferencePrice(IPriceFeed priceFeed, address _token) public view returns (uint256 referencePrice) {
@@ -224,8 +229,9 @@ library Oracle {
                 (referencePrice,) = priceFeed.getPriceUnsafe(_asset);
                 require(referencePrice > 0, "Oracle: Invalid Pyth Price");
                 return referencePrice;
+            } else {
+                revert("Oracle: No Reference Price");
             }
-            return 0;
         }
         // get interface
         IChainlinkFeed chainlinkFeed = IChainlinkFeed(_asset.chainlinkPriceFeed);
@@ -259,7 +265,7 @@ library Oracle {
     }
 
     function priceWasSigned(IPriceFeed priceFeed, address _token, uint256 _block) external view returns (bool) {
-        return priceFeed.getPrice(_block, _token).max != 0;
+        return priceFeed.getPrice(_block, _token).price != 0;
     }
 
     // @audit - where is this used? should we max or min the price?

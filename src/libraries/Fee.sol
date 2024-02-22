@@ -66,8 +66,12 @@ library Fee {
 
         // Convert skew to USD values and calculate sizeDeltaUsd once
         cache.sizeDeltaUsd = _params.isLongToken
-            ? mulDiv(_params.sizeDelta, _params.longPrices.max, _params.values.longBaseUnit)
-            : mulDiv(_params.sizeDelta, _params.shortPrices.max, _params.values.shortBaseUnit);
+            ? mulDiv(
+                _params.sizeDelta, _params.longPrices.price + _params.longPrices.confidence, _params.values.longBaseUnit
+            )
+            : mulDiv(
+                _params.sizeDelta, _params.shortPrices.price + _params.shortPrices.confidence, _params.values.shortBaseUnit
+            );
 
         // If Size Delta * Price < Base Unit -> Action has no effect on skew
         if (cache.sizeDeltaUsd == 0) {
@@ -75,10 +79,16 @@ library Fee {
         }
 
         // Calculate pool balances before and minimise value of pool to maximise the effect on the skew
-        cache.longTokenValue =
-            mulDiv(_params.values.longTokenBalance, _params.longPrices.min, _params.values.longBaseUnit);
-        cache.shortTokenValue =
-            mulDiv(_params.values.shortTokenBalance, _params.shortPrices.min, _params.values.shortBaseUnit);
+        cache.longTokenValue = mulDiv(
+            _params.values.longTokenBalance,
+            _params.longPrices.price - _params.longPrices.confidence,
+            _params.values.longBaseUnit
+        );
+        cache.shortTokenValue = mulDiv(
+            _params.values.shortTokenBalance,
+            _params.shortPrices.price - _params.shortPrices.confidence,
+            _params.values.shortBaseUnit
+        );
 
         // Don't want to disincentivise deposits on empty pool
         if (cache.longTokenValue == 0 && cache.shortTokenValue == 0) {
@@ -129,8 +139,16 @@ library Fee {
 
             // Convert the additional fee to index tokens
             cache.indexFee = _params.isLongToken
-                ? mulDiv(cache.feeAdditionUsd, _params.values.longBaseUnit, _params.longPrices.max)
-                : mulDiv(cache.feeAdditionUsd, _params.values.shortBaseUnit, _params.shortPrices.max);
+                ? mulDiv(
+                    cache.feeAdditionUsd,
+                    _params.values.longBaseUnit,
+                    _params.longPrices.price + _params.longPrices.confidence
+                )
+                : mulDiv(
+                    cache.feeAdditionUsd,
+                    _params.values.shortBaseUnit,
+                    _params.shortPrices.price + _params.shortPrices.confidence
+                );
 
             // Return base fee + additional fee
             return cache.baseFee + cache.indexFee;

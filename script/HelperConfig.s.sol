@@ -40,29 +40,6 @@ contract HelperConfig is Script {
         // Need to configurate Price Feed for Base and return
     }
 
-    /**
-     * Oracle.Asset memory wethData = Oracle.Asset({
-     *         isValid: true,
-     *         chainlinkPriceFeed: address(0),
-     *         priceId: ethPriceId,
-     *         baseUnit: 1e18,
-     *         heartbeatDuration: 1 minutes,
-     *         maxPriceDeviation: 0.01e18,
-     *         priceProvider: Oracle.PriceProvider.PYTH,
-     *         assetType: Oracle.AssetType.CRYPTO
-     *     });
-     *     marketMaker.createNewMarket(weth, ethPriceId, wethData);
-     *     Oracle.Asset memory usdcData = Oracle.Asset({
-     *         isValid: true,
-     *         chainlinkPriceFeed: address(0),
-     *         priceId: usdcPriceId,
-     *         baseUnit: 1e6,
-     *         heartbeatDuration: 1 minutes,
-     *         maxPriceDeviation: 0.01e18,
-     *         priceProvider: Oracle.PriceProvider.PYTH,
-     *         assetType: Oracle.AssetType.CRYPTO
-     *     });
-     */
     function getOrCreateAnvilConfig() public returns (NetworkConfig memory anvilConfig) {
         MockUSDC mockUSDC = new MockUSDC();
         WETH weth = new WETH();
@@ -76,6 +53,7 @@ contract HelperConfig is Script {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
+            priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
             assetType: Oracle.AssetType.CRYPTO
         });
@@ -86,6 +64,7 @@ contract HelperConfig is Script {
             baseUnit: 1e6,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
+            priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
             assetType: Oracle.AssetType.CRYPTO
         });

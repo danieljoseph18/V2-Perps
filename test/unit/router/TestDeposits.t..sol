@@ -87,6 +87,7 @@ contract TestDeposits is Test {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
+            priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
             assetType: Oracle.AssetType.CRYPTO
         });
@@ -192,10 +193,6 @@ contract TestDeposits is Test {
         // Calculate the expected amount out
         (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) =
             Oracle.getMarketTokenPrices(priceFeed, priceFeed.lastUpdateBlock());
-        console.log("Max Long Price: ", longPrices.max);
-        console.log("Min Long Price: ", longPrices.min);
-        console.log("Max Short Price: ", shortPrices.max);
-        console.log("Min Short Price: ", shortPrices.min);
         Pool.Values memory values = Pool.Values({
             longTokenBalance: liquidityVault.longTokenBalance(),
             shortTokenBalance: liquidityVault.shortTokenBalance(),
@@ -276,8 +273,8 @@ contract TestDeposits is Test {
                 longBaseUnit: 1e18,
                 shortBaseUnit: 1e6
             }),
-            longPrices.max,
-            shortPrices.max,
+            longPrices.price + longPrices.confidence,
+            shortPrices.price + shortPrices.confidence,
             0
         );
         uint256 valueReceived = (amountReceived * marketTokenPrice) / 1e18;

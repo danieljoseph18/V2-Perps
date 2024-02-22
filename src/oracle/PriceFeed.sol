@@ -25,6 +25,8 @@ contract PriceFeed is IPriceFeed, RoleValidation {
 
     uint256 public constant PRICE_DECIMALS = 18;
 
+    uint256 public constant DEFAULT_SPREAD = 0.001e18; // 0.1%
+
     address public longToken;
     address public shortToken;
     uint256 public secondaryPriceFee; // Fee for updating secondary prices
@@ -97,7 +99,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         Oracle.isSequencerUp(this);
         uint256 currentBlock = block.number;
         // Check if the price has already been signed for _token
-        if (prices[_token][currentBlock].max != 0) {
+        if (prices[_token][currentBlock].price != 0) {
             // No need to check for Long / Short Token here
             // If _token has been signed, it's safe to assume so have the Long/Short Tokens
             return;
@@ -120,7 +122,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         prices[_token][currentBlock] = indexPrice;
 
         // Check if the Long/Short Tokens have been signed
-        if (prices[longToken][currentBlock].max == 0) {
+        if (prices[longToken][currentBlock].price == 0) {
             Oracle.Asset memory longAsset = assets[longToken];
             PythStructs.Price memory longData = pyth.getPrice(longAsset.priceId);
             Oracle.Price memory longPrice = Oracle.deconstructPythPrice(longData);
@@ -131,7 +133,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
             prices[longToken][currentBlock] = longPrice;
         }
 
-        if (prices[shortToken][currentBlock].max == 0) {
+        if (prices[shortToken][currentBlock].price == 0) {
             Oracle.Asset memory shortAsset = assets[shortToken];
             PythStructs.Price memory shortData = pyth.getPrice(shortAsset.priceId);
             Oracle.Price memory shortPrice = Oracle.deconstructPythPrice(shortData);
@@ -198,21 +200,21 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     }
 
     // Set Prices for Alternative Assets - Gas Inefficient
-    function setAssetPrices(Oracle.Price[] memory _prices, uint256 _block) external onlyKeeper {
+    function setAssetPrices(uint256[] memory _prices, uint256 _block) external onlyKeeper {
         address[] memory tokens = alternativeAssets;
-        for (uint256 i = 0; i < tokens.length; i++) {
+        for (uint256 i = 0; i < tokens.length; ++i) {
             address token = tokens[i];
-            _setPrice(token, _prices[i].max, _prices[i].min, _block);
+            _setPrice(token, _prices[i], _block);
         }
     }
 
     // @audit - gas
     function setPricesWithBits(uint256[] calldata _priceBits, uint256 _block) external onlyKeeper {
         uint256 len = alternativeAssets.length;
-        uint256 loops = Math.ceilDiv(len, 4);
+        uint256 loops = Math.ceilDiv(len, 8);
         for (uint256 i = 0; i < loops; i++) {
-            uint256 start = i * 4;
-            uint256 end = start + 4;
+            uint256 start = i * 8;
+            uint256 end = start + 8;
             if (end > len) {
                 end = len;
             }
@@ -225,27 +227,23 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     }
 
     function _setPricesWithBits(address[] memory _assets, uint256 _priceBits, uint256 _block) private {
-        for (uint256 i = 0; i < 4; ++i) {
+        for (uint256 i = 0; i < 8; ++i) {
             uint256 index = i;
             if (index >= _assets.length) return;
 
-            uint256 startBit = i * 64;
-            uint256 maxPrice = (_priceBits >> startBit) & BITMASK_32;
-            uint256 minPrice = (_priceBits >> (startBit + 32)) & BITMASK_32;
+            uint256 startBit = i * 32;
+            uint256 price = (_priceBits >> startBit) & BITMASK_32;
 
             address token = _assets[index];
-            _setPrice(
-                token,
-                (maxPrice * PRICE_PRECISION) / tokenPrecision,
-                (minPrice * PRICE_PRECISION) / tokenPrecision,
-                _block
-            );
+            _setPrice(token, (price * PRICE_PRECISION) / tokenPrecision, _block);
         }
     }
 
-    function _setPrice(address _token, uint256 _maxPrice, uint256 _minPrice, uint256 _block) private {
+    function _setPrice(address _token, uint256 _price, uint256 _block) private {
         lastSecondaryUpdateBlock[_token] = _block;
-        Oracle.Price memory price = Oracle.Price({max: _maxPrice, min: _minPrice});
+        uint256 spreadForToken = assets[_token].priceSpread;
+        if (spreadForToken == 0) spreadForToken = DEFAULT_SPREAD;
+        Oracle.Price memory price = Oracle.Price({price: _price, confidence: spreadForToken});
         prices[_token][_block] = price;
     }
 

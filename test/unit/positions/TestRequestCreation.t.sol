@@ -42,6 +42,8 @@ contract TestRequestCreation is Test {
     bytes32 ethPriceId;
     bytes32 usdcPriceId;
 
+    address USER = makeAddr("USER");
+
     bytes[] tokenUpdateData;
     uint256[] allocations;
 
@@ -82,6 +84,8 @@ contract TestRequestCreation is Test {
     modifier setUpMarkets() {
         vm.deal(OWNER, 1_000_000 ether);
         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
+        vm.deal(USER, 1_000_000 ether);
+        MockUSDC(usdc).mint(USER, 1_000_000_000e6);
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 50 ether}();
         Oracle.Asset memory wethData = Oracle.Asset({
@@ -91,6 +95,7 @@ contract TestRequestCreation is Test {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
+            priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
             assetType: Oracle.AssetType.CRYPTO
         });

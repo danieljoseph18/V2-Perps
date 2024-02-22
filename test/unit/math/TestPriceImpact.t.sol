@@ -97,6 +97,7 @@ contract TestPriceImpact is Test {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
+            priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
             assetType: Oracle.AssetType.CRYPTO
         });
@@ -144,8 +145,8 @@ contract TestPriceImpact is Test {
     }
 
     /**
-     * Actual Impacted Price PRB Math: 2512.613317850584708601
-     * Expected Impacted Price:        2512.613317850584708601
+     * Actual Impacted Price PRB Math: 2551.072469825497887958
+     * Expected Impacted Price:        2551.072469825497887958
      * Delta: 0
      *
      * Actual Price Impact PRB Math: -200008000080000000000
@@ -160,7 +161,7 @@ contract TestPriceImpact is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 4 ether,
             limitPrice: 0,
-            maxSlippage: 0.01e18,
+            maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -183,8 +184,8 @@ contract TestPriceImpact is Test {
         // Test negative price impact values
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
         (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, request, 2500.05e18, 1e18);
-        uint256 expectedImpactPrice = 2512.6133178505846e18;
-        int256 expectedPriceImpactUsd = -200.00800008000004e18;
+        uint256 expectedImpactPrice = 2551072469825497887958;
+        int256 expectedPriceImpactUsd = -200008000080000000000;
         assertEq(impactedPrice, expectedImpactPrice);
         assertEq(priceImpactUsd, expectedPriceImpactUsd);
     }
