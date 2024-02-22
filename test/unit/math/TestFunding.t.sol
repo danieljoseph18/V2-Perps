@@ -152,4 +152,172 @@ contract TestFunding is Test {
      * - Calculation of Funding Rate
      * - Calculation of Fees Since Update
      */
+
+    /**
+     * Config:
+     * maxVelocity: 0.0003e18, // 0.03%
+     * maxRate: 0.03e18, // 3%
+     * minRate: -0.03e18, // -3%
+     * skewScale: 1_000_000e18 // 1 Mil USD
+     */
+    function testVelocityCalculationForDifferentSkews() public setUpMarkets {
+        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+        // Different Skews
+        int256 heavyLong = 500_000e18;
+        int256 heavyShort = -500_000e18;
+        int256 balancedLong = 1000e18;
+        int256 balancedShort = -1000e18;
+        // Calculate Heavy Long Velocity
+        int256 heavyLongVelocity = Funding.calculateVelocity(market, heavyLong);
+        int256 expectedHeavyLongVelocity = 0.00015e18;
+        assertEq(heavyLongVelocity, expectedHeavyLongVelocity);
+        // Calculate Heavy Short Velocity
+        int256 heavyShortVelocity = Funding.calculateVelocity(market, heavyShort);
+        int256 expectedHeavyShortVelocity = -0.00015e18;
+        assertEq(heavyShortVelocity, expectedHeavyShortVelocity);
+        // Calculate Balanced Long Velocity
+        int256 balancedLongVelocity = Funding.calculateVelocity(market, balancedLong);
+        int256 expectedBalancedLongVelocity = 0.0000003e18;
+        assertEq(balancedLongVelocity, expectedBalancedLongVelocity);
+        // Calculate Balanced Short Velocity
+        int256 balancedShortVelocity = Funding.calculateVelocity(market, balancedShort);
+        int256 expectedBalancedShortVelocity = -0.0000003e18;
+        assertEq(balancedShortVelocity, expectedBalancedShortVelocity);
+    }
+
+    function testSkewCalculationForDifferentSkews() public setUpMarkets {
+        // open and execute a long to skew it long
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        // Execute the Position
+        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
+        Oracle.TradingEnabled memory tradingEnabled =
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        // Get the size of the impact pool before the position is executed
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+
+        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+        int256 skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
+        assertEq(skew, 10_000e18);
+
+        // open and execute a short to skew it short
+        input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 2000e6,
+            sizeDelta: 8 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(USER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+        // Execute the Position
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+
+        skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
+        assertEq(skew, -10_000e18);
+
+        // open and execute a long to balance it
+        input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        // Execute the Position
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+
+        skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
+        assertEq(skew, 0);
+
+        // open and execute a short to heavily skew
+        input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 10_000e6,
+            sizeDelta: 20 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        // Execute the Position
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+
+        skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
+        assertEq(skew, -50_000e18);
+    }
 }

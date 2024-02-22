@@ -119,6 +119,7 @@ contract Deploy is Script {
             maxLeverage: 10000, // 100x
             feeForSmallerSide: true,
             reserveFactor: 0.3e18,
+            // Skew Scale = Skew for Max Velocity
             funding: IMarket.FundingConfig({
                 maxVelocity: 0.0003e18, // 0.03%
                 maxRate: 0.03e18, // 3%
