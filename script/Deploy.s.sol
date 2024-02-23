@@ -137,7 +137,7 @@ contract Deploy is Script {
             defaultMarketConfig, address(contracts.priceFeed), address(contracts.liquidityVault)
         );
 
-        contracts.tradeStorage.initialise(5e18, 0.001e18, 180000 gwei, 2e18);
+        contracts.tradeStorage.initialise(5e18, 0.001e18, 180000 gwei, 2e18, 10);
 
         contracts.processor.updateGasLimits(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);
 

@@ -20,5 +20,6 @@ interface IProcessor {
     function withdrawalGasLimit() external view returns (uint256);
     function positionGasLimit() external view returns (uint256);
     function sendExecutionFee(address payable _to, uint256 _amount) external;
+    function sendCollateralRefund(address _token, address _to, uint256 _amount) external;
     function baseGasLimit() external view returns (uint256);
 }

@@ -17,6 +17,7 @@ interface ILiquidityVault {
         uint256 _feeScale
     ) external;
     function updateFees(uint256 _executionFee, uint256 _feeScale) external;
+    function updatePriceFeed(IPriceFeed _priceFeed) external;
 
     // Trading related functions
     function reserveLiquidity(uint256 _amount, bool _isLong) external;
@@ -66,7 +67,7 @@ interface ILiquidityVault {
     function SHORT_TOKEN() external view returns (address);
     function getDepositRequestAtIndex(uint256 _index) external view returns (Deposit.Data memory);
     function getWithdrawalRequestAtIndex(uint256 _index) external view returns (Withdrawal.Data memory);
-    function updatePriceFeed(IPriceFeed _priceFeed) external;
+    function getPoolValues() external view returns (uint256, uint256, uint256, uint256, uint256);
 
     event DepositRequestCreated(
         bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 blockNumber

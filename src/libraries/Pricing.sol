@@ -54,27 +54,27 @@ library Pricing {
      */
     function calculateWeightedAverageEntryPrice(
         uint256 _prevAverageEntryPrice,
-        uint256 _totalOpenInterest, // Total Index Tokens in Position / Market
+        uint256 _totalIndexSize, // Total Index Tokens in Position / Market
         int256 _sizeDelta,
         uint256 _indexPrice
     ) external pure returns (uint256) {
         uint256 absSizeDelta = _sizeDelta.abs();
         if (_sizeDelta <= 0) {
             // If full close, Avg Entry Price is reset to 0
-            if (absSizeDelta == _totalOpenInterest) return 0;
+            if (absSizeDelta == _totalIndexSize) return 0;
             // Else, Avg Entry Price doesn't change for decrease
             else return _prevAverageEntryPrice;
         }
 
-        uint256 nextOpenInterest;
+        uint256 nextIndexSize;
         uint256 nextTotalEntryValue;
 
         // Increasing position size
-        nextOpenInterest = _totalOpenInterest + absSizeDelta;
-        nextTotalEntryValue = (_prevAverageEntryPrice * _totalOpenInterest) + (_indexPrice * absSizeDelta);
+        nextIndexSize = _totalIndexSize + absSizeDelta;
+        nextTotalEntryValue = (_prevAverageEntryPrice * _totalIndexSize) + (_indexPrice * absSizeDelta);
 
         // @audit - precision
-        return nextTotalEntryValue / nextOpenInterest;
+        return nextTotalEntryValue / nextIndexSize;
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD

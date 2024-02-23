@@ -2,8 +2,12 @@
 pragma solidity 0.8.23;
 
 import {IProcessor} from "../router/interfaces/IProcessor.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 
 library Gas {
+    uint256 private constant CANCELLATION_PENALTY = 0.2e18; // 20%
+    uint256 private constant SCALING_FACTOR = 1e18;
+
     enum Action {
         DEPOSIT,
         WITHDRAW,
@@ -69,5 +73,9 @@ library Gas {
     {
         uint256 baseGasLimit = processor.baseGasLimit();
         minExecutionFee = (baseGasLimit + _expectedGasLimit) * tx.gasprice;
+    }
+
+    function getRefundForCancellation(uint256 _executionFee) public pure returns (uint256) {
+        return mulDiv(_executionFee, CANCELLATION_PENALTY, SCALING_FACTOR);
     }
 }

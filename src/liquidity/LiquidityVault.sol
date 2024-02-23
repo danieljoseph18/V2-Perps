@@ -370,4 +370,8 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total) {
         total = _isLong ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
     }
+
+    function getPoolValues() external view returns (uint256, uint256, uint256, uint256, uint256) {
+        return (longTokenBalance, shortTokenBalance, totalSupply(), LONG_BASE_UNIT, SHORT_BASE_UNIT);
+    }
 }

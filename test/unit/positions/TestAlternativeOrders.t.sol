@@ -26,9 +26,14 @@ import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
+import {Pricing} from "../../../src/libraries/Pricing.sol";
 import {Order} from "../../../src/positions/Order.sol";
+import {mulDiv} from "@prb/math/Common.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {Fee} from "../../../src/libraries/Fee.sol";
 
-contract TestBorrowing is Test {
+contract TestAlternativeOrders is Test {
+    using SignedMath for int256;
     using stdStorage for StdStorage;
 
     RoleStorage roleStorage;
@@ -149,35 +154,12 @@ contract TestBorrowing is Test {
     }
 
     /**
-     * Config:
-     * - Factor: 0.000000035e18 or 0.0000035% per second
-     * - Exponent: 1
+     * Test:
+     * - Shouldnt be able to cancel orders before delay
+     * - Stop Loss and Take Profit Orders
      */
-    function testCalculateBorrowFeesSinceUpdateForDifferentDistances(uint256 _distance) public {
-        _distance = bound(_distance, 1, 3650000 days); // 10000 years
-        uint256 rate = 0.000000035e18;
-        vm.warp(block.timestamp + _distance);
-        vm.roll(block.number + 1);
-        uint256 lastUpdate = block.timestamp - _distance;
-        uint256 computedVal = Borrowing.calculateFeesSinceUpdate(rate, lastUpdate);
-        assertEq(computedVal, rate * _distance);
-    }
-
-    /**
-     * For Position, Need:
-     * borrowParams.feesOwed, positionSize, isLong, borrowParams.lastCumulatives
-     *
-     * For Cache, Need:
-     * market, indexPrice, indexBaseUnit, collateralBaseUnit, collateralPrice,
-     *
-     */
-    function testCalculatingTotalFeesOwedInCollateralTokens(uint256 _collateral, uint256 _leverage)
-        public
-        setUpMarkets
-    {
-        Order.ExecuteCache memory cache;
-        cache.market = IMarket(marketMaker.tokenToMarkets(weth));
-        // Open a position to alter the borrowing rate
+    function testAUserCantCancelAnOrderBeforeDelay() public setUpMarkets {
+        // create a position
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -202,57 +184,16 @@ contract TestBorrowing is Test {
         vm.prank(USER);
         router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
 
-        vm.prank(OWNER);
-        processor.executePosition(
-            tradeStorage.getOrderAtIndex(0, false),
-            OWNER,
-            false,
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true})
-        );
-        // Get the current rate
+        // get key
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
 
-        vm.warp(block.timestamp + 1 days);
-        vm.roll(block.number + 1);
-
-        // Create an arbitrary position
-        _collateral = bound(_collateral, 1, 100_000 ether);
-        _leverage = bound(_leverage, 1, 100);
-        uint256 positionSize = _collateral * _leverage;
-        Position.Data memory position = Position.Data(
-            cache.market,
-            weth,
-            USER,
-            weth,
-            _collateral,
-            positionSize,
-            2500e18,
-            true,
-            Position.BorrowingParams(0, 0, 0, 0),
-            Position.FundingParams(0, 0, 0, 0, 0),
-            bytes32(0),
-            bytes32(0)
-        );
-
-        // Cache necessary Variables
-        cache.indexPrice = 2500e18;
-        cache.indexBaseUnit = 1e18;
-        cache.collateralBaseUnit = 1e18;
-        cache.collateralPrice = 2500e18;
-
-        // Calculate Fees Owed
-        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, cache);
-        // Index Tokens == Collateral Tokens
-        uint256 expectedFees = ((cache.market.longBorrowingRate() * 1 days) * positionSize) / 1e18;
-        assertEq(feesOwed, expectedFees);
+        vm.prank(USER);
+        vm.expectRevert();
+        router.cancelOrderRequest(key, false);
     }
 
-    function testCalculatingTotalFeesOwedInCollateralTokensWithExistingCumulative(
-        uint256 _collateral,
-        uint256 _leverage
-    ) public setUpMarkets {
-        Order.ExecuteCache memory cache;
-        cache.market = IMarket(marketMaker.tokenToMarkets(weth));
-        // Open a position to alter the borrowing rate
+    function testAUserCanCancelAnOrderAfterDelayHasPassed() public setUpMarkets {
+        // create a position
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -277,65 +218,70 @@ contract TestBorrowing is Test {
         vm.prank(USER);
         router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
 
-        vm.prank(OWNER);
-        processor.executePosition(
-            tradeStorage.getOrderAtIndex(0, false),
-            OWNER,
-            false,
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true})
-        );
-        // Get the current rate
+        // get key
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
 
-        // Set the Cumulative Borrow Fees To 1e18
-        stdstore.target(address(cache.market)).sig("longCumulativeBorrowFees()").with_key(address(this)).checked_write(
-            1e18
-        );
-        assertEq(cache.market.longCumulativeBorrowFees(), 1e18);
+        vm.roll(block.number + 11);
 
-        vm.warp(block.timestamp + 1 days);
-        vm.roll(block.number + 1);
+        vm.prank(USER);
+        router.cancelOrderRequest(key, false);
 
-        // Create an arbitrary position
-        _collateral = bound(_collateral, 1, 100_000 ether);
-        _leverage = bound(_leverage, 1, 100);
-        uint256 positionSize = _collateral * _leverage;
-        Position.Data memory position = Position.Data(
-            cache.market,
-            weth,
-            USER,
-            weth,
-            _collateral,
-            positionSize,
-            2500e18,
-            true,
-            Position.BorrowingParams(0, 0, 1e18, 0),
-            Position.FundingParams(0, 0, 0, 0, 0),
-            bytes32(0),
-            bytes32(0)
-        );
-
-        uint256 bonusCumulative = 0.000003e18;
-
-        stdstore.target(address(cache.market)).sig("longCumulativeBorrowFees()").with_key(address(this)).checked_write(
-            1e18 + bonusCumulative
-        );
-
-        // Cache necessary Variables
-        cache.indexPrice = 2500e18;
-        cache.indexBaseUnit = 1e18;
-        cache.collateralBaseUnit = 1e18;
-        cache.collateralPrice = 2500e18;
-
-        // Calculate Fees Owed
-        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, cache);
-        // Index Tokens == Collateral Tokens
-        uint256 expectedFees = (((cache.market.longBorrowingRate() * 1 days) + bonusCumulative) * positionSize) / 1e18;
-        assertEq(feesOwed, expectedFees);
+        assertEq(tradeStorage.getOrder(key).user, address(0));
     }
 
-    function testBorrowingRateCalculationBasic() public setUpMarkets {
-        // Open a position to alter the borrowing rate
+    function testAUserCanOpenAStopLossAndTakeProfitWithAnOrder() public setUpMarkets {
+        // create a position
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: true,
+                takeProfitSet: true,
+                stopLossPrice: 2400e18,
+                takeProfitPrice: 2600e18,
+                stopLossPercentage: 1e18,
+                takeProfitPercentage: 1e18
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+
+        // get key
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        // execute the order
+        vm.prank(OWNER);
+        processor.executePosition(
+            key, OWNER, false, Oracle.TradingEnabled({forex: false, equity: false, commodity: false, prediction: false})
+        );
+
+        // the position
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+        bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), true);
+        Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
+
+        bytes32 slKey = position.stopLossKey;
+        bytes32 tpKey = position.takeProfitKey;
+
+        Position.Request memory sl = tradeStorage.getOrder(slKey);
+        Position.Request memory tp = tradeStorage.getOrder(tpKey);
+
+        assertEq(sl.user, USER);
+        assertEq(tp.user, USER);
+        assertEq(sl.input.sizeDelta, 4 ether);
+        assertEq(tp.input.sizeDelta, 4 ether);
+    }
+
+    function testAUserCanOverwriteExistingStopLossAndTakeProfitOrders() public setUpMarkets {
+        // create a position
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -349,31 +295,100 @@ contract TestBorrowing is Test {
             isIncrease: true,
             shouldWrap: true,
             conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
+                stopLossSet: true,
+                takeProfitSet: true,
+                stopLossPrice: 2400e18,
+                takeProfitPrice: 2600e18,
+                stopLossPercentage: 1e18,
+                takeProfitPercentage: 1e18
             })
         });
         vm.prank(USER);
         router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
 
+        // get key
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        // execute the order
         vm.prank(OWNER);
         processor.executePosition(
-            tradeStorage.getOrderAtIndex(0, false),
-            OWNER,
-            false,
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true})
+            key, OWNER, false, Oracle.TradingEnabled({forex: false, equity: false, commodity: false, prediction: false})
         );
 
-        // Fetch the borrowing rate
-        uint256 borrowingRate = market.longBorrowingRate();
-        // Calculate the expected borrowing rate
-        // 3.4330185397149488e-12
-        uint256 expectedRate = 0.000000000003433018e18;
-        // Cross check
-        assertEq(borrowingRate, expectedRate);
+        // the position
+        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+        bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), true);
+
+        Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
+
+        bytes32 slBefore = position.stopLossKey;
+        bytes32 tpBefore = position.takeProfitKey;
+
+        Position.Conditionals memory newConditionals = Position.Conditionals({
+            stopLossSet: true,
+            takeProfitSet: true,
+            stopLossPrice: 2300e18,
+            takeProfitPrice: 2700e18,
+            stopLossPercentage: 0.5e18,
+            takeProfitPercentage: 0.5e18
+        });
+        vm.prank(USER);
+        router.createEditOrder{value: 0.01 ether}(newConditionals, 0.01 ether, positionKeys[0]);
+
+        position = tradeStorage.getPosition(positionKeys[0]);
+        bytes32 slKey = position.stopLossKey;
+        bytes32 tpKey = position.takeProfitKey;
+
+        Position.Request memory sl = tradeStorage.getOrder(slKey);
+        Position.Request memory tp = tradeStorage.getOrder(tpKey);
+
+        assertEq(sl.user, USER);
+        assertEq(tp.user, USER);
+        assertEq(sl.input.sizeDelta, 2 ether);
+        assertEq(tp.input.sizeDelta, 2 ether);
+
+        // check the old sl / tp were deleted
+        assertEq(tradeStorage.getOrder(slBefore).user, address(0));
+        assertEq(tradeStorage.getOrder(tpBefore).user, address(0));
+    }
+
+    function testGasRefundsForCancellations() public setUpMarkets {
+        // create a position
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: true,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: true,
+                takeProfitSet: true,
+                stopLossPrice: 2400e18,
+                takeProfitPrice: 2600e18,
+                stopLossPercentage: 1e18,
+                takeProfitPercentage: 1e18
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+
+        vm.roll(block.number + 11);
+
+        uint256 balanceBefore = USER.balance;
+
+        // get key
+        bytes32 key = tradeStorage.getOrderAtIndex(0, true);
+
+        vm.prank(USER);
+        router.cancelOrderRequest(key, true);
+
+        uint256 balanceAfter = USER.balance;
+
+        assertGt(balanceAfter, balanceBefore);
     }
 }

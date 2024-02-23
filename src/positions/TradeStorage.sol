@@ -66,6 +66,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     uint256 public minCollateralUsd;
     uint256 public tradingFee;
     uint256 public executionFee;
+    uint256 public minBlockDelay;
 
     constructor(address _liquidityVault, address _priceFeed, address _roleStorage) RoleValidation(_roleStorage) {
         liquidityVault = ILiquidityVault(_liquidityVault);
@@ -76,19 +77,25 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         uint256 _liquidationFee, // 5e18 = 5 USD
         uint256 _tradingFee, // 0.001e18 = 0.1%
         uint256 _executionFee, // 0.001 ether
-        uint256 _minCollateralUsd // 2e18 = 2 USD
+        uint256 _minCollateralUsd, // 2e18 = 2 USD
+        uint256 _minBlockDelay // e.g 1 minutes
     ) external onlyAdmin {
         require(!isInitialised, "TradeStorage: Already Initialised");
         liquidationFeeUsd = _liquidationFee;
         tradingFee = _tradingFee;
         executionFee = _executionFee;
         minCollateralUsd = _minCollateralUsd;
+        minBlockDelay = _minBlockDelay;
         isInitialised = true;
         emit TradeStorageInitialised(_liquidationFee, _tradingFee, _executionFee);
     }
 
     function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
         priceFeed = _priceFeed;
+    }
+
+    function setMinBlockDelay(uint256 _minBlockDelay) external onlyConfigurator {
+        minBlockDelay = _minBlockDelay;
     }
 
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {

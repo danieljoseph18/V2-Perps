@@ -181,7 +181,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         _sendExecutionFee(_executionFee);
     }
 
-    // @audit - need to check X blocks have passed
+    // @audit - is this vulnerable?
     function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
         // Fetch the Request
         Position.Request memory request = tradeStorage.getOrder(_key);
@@ -189,8 +189,17 @@ contract Router is ReentrancyGuard, RoleValidation {
         require(request.user != address(0), "Router: Request Doesn't Exist");
         // Check the caller is the position owner
         require(msg.sender == request.user, "Router: Not Position Owner");
+        // Check sufficient time has passed
+        require(block.number >= request.requestBlock + tradeStorage.minBlockDelay(), "Router: Insufficient Delay");
         // Cancel the Request
         ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
+        // Refund the Collateral
+        processor.sendCollateralRefund(
+            request.input.collateralToken, payable(msg.sender), request.input.collateralDelta
+        );
+        // Refund the Execution Fee
+        uint256 refundAmount = Gas.getRefundForCancellation(request.input.executionFee);
+        processor.sendExecutionFee(payable(msg.sender), refundAmount);
     }
 
     // How can we estimate the update fee and add it to the execution fee?

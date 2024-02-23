@@ -42,8 +42,13 @@ interface ITradeStorage {
         bytes32 indexed _positionKey, uint256 indexed _stopLossPrice, uint256 indexed _stopLossPercentage
     );
 
-    function initialise(uint256 _liquidationFee, uint256 _tradingFee, uint256 _executionFee, uint256 _minCollateralUsd)
-        external;
+    function initialise(
+        uint256 _liquidationFee,
+        uint256 _tradingFee,
+        uint256 _executionFee,
+        uint256 _minCollateralUsd,
+        uint256 _minCancellationTime
+    ) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function createOrderRequest(Position.Request calldata _request) external;
     function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external;
@@ -67,4 +72,5 @@ interface ITradeStorage {
     function getOrder(bytes32 _key) external view returns (Position.Request memory _order);
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory);
     function getOrderAtIndex(uint256 _index, bool _isLimit) external view returns (bytes32);
+    function minBlockDelay() external view returns (uint256);
 }

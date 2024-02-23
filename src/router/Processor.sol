@@ -371,8 +371,12 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - is this vulnerable?
-    function sendExecutionFee(address payable _to, uint256 _amount) external onlyProcessor {
+    function sendExecutionFee(address payable _to, uint256 _amount) external onlyRouterOrProcessor {
         _to.sendValue(_amount);
+    }
+
+    function sendCollateralRefund(address _token, address _to, uint256 _amount) external onlyRouter {
+        IERC20(_token).safeTransfer(_to, _amount);
     }
 
     function _transferTokensForIncrease(

@@ -5,6 +5,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
 
 library Pool {
     using SignedMath for int256;
@@ -106,5 +107,15 @@ library Pool {
         aum = _cumulativePnl >= 0
             ? longTokenValue + shortTokenValue + _cumulativePnl.abs()
             : longTokenValue + shortTokenValue - _cumulativePnl.abs();
+    }
+
+    function getValues(ILiquidityVault liquidityVault) external view returns (Values memory values) {
+        (
+            values.longTokenBalance,
+            values.shortTokenBalance,
+            values.marketTokenSupply,
+            values.longBaseUnit,
+            values.shortBaseUnit
+        ) = liquidityVault.getPoolValues();
     }
 }
