@@ -18,7 +18,7 @@ library MarketUtils {
     function getOpenInterestUsd(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
         public
         view
-        returns (uint256 longOIUSD)
+        returns (uint256 longOiUsd)
     {
         return _isLong
             ? mulDiv(market.longOpenInterest(), _indexPrice, _indexBaseUnit)
@@ -28,7 +28,7 @@ library MarketUtils {
     function getTotalOpenInterestUsd(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         view
-        returns (uint256 totalOIUSD)
+        returns (uint256 totalOiUsd)
     {
         uint256 longOIUSD = mulDiv(market.longOpenInterest(), _indexPrice, _indexBaseUnit);
         uint256 shortOIUSD = mulDiv(market.shortOpenInterest(), _indexPrice, _indexBaseUnit);
@@ -53,7 +53,7 @@ library MarketUtils {
         entryValueUsd = mulDiv(averageEntryPrice, indexOI, _indexBaseUnit);
     }
 
-    function getTotalPoolBalanceUSD(
+    function getTotalPoolBalanceUsd(
         IMarket market,
         ILiquidityVault liquidityVault,
         uint256 _longTokenPrice,

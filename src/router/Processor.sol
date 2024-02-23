@@ -332,7 +332,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // fetch prices, base units, calculate sizeDeltaUsd, no fee / discount, no ref, no impact
         priceFeed.signPriceData{value: msg.value}(position.indexToken, _priceData);
         // Get current pricing and token data
-        cache = Order.fetchTokenValues(priceFeed, cache, position.indexToken, block.number, position.isLong);
+        cache = Order.retrieveTokenPrices(priceFeed, cache, position.indexToken, block.number, position.isLong, false);
         // Get size delta usd
         cache.sizeDeltaUsd = -int256(mulDiv(_sizeDelta, cache.indexPrice, cache.indexBaseUnit));
         // Get starting PNL Factor

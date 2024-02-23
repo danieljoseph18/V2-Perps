@@ -28,6 +28,7 @@ import {Withdrawal} from "../liquidity/Withdrawal.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {Order} from "../positions/Order.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
@@ -58,9 +59,11 @@ library PriceImpact {
         ExecuteCache memory cache;
 
         cache.impact = market.getImpactConfig();
+        // Minimize the OI and maximize size delta -> maximizes the impact
         cache.longOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, true);
         cache.shortOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, false);
         cache.sizeDeltaUSD = mulDiv(_request.input.sizeDelta, _indexPrice, _indexBaseUnit);
+
         cache.startingSkewLong = cache.longOI >= cache.shortOI;
         cache.skewBefore = cache.startingSkewLong ? cache.longOI - cache.shortOI : cache.shortOI - cache.longOI;
         if (_request.input.isIncrease) {

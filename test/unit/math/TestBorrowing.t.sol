@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console, console2} from "forge-std/Test.sol";
+import {Test, console, console2, stdStorage, StdStorage} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
@@ -26,8 +26,11 @@ import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
+import {Order} from "../../../src/positions/Order.sol";
 
 contract TestBorrowing is Test {
+    using stdStorage for StdStorage;
+
     RoleStorage roleStorage;
     GlobalMarketConfig globalMarketConfig;
     LiquidityVault liquidityVault;
@@ -147,11 +150,10 @@ contract TestBorrowing is Test {
 
     /**
      * Need To Test:
-     * - Velocity Calculation
-     * - Calculation of Accumulated Fees for Market
-     * - Calculation of Accumulated Fees for Position
-     * - Calculation of Funding Rate
-     * - Calculation of Fees Since Update
+     * - Rate Calculation Long / Short
+     * - Fees Since Update Calculation Long / Short
+     * - Fees should be the same for Long/Short if no PNL
+     * - Total Fees Owed in Collateral for Positions
      */
 
     /**
@@ -159,4 +161,227 @@ contract TestBorrowing is Test {
      * - Factor: 0.000000035e18 or 0.0000035% per second
      * - Exponent: 1
      */
+    function testCalculateBorrowFeesSinceUpdateForDifferentDistances(uint256 _distance) public {
+        _distance = bound(_distance, 1, 3650000 days); // 10000 years
+        uint256 rate = 0.000000035e18;
+        vm.warp(block.timestamp + _distance);
+        vm.roll(block.number + 1);
+        uint256 lastUpdate = block.timestamp - _distance;
+        uint256 computedVal = Borrowing.calculateFeesSinceUpdate(rate, lastUpdate);
+        assertEq(computedVal, rate * _distance);
+    }
+
+    /**
+     * For Position, Need:
+     * borrowParams.feesOwed, positionSize, isLong, borrowParams.lastCumulatives
+     *
+     * For Cache, Need:
+     * market, indexPrice, indexBaseUnit, collateralBaseUnit, collateralPrice,
+     *
+     */
+    function testCalculatingTotalFeesOwedInCollateralTokens(uint256 _collateral, uint256 _leverage)
+        public
+        setUpMarkets
+    {
+        Order.ExecuteCache memory cache;
+        cache.market = IMarket(marketMaker.tokenToMarkets(weth));
+        // Open a position to alter the borrowing rate
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+
+        vm.prank(OWNER);
+        processor.executePosition(
+            tradeStorage.getOrderAtIndex(0, false),
+            OWNER,
+            false,
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true})
+        );
+        // Get the current rate
+
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+
+        // Create an arbitrary position
+        _collateral = bound(_collateral, 1, 100_000 ether);
+        _leverage = bound(_leverage, 1, 100);
+        uint256 positionSize = _collateral * _leverage;
+        Position.Data memory position = Position.Data(
+            cache.market,
+            weth,
+            USER,
+            weth,
+            _collateral,
+            positionSize,
+            2500e18,
+            true,
+            Position.BorrowingParams(0, 0, 0, 0),
+            Position.FundingParams(0, 0, 0, 0, 0),
+            bytes32(0),
+            bytes32(0)
+        );
+
+        // Cache necessary Variables
+        cache.indexPrice = 2500e18;
+        cache.indexBaseUnit = 1e18;
+        cache.collateralBaseUnit = 1e18;
+        cache.collateralPrice = 2500e18;
+
+        // Calculate Fees Owed
+        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, cache);
+        // Index Tokens == Collateral Tokens
+        uint256 expectedFees = ((cache.market.longBorrowingRate() * 1 days) * positionSize) / 1e18;
+        assertEq(feesOwed, expectedFees);
+    }
+
+    function testCalculatingTotalFeesOwedInCollateralTokensWithExistingCumulative(
+        uint256 _collateral,
+        uint256 _leverage
+    ) public setUpMarkets {
+        Order.ExecuteCache memory cache;
+        cache.market = IMarket(marketMaker.tokenToMarkets(weth));
+        // Open a position to alter the borrowing rate
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+
+        vm.prank(OWNER);
+        processor.executePosition(
+            tradeStorage.getOrderAtIndex(0, false),
+            OWNER,
+            false,
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true})
+        );
+        // Get the current rate
+
+        // Set the Cumulative Borrow Fees To 1e18
+        stdstore.target(address(cache.market)).sig("longCumulativeBorrowFees()").with_key(address(this)).checked_write(
+            1e18
+        );
+        assertEq(cache.market.longCumulativeBorrowFees(), 1e18);
+
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+
+        // Create an arbitrary position
+        _collateral = bound(_collateral, 1, 100_000 ether);
+        _leverage = bound(_leverage, 1, 100);
+        uint256 positionSize = _collateral * _leverage;
+        Position.Data memory position = Position.Data(
+            cache.market,
+            weth,
+            USER,
+            weth,
+            _collateral,
+            positionSize,
+            2500e18,
+            true,
+            Position.BorrowingParams(0, 0, 1e18, 0),
+            Position.FundingParams(0, 0, 0, 0, 0),
+            bytes32(0),
+            bytes32(0)
+        );
+
+        uint256 bonusCumulative = 0.000003e18;
+
+        stdstore.target(address(cache.market)).sig("longCumulativeBorrowFees()").with_key(address(this)).checked_write(
+            1e18 + bonusCumulative
+        );
+
+        // Cache necessary Variables
+        cache.indexPrice = 2500e18;
+        cache.indexBaseUnit = 1e18;
+        cache.collateralBaseUnit = 1e18;
+        cache.collateralPrice = 2500e18;
+
+        // Calculate Fees Owed
+        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, cache);
+        // Index Tokens == Collateral Tokens
+        uint256 expectedFees = (((cache.market.longBorrowingRate() * 1 days) + bonusCumulative) * positionSize) / 1e18;
+        assertEq(feesOwed, expectedFees);
+    }
+
+    function testBorrowingRateCalculationBasic() public setUpMarkets {
+        // Open a position to alter the borrowing rate
+        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+
+        vm.prank(OWNER);
+        processor.executePosition(
+            tradeStorage.getOrderAtIndex(0, false),
+            OWNER,
+            false,
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true})
+        );
+
+        // Fetch the borrowing rate
+        uint256 borrowingRate = market.longBorrowingRate();
+        // Calculate the expected borrowing rate
+        // 3.4330185397149488e-12
+        uint256 expectedRate = 0.000000000003433018e18;
+        // Cross check
+        assertEq(borrowingRate, expectedRate);
+    }
 }

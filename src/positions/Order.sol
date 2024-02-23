@@ -19,6 +19,7 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Order {
@@ -93,7 +94,14 @@ library Order {
         // Get the asset and validate trading is enabled
         Oracle.validateTradingHours(priceFeed, request.input.indexToken, _isTradingEnabled);
         // Fetch and validate price
-        cache = fetchTokenValues(priceFeed, cache, request.input.indexToken, request.requestBlock, request.input.isLong);
+        cache = retrieveTokenPrices(
+            priceFeed,
+            cache,
+            request.input.indexToken,
+            request.requestBlock,
+            request.input.isLong,
+            request.input.isIncrease
+        );
 
         if (_isLimitOrder) Position.checkLimitPrice(cache.indexPrice, request.input);
 
@@ -572,9 +580,11 @@ library Order {
 
     function _subtractFundingFee(Position.Data memory _position, uint256 _collateralDelta)
         internal
-        pure
+        view
         returns (Position.Data memory, uint256 fundingAmountOwed)
     {
+        console2.log("Funding Fees Owed: ", _position.fundingParams.feesOwed);
+        console.log("Funding Collateral Delta: ", _collateralDelta);
         require(_position.fundingParams.feesOwed <= _collateralDelta, "Order: Fee > CollateralDelta");
         fundingAmountOwed = _position.fundingParams.feesOwed;
         // Subtract the Fees Owed
@@ -590,7 +600,9 @@ library Order {
         returns (Position.Data memory, uint256 borrowFee)
     {
         borrowFee = Borrowing.getTotalCollateralFeesOwed(_position, _cache);
-        _position.borrowingParams.feesOwed -= borrowFee;
+        console.log("borrowFee", borrowFee);
+        console.log("collateralDelta: ", _collateralDelta);
+        _position.borrowingParams.feesOwed = 0;
         require(borrowFee <= _collateralDelta, "Order: Fee > CollateralDelta");
 
         return (_position, borrowFee);
@@ -611,28 +623,56 @@ library Order {
     }
 
     // @audit - We're giving the position extra size by using max price
-    function fetchTokenValues(
+    /**
+     * For Index Tokens:
+     *
+     * Long & Increase: Max Price
+     * Long & Decrease: Min Price
+     * Short & Increase: Min Price
+     * Short & Decrease: Max Price
+     *
+     * For Market Tokens:
+     *
+     * Long & Increase: Min Price
+     * Long & Decrease: Max Price
+     * Short & Increase: Max Price
+     * Short & Decrease: Min Price
+     */
+    function retrieveTokenPrices(
         IPriceFeed priceFeed,
         ExecuteCache memory _cache,
         address _indexToken,
         uint256 _requestBlock,
-        bool _isLong
+        bool _isLong,
+        bool _isIncrease
     ) public view returns (ExecuteCache memory) {
+        // Ensure the price was signed for the given block
         require(Oracle.priceWasSigned(priceFeed, _indexToken, _requestBlock), "Order: Price Not Signed");
+
         if (_isLong) {
-            _cache.indexPrice = Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock);
-            (_cache.longMarketTokenPrice, _cache.shortMarketTokenPrice) =
-                Oracle.getMarketTokenPrices(priceFeed, _requestBlock, true);
-            _cache.collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
-            _cache.collateralPrice = _cache.longMarketTokenPrice;
+            _cache.indexPrice = _isIncrease
+                ? Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock)
+                : Oracle.getMinPrice(priceFeed, _indexToken, _requestBlock);
         } else {
-            _cache.indexPrice = Oracle.getMinPrice(priceFeed, _indexToken, _requestBlock);
-            (_cache.longMarketTokenPrice, _cache.shortMarketTokenPrice) =
-                Oracle.getMarketTokenPrices(priceFeed, _requestBlock, false);
-            _cache.collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
-            _cache.collateralPrice = _cache.shortMarketTokenPrice;
+            _cache.indexPrice = _isIncrease
+                ? Oracle.getMinPrice(priceFeed, _indexToken, _requestBlock)
+                : Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock);
         }
+
+        bool maximise = _isLong ? !_isIncrease : _isIncrease;
+        (_cache.longMarketTokenPrice, _cache.shortMarketTokenPrice) =
+            Oracle.getMarketTokenPrices(priceFeed, _requestBlock, maximise);
+
+        if (_isLong) {
+            _cache.collateralPrice = _cache.longMarketTokenPrice;
+            _cache.collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
+        } else {
+            _cache.collateralPrice = _cache.shortMarketTokenPrice;
+            _cache.collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
+        }
+
         _cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexToken);
+
         return _cache;
     }
 }

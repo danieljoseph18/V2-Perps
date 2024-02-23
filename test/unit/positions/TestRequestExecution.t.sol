@@ -313,7 +313,7 @@ contract TestRequestExecution is Test {
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, false, tradingEnabled);
 
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
 
         // Update the Price
@@ -395,16 +395,16 @@ contract TestRequestExecution is Test {
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, false, tradingEnabled);
 
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
 
         // Update the Price
         bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
-            ethPriceId, 230000, 50, -2, 230000, 50, uint64(block.timestamp), uint64(block.timestamp)
+            ethPriceId, 240000, 50, -2, 240000, 50, uint64(block.timestamp), uint64(block.timestamp)
         );
         // Create usdc update data with a price of 1.05
         bytes memory usdcUpdateData = priceFeed.createPriceFeedUpdateData(
-            usdcPriceId, 95, 0, -2, 95, 0, uint64(block.timestamp), uint64(block.timestamp)
+            usdcPriceId, 100, 0, -2, 100, 0, uint64(block.timestamp), uint64(block.timestamp)
         );
         tokenUpdateData[0] = wethUpdateData;
         tokenUpdateData[1] = usdcUpdateData;
@@ -481,7 +481,7 @@ contract TestRequestExecution is Test {
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, false, tradingEnabled);
         // pass some time
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
         // check the market parameters
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));

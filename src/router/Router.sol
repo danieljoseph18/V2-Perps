@@ -168,6 +168,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         _sendExecutionFee(_trade.executionFee);
     }
 
+    // @audit - need ability to edit a limit order
     function createEditOrder(Position.Conditionals memory _conditionals, uint256 _executionFee, bytes32 _positionKey)
         external
         payable

@@ -29,7 +29,7 @@ import {Pricing} from "./Pricing.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Order} from "../positions/Order.sol";
-import {Test, console} from "forge-std/Test.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
@@ -71,13 +71,18 @@ library Borrowing {
         cache.config = market.getBorrowingConfig();
         cache.openInterestUsd = ud(MarketUtils.getTotalOpenInterestUsd(market, _indexPrice, _indexBaseUnit));
         cache.poolBalance = ud(
-            MarketUtils.getTotalPoolBalanceUSD(
+            MarketUtils.getTotalPoolBalanceUsd(
                 market, liquidityVault, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
             )
         );
+
+        console.log("Open Interest USD: ", unwrap(cache.openInterestUsd));
+        console.log("Pool Balance: ", unwrap(cache.poolBalance));
+
         cache.borrowingFactor = ud(cache.config.factor);
         if (_isLong) {
             cache.pendingPnl = Pricing.getPnl(market, _indexPrice, _indexBaseUnit, true);
+            console2.log("Pending PNL: ", cache.pendingPnl);
             // Adjust the OI by the Pending PNL
             if (cache.pendingPnl > 0) {
                 cache.openInterestUsd = cache.openInterestUsd.add(ud(cache.pendingPnl.toUint256()));
