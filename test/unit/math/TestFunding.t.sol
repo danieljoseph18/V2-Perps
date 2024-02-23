@@ -706,7 +706,95 @@ contract TestFunding is Test {
         assertEq(feesOwed, 14835150000000000);
     }
 
-    function testCalculationOfNonUpdatedFeesWithSignFlipAndBoundaryCrossLongToShort() public setUpMarkets {}
+    /**
+     * Funding Rate: 300060000000000
+     * Velocity: -2999400000000
+     */
+    function testCalculationOfNonUpdatedFeesWithSignFlipAndBoundaryCross() public setUpMarkets {
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
 
-    function testCalculationOfNonUpdatedFeesWithSignFlipAndBoundaryCrossShortToLong() public setUpMarkets {}
+        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
+        Oracle.TradingEnabled memory tradingEnabled =
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+
+        // Pass enough time
+        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+        vm.warp(block.timestamp + 100);
+        vm.roll(block.number + 1);
+
+        // Open a short position to flip the sign
+        input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 2000e6,
+            sizeDelta: 8 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(USER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+
+        int256 fundingRate = market.fundingRate();
+        int256 fundingVelocity = market.fundingRateVelocity();
+
+        console2.log("Funding Rate: ", fundingRate);
+        console2.log("Funding Velocity: ", fundingVelocity);
+
+        // Pass enough time for boundary cross
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+
+        // get the fees since update and compare with expected values
+        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, false);
+        /**
+         * fundingUntilFlip: 15159090000000000
+         * fundingUntilBoundary: 150043793758200000000
+         * fundingAfterBoundary: 2.28891e+21
+         */
+        assertEq(feesEarned, 15159090000000000);
+        assertEq(feesOwed, 2.4389537937582e21);
+    }
 }

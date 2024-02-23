@@ -305,7 +305,7 @@ library Order {
         ExecuteCache memory _cache
     ) external view returns (Position.Data memory position, uint256 fundingFeeOwed, uint256 borrowFeeOwed) {
         // Update the Fee Parameters
-        position = _updateFeeParameters(_position);
+        position = _updateFeeParameters(_position, _cache);
         // Process any Outstanding Fees
         uint256 afterFeeAmount;
         (position, afterFeeAmount, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _cache);
@@ -328,7 +328,7 @@ library Order {
         uint256 _liquidationFeeUsd
     ) external view returns (Position.Data memory position, uint256 fundingFeeOwed, uint256 borrowFeeOwed) {
         // Update the Fee Parameters
-        position = _updateFeeParameters(_position);
+        position = _updateFeeParameters(_position, _cache);
         // Process any Outstanding Fees
         (position,, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _cache);
         // Edit the Position
@@ -384,7 +384,7 @@ library Order {
         returns (Position.Data memory position, uint256 sizeDeltaUsd, uint256 fundingFeeOwed, uint256 borrowFeeOwed)
     {
         // Update the Fee Parameters
-        position = _updateFeeParameters(_position);
+        position = _updateFeeParameters(_position, _cache);
         // Process any Outstanding Fees
         (position,, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _cache);
 
@@ -409,7 +409,7 @@ library Order {
         uint256 _minCollateralUsd,
         uint256 _liquidationFeeUsd
     ) external view returns (Position.Data memory position, DecreaseCache memory decreaseCache) {
-        position = _updateFeeParameters(_position);
+        position = _updateFeeParameters(_position, _cache);
 
         if (_params.request.input.collateralDelta == position.collateralAmount) {
             decreaseCache.sizeDelta = position.positionSize;
@@ -465,15 +465,19 @@ library Order {
     /**
      * ========================= Internal Helper Functions =========================
      */
-    function _updateFeeParameters(Position.Data memory _position) internal view returns (Position.Data memory) {
+    function _updateFeeParameters(Position.Data memory _position, ExecuteCache memory _cache)
+        internal
+        view
+        returns (Position.Data memory)
+    {
         // Borrowing Fees
-        _position.borrowingParams.feesOwed = Borrowing.getTotalPositionFeesOwed(_position.market, _position);
+        _position.borrowingParams.feesOwed = Borrowing.getTotalCollateralFeesOwed(_position, _cache);
         _position.borrowingParams.lastLongCumulativeBorrowFee = _position.market.longCumulativeBorrowFees();
         _position.borrowingParams.lastShortCumulativeBorrowFee = _position.market.shortCumulativeBorrowFees();
         _position.borrowingParams.lastBorrowUpdate = block.timestamp;
         // Funding Fees
         (_position.fundingParams.feesEarned, _position.fundingParams.feesOwed) =
-            Funding.getTotalPositionFees(_position.market, _position);
+            Funding.getTotalPositionFees(_position, _cache);
         _position.fundingParams.lastLongCumulativeFunding = _position.market.longCumulativeFundingFees();
         _position.fundingParams.lastShortCumulativeFunding = _position.market.shortCumulativeFundingFees();
         _position.fundingParams.lastFundingUpdate = block.timestamp;
@@ -528,6 +532,7 @@ library Order {
         return position;
     }
 
+    // @gas - duplicate in position
     function _checkIsLiquidatable(
         Position.Data memory _position,
         ExecuteCache memory _cache,
@@ -557,7 +562,7 @@ library Order {
         view
         returns (Position.Data memory position, uint256 afterFeeAmount, uint256 fundingFee, uint256 borrowFee)
     {
-        (position, fundingFee) = _subtractFundingFee(_position, _cache, _params.request.input.collateralDelta);
+        (position, fundingFee) = _subtractFundingFee(_position, _params.request.input.collateralDelta);
 
         (position, borrowFee) = _subtractBorrowingFee(position, _cache, _params.request.input.collateralDelta);
         afterFeeAmount = _params.request.input.collateralDelta - fundingFee - borrowFee;
@@ -565,16 +570,14 @@ library Order {
         return (position, afterFeeAmount, fundingFee, borrowFee);
     }
 
-    function _subtractFundingFee(Position.Data memory _position, ExecuteCache memory _cache, uint256 _collateralDelta)
+    function _subtractFundingFee(Position.Data memory _position, uint256 _collateralDelta)
         internal
         pure
         returns (Position.Data memory, uint256 fundingAmountOwed)
     {
-        uint256 feesOwedUsd = mulDiv(_position.fundingParams.feesOwed, _cache.indexPrice, _cache.indexBaseUnit);
-        fundingAmountOwed = mulDiv(feesOwedUsd, _cache.collateralBaseUnit, _cache.collateralPrice);
-
-        require(fundingAmountOwed <= _collateralDelta, "Order: Fee > CollateralDelta");
-
+        require(_position.fundingParams.feesOwed <= _collateralDelta, "Order: Fee > CollateralDelta");
+        fundingAmountOwed = _position.fundingParams.feesOwed;
+        // Subtract the Fees Owed
         _position.fundingParams.feesOwed = 0;
 
         return (_position, fundingAmountOwed);
@@ -584,17 +587,13 @@ library Order {
     function _subtractBorrowingFee(Position.Data memory _position, ExecuteCache memory _cache, uint256 _collateralDelta)
         internal
         view
-        returns (Position.Data memory, uint256 borrowingAmountOwed)
+        returns (Position.Data memory, uint256 borrowFee)
     {
-        uint256 borrowFee = Borrowing.calculateFeeForPositionChange(_cache.market, _position, _collateralDelta);
+        borrowFee = Borrowing.getTotalCollateralFeesOwed(_position, _cache);
         _position.borrowingParams.feesOwed -= borrowFee;
-        // convert borrow fee from index tokens to collateral tokens to subtract from collateral:
-        uint256 borrowFeeUsd = mulDiv(borrowFee, _cache.indexPrice, _cache.indexBaseUnit);
-        borrowingAmountOwed = mulDiv(borrowFeeUsd, _cache.collateralBaseUnit, _cache.collateralPrice);
+        require(borrowFee <= _collateralDelta, "Order: Fee > CollateralDelta");
 
-        require(borrowingAmountOwed <= _collateralDelta, "Order: Fee > CollateralDelta");
-
-        return (_position, borrowingAmountOwed);
+        return (_position, borrowFee);
     }
 
     function _calculateValueUsd(uint256 _tokenAmount, uint256 _tokenPrice, uint256 _tokenBaseUnit, bool _isIncrease)

@@ -338,22 +338,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         uint256 remainingCollateral = position.collateralAmount;
 
         // Calculate the Funding Fee and Pay off all Outstanding
-        (uint256 indexFeeEarned, uint256 indexFeeOwed) = Funding.getTotalPositionFees(_cache.market, position);
-
-        uint256 feeEarnedUsd = mulDiv(indexFeeEarned, _cache.indexPrice, _cache.indexBaseUnit);
-        uint256 feeOwedUsd = mulDiv(indexFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
-
-        // Pay fees in collateral tokens
-        uint256 fundingOwed = mulDiv(feeOwedUsd, _cache.collateralPrice, _cache.collateralBaseUnit);
-        // Earn fees in counterparty tokens
-        uint256 fundingEarned;
-        if (position.isLong) {
-            // funding earned is in short tokens -> convert from usd
-            fundingEarned = mulDiv(feeEarnedUsd, _cache.shortMarketTokenPrice, Oracle.getShortBaseUnit(priceFeed));
-        } else {
-            // funding earned is in long tokens -> convert from usd
-            fundingEarned = mulDiv(feeEarnedUsd, _cache.longMarketTokenPrice, Oracle.getLongBaseUnit(priceFeed));
-        }
+        (uint256 fundingEarned, uint256 fundingOwed) = Funding.getTotalPositionFees(position, _cache);
 
         // Pay off Outstanding Funding Fees
         remainingCollateral -= fundingOwed;

@@ -25,80 +25,106 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {Pricing} from "./Pricing.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {Order} from "../positions/Order.sol";
 import {Test, console} from "forge-std/Test.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
-    uint256 public constant PRECISION = 1e18;
+    using SafeCast for int256;
+    using SignedMath for int256;
+
+    uint256 private constant PRECISION = 1e18;
+    uint256 private constant MAX_FEE_PERCENTAGE = 0.33e18;
 
     struct BorrowingCache {
         IMarket.BorrowingConfig config;
-        UD60x18 openInterest;
+        UD60x18 openInterestUsd;
         UD60x18 poolBalance;
-        UD60x18 exponentiatedOI;
+        UD60x18 adjustedOiExponent;
         UD60x18 borrowingFactor;
+        int256 pendingPnl;
     }
 
-    // @audit - correct use of OI / PB here?
+    /**
+     * Borrowing Fees are paid from open positions to liquidity providers in exchange
+     * for reserving liquidity for their position.
+     *
+     * Long Fee Calculation: borrowing factor * (open interest in usd + pending pnl) ^ (borrowing exponent factor) / (pool usd)
+     * Short Fee Calculation: borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
+     */
     function calculateRate(
         IMarket market,
         ILiquidityVault liquidityVault,
-        IPriceFeed priceFeed,
         uint256 _indexPrice,
-        address _indexToken,
+        uint256 _indexBaseUnit,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice,
         uint256 _longTokenBaseUnit,
-        uint256 _shortTokenBaseUnit
+        uint256 _shortTokenBaseUnit,
+        bool _isLong
     ) external view returns (uint256 rate) {
         BorrowingCache memory cache;
         // Calculate the new Borrowing Rate
         cache.config = market.getBorrowingConfig();
-        cache.openInterest =
-            ud(MarketUtils.getTotalOpenInterestUsd(market, _indexPrice, Oracle.getBaseUnit(priceFeed, _indexToken)));
+        cache.openInterestUsd = ud(MarketUtils.getTotalOpenInterestUsd(market, _indexPrice, _indexBaseUnit));
         cache.poolBalance = ud(
             MarketUtils.getTotalPoolBalanceUSD(
                 market, liquidityVault, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
             )
         );
-        cache.exponentiatedOI = cache.openInterest.powu(cache.config.exponent);
         cache.borrowingFactor = ud(cache.config.factor);
-        rate = unwrap(cache.borrowingFactor.mul(cache.exponentiatedOI).div(cache.poolBalance));
-    }
-
-    function calculateFeeAddition(uint256 _prevRate, uint256 _lastUpdate) external view returns (uint256 feeAddition) {
-        uint256 timeElapsed = block.timestamp - _lastUpdate;
-        feeAddition = _prevRate * timeElapsed;
-    }
-
-    /// @dev Gets the Total Fee To Charge For a Position Change in Tokens
-    function calculateFeeForPositionChange(IMarket market, Position.Data calldata _position, uint256 _collateralDelta)
-        external
-        view
-        returns (uint256 indexFee)
-    {
-        if (_position.collateralAmount == 0) {
-            // For Close
-            indexFee = getTotalPositionFeesOwed(market, _position);
+        if (_isLong) {
+            cache.pendingPnl = Pricing.getPnl(market, _indexPrice, _indexBaseUnit, true);
+            // Adjust the OI by the Pending PNL
+            if (cache.pendingPnl > 0) {
+                cache.openInterestUsd = cache.openInterestUsd.add(ud(cache.pendingPnl.toUint256()));
+            } else if (cache.pendingPnl < 0) {
+                cache.openInterestUsd = cache.openInterestUsd.sub(ud(cache.pendingPnl.abs()));
+            }
+            cache.adjustedOiExponent = cache.openInterestUsd.powu(cache.config.exponent);
         } else {
-            indexFee = mulDiv(getTotalPositionFeesOwed(market, _position), _collateralDelta, _position.collateralAmount);
+            cache.adjustedOiExponent = cache.openInterestUsd.powu(cache.config.exponent);
         }
+
+        rate = unwrap(cache.borrowingFactor.mul(cache.adjustedOiExponent).div(cache.poolBalance));
+    }
+
+    function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) external view returns (uint256 fee) {
+        uint256 timeElapsed = block.timestamp - _lastUpdate;
+        fee = _rate * timeElapsed;
+    }
+
+    function getTotalCollateralFeesOwed(Position.Data calldata _position, Order.ExecuteCache memory _cache)
+        public
+        view
+        returns (uint256 collateralFeesOwed)
+    {
+        uint256 indexFees = _getTotalPositionFeesOwed(_cache.market, _position);
+        uint256 feesUsd = mulDiv(indexFees, _cache.indexPrice, _cache.indexBaseUnit);
+        collateralFeesOwed = mulDiv(feesUsd, _cache.collateralBaseUnit, _cache.collateralPrice);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
-    function getTotalPositionFeesOwed(IMarket market, Position.Data calldata _position)
-        public
+    function _getTotalPositionFeesOwed(IMarket market, Position.Data calldata _position)
+        internal
         view
         returns (uint256 indexTotalFeesOwed)
     {
-        uint256 feeSinceUpdate = getFeesSinceLastPositionUpdate(market, _position);
+        uint256 feeSinceUpdate = _getFeesSinceLastPositionUpdate(market, _position);
         indexTotalFeesOwed = feeSinceUpdate + _position.borrowingParams.feesOwed;
+        uint256 maxPayableFee = mulDiv(_position.positionSize, MAX_FEE_PERCENTAGE, PRECISION);
+        if (indexTotalFeesOwed > maxPayableFee) {
+            indexTotalFeesOwed = maxPayableFee;
+        }
     }
 
     /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
     /// @dev Units: Fees in Tokens (% of fees applied to position size)
-    function getFeesSinceLastPositionUpdate(IMarket market, Position.Data calldata _position)
-        public
+    function _getFeesSinceLastPositionUpdate(IMarket market, Position.Data calldata _position)
+        internal
         view
         returns (uint256 indexFeesSinceUpdate)
     {

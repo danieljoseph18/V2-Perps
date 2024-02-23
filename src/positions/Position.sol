@@ -350,11 +350,11 @@ library Position {
         view
         returns (uint256 totalFeesOwedUsd)
     {
-        uint256 borrowingFeeOwed = Borrowing.getTotalPositionFeesOwed(_cache.market, _position);
-        uint256 borrowingFeeUsd = mulDiv(borrowingFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
+        uint256 borrowingFeeOwed = Borrowing.getTotalCollateralFeesOwed(_position, _cache);
+        uint256 borrowingFeeUsd = mulDiv(borrowingFeeOwed, _cache.collateralPrice, _cache.collateralBaseUnit);
 
-        (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_cache.market, _position);
-        uint256 fundingValueUsd = mulDiv(fundingFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
+        (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_position, _cache);
+        uint256 fundingValueUsd = mulDiv(fundingFeeOwed, _cache.collateralPrice, _cache.collateralBaseUnit);
 
         totalFeesOwedUsd = borrowingFeeUsd + fundingValueUsd;
     }

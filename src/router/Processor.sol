@@ -192,19 +192,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             _isTradingEnabled
         );
         _updateImpactPool(cache.market, cache.priceImpactUsd);
-        _updateMarketState(
-            cache.market,
-            request.input.sizeDelta,
-            cache.impactedPrice,
-            cache.indexPrice,
-            cache.indexBaseUnit,
-            cache.longMarketTokenPrice,
-            Oracle.getLongBaseUnit(priceFeed),
-            cache.shortMarketTokenPrice,
-            Oracle.getShortBaseUnit(priceFeed),
-            request.input.isLong,
-            request.input.isIncrease
-        );
+        _updateMarketState(cache, request.input.sizeDelta, request.input.isLong, request.input.isIncrease);
 
         // Calculate Fee
         cache.fee = Fee.calculateForPosition(
@@ -284,19 +272,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         cache.sizeDeltaUsd = _calculateValueUsd(position.positionSize, cache.indexPrice, cache.indexBaseUnit, false);
 
         // call _updateMarketState
-        _updateMarketState(
-            cache.market,
-            position.positionSize,
-            cache.impactedPrice,
-            cache.indexPrice,
-            cache.indexBaseUnit,
-            cache.longMarketTokenPrice,
-            Oracle.getLongBaseUnit(priceFeed),
-            cache.shortMarketTokenPrice,
-            Oracle.getShortBaseUnit(priceFeed),
-            position.isLong,
-            false
-        );
+        _updateMarketState(cache, position.positionSize, position.isLong, false);
         // liquidate the position
         try tradeStorage.liquidatePosition(cache, _positionKey, msg.sender) {}
         catch {
@@ -438,29 +414,25 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function _updateMarketState(
-        IMarket market,
-        uint256 _sizeDelta,
-        uint256 _impactedIndexPrice,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
-        uint256 _longTokenPrice,
-        uint256 _longBaseUnit,
-        uint256 _shortTokenPrice,
-        uint256 _shortBaseUnit,
-        bool _isLong,
-        bool _isIncrease
-    ) internal {
+    function _updateMarketState(Order.ExecuteCache memory _cache, uint256 _sizeDelta, bool _isLong, bool _isIncrease)
+        internal
+    {
         if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
             int256 signedSizeDelta = _isIncrease ? _sizeDelta.toInt256() : -_sizeDelta.toInt256();
-            market.updateAverageEntryPrice(_impactedIndexPrice, signedSizeDelta, _isLong);
+            _cache.market.updateAverageEntryPrice(_cache.impactedPrice, signedSizeDelta, _isLong);
             // Average Entry Price relies on OI, so it must be updated before this
-            market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
+            _cache.market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
         }
-        market.updateFundingRate(_indexPrice, _indexBaseUnit);
-        market.updateBorrowingRate(
-            _indexPrice, _indexBaseUnit, _longTokenPrice, _longBaseUnit, _shortTokenPrice, _shortBaseUnit, _isLong
+        _cache.market.updateFundingRate(_cache.indexPrice, _cache.indexBaseUnit);
+        _cache.market.updateBorrowingRate(
+            _cache.indexPrice,
+            _cache.indexBaseUnit,
+            _cache.longMarketTokenPrice,
+            Oracle.getLongBaseUnit(priceFeed),
+            _cache.shortMarketTokenPrice,
+            Oracle.getShortBaseUnit(priceFeed),
+            _isLong
         );
     }
 

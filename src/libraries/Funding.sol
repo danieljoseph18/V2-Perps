@@ -24,6 +24,7 @@ import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Order} from "../positions/Order.sol";
 import {Test, console, console2} from "forge-std/Test.sol";
 
 /// @dev Library for Funding Related Calculations
@@ -83,19 +84,18 @@ library Funding {
         shortAccumulatedFees = market.shortCumulativeFundingFees() + shortFundingSinceUpdate;
     }
 
-    /// @dev Returns fees earned and fees owed in tokens
+    /// @dev Returns fees earned and fees owed in collateral tokens
     /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
-    /// to charge for a position need to go: index -> usd -> collateral
-    function getTotalPositionFees(IMarket market, Position.Data memory _position)
+    function getTotalPositionFees(Position.Data memory _position, Order.ExecuteCache memory _cache)
         external
         view
-        returns (uint256 indexFeeEarned, uint256 indexFeeOwed)
+        returns (uint256 collateralFeeEarned, uint256 collateralFeeOwed)
     {
         // Get the fees accumulated since the last position update
         uint256 shortAccumulatedFees =
-            market.shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
+            _cache.market.shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
         uint256 longAccumulatedFees =
-            market.longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
+            _cache.market.longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
         // Separate Short and Long Fees to Earned and Owed
         uint256 accumulatedFundingEarned;
         uint256 accumulatedFundingOwed;
@@ -106,18 +106,24 @@ library Funding {
             accumulatedFundingEarned = longAccumulatedFees;
             accumulatedFundingOwed = shortAccumulatedFees;
         }
-        indexFeeEarned =
+        uint256 indexFeeEarned =
             _position.fundingParams.feesEarned + mulDiv(accumulatedFundingEarned, _position.positionSize, PRECISION);
-        indexFeeOwed =
+        uint256 indexFeeOwed =
             _position.fundingParams.feesOwed + mulDiv(accumulatedFundingOwed, _position.positionSize, PRECISION);
         // Flag avoids unnecessary heavy computation
-        if (market.lastFundingUpdate() != block.timestamp) {
+        if (_cache.market.lastFundingUpdate() != block.timestamp) {
             (uint256 feesEarnedSinceUpdate, uint256 feesOwedSinceUpdate) =
-                getFeesSinceLastMarketUpdate(market, _position.isLong);
+                getFeesSinceLastMarketUpdate(_cache.market, _position.isLong);
             // Calculate the Total Fees Earned and Owed
             indexFeeEarned += feesEarnedSinceUpdate;
             indexFeeOwed += feesOwedSinceUpdate;
         }
+        // Convert Fees to USD
+        uint256 feeEarnedUsd = mulDiv(indexFeeEarned, _cache.indexPrice, _cache.indexBaseUnit);
+        uint256 feeOwedUsd = mulDiv(indexFeeOwed, _cache.indexPrice, _cache.indexBaseUnit);
+        // Convert Fees to Collateral
+        collateralFeeEarned = mulDiv(feeEarnedUsd, _cache.collateralBaseUnit, _cache.collateralPrice);
+        collateralFeeOwed = mulDiv(feeOwedUsd, _cache.collateralBaseUnit, _cache.collateralPrice);
     }
 
     // Rate to 18 D.P

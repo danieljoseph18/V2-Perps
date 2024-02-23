@@ -177,34 +177,38 @@ contract Market is IMarket, ReentrancyGuard, RoleValidation {
     ) external nonReentrant onlyProcessor {
         // If time elapsed = 0, return
         uint48 lastUpdate = lastBorrowUpdate;
-        // @audit - Wrong?? Can be updated multiple times in 1 block
-        if (block.timestamp == lastUpdate) return; // No update
 
-        // Calculate the new Borrowing Rate
-        uint256 openInterestUSD = _isLong
-            ? MarketUtils.getOpenInterestUsd(this, _indexPrice, _indexBaseUnit, true)
-            : MarketUtils.getOpenInterestUsd(this, _indexPrice, _indexBaseUnit, false);
-        uint256 poolBalance = MarketUtils.getTotalPoolBalanceUSD(
-            this, liquidityVault, _longTokenPrice, _shortTokenPrice, _longBaseUnit, _shortBaseUnit
-        );
-
-        if (poolBalance == 0 || openInterestUSD == 0) return;
-
-        uint256 rate = unwrap(
-            (ud(config.borrowing.factor).mul(ud(openInterestUSD).powu(config.borrowing.exponent))).div(ud(poolBalance))
-        );
         // update cumulative fees with current borrowing rate
         if (_isLong) {
-            longCumulativeBorrowFees += unwrap(ud(longBorrowingRate).mul(ud(block.timestamp).div(ud(lastBorrowUpdate))));
-            longBorrowingRate = rate;
+            longCumulativeBorrowFees += Borrowing.calculateFeesSinceUpdate(longBorrowingRate, lastUpdate);
+            longBorrowingRate = Borrowing.calculateRate(
+                this,
+                liquidityVault,
+                _indexPrice,
+                _indexBaseUnit,
+                _longTokenPrice,
+                _shortTokenPrice,
+                _longBaseUnit,
+                _shortBaseUnit,
+                true
+            );
         } else {
-            shortCumulativeBorrowFees +=
-                unwrap(ud(shortBorrowingRate).mul(ud(block.timestamp).div(ud(lastBorrowUpdate))));
-            shortBorrowingRate = rate;
+            shortCumulativeBorrowFees += Borrowing.calculateFeesSinceUpdate(shortBorrowingRate, lastUpdate);
+            shortBorrowingRate = Borrowing.calculateRate(
+                this,
+                liquidityVault,
+                _indexPrice,
+                _indexBaseUnit,
+                _longTokenPrice,
+                _shortTokenPrice,
+                _longBaseUnit,
+                _shortBaseUnit,
+                false
+            );
         }
         lastBorrowUpdate = uint48(block.timestamp);
-        // update borrowing rate
-        emit BorrowingUpdated(_isLong, rate);
+
+        emit BorrowingRatesUpdated(longBorrowingRate, shortBorrowingRate);
     }
 
     /// @dev Updates Weighted Average Entry Price => Used to Track PNL For a Market

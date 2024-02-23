@@ -67,7 +67,7 @@ interface IMarket {
         uint256 longCumulativeFundingFees,
         uint256 shortCumulativeFundingFees
     );
-    event BorrowingUpdated(bool isLong, uint256 rate);
+    event BorrowingRatesUpdated(uint256 longBorrowingRate, uint256 shortBorrowingRate);
     event AverageEntryPriceUpdated(uint256 longAverageEntryPrice, uint256 shortAverageEntryPrice);
     event OpenInterestUpdated(uint256 longOpenInterest, uint256 shortOpenInterest);
     event AllocationUpdated(address market, uint256 percentageAllocation);
