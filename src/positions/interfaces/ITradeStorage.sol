@@ -49,7 +49,6 @@ interface ITradeStorage {
         uint256 _minCollateralUsd,
         uint256 _minCancellationTime
     ) external;
-    function updatePriceFeed(IPriceFeed _priceFeed) external;
     function createOrderRequest(Position.Request calldata _request) external;
     function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;

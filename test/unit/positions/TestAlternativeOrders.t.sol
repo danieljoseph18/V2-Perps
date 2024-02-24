@@ -143,7 +143,7 @@ contract TestAlternativeOrders is Test {
         vm.stopPrank();
         vm.startPrank(OWNER);
         address wethMarket = marketMaker.tokenToMarkets(weth);
-        stateUpdater.addMarket(IMarket(wethMarket));
+        stateUpdater.syncMarkets();
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
@@ -189,7 +189,7 @@ contract TestAlternativeOrders is Test {
 
         vm.prank(USER);
         vm.expectRevert();
-        router.cancelOrderRequest(key, false);
+        processor.cancelOrderRequest(key, false);
     }
 
     function testAUserCanCancelAnOrderAfterDelayHasPassed() public setUpMarkets {
@@ -224,7 +224,7 @@ contract TestAlternativeOrders is Test {
         vm.roll(block.number + 11);
 
         vm.prank(USER);
-        router.cancelOrderRequest(key, false);
+        processor.cancelOrderRequest(key, false);
 
         assertEq(tradeStorage.getOrder(key).user, address(0));
     }
@@ -358,7 +358,7 @@ contract TestAlternativeOrders is Test {
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 4 ether,
-            limitPrice: 0,
+            limitPrice: 2600e18,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
             isLong: true,
@@ -385,7 +385,7 @@ contract TestAlternativeOrders is Test {
         bytes32 key = tradeStorage.getOrderAtIndex(0, true);
 
         vm.prank(USER);
-        router.cancelOrderRequest(key, true);
+        processor.cancelOrderRequest(key, true);
 
         uint256 balanceAfter = USER.balance;
 

@@ -18,34 +18,21 @@
 pragma solidity 0.8.23;
 
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
-import {Pricing} from "../libraries/Pricing.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Position} from "../positions/Position.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Order} from "./Order.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {Oracle} from "../oracle/Oracle.sol";
 
 /// @dev Needs TradeStorage Role
 /// @dev Need to add liquidity reservation for positions
 contract TradeStorage is ITradeStorage, RoleValidation {
-    using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SignedMath for int256;
-    using SafeCast for uint256;
-    using SafeCast for int256;
 
-    IPriceFeed priceFeed;
     ILiquidityVault liquidityVault;
 
     uint256 constant PRECISION = 1e18;
@@ -68,9 +55,8 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     uint256 public executionFee;
     uint256 public minBlockDelay;
 
-    constructor(address _liquidityVault, address _priceFeed, address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
         liquidityVault = ILiquidityVault(_liquidityVault);
-        priceFeed = IPriceFeed(_priceFeed);
     }
 
     function initialise(
@@ -88,10 +74,6 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         minBlockDelay = _minBlockDelay;
         isInitialised = true;
         emit TradeStorageInitialised(_liquidationFee, _tradingFee, _executionFee);
-    }
-
-    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
-        priceFeed = _priceFeed;
     }
 
     function setMinBlockDelay(uint256 _minBlockDelay) external onlyConfigurator {

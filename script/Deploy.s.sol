@@ -70,11 +70,9 @@ contract Deploy is Script {
 
         contracts.marketMaker = new MarketMaker(address(contracts.roleStorage));
 
-        contracts.tradeStorage = new TradeStorage(
-            address(contracts.liquidityVault), address(contracts.priceFeed), address(contracts.roleStorage)
-        );
+        contracts.tradeStorage = new TradeStorage(address(contracts.liquidityVault), address(contracts.roleStorage));
 
-        contracts.stateUpdater = new StateUpdater(address(contracts.roleStorage));
+        contracts.stateUpdater = new StateUpdater(contracts.marketMaker, address(contracts.roleStorage));
 
         contracts.referralStorage = new ReferralStorage(weth, usdc, address(contracts.roleStorage));
 

@@ -18,32 +18,26 @@
 pragma solidity 0.8.23;
 
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
+import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 
 /// @dev needs StateUpdater Role
 contract StateUpdater is RoleValidation {
-    using EnumerableSet for EnumerableSet.AddressSet;
-
     uint256 public constant BITMASK_16 = type(uint256).max >> (256 - 16);
     uint256 public constant TOTAL_ALLOCATION = 10000;
 
-    IMarket[] private markets;
+    IMarketMaker public marketMaker;
 
-    constructor(address _roleStorage) RoleValidation(_roleStorage) {}
+    address[] public markets;
 
-    function setMarkets(IMarket[] calldata _markets) external onlyAdmin {
-        markets = _markets;
+    constructor(IMarketMaker _marketMaker, address _roleStorage) RoleValidation(_roleStorage) {
+        marketMaker = _marketMaker;
     }
 
-    function addMarket(IMarket _market) external onlyAdmin {
-        markets.push(_market);
-    }
-
-    function removeMarket(IMarket _market, uint256 _index) external onlyAdmin {
-        require(markets[_index] == _market, "StateUpdater: Invalid index");
-        markets[_index] = markets[markets.length - 1];
-        markets.pop();
+    function syncMarkets() external onlyAdmin {
+        // fetch the markets from marketMaker
+        // update the markets array
+        markets = marketMaker.getMarkets();
     }
 
     // Each allocation is a number between 0 and 10000 -> can fit in 16 bits
@@ -73,16 +67,12 @@ contract StateUpdater is RoleValidation {
 
                 // Ensure that the allocationIndex does not exceed the bounds of the markets array
                 if (allocationIndex < markets.length) {
-                    markets[allocationIndex].updateAllocation(allocation);
+                    IMarket(markets[allocationIndex]).updateAllocation(allocation);
                     ++allocationIndex;
                 }
             }
         }
 
         require(total == TOTAL_ALLOCATION, "StateUpdater: Invalid Cumulative Allocation");
-    }
-
-    function getMarkets() external view returns (IMarket[] memory) {
-        return markets;
     }
 }

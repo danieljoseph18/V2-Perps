@@ -22,7 +22,6 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -42,6 +41,7 @@ import {Withdrawal} from "../liquidity/Withdrawal.sol";
 import {IProcessor} from "./interfaces/IProcessor.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
+import {Roles} from "../access/roles.sol";
 
 /// @dev Needs Processor Role
 // All keeper interactions should come through this contract
@@ -162,7 +162,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             bytes32 _key = marketOrders[i];
             try this.executePosition(_key, _feeReceiver, false, _isTradingEnabled) {}
             catch {
-                try tradeStorage.cancelOrderRequest(_key, false) {} catch {}
+                try this.cancelOrderRequest(_key, false) {} catch {}
             }
             unchecked {
                 ++i;
@@ -280,6 +280,28 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         }
     }
 
+    // @audit - is this vulnerable?
+    function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
+        // Fetch the Request
+        Position.Request memory request = tradeStorage.getOrder(_key);
+        // Check it exists
+        require(request.user != address(0), "Router: Request Doesn't Exist");
+        // Check if the caller's permissions
+        if (!roleStorage.hasRole(Roles.KEEPER, msg.sender)) {
+            // Check the caller is the position owner
+            require(msg.sender == request.user, "Router: Not Position Owner");
+            // Check sufficient time has passed
+            require(block.number >= request.requestBlock + tradeStorage.minBlockDelay(), "Router: Insufficient Delay");
+        }
+        // Cancel the Request
+        tradeStorage.cancelOrderRequest(_key, _isLimit);
+        // Refund the Collateral
+        IERC20(request.input.collateralToken).safeTransfer(msg.sender, request.input.collateralDelta);
+        // Refund the Execution Fee
+        uint256 refundAmount = Gas.getRefundForCancellation(request.input.executionFee);
+        payable(msg.sender).sendValue(refundAmount);
+    }
+
     function flagForAdl(IMarket market, bool _isLong) external onlyAdlKeeper {
         require(market != IMarket(address(0)), "ADL: Invalid market");
         // get current price
@@ -373,10 +395,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // @audit - is this vulnerable?
     function sendExecutionFee(address payable _to, uint256 _amount) external onlyRouterOrProcessor {
         _to.sendValue(_amount);
-    }
-
-    function sendCollateralRefund(address _token, address _to, uint256 _amount) external onlyRouter {
-        IERC20(_token).safeTransfer(_to, _amount);
     }
 
     function _transferTokensForIncrease(

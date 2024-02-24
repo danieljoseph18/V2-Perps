@@ -22,12 +22,9 @@ import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {Order} from "../positions/Order.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {Oracle} from "../oracle/Oracle.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 
 /// @dev Library containing all the data types used throughout the protocol

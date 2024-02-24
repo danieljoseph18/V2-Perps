@@ -97,4 +97,8 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Fire Event
         emit MarketCreated(marketAddress, _indexToken, _priceId);
     }
+
+    function getMarkets() external view returns (address[] memory) {
+        return markets.values();
+    }
 }

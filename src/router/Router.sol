@@ -22,9 +22,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
-import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Position} from "../positions/Position.sol";
 import {Deposit} from "../liquidity/Deposit.sol";
 import {Withdrawal} from "../liquidity/Withdrawal.sol";
@@ -34,7 +32,6 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IProcessor} from "./interfaces/IProcessor.sol";
-import {mulDiv} from "@prb/math/Common.sol";
 import {Order} from "../positions/Order.sol";
 
 /// @dev Needs Router role
@@ -179,27 +176,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         tradeStorage.createEditOrder(_conditionals, _positionKey);
 
         _sendExecutionFee(_executionFee);
-    }
-
-    // @audit - is this vulnerable?
-    function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
-        // Fetch the Request
-        Position.Request memory request = tradeStorage.getOrder(_key);
-        // Check it exists
-        require(request.user != address(0), "Router: Request Doesn't Exist");
-        // Check the caller is the position owner
-        require(msg.sender == request.user, "Router: Not Position Owner");
-        // Check sufficient time has passed
-        require(block.number >= request.requestBlock + tradeStorage.minBlockDelay(), "Router: Insufficient Delay");
-        // Cancel the Request
-        ITradeStorage(tradeStorage).cancelOrderRequest(_key, _isLimit);
-        // Refund the Collateral
-        processor.sendCollateralRefund(
-            request.input.collateralToken, payable(msg.sender), request.input.collateralDelta
-        );
-        // Refund the Execution Fee
-        uint256 refundAmount = Gas.getRefundForCancellation(request.input.executionFee);
-        processor.sendExecutionFee(payable(msg.sender), refundAmount);
     }
 
     // How can we estimate the update fee and add it to the execution fee?

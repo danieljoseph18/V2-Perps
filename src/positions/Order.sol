@@ -13,13 +13,10 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Fee} from "../libraries/Fee.sol";
-import {Referral} from "../referrals/Referral.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
-import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
-import {Test, console, console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Order {
@@ -580,11 +577,9 @@ library Order {
 
     function _subtractFundingFee(Position.Data memory _position, uint256 _collateralDelta)
         internal
-        view
+        pure
         returns (Position.Data memory, uint256 fundingAmountOwed)
     {
-        console2.log("Funding Fees Owed: ", _position.fundingParams.feesOwed);
-        console.log("Funding Collateral Delta: ", _collateralDelta);
         require(_position.fundingParams.feesOwed <= _collateralDelta, "Order: Fee > CollateralDelta");
         fundingAmountOwed = _position.fundingParams.feesOwed;
         // Subtract the Fees Owed
@@ -600,8 +595,6 @@ library Order {
         returns (Position.Data memory, uint256 borrowFee)
     {
         borrowFee = Borrowing.getTotalCollateralFeesOwed(_position, _cache);
-        console.log("borrowFee", borrowFee);
-        console.log("collateralDelta: ", _collateralDelta);
         _position.borrowingParams.feesOwed = 0;
         require(borrowFee <= _collateralDelta, "Order: Fee > CollateralDelta");
 

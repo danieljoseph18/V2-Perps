@@ -5,17 +5,14 @@ import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
 import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {UD60x18, unwrap, ud, powu} from "@prb/math/UD60x18.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {IChainlinkFeed} from "./interfaces/IChainlinkFeed.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 library Oracle {
     using SignedMath for int64;
     using SignedMath for int32;
-    using SafeCast for int256;
 
     struct Asset {
         bool isValid;
@@ -249,7 +246,7 @@ library Oracle {
         require(_price > 0, "Oracle: Invalid Chainlink Price");
         require(timestamp > block.timestamp - _asset.heartbeatDuration, "Oracle: Stale Chainlink Price");
         // adjust and return
-        referencePrice = mulDiv(_price.toUint256(), _asset.baseUnit, 10 ** CHAINLINK_PRICE_DECIMALS);
+        referencePrice = mulDiv(uint256(_price), _asset.baseUnit, 10 ** CHAINLINK_PRICE_DECIMALS);
     }
 
     function getBaseUnit(IPriceFeed priceFeed, address _token) public view returns (uint256) {

@@ -2,11 +2,8 @@
 pragma solidity 0.8.23;
 
 import {Fee} from "../libraries/Fee.sol";
-import {PriceImpact} from "../libraries/PriceImpact.sol";
-import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
-import {MarketUtils} from "../markets/MarketUtils.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";

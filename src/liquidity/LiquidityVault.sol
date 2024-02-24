@@ -10,15 +10,11 @@ import {Withdrawal} from "./Withdrawal.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
-import {mulDiv} from "@prb/math/Common.sol";
 import {Pool} from "./Pool.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {IProcessor} from "../router/interfaces/IProcessor.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {Oracle} from "../oracle/Oracle.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 // Stores all funds for the protocol

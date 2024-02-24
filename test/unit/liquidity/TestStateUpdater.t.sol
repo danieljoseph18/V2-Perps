@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test, console, console2, stdStorage, StdStorage} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
@@ -22,8 +22,20 @@ import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
 import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
+import {Gas} from "../../../src/libraries/Gas.sol";
+import {Funding} from "../../../src/libraries/Funding.sol";
+import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Borrowing} from "../../../src/libraries/Borrowing.sol";
+import {Pricing} from "../../../src/libraries/Pricing.sol";
+import {Order} from "../../../src/positions/Order.sol";
+import {mulDiv} from "@prb/math/Common.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {Fee} from "../../../src/libraries/Fee.sol";
 
-contract TestWithdrawals is Test {
+contract TestStateUpdater is Test {
+    using SignedMath for int256;
+    using stdStorage for StdStorage;
+
     RoleStorage roleStorage;
     GlobalMarketConfig globalMarketConfig;
     LiquidityVault liquidityVault;
@@ -47,6 +59,9 @@ contract TestWithdrawals is Test {
     address USER = makeAddr("USER");
 
     function setUp() public {
+        // Pass some time so block timestamp isn't 0
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
@@ -64,9 +79,6 @@ contract TestWithdrawals is Test {
         usdcPriceId = deploy.usdcPriceId();
         weth = deploy.weth();
         usdc = deploy.usdc();
-        // Pass some time so block timestamp isn't 0
-        vm.warp(block.timestamp + 1 days);
-        vm.roll(block.number + 1);
         // Set Update Data
         bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
             ethPriceId, 250000, 50, -2, 250000, 50, uint64(block.timestamp), uint64(block.timestamp)
@@ -139,99 +151,5 @@ contract TestWithdrawals is Test {
         assertEq(IMarket(wethMarket).percentageAllocation(), 10000);
         vm.stopPrank();
         _;
-    }
-
-    function testCreatingAWithdrawalRequest() public setUpMarkets {
-        // Construct the withdrawal input
-        uint256 marketTokenBalance = liquidityVault.balanceOf(OWNER);
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: marketTokenBalance / 1000,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
-        // Call the withdrawal function with sufficient gas
-        vm.startPrank(OWNER);
-        liquidityVault.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        vm.stopPrank();
-    }
-
-    function testExecutingAWithdrawalRequest() public setUpMarkets {
-        // Construct the withdrawal input
-        uint256 marketTokenBalance = liquidityVault.balanceOf(OWNER);
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: marketTokenBalance / 1000,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
-        // Call the withdrawal function with sufficient gas
-        vm.startPrank(OWNER);
-        liquidityVault.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 withdrawalKey = liquidityVault.getWithdrawalRequestAtIndex(0).key;
-        processor.executeWithdrawal(withdrawalKey, 0);
-        vm.stopPrank();
-    }
-
-    function testWithdrawalRequestWithTinyAmountOut() public setUpMarkets {
-        // Construct the withdrawal input
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: 1,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
-        // Call the withdrawal function with sufficient gas
-        vm.startPrank(OWNER);
-        liquidityVault.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 withdrawalKey = liquidityVault.getWithdrawalRequestAtIndex(0).key;
-        vm.expectRevert();
-        processor.executeWithdrawal(withdrawalKey, 0);
-        vm.stopPrank();
-    }
-
-    function testWithdrawalRequestForGreaterThanPoolBalance() public setUpMarkets {
-        uint256 marketTokenBalance = liquidityVault.balanceOf(OWNER);
-        // Construct the withdrawal input
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: marketTokenBalance,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
-        // Call the withdrawal function with sufficient gas
-        vm.startPrank(OWNER);
-        liquidityVault.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 withdrawalKey = liquidityVault.getWithdrawalRequestAtIndex(0).key;
-        vm.expectRevert();
-        processor.executeWithdrawal(withdrawalKey, 0);
-        vm.stopPrank();
-    }
-
-    function testLargeWithdrawalRequest() public setUpMarkets {
-        uint256 marketTokenBalance = liquidityVault.balanceOf(OWNER);
-        // Construct the withdrawal input
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: marketTokenBalance / 4,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
-        // Call the withdrawal function with sufficient gas
-        vm.startPrank(OWNER);
-        liquidityVault.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 withdrawalKey = liquidityVault.getWithdrawalRequestAtIndex(0).key;
-        processor.executeWithdrawal(withdrawalKey, 0);
-        vm.stopPrank();
     }
 }

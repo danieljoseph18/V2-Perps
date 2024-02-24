@@ -24,11 +24,8 @@ import {sd, SD59x18, unwrap} from "@prb/math/SD59x18.sol";
 import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Pool} from "../liquidity/Pool.sol";
-import {Withdrawal} from "../liquidity/Withdrawal.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {Oracle} from "../oracle/Oracle.sol";
-import {Order} from "../positions/Order.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {

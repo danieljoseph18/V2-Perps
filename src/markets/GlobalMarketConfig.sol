@@ -76,7 +76,6 @@ contract GlobalMarketConfig is RoleValidation {
     function updatePriceFeeds() external onlyModerator {
         require(address(priceFeed) != address(0), "PriceFeed not set");
         liquidityVault.updatePriceFeed(priceFeed);
-        tradeStorage.updatePriceFeed(priceFeed);
         marketMaker.updatePriceFeed(priceFeed);
         processor.updatePriceFeed(priceFeed);
         router.updatePriceFeed(priceFeed);

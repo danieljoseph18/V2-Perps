@@ -134,7 +134,7 @@ contract TestPriceImpact is Test {
         vm.stopPrank();
         vm.startPrank(OWNER);
         address wethMarket = marketMaker.tokenToMarkets(weth);
-        stateUpdater.addMarket(IMarket(wethMarket));
+        stateUpdater.syncMarkets();
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);

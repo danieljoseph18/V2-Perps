@@ -18,21 +18,16 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "./interfaces/IMarket.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {UD60x18, ud, unwrap} from "@prb/math/UD60x18.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {MarketUtils} from "./MarketUtils.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 
 contract Market is IMarket, ReentrancyGuard, RoleValidation {
-    using SafeERC20 for IERC20;
     using SafeCast for uint256;
     using SignedMath for int256;
 
