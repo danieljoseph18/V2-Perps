@@ -52,6 +52,9 @@ contract Router is ReentrancyGuard, RoleValidation {
     uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
 
+    // Used to request a secondary price update from the Keeper
+    event SecondaryPriceRequested(address indexed token, uint256 indexed blockNumber);
+
     constructor(
         address _tradeStorage,
         address _liquidityVault,
@@ -105,8 +108,8 @@ contract Router is ReentrancyGuard, RoleValidation {
             require(_input.tokenIn == address(USDC) || _input.tokenIn == address(WETH), "Router: Invalid Token In");
             IERC20(_input.tokenIn).safeTransferFrom(_input.owner, address(processor), _input.amountIn);
         }
+        _input.executionFee -= _requestOraclePricing(_input.tokenIn, _priceUpdateData);
         liquidityVault.createDeposit(_input);
-        _requestOraclePricing(_input.tokenIn, _priceUpdateData);
         _sendExecutionFee(_input.executionFee);
     }
 
@@ -129,8 +132,8 @@ contract Router is ReentrancyGuard, RoleValidation {
             require(_input.tokenOut == address(USDC) || _input.tokenOut == address(WETH), "Router: Invalid Token Out");
         }
         IERC20(address(liquidityVault)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
+        _input.executionFee -= _requestOraclePricing(_input.tokenOut, _priceUpdateData);
         liquidityVault.createWithdrawal(_input);
-        _requestOraclePricing(_input.tokenOut, _priceUpdateData);
         _sendExecutionFee(_input.executionFee);
     }
 
@@ -146,22 +149,30 @@ contract Router is ReentrancyGuard, RoleValidation {
     {
         Gas.validateExecutionFee(processor, _trade.executionFee, msg.value, Gas.Action.POSITION);
 
+        // Construct the Cache for Order Creation
         Order.CreateCache memory cache = Order.validateInitialParameters(marketMaker, tradeStorage, priceFeed, _trade);
 
         Position.Data memory position = tradeStorage.getPosition(cache.positionKey);
 
+        // Set the Request Type
         cache.requestType = Position.getRequestType(_trade, position);
 
+        // Validate Parameters
         Order.validateParamsForType(_trade, cache, position.collateralAmount, position.positionSize);
 
+        // Construct the Request from the user input
         Position.Request memory request = Position.createRequest(_trade, cache.market, msg.sender, cache.requestType);
 
+        // Sign Oracle Prices and Subtract Value from Execution Fee
+        request.input.executionFee -= _requestOraclePricing(_trade.indexToken, _priceUpdateData);
+
+        // Store the Order Request
         tradeStorage.createOrderRequest(request);
 
-        _requestOraclePricing(_trade.indexToken, _priceUpdateData);
-
+        // Handle Token Transfers
         if (_trade.isIncrease) _handleTokenTransfers(_trade);
 
+        // Send Full Execution Fee to Processor to Distribute
         _sendExecutionFee(_trade.executionFee);
     }
 
@@ -178,17 +189,17 @@ contract Router is ReentrancyGuard, RoleValidation {
         _sendExecutionFee(_executionFee);
     }
 
-    // How can we estimate the update fee and add it to the execution fee?
-    function _requestOraclePricing(address _token, bytes[] memory _priceUpdateData) private {
+    function _requestOraclePricing(address _token, bytes[] memory _priceUpdateData)
+        private
+        returns (uint256 updateFee)
+    {
         Oracle.Asset memory asset = priceFeed.getAsset(_token);
         require(asset.isValid, "Router: Invalid Asset");
-        if (asset.priceProvider == Oracle.PriceProvider.PYTH) {
-            uint256 fee = priceFeed.getPrimaryUpdateFee(_priceUpdateData);
-            priceFeed.signPriceData{value: fee}(_token, _priceUpdateData);
-        } else {
-            uint256 fee = priceFeed.secondaryPriceFee();
-            (bool success,) = address(priceFeed).call{value: fee}("");
-            require(success, "Router: Price Fee Transfer");
+        updateFee = priceFeed.getPrimaryUpdateFee(_priceUpdateData);
+        priceFeed.signPriceData{value: updateFee}(_token, _priceUpdateData);
+        if (asset.priceProvider != Oracle.PriceProvider.PYTH) {
+            updateFee += priceFeed.secondaryPriceFee();
+            emit SecondaryPriceRequested(_token, block.number);
         }
     }
 

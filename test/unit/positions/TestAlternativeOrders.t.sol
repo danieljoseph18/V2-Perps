@@ -260,7 +260,12 @@ contract TestAlternativeOrders is Test {
         // execute the order
         vm.prank(OWNER);
         processor.executePosition(
-            key, OWNER, false, Oracle.TradingEnabled({forex: false, equity: false, commodity: false, prediction: false})
+            key,
+            OWNER,
+            Oracle.TradingEnabled({forex: false, equity: false, commodity: false, prediction: false}),
+            tokenUpdateData,
+            weth,
+            0
         );
 
         // the position
@@ -311,7 +316,12 @@ contract TestAlternativeOrders is Test {
         // execute the order
         vm.prank(OWNER);
         processor.executePosition(
-            key, OWNER, false, Oracle.TradingEnabled({forex: false, equity: false, commodity: false, prediction: false})
+            key,
+            OWNER,
+            Oracle.TradingEnabled({forex: false, equity: false, commodity: false, prediction: false}),
+            tokenUpdateData,
+            weth,
+            0
         );
 
         // the position
@@ -390,5 +400,86 @@ contract TestAlternativeOrders is Test {
         uint256 balanceAfter = USER.balance;
 
         assertGt(balanceAfter, balanceBefore);
+    }
+
+    function testLimitOrdersCantBeExecutedBeforePriceHasReachedTarget() public setUpMarkets {
+        // create a limit order
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 500e6,
+            sizeDelta: 4 ether,
+            limitPrice: 2600e18,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: true,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(USER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+        // try to execute and expect revert
+        bytes32 key = tradeStorage.getOrderAtIndex(0, true);
+        vm.prank(OWNER);
+        vm.expectRevert();
+        processor.executePosition(
+            key,
+            OWNER,
+            Oracle.TradingEnabled({forex: false, equity: false, commodity: false, prediction: false}),
+            tokenUpdateData,
+            weth,
+            0
+        );
+    }
+
+    function testLimitOrdersCanBeExecutedAtValidPrices() public setUpMarkets {
+        // create a limit order
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 500e6,
+            sizeDelta: 4 ether,
+            limitPrice: 2600e18,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: true,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(USER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+        // execute the order
+        bytes32 key = tradeStorage.getOrderAtIndex(0, true);
+        vm.prank(OWNER);
+        processor.executePosition(
+            key,
+            OWNER,
+            Oracle.TradingEnabled({forex: false, equity: false, commodity: false, prediction: false}),
+            tokenUpdateData,
+            weth,
+            0
+        );
     }
 }

@@ -206,8 +206,10 @@ contract TestBorrowing is Test {
         processor.executePosition(
             tradeStorage.getOrderAtIndex(0, false),
             OWNER,
-            false,
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true})
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true}),
+            tokenUpdateData,
+            weth,
+            0
         );
         // Get the current rate
 
@@ -281,8 +283,10 @@ contract TestBorrowing is Test {
         processor.executePosition(
             tradeStorage.getOrderAtIndex(0, false),
             OWNER,
-            false,
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true})
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true}),
+            tokenUpdateData,
+            weth,
+            0
         );
         // Get the current rate
 
@@ -364,8 +368,10 @@ contract TestBorrowing is Test {
         processor.executePosition(
             tradeStorage.getOrderAtIndex(0, false),
             OWNER,
-            false,
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true})
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true}),
+            tokenUpdateData,
+            weth,
+            0
         );
 
         // Fetch the borrowing rate

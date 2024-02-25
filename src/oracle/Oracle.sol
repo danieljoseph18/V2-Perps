@@ -124,17 +124,26 @@ library Oracle {
     }
 
     function getPrice(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (uint256 price) {
-        return priceFeed.getPrice(_block, _token).price;
+        return priceFeed.getPrice(_token, _block).price;
     }
 
     function getMaxPrice(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (uint256 maxPrice) {
-        Price memory priceData = priceFeed.getPrice(_block, _token);
+        Price memory priceData = priceFeed.getPrice(_token, _block);
         maxPrice = priceData.price + priceData.confidence;
     }
 
     function getMinPrice(IPriceFeed priceFeed, address _token, uint256 _block) public view returns (uint256 minPrice) {
-        Price memory priceData = priceFeed.getPrice(_block, _token);
+        Price memory priceData = priceFeed.getPrice(_token, _block);
         minPrice = priceData.price - priceData.confidence;
+    }
+
+    // Get the price for the current block
+    function getLatestPrice(IPriceFeed priceFeed, address _token, bool _maximise)
+        external
+        view
+        returns (uint256 price)
+    {
+        return _maximise ? getMaxPrice(priceFeed, _token, block.number) : getMinPrice(priceFeed, _token, block.number);
     }
 
     function getMarketTokenPrices(IPriceFeed priceFeed, uint256 _blockNumber, bool _maximise)
@@ -158,8 +167,8 @@ library Oracle {
         view
         returns (Price memory _longPrices, Price memory _shortPrices)
     {
-        _longPrices = priceFeed.getPrice(_blockNumber, priceFeed.longToken());
-        _shortPrices = priceFeed.getPrice(_blockNumber, priceFeed.shortToken());
+        _longPrices = priceFeed.getPrice(priceFeed.longToken(), _blockNumber);
+        _shortPrices = priceFeed.getPrice(priceFeed.shortToken(), _blockNumber);
     }
 
     function getLastMarketTokenPrices(IPriceFeed priceFeed)
@@ -262,7 +271,7 @@ library Oracle {
     }
 
     function priceWasSigned(IPriceFeed priceFeed, address _token, uint256 _block) external view returns (bool) {
-        return priceFeed.getPrice(_block, _token).price != 0;
+        return priceFeed.getPrice(_token, _block).price != 0;
     }
 
     // @audit - where is this used? should we max or min the price?

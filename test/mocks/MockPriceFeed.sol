@@ -209,6 +209,10 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
         tokenPrecision = _tokenPrecision;
     }
 
+    function setAssetPrice(address _token, uint256 _price, uint256 _block) external {
+        _setPrice(_token, _price, _block);
+    }
+
     // Set Prices for Alternative Assets - Gas Inefficient
     function setAssetPrices(uint256[] memory _prices, uint256 _block) external {
         address[] memory tokens = alternativeAssets;
@@ -261,7 +265,7 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
     // GETTERS //
     /////////////
 
-    function getPrice(uint256 _block, address _token) external view returns (Oracle.Price memory) {
+    function getPrice(address _token, uint256 _block) external view returns (Oracle.Price memory) {
         return prices[_token][_block];
     }
 

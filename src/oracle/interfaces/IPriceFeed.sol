@@ -11,7 +11,7 @@ interface IPriceFeed {
     function supportAsset(address _token, Oracle.Asset memory _asset) external;
     function unsupportAsset(address _token) external;
     function signPriceData(address _token, bytes[] calldata _priceUpdateData) external payable;
-    function getPrice(uint256 _block, address _token) external view returns (Oracle.Price memory);
+    function getPrice(address _token, uint256 _block) external view returns (Oracle.Price memory);
     function getAsset(address token) external view returns (Oracle.Asset memory);
     function lastUpdateBlock() external view returns (uint256);
     function longToken() external view returns (address);
@@ -30,6 +30,7 @@ interface IPriceFeed {
         uint64 publishTime,
         uint64 prevPublishTime
     ) external pure returns (bytes memory priceFeedData);
+    function setAssetPrice(address _token, uint256 _price, uint256 _block) external;
     function getAssetPricesUnsafe()
         external
         view

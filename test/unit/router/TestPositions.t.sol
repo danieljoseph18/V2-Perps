@@ -238,7 +238,7 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
     }
 
@@ -270,7 +270,7 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
     }
 
@@ -301,10 +301,10 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
     }
 
@@ -335,7 +335,7 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
         vm.expectRevert();
         key = tradeStorage.getOrderAtIndex(0, false);
@@ -369,10 +369,10 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
     }
 
@@ -404,7 +404,7 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,
@@ -428,7 +428,7 @@ contract TestPositions is Test {
         });
         router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
     }
 
@@ -459,7 +459,7 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -483,7 +483,7 @@ contract TestPositions is Test {
         });
         router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
     }
 
@@ -515,7 +515,7 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,
@@ -539,7 +539,7 @@ contract TestPositions is Test {
         });
         router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
     }
 
@@ -570,7 +570,7 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -594,7 +594,7 @@ contract TestPositions is Test {
         });
         router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
         // Check the position was removed from storage
         bytes32 positionKey = keccak256(abi.encode(input.indexToken, OWNER, input.isLong));
@@ -629,7 +629,7 @@ contract TestPositions is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -654,7 +654,7 @@ contract TestPositions is Test {
         router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
         key = tradeStorage.getOrderAtIndex(0, false);
         uint256 balanceBeforeDecrease = OWNER.balance;
-        processor.executePosition(key, OWNER, false, tradingEnabled);
+        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         vm.stopPrank();
         bytes32 positionKey = keccak256(abi.encode(input.indexToken, OWNER, input.isLong));
         Position.Data memory position = tradeStorage.getPosition(positionKey);

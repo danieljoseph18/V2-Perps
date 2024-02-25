@@ -216,7 +216,7 @@ contract TestFunding is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
         int256 skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
@@ -251,7 +251,7 @@ contract TestFunding is Test {
         // Execute the Position
         orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
         assertEq(skew, -10_000e18);
@@ -283,7 +283,7 @@ contract TestFunding is Test {
         // Execute the Position
         orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
         assertEq(skew, 0);
@@ -315,7 +315,7 @@ contract TestFunding is Test {
         // Execute the Position
         orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
         assertEq(skew, -50_000e18);
@@ -356,7 +356,7 @@ contract TestFunding is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass some time
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
@@ -403,7 +403,7 @@ contract TestFunding is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
 
         // Pass some time
@@ -451,7 +451,7 @@ contract TestFunding is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass enough time to get to the boundary
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
@@ -505,7 +505,7 @@ contract TestFunding is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
 
         // Pass enough time
@@ -549,7 +549,7 @@ contract TestFunding is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass enough time
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
@@ -601,7 +601,7 @@ contract TestFunding is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
 
         // Pass enough time to reach boundary
@@ -659,7 +659,7 @@ contract TestFunding is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass enough time
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
@@ -694,7 +694,7 @@ contract TestFunding is Test {
         vm.stopPrank();
         orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass some time
         vm.warp(block.timestamp + 200 seconds);
@@ -740,7 +740,7 @@ contract TestFunding is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass enough time
         IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
@@ -775,7 +775,7 @@ contract TestFunding is Test {
         vm.stopPrank();
         orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         int256 fundingRate = market.fundingRate();
         int256 fundingVelocity = market.fundingRateVelocity();

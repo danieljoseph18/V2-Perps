@@ -227,7 +227,7 @@ contract TestPriceImpact is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // create a position
         input = Position.Input({
             indexToken: weth,
@@ -304,7 +304,7 @@ contract TestPriceImpact is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // new pos
         input = Position.Input({
             indexToken: weth,

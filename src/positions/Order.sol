@@ -81,7 +81,6 @@ library Order {
         ILiquidityVault liquidityVault,
         bytes32 _orderKey,
         address _feeReceiver,
-        bool _isLimitOrder,
         Oracle.TradingEnabled memory _isTradingEnabled
     ) external view returns (ExecuteCache memory cache, Position.Request memory request) {
         // Fetch and validate request from key
@@ -97,10 +96,11 @@ library Order {
             request.input.indexToken,
             request.requestBlock,
             request.input.isLong,
-            request.input.isIncrease
+            request.input.isIncrease,
+            request.input.isLimit
         );
 
-        if (_isLimitOrder) Position.checkLimitPrice(cache.indexPrice, request.input);
+        if (request.input.isLimit) Position.checkLimitPrice(cache.indexPrice, request.input);
 
         // Cache Variables
         cache.market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
@@ -228,9 +228,9 @@ library Order {
 
         if (_trade.isLimit) {
             if (_trade.isLong) {
-                require(_trade.limitPrice > cache.indexRefPrice, "Order: mark price > limit price");
+                require(_trade.limitPrice <= cache.indexRefPrice, "Order: ref price > limit price");
             } else {
-                require(_trade.limitPrice < cache.indexRefPrice, "Order: mark price < limit price");
+                require(_trade.limitPrice >= cache.indexRefPrice, "Order: ref price < limit price");
             }
         }
 
@@ -630,6 +630,8 @@ library Order {
      * Long & Decrease: Max Price
      * Short & Increase: Max Price
      * Short & Decrease: Min Price
+     *
+     * If the position is a limit / adl order, don't use the block prices, use the latest signed prices
      */
     function retrieveTokenPrices(
         IPriceFeed priceFeed,
@@ -637,32 +639,31 @@ library Order {
         address _indexToken,
         uint256 _requestBlock,
         bool _isLong,
-        bool _isIncrease
+        bool _isIncrease,
+        bool _fetchLatest
     ) public view returns (ExecuteCache memory) {
-        // Ensure the price was signed for the given block
-        require(Oracle.priceWasSigned(priceFeed, _indexToken, _requestBlock), "Order: Price Not Signed");
+        // Determine price fetch strategy based on whether it's a limit order or not
+        uint256 priceFetchBlock = _fetchLatest ? block.number : _requestBlock;
+        bool maximizePrice = _isLong != _isIncrease;
 
-        if (_isLong) {
-            _cache.indexPrice = _isIncrease
-                ? Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock)
-                : Oracle.getMinPrice(priceFeed, _indexToken, _requestBlock);
-        } else {
-            _cache.indexPrice = _isIncrease
-                ? Oracle.getMinPrice(priceFeed, _indexToken, _requestBlock)
-                : Oracle.getMaxPrice(priceFeed, _indexToken, _requestBlock);
-        }
+        // Fetch index price based on order type and direction
+        _cache.indexPrice = _fetchLatest
+            ? Oracle.getLatestPrice(priceFeed, _indexToken, maximizePrice)
+            : _isLong
+                ? _isIncrease
+                    ? Oracle.getMaxPrice(priceFeed, _indexToken, priceFetchBlock)
+                    : Oracle.getMinPrice(priceFeed, _indexToken, priceFetchBlock)
+                : _isIncrease
+                    ? Oracle.getMinPrice(priceFeed, _indexToken, priceFetchBlock)
+                    : Oracle.getMaxPrice(priceFeed, _indexToken, priceFetchBlock);
 
-        bool maximise = _isLong ? !_isIncrease : _isIncrease;
-        (_cache.longMarketTokenPrice, _cache.shortMarketTokenPrice) =
-            Oracle.getMarketTokenPrices(priceFeed, _requestBlock, maximise);
+        // Market Token Prices and Base Units
+        (_cache.longMarketTokenPrice, _cache.shortMarketTokenPrice) = _fetchLatest
+            ? Oracle.getLastMarketTokenPrices(priceFeed, maximizePrice)
+            : Oracle.getMarketTokenPrices(priceFeed, priceFetchBlock, maximizePrice);
 
-        if (_isLong) {
-            _cache.collateralPrice = _cache.longMarketTokenPrice;
-            _cache.collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
-        } else {
-            _cache.collateralPrice = _cache.shortMarketTokenPrice;
-            _cache.collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
-        }
+        _cache.collateralPrice = _isLong ? _cache.longMarketTokenPrice : _cache.shortMarketTokenPrice;
+        _cache.collateralBaseUnit = _isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
 
         _cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexToken);
 

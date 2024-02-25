@@ -35,8 +35,6 @@ library Position {
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant LEVERAGE_PRECISION = 100;
     uint256 public constant PRECISION = 1e18;
-    // Margin of Error for Limit Order Prices
-    uint256 public constant PRICE_MARGIN = 0.005e18; // 0.5%
 
     // Data for an Open Position
     struct Data {
@@ -44,26 +42,23 @@ library Position {
         address indexToken;
         address user;
         address collateralToken; // WETH long, USDC short
-        uint256 collateralAmount; // vs size = leverage
-        uint256 positionSize; // position size in index tokens, value fluctuates in USD giving PnL
+        uint256 collateralAmount;
+        uint256 positionSize;
         uint256 weightedAvgEntryPrice;
-        bool isLong; // will determine token used
+        bool isLong;
         BorrowingParams borrowingParams;
         FundingParams fundingParams;
         bytes32 stopLossKey;
         bytes32 takeProfitKey;
     }
 
-    // Borrow Component of an Open Position
     struct BorrowingParams {
         uint256 feesOwed;
         uint256 lastBorrowUpdate;
-        uint256 lastLongCumulativeBorrowFee; // borrow fee at last for longs
-        uint256 lastShortCumulativeBorrowFee; // borrow fee at entry for shorts
+        uint256 lastLongCumulativeBorrowFee;
+        uint256 lastShortCumulativeBorrowFee;
     }
 
-    // Funding Component of a Position
-    // All Values in Index Tokens
     struct FundingParams {
         uint256 feesEarned;
         uint256 feesOwed;
@@ -97,7 +92,7 @@ library Position {
         Conditionals conditionals;
     }
 
-    // Request -> Constructed by Router
+    // Request -> Constructed by Router based on User Input
     struct Request {
         Input input;
         address market;
@@ -189,10 +184,8 @@ library Position {
 
     function checkLimitPrice(uint256 _price, Input memory _request) external pure {
         if (_request.isLong) {
-            // Increase Probability of a new order
             require(_price <= _request.limitPrice, "Position: Limit Price");
         } else {
-            // Increase Probability of a new order
             require(_price >= _request.limitPrice, "Position: Limit Price");
         }
     }
@@ -365,21 +358,25 @@ library Position {
         public
         pure
     {
-        uint256 priceMargin = mulDiv(_referencePrice, PRICE_MARGIN, PRECISION);
         if (_conditionals.stopLossSet) {
-            require(_conditionals.stopLossPercentage > 0, "Position: StopLoss %");
+            require(
+                _conditionals.stopLossPercentage > 0 && _conditionals.stopLossPercentage <= 1e18, "Position: StopLoss %"
+            );
             if (_isLong) {
-                require(_conditionals.stopLossPrice <= _referencePrice - priceMargin, "Position: StopLoss Price");
+                require(_conditionals.stopLossPrice < _referencePrice, "Position: StopLoss Price");
             } else {
-                require(_conditionals.stopLossPrice >= _referencePrice + priceMargin, "Position: StopLoss Price");
+                require(_conditionals.stopLossPrice > _referencePrice, "Position: StopLoss Price");
             }
         }
         if (_conditionals.takeProfitSet) {
-            require(_conditionals.takeProfitPercentage > 0, "Position: TakeProfit %");
+            require(
+                _conditionals.takeProfitPercentage > 0 && _conditionals.takeProfitPercentage <= 1e18,
+                "Position: TakeProfit %"
+            );
             if (_isLong) {
-                require(_conditionals.takeProfitPrice >= _referencePrice + priceMargin, "Position: TakeProfit Price");
+                require(_conditionals.takeProfitPrice > _referencePrice, "Position: TakeProfit Price");
             } else {
-                require(_conditionals.takeProfitPrice <= _referencePrice - priceMargin, "Position: TakeProfit Price");
+                require(_conditionals.takeProfitPrice < _referencePrice, "Position: TakeProfit Price");
             }
         }
     }

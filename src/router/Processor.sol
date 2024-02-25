@@ -62,7 +62,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // Upper Bounds to account for fluctuations
     uint256 public depositGasLimit;
     uint256 public withdrawalGasLimit;
-    uint256 public positionGasLimit;
+    uint256 public positionGasLimit; // Accounts for Price Updates
 
     constructor(
         address _marketMaker,
@@ -99,6 +99,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // @audit - keeper needs to pass in cumulative net pnl
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
+    // @audit - what happens if the prices of many markets are stale?
     function executeDeposit(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
         uint256 initialGas = gasleft();
         require(_key != bytes32(0), "E: Invalid Key");
@@ -124,6 +125,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // @audit - keeper needs to pass in cumulative net pnl
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
+    // @audit - what happens if the prices of many markets are stale?
     function executeWithdrawal(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
         uint256 initialGas = gasleft();
         require(_key != bytes32(0), "E: Invalid Key");
@@ -152,24 +154,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         IERC20(_token).safeTransfer(address(liquidityVault), _amount);
     }
 
-    function executePositions(address _feeReceiver, Oracle.TradingEnabled memory _isTradingEnabled)
-        external
-        onlyKeeper
-    {
-        bytes32[] memory marketOrders = tradeStorage.getOrderKeys(false);
-        uint32 len = uint32(marketOrders.length);
-        for (uint256 i = 0; i < len;) {
-            bytes32 _key = marketOrders[i];
-            try this.executePosition(_key, _feeReceiver, false, _isTradingEnabled) {}
-            catch {
-                try this.cancelOrderRequest(_key, false) {} catch {}
-            }
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
     /// @dev Only Keeper
     // @audit - Need a step to validate the trade doesn't put the market over its
     // allocation (_validateAllocation)
@@ -177,19 +161,15 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     function executePosition(
         bytes32 _orderKey,
         address _feeReceiver,
-        bool _isLimitOrder,
-        Oracle.TradingEnabled memory _isTradingEnabled
+        Oracle.TradingEnabled memory _isTradingEnabled,
+        bytes[] memory _priceUpdateData,
+        address _indexToken,
+        uint256 _indexPrice
     ) external nonReentrant onlyKeeperOrSelf {
         uint256 initialGas = gasleft();
+        uint256 priceUpdateFee = _signLatestPrices(_indexToken, _priceUpdateData, _indexPrice);
         (Order.ExecuteCache memory cache, Position.Request memory request) = Order.constructExecuteParams(
-            tradeStorage,
-            marketMaker,
-            priceFeed,
-            liquidityVault,
-            _orderKey,
-            _feeReceiver,
-            _isLimitOrder,
-            _isTradingEnabled
+            tradeStorage, marketMaker, priceFeed, liquidityVault, _orderKey, _feeReceiver, _isTradingEnabled
         );
         _updateImpactPool(cache.market, cache.priceImpactUsd);
         _updateMarketState(cache, request.input.sizeDelta, request.input.isLong, request.input.isIncrease);
@@ -235,7 +215,10 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         emit ExecutePosition(_orderKey, request, cache.fee, cache.feeDiscount);
 
         // Send Execution Fee + Rebate
-        Gas.payExecutionFee(this, request.input.executionFee, initialGas, payable(_feeReceiver), payable(msg.sender));
+        // Execution Fee reduced to account for value sent to update Pyth prices
+        Gas.payExecutionFee(
+            this, (request.input.executionFee - priceUpdateFee), initialGas, payable(_feeReceiver), payable(msg.sender)
+        );
     }
 
     // need to store who flagged and liquidated
@@ -354,7 +337,8 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // fetch prices, base units, calculate sizeDeltaUsd, no fee / discount, no ref, no impact
         priceFeed.signPriceData{value: msg.value}(position.indexToken, _priceData);
         // Get current pricing and token data
-        cache = Order.retrieveTokenPrices(priceFeed, cache, position.indexToken, block.number, position.isLong, false);
+        cache =
+            Order.retrieveTokenPrices(priceFeed, cache, position.indexToken, block.number, position.isLong, false, true);
         // Get size delta usd
         cache.sizeDeltaUsd = -int256(mulDiv(_sizeDelta, cache.indexPrice, cache.indexBaseUnit));
         // Get starting PNL Factor
@@ -390,6 +374,21 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             market.updateAdlState(false, _isLong);
         }
         emit AdlExecuted(market, _positionKey, _sizeDelta, _isLong);
+    }
+
+    // For when Router requests a secondary price update
+    // User prepays the execution fee
+    // This function updates the price on-chain and releases the execution fee
+    // to the keeper
+    // Excess fees are returned to the user
+    // Only needed if price hasn't already been updated in the same block
+    // @audit - review logic
+    function executePriceUpdate(address _token, uint256 _price, uint256 _block) external onlyKeeper {
+        uint256 initialGas = gasleft();
+        require(_price > 0, "Processor: Invalid Price");
+        require(priceFeed.getPrice(_token, _block).price == 0, "Processor: Price Already Updated");
+        priceFeed.setAssetPrice(_token, _price, _block);
+        Gas.refundPriceUpdateGas(this, initialGas, payable(msg.sender));
     }
 
     // @audit - is this vulnerable?
@@ -464,5 +463,23 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Impact Pool Delta = -1 * Price Impact
         if (_priceImpactUsd == 0) return;
         market.updateImpactPool(-_priceImpactUsd);
+    }
+
+    // Pyth Price Update Data will always at least contain the 2 market tokens
+    // Index Token can have a Pyth Price, or a Secondary Price
+    // If the Price Provider isn't pyth, use _indexPrice and store it in storage
+    function _signLatestPrices(address _indexToken, bytes[] memory _priceUpdateData, uint256 _indexPrice)
+        internal
+        returns (uint256 updateFee)
+    {
+        Oracle.Asset memory asset = priceFeed.getAsset(_indexToken);
+        updateFee = priceFeed.getPrimaryUpdateFee(_priceUpdateData);
+        // Update fee paid to Pyth: needs to be accounted for
+        priceFeed.signPriceData{value: updateFee}(_indexToken, _priceUpdateData);
+        if (asset.priceProvider != Oracle.PriceProvider.PYTH) {
+            require(_indexPrice > 0, "Processor: Invalid Index Price");
+            // fee accounted for in gas costs
+            priceFeed.setAssetPrice(_indexToken, _indexPrice, block.number);
+        }
     }
 }

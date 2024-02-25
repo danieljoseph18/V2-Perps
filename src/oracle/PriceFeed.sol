@@ -84,9 +84,8 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     // @audit - how do we check the validity of price update data
     // who can call?
     // if status is unknown, invalidate
-    // @audit - Should we use 30 decimals of precision for prices?
-    // @audit - Or Do we round prices to the nearest valid decimal, e.g 2000.99?
     // Need to avoid precision loss
+    /// @dev Price update data must always contain long / short token prices
     function signPriceData(address _token, bytes[] calldata _priceUpdateData)
         external
         payable
@@ -107,17 +106,20 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         // Update Storage
         lastUpdateBlock = currentBlock;
         // Update the Price Feeds
+        // @audit - need to receieve the fee from processor
         pyth.updatePriceFeeds{value: msg.value}(_priceUpdateData);
 
         // Store the price for the current block
         PythStructs.Price memory data = pyth.getPrice(indexAsset.priceId);
         Oracle.Price memory indexPrice = Oracle.deconstructPythPrice(data);
+
+        // Validate the Price
         uint256 indexRefPrice = Oracle.getReferencePrice(this, indexAsset);
         if (indexRefPrice > 0) {
-            // Check the Price is within range
+            // Check the Price is within range if it has a reference
             Oracle.validatePriceRange(indexAsset, indexPrice, indexRefPrice);
         }
-        // Deconstruct the price into an Oracle.Price struct
+
         // Store the Price Data in the Price Mapping
         prices[_token][currentBlock] = indexPrice;
 
@@ -199,6 +201,11 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         tokenPrecision = _tokenPrecision;
     }
 
+    // Set the Price for a Single Asset
+    function setAssetPrice(address _token, uint256 _price, uint256 _block) external onlyProcessor {
+        _setPrice(_token, _price, _block);
+    }
+
     // Set Prices for Alternative Assets - Gas Inefficient
     function setAssetPrices(uint256[] memory _prices, uint256 _block) external onlyKeeper {
         address[] memory tokens = alternativeAssets;
@@ -247,7 +254,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         prices[_token][_block] = price;
     }
 
-    function getPrice(uint256 _block, address _token) external view returns (Oracle.Price memory) {
+    function getPrice(address _token, uint256 _block) external view returns (Oracle.Price memory) {
         return prices[_token][_block];
     }
 

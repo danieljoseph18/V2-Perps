@@ -11,7 +11,8 @@ library Gas {
     enum Action {
         DEPOSIT,
         WITHDRAW,
-        POSITION
+        POSITION,
+        POSITION_WITH_PRICE
     }
 
     function validateExecutionFee(IProcessor processor, uint256 _executionFee, uint256 _msgValue, Action _action)
@@ -52,6 +53,15 @@ library Gas {
         if (feeToRefund > 0) {
             processor.sendExecutionFee(_refundReceiver, feeToRefund);
         }
+    }
+
+    // Refund Gas the executor has spent updating the price feed at the end of a transaction
+    function refundPriceUpdateGas(IProcessor processor, uint256 _initialGas, address payable _executor) external {
+        _initialGas -= gasleft() / 63;
+        uint256 gasUsed = _initialGas - gasleft();
+        uint256 baseGasLimit = processor.baseGasLimit();
+        uint256 feeForExecutor = (baseGasLimit + gasUsed) * tx.gasprice;
+        processor.sendExecutionFee(_executor, feeForExecutor);
     }
 
     function getLimitForAction(IProcessor processor, Action _action) public view returns (uint256 gasLimit) {

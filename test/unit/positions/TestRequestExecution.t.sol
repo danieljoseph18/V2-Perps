@@ -178,7 +178,7 @@ contract TestRequestExecution is Test {
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         uint256 liquidityVaultBalance = WETH(weth).balanceOf(address(liquidityVault));
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // Check that the tokens for the position are stored in the Liquidity Vault contract
         uint256 processorBalanceAfterExecution = WETH(weth).balanceOf(address(processor));
         assertEq(processorBalanceAfterExecution, 0);
@@ -218,7 +218,7 @@ contract TestRequestExecution is Test {
         // Get the size of the impact pool before the position is executed
         uint256 impactPoolBefore = IMarket(marketMaker.tokenToMarkets(weth)).impactPoolUsd();
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // Get the size of the impact pool after the position is executed
         uint256 impactPoolAfter = IMarket(marketMaker.tokenToMarkets(weth)).impactPoolUsd();
         // Check that the impact pool has been updated
@@ -270,7 +270,7 @@ contract TestRequestExecution is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // Check that the prices are based on the price at the request block
         bytes32 positionKey = keccak256(abi.encode(weth, OWNER, true));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
@@ -311,7 +311,7 @@ contract TestRequestExecution is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
@@ -356,7 +356,7 @@ contract TestRequestExecution is Test {
         bytes32 closeOrderKey = tradeStorage.getOrderAtIndex(0, false);
         uint256 balanceBefore = OWNER.balance;
         vm.prank(OWNER);
-        processor.executePosition(closeOrderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(closeOrderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         uint256 balanceAfter = OWNER.balance;
         // Check that the user receives profit
         assertGt(balanceAfter, balanceBefore);
@@ -393,7 +393,7 @@ contract TestRequestExecution is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
@@ -438,7 +438,7 @@ contract TestRequestExecution is Test {
         bytes32 closeOrderKey = tradeStorage.getOrderAtIndex(0, false);
         uint256 balanceBefore = OWNER.balance;
         vm.prank(OWNER);
-        processor.executePosition(closeOrderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(closeOrderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         uint256 balanceAfter = OWNER.balance;
         // Check that the user accrues losses
         uint256 expectedAmountOut = 0.5 ether;
@@ -479,7 +479,7 @@ contract TestRequestExecution is Test {
         Oracle.TradingEnabled memory tradingEnabled =
             Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // pass some time
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
@@ -508,7 +508,7 @@ contract TestRequestExecution is Test {
         console2.log("Funding Rate Before: ", market.fundingRate());
         (uint256 predictedLongFees, uint256 predictedShortFees) = Funding.getTotalAccumulatedFees(market);
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, false, tradingEnabled);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // check the market parameters
         longOpenInterest = market.longOpenInterest();
         assertEq(longOpenInterest, 0.08 ether);
