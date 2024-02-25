@@ -11,8 +11,7 @@ library Gas {
     enum Action {
         DEPOSIT,
         WITHDRAW,
-        POSITION,
-        POSITION_WITH_PRICE
+        POSITION
     }
 
     function validateExecutionFee(IProcessor processor, uint256 _executionFee, uint256 _msgValue, Action _action)

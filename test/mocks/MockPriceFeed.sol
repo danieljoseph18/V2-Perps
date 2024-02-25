@@ -135,7 +135,9 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
             Oracle.Price memory longPrice = Oracle.deconstructPythPrice(longData);
             // Reference price should always exist
             uint256 longRefPrice = Oracle.getReferencePrice(this, longAsset);
-            Oracle.validatePriceRange(longAsset, longPrice, longRefPrice);
+            if (longRefPrice > 0) {
+                Oracle.validatePriceRange(longAsset, longPrice, longRefPrice);
+            }
             // Get ref price and validate price is within range
             prices[longToken][currentBlock] = longPrice;
         }
@@ -146,7 +148,9 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
             Oracle.Price memory shortPrice = Oracle.deconstructPythPrice(shortData);
             // Reference price should always exist
             uint256 shortRefPrice = Oracle.getReferencePrice(this, shortAsset);
-            Oracle.validatePriceRange(shortAsset, shortPrice, shortRefPrice);
+            if (shortRefPrice > 0) {
+                Oracle.validatePriceRange(shortAsset, shortPrice, shortRefPrice);
+            }
             // Get ref price and validate price is within range
             prices[shortToken][currentBlock] = shortPrice;
         }

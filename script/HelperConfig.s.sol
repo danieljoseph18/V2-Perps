@@ -41,7 +41,7 @@ contract HelperConfig is Script {
     }
 
     function getOrCreateAnvilConfig() public returns (NetworkConfig memory anvilConfig) {
-        MockUSDC mockUSDC = new MockUSDC();
+        MockUSDC mockUsdc = new MockUSDC();
         WETH weth = new WETH();
         bytes32 ethPriceId = keccak256(abi.encode("ETH/USD"));
         bytes32 usdcPriceId = keccak256(abi.encode("USDC/USD"));
@@ -55,7 +55,13 @@ contract HelperConfig is Script {
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO
+            assetType: Oracle.AssetType.CRYPTO,
+            pool: Oracle.UniswapPool({
+                token0: address(weth),
+                token1: address(mockUsdc),
+                poolAddress: address(0),
+                poolType: Oracle.PoolType.UNISWAP_V3
+            })
         });
         Oracle.Asset memory usdcAsset = Oracle.Asset({
             isValid: true,
@@ -66,14 +72,20 @@ contract HelperConfig is Script {
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO
+            assetType: Oracle.AssetType.CRYPTO,
+            pool: Oracle.UniswapPool({
+                token0: address(mockUsdc),
+                token1: address(weth),
+                poolAddress: address(0),
+                poolType: Oracle.PoolType.UNISWAP_V3
+            })
         });
-        MockPriceFeed mockPriceFeed = new MockPriceFeed(10, 1, address(weth), address(mockUSDC), wethAsset, usdcAsset);
+        MockPriceFeed mockPriceFeed = new MockPriceFeed(10, 1, address(weth), address(mockUsdc), wethAsset, usdcAsset);
 
         anvilConfig = NetworkConfig({
             priceFeed: IPriceFeed(address(mockPriceFeed)),
             weth: address(weth),
-            usdc: address(mockUSDC),
+            usdc: address(mockUsdc),
             ethPriceId: ethPriceId,
             usdcPriceId: usdcPriceId
         });

@@ -108,7 +108,13 @@ contract TestLiquidations is Test {
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO
+            assetType: Oracle.AssetType.CRYPTO,
+            pool: Oracle.UniswapPool({
+                token0: weth,
+                token1: usdc,
+                poolAddress: address(0),
+                poolType: Oracle.PoolType.UNISWAP_V3
+            })
         });
         marketMaker.createNewMarket(weth, ethPriceId, wethData);
         vm.stopPrank();
@@ -151,5 +157,54 @@ contract TestLiquidations is Test {
         assertEq(IMarket(wethMarket).percentageAllocation(), 10000);
         vm.stopPrank();
         _;
+    }
+
+    function testLiquidatingAPositionThatGoesUnder() public setUpMarkets {
+        // create a position
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        // Execute the Position
+        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
+        Oracle.TradingEnabled memory tradingEnabled =
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+
+        vm.warp(block.timestamp + 10);
+        vm.roll(block.number + 10);
+
+        // set the price so it's liquidatable
+        bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 200000, 50, -2, 200000, 50, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        tokenUpdateData[0] = wethUpdateData;
+
+        // liquidate it
+        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+        bytes32 positionKey = tradeStorage.getOpenPositionKeys(address(market), true)[0];
+        vm.prank(OWNER);
+        processor.liquidatePosition(positionKey, tokenUpdateData);
     }
 }

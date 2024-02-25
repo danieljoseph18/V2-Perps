@@ -97,7 +97,13 @@ contract TestRequestCreation is Test {
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO
+            assetType: Oracle.AssetType.CRYPTO,
+            pool: Oracle.UniswapPool({
+                token0: weth,
+                token1: usdc,
+                poolAddress: address(0),
+                poolType: Oracle.PoolType.UNISWAP_V3
+            })
         });
         marketMaker.createNewMarket(weth, ethPriceId, wethData);
         vm.stopPrank();
@@ -284,7 +290,7 @@ contract TestRequestCreation is Test {
     ////////////////
 
     function testFuzzingInvalidLimitPrices(uint256 _limitPrice) public setUpMarkets {
-        vm.assume(_limitPrice < 2500e18);
+        vm.assume(_limitPrice > 2500e18);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -312,7 +318,7 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingInvalidLimitPricesShort(uint256 _limitPrice) public setUpMarkets {
-        vm.assume(_limitPrice > 2500e18);
+        vm.assume(_limitPrice < 2500e18);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,
@@ -342,7 +348,7 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingLimitPriceWithinBounds(uint256 _limitPrice) public setUpMarkets {
-        vm.assume(_limitPrice > 2500e18);
+        _limitPrice = bound(_limitPrice, 1, 2500e18);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -369,7 +375,7 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingLimitPriceWithinBoundsShort(uint256 _limitPrice) public setUpMarkets {
-        vm.assume(_limitPrice < 2500e18);
+        vm.assume(_limitPrice > 2500e18);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,

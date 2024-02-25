@@ -108,7 +108,13 @@ contract TestStateUpdater is Test {
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO
+            assetType: Oracle.AssetType.CRYPTO,
+            pool: Oracle.UniswapPool({
+                token0: weth,
+                token1: usdc,
+                poolAddress: address(0),
+                poolType: Oracle.PoolType.UNISWAP_V3
+            })
         });
         marketMaker.createNewMarket(weth, ethPriceId, wethData);
         vm.stopPrank();

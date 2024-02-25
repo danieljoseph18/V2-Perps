@@ -253,6 +253,8 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, position.indexToken);
         cache.impactedPrice = cache.indexPrice;
         cache.sizeDeltaUsd = _calculateValueUsd(position.positionSize, cache.indexPrice, cache.indexBaseUnit, false);
+        cache.collateralBaseUnit =
+            position.isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
 
         // call _updateMarketState
         _updateMarketState(cache, position.positionSize, position.isLong, false);

@@ -8,7 +8,11 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {IChainlinkFeed} from "./interfaces/IChainlinkFeed.sol";
+import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
+import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol";
 import {mulDiv} from "@prb/math/Common.sol";
+import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 library Oracle {
     using SignedMath for int64;
@@ -24,6 +28,14 @@ library Oracle {
         uint256 priceSpread; // Spread to Apply to Price if Alternative Asset (e.g $0.1 = 0.1e18)
         PriceProvider priceProvider;
         AssetType assetType;
+        UniswapPool pool; // Uniswap V3 Pool
+    }
+
+    struct UniswapPool {
+        address token0;
+        address token1;
+        address poolAddress;
+        PoolType poolType;
     }
 
     struct Price {
@@ -45,6 +57,11 @@ library Oracle {
         PREDICTION
     }
 
+    enum PoolType {
+        UNISWAP_V3,
+        UNISWAP_V2
+    }
+
     struct TradingEnabled {
         bool forex;
         bool equity;
@@ -53,6 +70,7 @@ library Oracle {
     }
 
     uint256 private constant MAX_PERCENTAGE = 1e18; // 100%
+    uint256 private constant SCALING_FACTOR = 1e18;
     uint256 private constant PRICE_DECIMALS = 18;
     uint256 private constant CHAINLINK_PRICE_DECIMALS = 8;
 
@@ -220,42 +238,27 @@ library Oracle {
     }
 
     // Use chainlink price feed if available
-    // @audit - What do we do if ref price is 0???
-    // @audit - What do we do if secondary?
     // @audit - VERY SENSITIVE - needs to ALWAYS return a valid price
+    // @audit - what about limit orders?
+    // Use AMM price for reference if no chainlink price
     function getReferencePrice(IPriceFeed priceFeed, Asset memory _asset)
         public
         view
         returns (uint256 referencePrice)
     {
-        // get chainlink feed address
-        // if address = 0 -> return false, 0
-        if (_asset.chainlinkPriceFeed == address(0)) {
-            if (_asset.priceProvider == PriceProvider.PYTH) {
-                (referencePrice,) = priceFeed.getPriceUnsafe(_asset);
-                require(referencePrice > 0, "Oracle: Invalid Pyth Price");
-                return referencePrice;
-            } else {
-                revert("Oracle: No Reference Price");
-            }
+        if (_asset.chainlinkPriceFeed != address(0)) {
+            IChainlinkFeed chainlinkFeed = IChainlinkFeed(_asset.chainlinkPriceFeed);
+            (, int256 _price,, uint256 timestamp,) = chainlinkFeed.latestRoundData();
+            require(_price > 0, "Oracle: Invalid Chainlink Price");
+            require(timestamp > block.timestamp - _asset.heartbeatDuration, "Oracle: Stale Chainlink Price");
+            referencePrice = mulDiv(uint256(_price), _asset.baseUnit, 10 ** CHAINLINK_PRICE_DECIMALS);
+        } else if (_asset.pool.poolAddress != address(0)) {
+            referencePrice = getAmmPrice(_asset.pool);
+        } else if (_asset.priceProvider == PriceProvider.PYTH) {
+            (referencePrice, )= priceFeed.getPriceUnsafe(_asset);
+        } else {
+            revert("Oracle: Invalid Ref Price");
         }
-        // get interface
-        IChainlinkFeed chainlinkFeed = IChainlinkFeed(_asset.chainlinkPriceFeed);
-        // call latest round data
-        (
-            /* uint80 roundID */
-            ,
-            int256 _price,
-            /* uint256 startedAt */
-            ,
-            uint256 timestamp,
-            /* uint80 answeredInRound */
-        ) = chainlinkFeed.latestRoundData();
-        // validate price -> shouldn't be <= 0, shouldn't be stale
-        require(_price > 0, "Oracle: Invalid Chainlink Price");
-        require(timestamp > block.timestamp - _asset.heartbeatDuration, "Oracle: Stale Chainlink Price");
-        // adjust and return
-        referencePrice = mulDiv(uint256(_price), _asset.baseUnit, 10 ** CHAINLINK_PRICE_DECIMALS);
     }
 
     function getBaseUnit(IPriceFeed priceFeed, address _token) public view returns (uint256) {
@@ -290,5 +293,35 @@ library Oracle {
         require(indexPrice != 0, "Oracle: Invalid Index Price");
         uint256 indexBaseUnit = getBaseUnit(priceFeed, indexToken);
         netPnl = Pricing.getNetPnl(market, indexPrice, indexBaseUnit);
+    }
+
+    /// @dev _baseUnit is the base unit of the token0
+    function getAmmPrice(UniswapPool memory _pool) public view returns (uint256 price) {
+        if (_pool.poolType == PoolType.UNISWAP_V3) {
+            IUniswapV3Pool pool = IUniswapV3Pool(_pool.poolAddress);
+            (uint160 sqrtPriceX96,,,,,,) = pool.slot0();
+            // Convert the sqrtPriceX96 to price with 18 decimals
+            // price = sqrtPriceX96^2 / 2^192 to convert to token0 per token1 price
+            uint256 baseUnit = 10 ** ERC20(_pool.token0).decimals();
+            UD60x18 numerator = ud(uint256(sqrtPriceX96)).powu(2).mul(ud(baseUnit));
+            UD60x18 denominator = ud(2).powu(192);
+            price = unwrap(numerator.div(denominator));
+            return price;
+        } else if (_pool.poolType == PoolType.UNISWAP_V2) {
+            IUniswapV2Pair pair = IUniswapV2Pair(_pool.poolAddress);
+            (uint112 reserve0, uint112 reserve1,) = pair.getReserves();
+            address pairToken0 = pair.token0();
+
+            if (_pool.token0 == pairToken0) {
+                uint256 baseUnit = 10 ** ERC20(_pool.token0).decimals();
+                price = mulDiv(uint256(reserve1), baseUnit, uint256(reserve0));
+            } else {
+                uint256 baseUnit = 10 ** ERC20(_pool.token1).decimals();
+                price = mulDiv(uint256(reserve0), baseUnit, uint256(reserve1));
+            }
+            return price;
+        } else {
+            revert("Oracle: Invalid Pool Type");
+        }
     }
 }

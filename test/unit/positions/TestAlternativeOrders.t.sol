@@ -108,7 +108,13 @@ contract TestAlternativeOrders is Test {
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
             priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO
+            assetType: Oracle.AssetType.CRYPTO,
+            pool: Oracle.UniswapPool({
+                token0: weth,
+                token1: usdc,
+                poolAddress: address(0),
+                poolType: Oracle.PoolType.UNISWAP_V3
+            })
         });
         marketMaker.createNewMarket(weth, ethPriceId, wethData);
         vm.stopPrank();
@@ -368,7 +374,7 @@ contract TestAlternativeOrders is Test {
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 4 ether,
-            limitPrice: 2600e18,
+            limitPrice: 2400e18,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
             isLong: true,
@@ -376,8 +382,8 @@ contract TestAlternativeOrders is Test {
             isIncrease: true,
             shouldWrap: true,
             conditionals: Position.Conditionals({
-                stopLossSet: true,
-                takeProfitSet: true,
+                stopLossSet: false,
+                takeProfitSet: false,
                 stopLossPrice: 2400e18,
                 takeProfitPrice: 2600e18,
                 stopLossPercentage: 1e18,
@@ -470,8 +476,20 @@ contract TestAlternativeOrders is Test {
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
         vm.stopPrank();
+
+        vm.warp(block.timestamp + 1);
+        vm.roll(block.number + 1);
         // execute the order
         bytes32 key = tradeStorage.getOrderAtIndex(0, true);
+        // update the prices to be valid
+        bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 270000, 50, -2, 260000, 50, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        bytes memory usdcUpdateData = priceFeed.createPriceFeedUpdateData(
+            usdcPriceId, 1, 0, 0, 1, 0, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        tokenUpdateData[0] = wethUpdateData;
+        tokenUpdateData[1] = usdcUpdateData;
         vm.prank(OWNER);
         processor.executePosition(
             key,

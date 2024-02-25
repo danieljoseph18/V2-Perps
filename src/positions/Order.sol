@@ -17,6 +17,7 @@ import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
+import {Test, console} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Order {
@@ -227,6 +228,9 @@ library Order {
         cache.sizeDeltaUsd = mulDiv(_trade.sizeDelta, cache.indexRefPrice, cache.indexBaseUnit);
 
         if (_trade.isLimit) {
+            console.log("Limit Price: ", _trade.limitPrice);
+            console.log("Ref Price: ", cache.indexRefPrice);
+            require(_trade.limitPrice > 0, "Order: Limit Price");
             if (_trade.isLong) {
                 require(_trade.limitPrice <= cache.indexRefPrice, "Order: ref price > limit price");
             } else {
