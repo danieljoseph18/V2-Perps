@@ -3,11 +3,11 @@ pragma solidity 0.8.23;
 
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {Position} from "../positions/Position.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Pool} from "../liquidity/Pool.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 
 library Fee {
     using SignedMath for int256;
@@ -15,7 +15,7 @@ library Fee {
     uint256 public constant SCALING_FACTOR = 1e18;
 
     struct Params {
-        ILiquidityVault liquidityVault;
+        IMarket market;
         uint256 sizeDelta;
         bool isLongToken;
         Pool.Values values;
@@ -40,7 +40,7 @@ library Fee {
     }
 
     function constructFeeParams(
-        ILiquidityVault _liquidityVault,
+        IMarket market,
         uint256 _sizeDelta,
         bool _isLongToken,
         Pool.Values memory _values,
@@ -49,7 +49,7 @@ library Fee {
         bool _isDeposit
     ) external pure returns (Params memory) {
         return Params({
-            liquidityVault: _liquidityVault,
+            market: market,
             sizeDelta: _sizeDelta,
             isLongToken: _isLongToken,
             values: _values,
@@ -62,7 +62,7 @@ library Fee {
     function calculateForMarketAction(Params memory _params) external view returns (uint256) {
         Cache memory cache;
         // get the base fee
-        cache.baseFee = mulDiv(_params.sizeDelta, _params.liquidityVault.BASE_FEE(), SCALING_FACTOR);
+        cache.baseFee = mulDiv(_params.sizeDelta, _params.market.BASE_FEE(), SCALING_FACTOR);
 
         // Convert skew to USD values and calculate sizeDeltaUsd once
         cache.sizeDeltaUsd = _params.isLongToken
@@ -133,7 +133,7 @@ library Fee {
             // Uses the original value for LTV + STV so SkewDelta is never > LTV + STV
             cache.feeAdditionUsd = mulDiv(
                 cache.skewDelta,
-                _params.liquidityVault.feeScale(),
+                _params.market.feeScale(),
                 cache.longTokenValue + cache.shortTokenValue + cache.sizeDeltaUsd
             );
 

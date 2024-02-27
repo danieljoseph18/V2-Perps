@@ -4,12 +4,25 @@ pragma solidity 0.8.23;
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {IVault} from "./interfaces/IVault.sol";
 
 library Pool {
     using SignedMath for int256;
 
     uint256 public constant SCALING_FACTOR = 1e18;
+
+    struct VaultConfig {
+        address longToken;
+        address shortToken;
+        uint256 longBaseUnit;
+        uint256 shortBaseUnit;
+        string name;
+        string symbol;
+        address priceFeed;
+        address processor;
+        uint48 minTimeToExpiration;
+        uint256 feeScale;
+    }
 
     struct Values {
         uint256 longTokenBalance;
@@ -108,13 +121,13 @@ library Pool {
             : longTokenValue + shortTokenValue - _cumulativePnl.abs();
     }
 
-    function getValues(ILiquidityVault liquidityVault) external view returns (Values memory values) {
+    function getValues(IVault vault) external view returns (Values memory values) {
         (
             values.longTokenBalance,
             values.shortTokenBalance,
             values.marketTokenSupply,
             values.longBaseUnit,
             values.shortBaseUnit
-        ) = liquidityVault.getPoolValues();
+        ) = vault.getPoolValues();
     }
 }

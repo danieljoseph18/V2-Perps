@@ -4,18 +4,22 @@ pragma solidity 0.8.23;
 import {IMarket} from "./IMarket.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
+import {Pool} from "../../liquidity/Pool.sol";
 
 interface IMarketMaker {
     event MarketMakerInitialised(address priceStorage);
     event MarketCreated(address market, address indexToken, bytes32 priceId);
     event DefaultConfigSet(IMarket.Config defaultConfig);
 
-    function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _liquidityVault) external;
+    function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _processor) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
-    function createNewMarket(address _indexToken, bytes32 _priceId, Oracle.Asset memory _asset)
-        external
-        returns (address market);
+    function createNewMarket(
+        Pool.VaultConfig memory _config,
+        address _indexToken,
+        bytes32 _priceId,
+        Oracle.Asset memory _asset
+    ) external returns (address marketAddress);
 
     function tokenToMarkets(address _indexToken) external view returns (address market);
     function getMarkets() external view returns (address[] memory);

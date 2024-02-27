@@ -15,7 +15,7 @@ interface IProcessor {
     event AdlExecuted(IMarket indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
 
     function updatePriceFeed(IPriceFeed _priceFeed) external;
-    function transferDepositTokens(address _token, uint256 _amount) external;
+    function transferDepositTokens(address _vault, address _token, uint256 _amount) external;
     function depositGasLimit() external view returns (uint256);
     function withdrawalGasLimit() external view returns (uint256);
     function positionGasLimit() external view returns (uint256);

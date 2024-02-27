@@ -79,7 +79,7 @@ library Pricing {
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
-    function getPnl(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
+    function getPnl(IMarket market, address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
         public
         view
         returns (int256 netPnl)
@@ -87,24 +87,28 @@ library Pricing {
         // Get OI in USD
         if (_isLong) {
             // get index value
-            uint256 indexValue = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, true);
+            uint256 indexValue = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, true);
             // get entry value
-            uint256 entryValue = MarketUtils.getTotalEntryValueUsd(market, _indexBaseUnit, _isLong);
+            uint256 entryValue = MarketUtils.getTotalEntryValueUsd(market, _indexToken, _indexBaseUnit, _isLong);
             // return index value - entry value
             netPnl = indexValue.toInt256() - entryValue.toInt256();
         } else {
             // get entry value
-            uint256 entryValue = MarketUtils.getTotalEntryValueUsd(market, _indexBaseUnit, _isLong);
+            uint256 entryValue = MarketUtils.getTotalEntryValueUsd(market, _indexToken, _indexBaseUnit, _isLong);
             // get index value
-            uint256 indexValue = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, false);
+            uint256 indexValue = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, false);
             // return entry value - index value
             netPnl = entryValue.toInt256() - indexValue.toInt256();
         }
     }
 
-    function getNetPnl(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit) external view returns (int256) {
-        int256 longPnl = getPnl(market, _indexPrice, _indexBaseUnit, true);
-        int256 shortPnl = getPnl(market, _indexPrice, _indexBaseUnit, false);
+    function getNetPnl(IMarket market, address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit)
+        external
+        view
+        returns (int256)
+    {
+        int256 longPnl = getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
+        int256 shortPnl = getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, false);
         return longPnl + shortPnl;
     }
 

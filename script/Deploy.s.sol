@@ -5,9 +5,8 @@ import {Script} from "forge-std/Script.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
 import {RoleStorage} from "../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../src/markets/GlobalMarketConfig.sol";
-import {LiquidityVault} from "../src/liquidity/LiquidityVault.sol";
+import {Vault} from "../src/liquidity/Vault.sol";
 import {MarketMaker} from "../src/markets/MarketMaker.sol";
-import {StateUpdater} from "../src/markets/StateUpdater.sol";
 import {IPriceFeed} from "../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../src/referrals/ReferralStorage.sol";
@@ -23,9 +22,7 @@ contract Deploy is Script {
     struct Contracts {
         RoleStorage roleStorage;
         GlobalMarketConfig globalMarketConfig;
-        LiquidityVault liquidityVault;
         MarketMaker marketMaker;
-        StateUpdater stateUpdater;
         IPriceFeed priceFeed; // Deployed in Helper Config
         TradeStorage tradeStorage;
         ReferralStorage referralStorage;
@@ -49,9 +46,7 @@ contract Deploy is Script {
         contracts = Contracts(
             RoleStorage(address(0)),
             GlobalMarketConfig(address(0)),
-            LiquidityVault(payable(address(0))),
             MarketMaker(address(0)),
-            StateUpdater(address(0)),
             priceFeed,
             TradeStorage(address(0)),
             ReferralStorage(address(0)),
@@ -65,21 +60,15 @@ contract Deploy is Script {
          */
         contracts.roleStorage = new RoleStorage();
 
-        contracts.liquidityVault =
-            new LiquidityVault(weth, usdc, 1e18, 1e6, "BRRR-LP", "BRRR", address(contracts.roleStorage));
-
         contracts.marketMaker = new MarketMaker(address(contracts.roleStorage));
 
-        contracts.tradeStorage = new TradeStorage(address(contracts.liquidityVault), address(contracts.roleStorage));
-
-        contracts.stateUpdater = new StateUpdater(contracts.marketMaker, address(contracts.roleStorage));
+        contracts.tradeStorage = new TradeStorage(address(contracts.roleStorage));
 
         contracts.referralStorage = new ReferralStorage(weth, usdc, address(contracts.roleStorage));
 
         contracts.processor = new Processor(
             address(contracts.marketMaker),
             address(contracts.tradeStorage),
-            address(contracts.liquidityVault),
             address(contracts.referralStorage),
             address(contracts.priceFeed),
             address(contracts.roleStorage)
@@ -87,7 +76,6 @@ contract Deploy is Script {
 
         contracts.router = new Router(
             address(contracts.tradeStorage),
-            address(contracts.liquidityVault),
             address(contracts.marketMaker),
             address(contracts.priceFeed),
             usdc,
@@ -97,7 +85,6 @@ contract Deploy is Script {
         );
 
         contracts.globalMarketConfig = new GlobalMarketConfig(
-            payable(address(contracts.liquidityVault)),
             address(contracts.tradeStorage),
             address(contracts.marketMaker),
             payable(address(contracts.processor)),
@@ -109,10 +96,6 @@ contract Deploy is Script {
         /**
          * ============ Set Up Contracts ============
          */
-        contracts.liquidityVault.initialise(
-            address(contracts.priceFeed), address(contracts.processor), 1 minutes, 180000 gwei, 0.03e18
-        );
-
         IMarket.Config memory defaultMarketConfig = IMarket.Config({
             maxLeverage: 10000, // 100x
             feeForSmallerSide: true,
@@ -132,7 +115,7 @@ contract Deploy is Script {
             adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18, flaggedLong: false, flaggedShort: false})
         });
         contracts.marketMaker.initialise(
-            defaultMarketConfig, address(contracts.priceFeed), address(contracts.liquidityVault)
+            defaultMarketConfig, address(contracts.priceFeed), address(contracts.processor)
         );
 
         contracts.tradeStorage.initialise(5e18, 0.001e18, 180000 gwei, 2e18, 10);
@@ -140,10 +123,8 @@ contract Deploy is Script {
         contracts.processor.updateGasLimits(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);
 
         // Set Up Roles
-        contracts.roleStorage.grantRole(Roles.VAULT, address(contracts.liquidityVault));
         contracts.roleStorage.grantRole(Roles.CONFIGURATOR, address(contracts.globalMarketConfig));
         contracts.roleStorage.grantRole(Roles.MARKET_MAKER, address(contracts.marketMaker));
-        contracts.roleStorage.grantRole(Roles.STATE_UPDATER, address(contracts.stateUpdater));
         contracts.roleStorage.grantRole(Roles.PROCESSOR, address(contracts.processor));
         contracts.roleStorage.grantRole(Roles.TRADE_STORAGE, address(contracts.tradeStorage));
         contracts.roleStorage.grantRole(Roles.ROUTER, address(contracts.router));

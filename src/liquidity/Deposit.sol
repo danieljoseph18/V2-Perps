@@ -3,7 +3,7 @@ pragma solidity 0.8.23;
 
 import {Fee} from "../libraries/Fee.sol";
 import {Pool} from "./Pool.sol";
-import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
@@ -34,7 +34,7 @@ library Deposit {
     }
 
     struct ExecuteParams {
-        ILiquidityVault liquidityVault;
+        IMarket market;
         IProcessor processor;
         IPriceFeed priceFeed;
         Data data;
@@ -79,7 +79,7 @@ library Deposit {
 
         // Calculate Fee
         cache.feeParams = Fee.constructFeeParams(
-            _params.liquidityVault,
+            _params.market,
             _params.data.input.amountIn,
             _params.isLongToken,
             _params.values,

@@ -5,9 +5,8 @@ import {Test, console} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
-import {LiquidityVault} from "../../../src/liquidity/LiquidityVault.sol";
-import {MarketMaker} from "../../../src/markets/MarketMaker.sol";
-import {StateUpdater} from "../../../src/markets/StateUpdater.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
+import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
@@ -21,20 +20,18 @@ import {Pool} from "../../../src/liquidity/Pool.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
-import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
 
 contract TestPositions is Test {
     RoleStorage roleStorage;
     GlobalMarketConfig globalMarketConfig;
-    LiquidityVault liquidityVault;
     MarketMaker marketMaker;
-    StateUpdater stateUpdater;
     IPriceFeed priceFeed; // Deployed in Helper Config
     TradeStorage tradeStorage;
     ReferralStorage referralStorage;
     Processor processor;
     Router router;
     address OWNER;
+    Market market;
 
     address weth;
     address usdc;
@@ -47,16 +44,11 @@ contract TestPositions is Test {
     address USER = makeAddr("USER");
 
     function setUp() public {
-        // Pass some time so block timestamp isn't 0
-        vm.warp(block.timestamp + 1 days);
-        vm.roll(block.number + 1);
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
         globalMarketConfig = contracts.globalMarketConfig;
-        liquidityVault = contracts.liquidityVault;
         marketMaker = contracts.marketMaker;
-        stateUpdater = contracts.stateUpdater;
         priceFeed = contracts.priceFeed;
         tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
@@ -67,6 +59,9 @@ contract TestPositions is Test {
         usdcPriceId = deploy.usdcPriceId();
         weth = deploy.weth();
         usdc = deploy.usdc();
+        // Pass some time so block timestamp isn't 0
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
         // Set Update Data
         bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
             ethPriceId, 250000, 50, -2, 250000, 50, uint64(block.timestamp), uint64(block.timestamp)
@@ -104,8 +99,22 @@ contract TestPositions is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        marketMaker.createNewMarket(weth, ethPriceId, wethData);
+        Pool.VaultConfig memory wethVaultDetails = Pool.VaultConfig({
+            longToken: weth,
+            shortToken: usdc,
+            longBaseUnit: 1e18,
+            shortBaseUnit: 1e6,
+            name: "WETH/USDC",
+            symbol: "WETH/USDC",
+            priceFeed: address(priceFeed),
+            processor: address(processor),
+            minTimeToExpiration: 1 minutes,
+            feeScale: 0.03e18
+        });
+        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
         vm.stopPrank();
+        address wethMarket = marketMaker.tokenToMarkets(weth);
+        market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
             owner: OWNER,
@@ -116,10 +125,10 @@ contract TestPositions is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(depositKey, 0);
+        processor.executeDeposit(market, depositKey, 0);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -131,18 +140,16 @@ contract TestPositions is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(depositKey, 0);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        depositKey = market.getDepositRequestAtIndex(0).key;
+        processor.executeDeposit(market, depositKey, 0);
         vm.stopPrank();
         vm.startPrank(OWNER);
-        address wethMarket = marketMaker.tokenToMarkets(weth);
-        stateUpdater.syncMarkets();
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
-        stateUpdater.setAllocationsWithBits(allocations);
-        assertEq(IMarket(wethMarket).percentageAllocation(), 10000);
+        market.setAllocationsWithBits(allocations);
+        assertEq(market.getAllocation(weth), 10000);
         vm.stopPrank();
         _;
     }

@@ -2,7 +2,7 @@
 
 pragma solidity 0.8.23;
 
-import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {IVault} from "./interfaces/IVault.sol";
 import {ERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Deposit} from "./Deposit.sol";
@@ -17,14 +17,18 @@ import {IProcessor} from "../router/interfaces/IProcessor.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
-// Stores all funds for the protocol
+// Stores all funds for the market(s)
+// Each Vault can be associated with 1+ markets
+// Its liquidity is allocated between the underlying markets
 /// @dev Needs Vault Role
-contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGuard {
+contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using Address for address payable;
     using SignedMath for int256;
 
+    uint256 public constant BITMASK_16 = type(uint256).max >> (256 - 16);
+    uint256 public constant TOTAL_ALLOCATION = 10000;
     uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 public constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
     uint256 public constant SCALING_FACTOR = 1e18;
@@ -38,7 +42,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     IPriceFeed priceFeed;
     IProcessor processor;
 
-    bool isInitialised;
     uint48 minTimeToExpiration;
 
     // Value = Max Bonus Fee
@@ -54,8 +57,6 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     uint256 public longTokensReserved;
     uint256 public shortTokensReserved;
 
-    uint256 public executionFee; // in Wei
-
     uint256 public longClaimableFunding; // in Short Tokens
     uint256 public shortClaimableFunding; // in Long Tokens
 
@@ -64,51 +65,34 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
     mapping(bytes32 => Withdrawal.Data) private withdrawalRequests;
     EnumerableSet.Bytes32Set private withdrawalKeys;
 
-    mapping(address _user => mapping(bool _isLong => uint256 _claimable)) public userClaimableFunding;
+    mapping(address user => mapping(bool isLong => uint256 claimable)) public userClaimableFunding;
 
     modifier orderExists(bytes32 _key, bool _isDeposit) {
         if (_isDeposit) {
-            require(depositKeys.contains(_key), "LiquidityVault: invalid key");
+            require(depositKeys.contains(_key), "Vault: invalid key");
         } else {
-            require(withdrawalKeys.contains(_key), "LiquidityVault: invalid key");
+            require(withdrawalKeys.contains(_key), "Vault: invalid key");
         }
         _;
     }
 
-    constructor(
-        address _longToken,
-        address _shortToken,
-        uint256 _longBaseUnit,
-        uint256 _shortBaseUnit,
-        string memory _name,
-        string memory _symbol,
-        address _roleStorage
-    ) ERC20(_name, _symbol) RoleValidation(_roleStorage) {
-        LONG_TOKEN = _longToken;
-        SHORT_TOKEN = _shortToken;
-        LONG_BASE_UNIT = _longBaseUnit;
-        SHORT_BASE_UNIT = _shortBaseUnit;
+    constructor(Pool.VaultConfig memory _config, address _roleStorage)
+        ERC20(_config.name, _config.symbol)
+        RoleValidation(_roleStorage)
+    {
+        LONG_TOKEN = _config.longToken;
+        SHORT_TOKEN = _config.shortToken;
+        LONG_BASE_UNIT = _config.longBaseUnit;
+        SHORT_BASE_UNIT = _config.shortBaseUnit;
+        priceFeed = IPriceFeed(_config.priceFeed);
+        processor = IProcessor(_config.processor);
+        minTimeToExpiration = _config.minTimeToExpiration;
+        feeScale = _config.feeScale;
     }
 
     receive() external payable {}
 
-    function initialise(
-        address _priceFeed,
-        address _processor,
-        uint48 _minTimeToExpiration,
-        uint256 _executionFee,
-        uint256 _feeScale
-    ) external onlyAdmin {
-        require(!isInitialised, "LiquidityVault: already initialised");
-        priceFeed = IPriceFeed(_priceFeed);
-        processor = IProcessor(_processor);
-        executionFee = _executionFee;
-        minTimeToExpiration = _minTimeToExpiration;
-        feeScale = _feeScale;
-    }
-
-    function updateFees(uint256 _executionFee, uint256 _feeScale) external onlyConfigurator {
-        executionFee = _executionFee;
+    function updateFees(uint256 _feeScale) external onlyConfigurator {
         feeScale = _feeScale;
     }
 
@@ -129,23 +113,11 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         IERC20(SHORT_TOKEN).safeTransfer(msg.sender, shortFees);
     }
 
-    function mint(address _to, uint256 _amount) external onlyVault {
-        _mint(_to, _amount);
-    }
-
-    function burn(uint256 _amount) external onlyVault {
-        _burn(address(this), _amount);
-    }
-
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
         onlyTradeStorage
     {
         _transferOutTokens(_to, _amount, _isLongToken, _shouldUnwrap);
-    }
-
-    function sendExecutionFee(address payable _processor, uint256 _executionFee) external onlyTradeStorage {
-        _processor.sendValue(_executionFee);
     }
 
     function accumulateFees(uint256 _amount, bool _isLong) external onlyFeeAccumulator {
@@ -218,7 +190,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         _accumulateFees(cache.fee, _params.isLongToken);
         _increasePoolBalance(cache.afterFeeAmount, _params.isLongToken);
         // Transfer tokens into the market
-        processor.transferDepositTokens(_params.data.input.tokenIn, _params.data.input.amountIn);
+        processor.transferDepositTokens(address(this), _params.data.input.tokenIn, _params.data.input.amountIn);
         // Invariant checks
         // @audit - what invariants checks do we need here?
         emit DepositExecuted(
@@ -263,7 +235,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
         orderExists(_params.key, false)
     {
         // Transfer in Market Tokens
-        _params.processor.transferDepositTokens(address(_params.liquidityVault), _params.data.input.marketTokenAmountIn);
+        _params.processor.transferDepositTokens(address(this), address(this), _params.data.input.marketTokenAmountIn);
         // Get Pool Values
         _params.values = Pool.Values({
             longTokenBalance: longTokenBalance,
@@ -309,7 +281,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     function claimFundingFees(bool _isLong) external nonReentrant {
         uint256 amount = userClaimableFunding[msg.sender][_isLong];
-        require(amount > 0, "LiquidityVault: Insufficient claimable funds");
+        require(amount > 0, "Vault: Insufficient claimable funds");
         userClaimableFunding[msg.sender][_isLong] = 0;
         _isLong ? longClaimableFunding -= amount : shortClaimableFunding -= amount;
         _transferOutTokens(msg.sender, amount, _isLong, false);
@@ -339,7 +311,7 @@ contract LiquidityVault is ILiquidityVault, ERC20, RoleValidation, ReentrancyGua
 
     function _transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) internal {
         if (_shouldUnwrap) {
-            require(_isLongToken == true, "LiquidityVault: Invalid Unwrap Token");
+            require(_isLongToken == true, "Vault: Invalid Unwrap Token");
             IWETH(LONG_TOKEN).withdraw(_amount);
             payable(_to).sendValue(_amount);
         } else {

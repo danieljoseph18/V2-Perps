@@ -5,25 +5,15 @@ import {Deposit} from "../../liquidity/Deposit.sol";
 import {Withdrawal} from "../../liquidity/Withdrawal.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
-interface ILiquidityVault {
-    // Constructor is not included in the interface
-
+interface IVault {
     // Admin functions
-    function initialise(
-        address _priceFeed,
-        address _processor,
-        uint48 _minTimeToExpiration,
-        uint256 _executionFee,
-        uint256 _feeScale
-    ) external;
-    function updateFees(uint256 _executionFee, uint256 _feeScale) external;
+    function updateFees(uint256 _feeScale) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
 
     // Trading related functions
     function reserveLiquidity(uint256 _amount, bool _isLong) external;
     function unreserveLiquidity(uint256 _amount, bool _isLong) external;
     function accumulateFees(uint256 _amount, bool _isLong) external;
-    function sendExecutionFee(address payable _processor, uint256 _executionFee) external;
     function accumulateFundingFees(uint256 _amount, bool _isLong) external;
     function decreasePoolBalance(uint256 _amount, bool _isLong) external;
     function increasePoolBalance(uint256 _amount, bool _isLong) external;
@@ -43,15 +33,10 @@ interface ILiquidityVault {
     function createWithdrawal(Withdrawal.Input memory _params) external payable;
     function cancelWithdrawal(bytes32 _key, address _caller) external;
 
-    // Mint and Burn
-    function mint(address _user, uint256 _amount) external;
-    function burn(uint256 _amount) external;
-
     // Funding
     function increaseUserClaimableFunding(uint256 _amount, bool _isLong) external;
 
     // Getter
-    function executionFee() external view returns (uint256);
     function feeScale() external view returns (uint256);
     function BASE_FEE() external view returns (uint256);
     function getDepositRequest(bytes32 _key) external view returns (Deposit.Data memory);
@@ -108,4 +93,5 @@ interface ILiquidityVault {
         bool _isLong
     );
     event TransferInCollateral(address indexed _market, uint256 indexed _collateralDelta, bool _isLong);
+    event MarketAdded(address indexed _market);
 }

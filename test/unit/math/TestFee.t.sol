@@ -5,9 +5,7 @@ import {Test, console, console2, stdStorage, StdStorage} from "forge-std/Test.so
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
-import {LiquidityVault} from "../../../src/liquidity/LiquidityVault.sol";
-import {MarketMaker} from "../../../src/markets/MarketMaker.sol";
-import {StateUpdater} from "../../../src/markets/StateUpdater.sol";
+import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
@@ -21,7 +19,7 @@ import {Pool} from "../../../src/liquidity/Pool.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
-import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
@@ -38,15 +36,14 @@ contract TestFee is Test {
 
     RoleStorage roleStorage;
     GlobalMarketConfig globalMarketConfig;
-    LiquidityVault liquidityVault;
     MarketMaker marketMaker;
-    StateUpdater stateUpdater;
     IPriceFeed priceFeed; // Deployed in Helper Config
     TradeStorage tradeStorage;
     ReferralStorage referralStorage;
     Processor processor;
     Router router;
     address OWNER;
+    Market market;
 
     address weth;
     address usdc;
@@ -59,16 +56,11 @@ contract TestFee is Test {
     address USER = makeAddr("USER");
 
     function setUp() public {
-        // Pass some time so block timestamp isn't 0
-        vm.warp(block.timestamp + 1 days);
-        vm.roll(block.number + 1);
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
         globalMarketConfig = contracts.globalMarketConfig;
-        liquidityVault = contracts.liquidityVault;
         marketMaker = contracts.marketMaker;
-        stateUpdater = contracts.stateUpdater;
         priceFeed = contracts.priceFeed;
         tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
@@ -79,6 +71,9 @@ contract TestFee is Test {
         usdcPriceId = deploy.usdcPriceId();
         weth = deploy.weth();
         usdc = deploy.usdc();
+        // Pass some time so block timestamp isn't 0
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
         // Set Update Data
         bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
             ethPriceId, 250000, 50, -2, 250000, 50, uint64(block.timestamp), uint64(block.timestamp)
@@ -116,8 +111,22 @@ contract TestFee is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        marketMaker.createNewMarket(weth, ethPriceId, wethData);
+        Pool.VaultConfig memory wethVaultDetails = Pool.VaultConfig({
+            longToken: weth,
+            shortToken: usdc,
+            longBaseUnit: 1e18,
+            shortBaseUnit: 1e6,
+            name: "WETH/USDC",
+            symbol: "WETH/USDC",
+            priceFeed: address(priceFeed),
+            processor: address(processor),
+            minTimeToExpiration: 1 minutes,
+            feeScale: 0.03e18
+        });
+        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
         vm.stopPrank();
+        address wethMarket = marketMaker.tokenToMarkets(weth);
+        market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
             owner: OWNER,
@@ -128,10 +137,10 @@ contract TestFee is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(depositKey, 0);
+        processor.executeDeposit(market, depositKey, 0);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -143,18 +152,16 @@ contract TestFee is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(depositKey, 0);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        depositKey = market.getDepositRequestAtIndex(0).key;
+        processor.executeDeposit(market, depositKey, 0);
         vm.stopPrank();
         vm.startPrank(OWNER);
-        address wethMarket = marketMaker.tokenToMarkets(weth);
-        stateUpdater.syncMarkets();
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
-        stateUpdater.setAllocationsWithBits(allocations);
-        assertEq(IMarket(wethMarket).percentageAllocation(), 10000);
+        market.setAllocationsWithBits(allocations);
+        assertEq(market.getAllocation(weth), 10000);
         vm.stopPrank();
         _;
     }
@@ -165,34 +172,32 @@ contract TestFee is Test {
      * - Calculate for a position
      */
     function testConstructionOfFeeParameters(uint256 _sizeDelta) public setUpMarkets {
-        Pool.Values memory poolValues = Pool.getValues(liquidityVault);
+        Pool.Values memory poolValues = Pool.getValues(market);
         (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) = Oracle.getLastMarketTokenPrices(priceFeed);
         Fee.Params memory feeParams =
-            Fee.constructFeeParams(liquidityVault, _sizeDelta, true, poolValues, longPrices, shortPrices, true);
+            Fee.constructFeeParams(market, _sizeDelta, true, poolValues, longPrices, shortPrices, true);
         assertEq(feeParams.sizeDelta, _sizeDelta);
     }
 
     function testCalculatingFeesForASinglePosition(uint256 _sizeDelta) public setUpMarkets {
         _sizeDelta = bound(_sizeDelta, 1, 1_000_000_000e18);
-        uint256 feePercentage = tradeStorage.tradingFee();
-        uint256 DEFAULT_PRICE = 2500e18;
         // convert size delta to usd
-        uint256 sizeDeltaUsd = mulDiv(_sizeDelta, DEFAULT_PRICE, 1e18);
+        uint256 sizeDeltaUsd = mulDiv(_sizeDelta, 2500e18, 1e18);
         // convert size delta usd to collateral
-        uint256 sizeDeltaCollateral = mulDiv(sizeDeltaUsd, 1e18, DEFAULT_PRICE);
+        uint256 sizeDeltaCollateral = mulDiv(sizeDeltaUsd, 1e18, 2500e18);
         // calculate expected fee
-        uint256 expectedFee = mulDiv(sizeDeltaCollateral, feePercentage, 1e18);
+        uint256 expectedFee = mulDiv(sizeDeltaCollateral, tradeStorage.tradingFee(), 1e18);
         // calculate fee
-        uint256 fee = Fee.calculateForPosition(tradeStorage, _sizeDelta, 0, DEFAULT_PRICE, 1e18, DEFAULT_PRICE, 1e18);
+        uint256 fee = Fee.calculateForPosition(tradeStorage, _sizeDelta, 0, 2500e18, 1e18, 2500e18, 1e18);
         assertEq(fee, expectedFee);
     }
 
     function testCalculatingFeesForAMarketAction(uint256 _sizeDelta) public setUpMarkets {
         _sizeDelta = bound(_sizeDelta, 1000, 1_000_000_000e18);
-        Pool.Values memory poolValues = Pool.getValues(liquidityVault);
+        Pool.Values memory poolValues = Pool.getValues(market);
         (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) = Oracle.getLastMarketTokenPrices(priceFeed);
         Fee.Params memory feeParams =
-            Fee.constructFeeParams(liquidityVault, _sizeDelta, true, poolValues, longPrices, shortPrices, true);
+            Fee.constructFeeParams(market, _sizeDelta, true, poolValues, longPrices, shortPrices, true);
 
         uint256 fee = Fee.calculateForMarketAction(feeParams);
         console.log("Fee: ", fee);

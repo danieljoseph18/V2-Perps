@@ -14,13 +14,9 @@ library Roles {
 
     bytes32 public constant TRADE_STORAGE = keccak256("TRADE_STORAGE");
 
-    bytes32 public constant VAULT = keccak256("VAULT");
-
     bytes32 public constant KEEPER = keccak256("KEEPER");
 
     bytes32 public constant ROUTER = keccak256("ROUTER");
-
-    bytes32 public constant STATE_UPDATER = keccak256("STATE_UPDATER");
 
     bytes32 public constant STATE_KEEPER = keccak256("STATE_KEEPER");
 
@@ -29,4 +25,6 @@ library Roles {
     bytes32 public constant ADL_KEEPER = keccak256("ADL_KEEPER");
 
     bytes32 public constant LIQUIDATOR = keccak256("LIQUIDATOR");
+
+    bytes32 public constant MARKET = keccak256("MARKET");
 }

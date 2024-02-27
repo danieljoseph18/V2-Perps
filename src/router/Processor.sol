@@ -19,7 +19,6 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
@@ -52,7 +51,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     using SignedMath for int256;
 
     ITradeStorage public tradeStorage;
-    ILiquidityVault public liquidityVault;
     IMarketMaker public marketMaker;
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
@@ -67,14 +65,12 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     constructor(
         address _marketMaker,
         address _tradeStorage,
-        address _liquidityVault,
         address _referralStorage,
         address _priceFeed,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         marketMaker = IMarketMaker(_marketMaker);
         tradeStorage = ITradeStorage(_tradeStorage);
-        liquidityVault = ILiquidityVault(_liquidityVault);
         referralStorage = IReferralStorage(_referralStorage);
         priceFeed = IPriceFeed(_priceFeed);
     }
@@ -100,19 +96,23 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
     // @audit - what happens if the prices of many markets are stale?
-    function executeDeposit(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
+    function executeDeposit(IMarket market, bytes32 _key, int256 _cumulativeMarketPnl)
+        external
+        nonReentrant
+        onlyKeeper
+    {
         uint256 initialGas = gasleft();
         require(_key != bytes32(0), "E: Invalid Key");
         // Fetch the request
         Deposit.ExecuteParams memory params;
-        params.liquidityVault = liquidityVault;
+        params.market = market;
         params.processor = this;
         params.priceFeed = priceFeed;
-        params.data = liquidityVault.getDepositRequest(_key);
+        params.data = market.getDepositRequest(_key);
         params.key = _key;
-        params.cumulativePnl = _cumulativePnl;
-        params.isLongToken = params.data.input.tokenIn == liquidityVault.LONG_TOKEN();
-        try liquidityVault.executeDeposit(params) {}
+        params.cumulativePnl = _cumulativeMarketPnl;
+        params.isLongToken = params.data.input.tokenIn == market.LONG_TOKEN();
+        try market.executeDeposit(params) {}
         catch {
             revert("Processor: Execute Deposit Failed");
         }
@@ -126,20 +126,24 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
     // @audit - what happens if the prices of many markets are stale?
-    function executeWithdrawal(bytes32 _key, int256 _cumulativePnl) external nonReentrant onlyKeeper {
+    function executeWithdrawal(IMarket market, bytes32 _key, int256 _cumulativeMarketPnl)
+        external
+        nonReentrant
+        onlyKeeper
+    {
         uint256 initialGas = gasleft();
         require(_key != bytes32(0), "E: Invalid Key");
         // Fetch the request
         Withdrawal.ExecuteParams memory params;
-        params.liquidityVault = liquidityVault;
+        params.market = market;
         params.processor = this;
         params.priceFeed = priceFeed;
-        params.data = liquidityVault.getWithdrawalRequest(_key);
+        params.data = market.getWithdrawalRequest(_key);
         params.key = _key;
-        params.cumulativePnl = _cumulativePnl;
-        params.isLongToken = params.data.input.tokenOut == liquidityVault.LONG_TOKEN();
+        params.cumulativePnl = _cumulativeMarketPnl;
+        params.isLongToken = params.data.input.tokenOut == market.LONG_TOKEN();
         params.shouldUnwrap = params.data.input.shouldUnwrap;
-        try liquidityVault.executeWithdrawal(params) {}
+        try market.executeWithdrawal(params) {}
         catch {
             revert("Processor: Execute Withdrawal Failed");
         }
@@ -149,9 +153,9 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         );
     }
 
-    // Used to transfer intermediary tokens to the vault from deposits
-    function transferDepositTokens(address _token, uint256 _amount) external onlyVault {
-        IERC20(_token).safeTransfer(address(liquidityVault), _amount);
+    // Used to transfer intermediary tokens to the market from deposits
+    function transferDepositTokens(address _market, address _token, uint256 _amount) external onlyMarket {
+        IERC20(_token).safeTransfer(_market, _amount);
     }
 
     /// @dev Only Keeper
@@ -169,10 +173,10 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint256 initialGas = gasleft();
         uint256 priceUpdateFee = _signLatestPrices(_indexToken, _priceUpdateData, _indexPrice);
         (Order.ExecuteCache memory cache, Position.Request memory request) = Order.constructExecuteParams(
-            tradeStorage, marketMaker, priceFeed, liquidityVault, _orderKey, _feeReceiver, _isTradingEnabled
+            tradeStorage, marketMaker, priceFeed, _orderKey, _feeReceiver, _isTradingEnabled
         );
-        _updateImpactPool(cache.market, cache.priceImpactUsd);
-        _updateMarketState(cache, request.input.sizeDelta, request.input.isLong, request.input.isIncrease);
+        _updateImpactPool(cache.market, _indexToken, cache.priceImpactUsd);
+        _updateMarketState(cache, _indexToken, request.input.sizeDelta, request.input.isLong, request.input.isIncrease);
 
         // Calculate Fee
         cache.fee = Fee.calculateForPosition(
@@ -257,7 +261,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             position.isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
 
         // call _updateMarketState
-        _updateMarketState(cache, position.positionSize, position.isLong, false);
+        _updateMarketState(cache, position.indexToken, position.positionSize, position.isLong, false);
         // liquidate the position
         try tradeStorage.liquidatePosition(cache, _positionKey, msg.sender) {}
         catch {
@@ -287,12 +291,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         payable(msg.sender).sendValue(refundAmount);
     }
 
-    function flagForAdl(IMarket market, bool _isLong) external onlyAdlKeeper {
+    function flagForAdl(IMarket market, address _indexToken, bool _isLong) external onlyAdlKeeper {
         require(market != IMarket(address(0)), "ADL: Invalid market");
         // get current price
-        address indexToken = market.indexToken();
-        uint256 indexPrice = Oracle.getReferencePrice(priceFeed, indexToken);
-        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, indexToken);
+        uint256 indexPrice = Oracle.getReferencePrice(priceFeed, _indexToken);
+        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexToken);
         uint256 collateralPrice;
         uint256 collateralBaseUnit;
         if (_isLong) {
@@ -304,13 +307,13 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         }
         // fetch pnl to pool ratio
         int256 pnlFactor = MarketUtils.getPnlFactor(
-            market, liquidityVault, collateralPrice, collateralBaseUnit, indexPrice, indexBaseUnit, _isLong
+            market, _indexToken, collateralPrice, collateralBaseUnit, indexPrice, indexBaseUnit, _isLong
         );
         // fetch max pnl to pool ratio
-        uint256 maxPnlFactor = market.getMaxPnlFactor();
+        uint256 maxPnlFactor = market.getMaxPnlFactor(_indexToken);
 
         if (pnlFactor.abs() > maxPnlFactor && pnlFactor > 0) {
-            market.updateAdlState(true, _isLong);
+            market.updateAdlState(_indexToken, true, _isLong);
         } else {
             revert("ADL: PTP ratio not exceeded");
         }
@@ -318,13 +321,14 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
     function executeAdl(
         IMarket market,
+        address _indexToken,
         uint256 _sizeDelta,
         bytes32 _positionKey,
         bool _isLong,
         bytes[] memory _priceData
     ) external payable onlyAdlKeeper {
         Order.ExecuteCache memory cache;
-        IMarket.AdlConfig memory adl = market.getAdlConfig();
+        IMarket.AdlConfig memory adl = market.getAdlConfig(_indexToken);
         // Check ADL is enabled for the market and for the side
         if (_isLong) {
             require(adl.flaggedLong, "ADL: Long side not flagged");
@@ -346,7 +350,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Get starting PNL Factor
         int256 startingPnlFactor = MarketUtils.getPnlFactor(
             market,
-            liquidityVault,
+            _indexToken,
             cache.collateralPrice,
             cache.collateralBaseUnit,
             cache.indexPrice,
@@ -360,7 +364,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Get the new PNL to pool ratio
         int256 newPnlFactor = MarketUtils.getPnlFactor(
             market,
-            liquidityVault,
+            _indexToken,
             cache.collateralPrice,
             cache.collateralBaseUnit,
             cache.indexPrice,
@@ -373,7 +377,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // the min PNL factor after ADL (~20%)
         // If not, unflag for ADL
         if (newPnlFactor.abs() <= adl.targetPnlFactor) {
-            market.updateAdlState(false, _isLong);
+            market.updateAdlState(_indexToken, false, _isLong);
         }
         emit AdlExecuted(market, _positionKey, _sizeDelta, _isLong);
     }
@@ -405,10 +409,10 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint256 _feeDiscount,
         bool _isLong
     ) internal {
-        // Increment Liquidity Vault Fee Balance
-        liquidityVault.accumulateFees(_fee, _isLong);
-        // Transfer Fee to Liquidity Vault
-        IERC20(_request.input.collateralToken).safeTransfer(address(liquidityVault), _fee);
+        // Increment Liquidity market Fee Balance
+        _cache.market.accumulateFees(_fee, _isLong);
+        // Transfer Fee to Liquidity market
+        IERC20(_request.input.collateralToken).safeTransfer(address(_cache.market), _fee);
         // Transfer Fee Discount to Referral Storage
         if (_feeDiscount > 0) {
             // Increment Referral Storage Fee Balance
@@ -417,10 +421,10 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), _feeDiscount);
         }
 
-        // Transfer Collateral to LiquidityVault
+        // Transfer Collateral to market
         uint256 afterFeeAmount = _request.input.collateralDelta - _fee;
-        liquidityVault.increasePoolBalance(afterFeeAmount, _isLong);
-        IERC20(_request.input.collateralToken).safeTransfer(address(liquidityVault), afterFeeAmount);
+        _cache.market.increasePoolBalance(afterFeeAmount, _isLong);
+        IERC20(_request.input.collateralToken).safeTransfer(address(_cache.market), afterFeeAmount);
     }
 
     function _calculateValueUsd(uint256 _tokenAmount, uint256 _tokenPrice, uint256 _tokenBaseUnit, bool _isIncrease)
@@ -437,18 +441,23 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function _updateMarketState(Order.ExecuteCache memory _cache, uint256 _sizeDelta, bool _isLong, bool _isIncrease)
-        internal
-    {
+    function _updateMarketState(
+        Order.ExecuteCache memory _cache,
+        address _indexToken,
+        uint256 _sizeDelta,
+        bool _isLong,
+        bool _isIncrease
+    ) internal {
         if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
             int256 signedSizeDelta = _isIncrease ? _sizeDelta.toInt256() : -_sizeDelta.toInt256();
-            _cache.market.updateAverageEntryPrice(_cache.impactedPrice, signedSizeDelta, _isLong);
+            _cache.market.updateAverageEntryPrice(_indexToken, _cache.impactedPrice, signedSizeDelta, _isLong);
             // Average Entry Price relies on OI, so it must be updated before this
-            _cache.market.updateOpenInterest(_sizeDelta, _isLong, _isIncrease);
+            _cache.market.updateOpenInterest(_indexToken, _sizeDelta, _isLong, _isIncrease);
         }
-        _cache.market.updateFundingRate(_cache.indexPrice, _cache.indexBaseUnit);
+        _cache.market.updateFundingRate(_indexToken, _cache.indexPrice, _cache.indexBaseUnit);
         _cache.market.updateBorrowingRate(
+            _indexToken,
             _cache.indexPrice,
             _cache.indexBaseUnit,
             _cache.longMarketTokenPrice,
@@ -459,12 +468,12 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         );
     }
 
-    function _updateImpactPool(IMarket market, int256 _priceImpactUsd) internal {
+    function _updateImpactPool(IMarket market, address _indexToken, int256 _priceImpactUsd) internal {
         // If Price Impact is Negative, add to the impact Pool
         // If Price Impact is Positive, Subtract from the Impact Pool
         // Impact Pool Delta = -1 * Price Impact
         if (_priceImpactUsd == 0) return;
-        market.updateImpactPool(-_priceImpactUsd);
+        market.updateImpactPool(_indexToken, -_priceImpactUsd);
     }
 
     // Pyth Price Update Data will always at least contain the 2 market tokens

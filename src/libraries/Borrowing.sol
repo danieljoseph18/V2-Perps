@@ -22,7 +22,7 @@ import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {IVault} from "../liquidity/interfaces/IVault.sol";
 import {Pricing} from "./Pricing.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
@@ -54,7 +54,7 @@ library Borrowing {
      */
     function calculateRate(
         IMarket market,
-        ILiquidityVault liquidityVault,
+        address _indexToken,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _longTokenPrice,
@@ -65,17 +65,18 @@ library Borrowing {
     ) external view returns (uint256 rate) {
         BorrowingCache memory cache;
         // Calculate the new Borrowing Rate
-        cache.config = market.getBorrowingConfig();
-        cache.openInterestUsd = ud(MarketUtils.getTotalOpenInterestUsd(market, _indexPrice, _indexBaseUnit));
+        cache.config = market.getBorrowingConfig(_indexToken);
+        cache.openInterestUsd =
+            ud(MarketUtils.getTotalOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit));
         cache.poolBalance = ud(
             MarketUtils.getTotalPoolBalanceUsd(
-                market, liquidityVault, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
+                market, _indexToken, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
             )
         );
 
         cache.borrowingFactor = ud(cache.config.factor);
         if (_isLong) {
-            cache.pendingPnl = Pricing.getPnl(market, _indexPrice, _indexBaseUnit, true);
+            cache.pendingPnl = Pricing.getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
             // Adjust the OI by the Pending PNL
             if (cache.pendingPnl > 0) {
                 cache.openInterestUsd = cache.openInterestUsd.add(ud(cache.pendingPnl.toUint256()));
@@ -128,9 +129,11 @@ library Borrowing {
     {
         // get cumulative borrowing fees since last update
         uint256 borrowFee = _position.isLong
-            ? market.longCumulativeBorrowFees() - _position.borrowingParams.lastLongCumulativeBorrowFee
-            : market.shortCumulativeBorrowFees() - _position.borrowingParams.lastShortCumulativeBorrowFee;
-        borrowFee += _calculatePendingFees(market, _position.isLong);
+            ? market.getCumulativeBorrowFees(_position.indexToken, true)
+                - _position.borrowingParams.lastLongCumulativeBorrowFee
+            : market.getCumulativeBorrowFees(_position.indexToken, false)
+                - _position.borrowingParams.lastShortCumulativeBorrowFee;
+        borrowFee += _calculatePendingFees(market, _position.indexToken, _position.isLong);
         if (borrowFee == 0) {
             indexFeesSinceUpdate = 0;
         } else {
@@ -140,10 +143,14 @@ library Borrowing {
 
     /// @dev Units: Fees as a percentage (e.g 0.03e18 = 3%)
     /// @dev Gets fees since last time the cumulative market rate was updated
-    function _calculatePendingFees(IMarket market, bool _isLong) internal view returns (uint256 pendingFees) {
-        uint256 borrowRate = _isLong ? market.longBorrowingRate() : market.shortBorrowingRate();
+    function _calculatePendingFees(IMarket market, address _indexToken, bool _isLong)
+        internal
+        view
+        returns (uint256 pendingFees)
+    {
+        uint256 borrowRate = market.getBorrowingRate(_indexToken, _isLong);
         if (borrowRate == 0) return 0;
-        uint256 timeElapsed = block.timestamp - market.lastBorrowUpdate();
+        uint256 timeElapsed = block.timestamp - market.getLastBorrowingUpdate(_indexToken);
         if (timeElapsed == 0) return 0;
         pendingFees = borrowRate * timeElapsed;
     }

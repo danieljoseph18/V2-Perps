@@ -17,28 +17,24 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {LiquidityVault} from "../liquidity/LiquidityVault.sol";
-import {TradeStorage} from "../positions/TradeStorage.sol";
+import {IVault} from "../liquidity/interfaces/IVault.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {PriceFeed} from "../oracle/PriceFeed.sol";
-import {MarketMaker} from "./MarketMaker.sol";
-import {Processor} from "../router/Processor.sol";
-import {Market, IMarket} from "./Market.sol";
-import {Router} from "../router/Router.sol";
-import {Processor} from "../router/Processor.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
+import {IProcessor} from "../router/interfaces/IProcessor.sol";
+import {IMarket} from "./interfaces/IMarket.sol";
 import {Router} from "../router/Router.sol";
 
 /// @dev Needs Configurator Role
 contract GlobalMarketConfig is RoleValidation {
-    LiquidityVault public liquidityVault;
-    TradeStorage public tradeStorage;
-    MarketMaker public marketMaker;
-    Processor public processor;
+    ITradeStorage public tradeStorage;
+    IMarketMaker public marketMaker;
+    IProcessor public processor;
     Router public router;
-    PriceFeed public priceFeed;
+    IPriceFeed public priceFeed;
 
     constructor(
-        address payable _liquidityVault,
         address _tradeStorage,
         address _marketMaker,
         address payable _processor,
@@ -46,36 +42,33 @@ contract GlobalMarketConfig is RoleValidation {
         address payable _router,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
-        liquidityVault = LiquidityVault(_liquidityVault);
-        tradeStorage = TradeStorage(_tradeStorage);
-        marketMaker = MarketMaker(_marketMaker);
-        processor = Processor(_processor);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        marketMaker = IMarketMaker(_marketMaker);
+        processor = IProcessor(_processor);
         router = Router(_router);
-        priceFeed = PriceFeed(_priceFeed);
+        priceFeed = IPriceFeed(_priceFeed);
     }
 
     function setTargetContracts(
-        address payable _liquidityVault,
         address _tradeStorage,
         address _marketMaker,
         address payable _processor,
         address payable _router,
         address _priceFeed
     ) external onlyModerator {
-        liquidityVault = LiquidityVault(_liquidityVault);
-        tradeStorage = TradeStorage(_tradeStorage);
-        marketMaker = MarketMaker(_marketMaker);
-        processor = Processor(_processor);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        marketMaker = IMarketMaker(_marketMaker);
+        processor = IProcessor(_processor);
         router = Router(_router);
-        priceFeed = PriceFeed(_priceFeed);
+        priceFeed = IPriceFeed(_priceFeed);
     }
 
     /**
      * ========================= Replace Contracts =========================
      */
-    function updatePriceFeeds() external onlyModerator {
+    function updatePriceFeeds(IVault vault) external onlyModerator {
         require(address(priceFeed) != address(0), "PriceFeed not set");
-        liquidityVault.updatePriceFeed(priceFeed);
+        vault.updatePriceFeed(priceFeed);
         marketMaker.updatePriceFeed(priceFeed);
         processor.updatePriceFeed(priceFeed);
         router.updatePriceFeed(priceFeed);
@@ -84,16 +77,19 @@ contract GlobalMarketConfig is RoleValidation {
     /**
      * ========================= Market Config =========================
      */
-    function setMarketConfig(IMarket market, IMarket.Config memory _config) external onlyModerator {
+    function setMarketConfig(IMarket market, IMarket.Config memory _config, address _indexToken)
+        external
+        onlyModerator
+    {
         require(address(market) != address(0), "Market does not exist");
-        market.updateConfig(_config);
+        market.updateConfig(_config, _indexToken);
     }
 
     /**
      * ========================= Fees =========================
      */
-    function updateLiquidityFees(uint256 _minExecutionFee, uint256 _feeScale) external onlyModerator {
-        liquidityVault.updateFees(_minExecutionFee, _feeScale);
+    function updateLiquidityFees(IVault vault, uint256 _feeScale) external onlyModerator {
+        vault.updateFees(_feeScale);
     }
 
     function setTradingFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyModerator {

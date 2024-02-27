@@ -5,9 +5,8 @@ import {Test, console} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
-import {LiquidityVault} from "../../../src/liquidity/LiquidityVault.sol";
-import {MarketMaker} from "../../../src/markets/MarketMaker.sol";
-import {StateUpdater} from "../../../src/markets/StateUpdater.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
+import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
@@ -24,15 +23,14 @@ import {Fee} from "../../../src/libraries/Fee.sol";
 contract TestDeposits is Test {
     RoleStorage roleStorage;
     GlobalMarketConfig globalMarketConfig;
-    LiquidityVault liquidityVault;
     MarketMaker marketMaker;
-    StateUpdater stateUpdater;
     IPriceFeed priceFeed; // Deployed in Helper Config
     TradeStorage tradeStorage;
     ReferralStorage referralStorage;
     Processor processor;
     Router router;
     address OWNER;
+    Market market;
 
     address weth;
     address usdc;
@@ -40,15 +38,16 @@ contract TestDeposits is Test {
     bytes32 usdcPriceId;
 
     bytes[] tokenUpdateData;
+    uint256[] allocations;
+
+    address USER = makeAddr("USER");
 
     function setUp() public {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
         globalMarketConfig = contracts.globalMarketConfig;
-        liquidityVault = contracts.liquidityVault;
         marketMaker = contracts.marketMaker;
-        stateUpdater = contracts.stateUpdater;
         priceFeed = contracts.priceFeed;
         tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
@@ -78,6 +77,8 @@ contract TestDeposits is Test {
     modifier setUpMarkets() {
         vm.deal(OWNER, 1_000_000 ether);
         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
+        vm.deal(USER, 1_000_000 ether);
+        MockUSDC(usdc).mint(USER, 1_000_000_000e6);
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 50 ether}();
         Oracle.Asset memory wethData = Oracle.Asset({
@@ -97,7 +98,57 @@ contract TestDeposits is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        marketMaker.createNewMarket(weth, ethPriceId, wethData);
+        Pool.VaultConfig memory wethVaultDetails = Pool.VaultConfig({
+            longToken: weth,
+            shortToken: usdc,
+            longBaseUnit: 1e18,
+            shortBaseUnit: 1e6,
+            name: "WETH/USDC",
+            symbol: "WETH/USDC",
+            priceFeed: address(priceFeed),
+            processor: address(processor),
+            minTimeToExpiration: 1 minutes,
+            feeScale: 0.03e18
+        });
+        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        vm.stopPrank();
+        address wethMarket = marketMaker.tokenToMarkets(weth);
+        market = Market(payable(wethMarket));
+        // Construct the deposit input
+        Deposit.Input memory input = Deposit.Input({
+            owner: OWNER,
+            tokenIn: weth,
+            amountIn: 20_000 ether,
+            executionFee: 0.01 ether,
+            shouldWrap: true
+        });
+        // Call the deposit function with sufficient gas
+        vm.prank(OWNER);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        vm.prank(OWNER);
+        processor.executeDeposit(market, depositKey, 0);
+
+        // Construct the deposit input
+        input = Deposit.Input({
+            owner: OWNER,
+            tokenIn: usdc,
+            amountIn: 50_000_000e6,
+            executionFee: 0.01 ether,
+            shouldWrap: false
+        });
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        depositKey = market.getDepositRequestAtIndex(0).key;
+        processor.executeDeposit(market, depositKey, 0);
+        vm.stopPrank();
+        vm.startPrank(OWNER);
+        uint256 allocation = 10000;
+        uint256 encodedAllocation = allocation << 240;
+        allocations.push(encodedAllocation);
+        market.setAllocationsWithBits(allocations);
+        assertEq(market.getAllocation(weth), 10000);
         vm.stopPrank();
         _;
     }
@@ -113,7 +164,7 @@ contract TestDeposits is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
+        router.createDeposit{value: 0.51 ether + 1 gwei}(market, input, tokenUpdateData);
     }
 
     function testExecutingADepositRequest() public setUpMarkets {
@@ -127,11 +178,11 @@ contract TestDeposits is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
+        router.createDeposit{value: 0.51 ether + 1 gwei}(market, input, tokenUpdateData);
         // Call the execute deposit function with sufficient gas
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(depositKey, 0);
+        processor.executeDeposit(market, depositKey, 0);
     }
 
     function testDepositWithTinyAmountIn() public setUpMarkets {
@@ -140,11 +191,11 @@ contract TestDeposits is Test {
             Deposit.Input({owner: OWNER, tokenIn: weth, amountIn: 1 wei, executionFee: 0.01 ether, shouldWrap: true});
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
         vm.expectRevert();
-        processor.executeDeposit(depositKey, 0);
+        processor.executeDeposit(market, depositKey, 0);
     }
 
     function testDepositWithTheMinimumAmountIn() public setUpMarkets {
@@ -153,10 +204,10 @@ contract TestDeposits is Test {
             Deposit.Input({owner: OWNER, tokenIn: weth, amountIn: 1000 wei, executionFee: 0.01 ether, shouldWrap: true});
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(depositKey, 0);
+        processor.executeDeposit(market, depositKey, 0);
     }
 
     // Expected Amount = 2.4970005e+25 (base fee + price spread)
@@ -172,12 +223,12 @@ contract TestDeposits is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 10_000.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
-        uint256 balanceBefore = liquidityVault.balanceOf(OWNER);
+        router.createDeposit{value: 10_000.01 ether + 1 wei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        uint256 balanceBefore = market.balanceOf(OWNER);
         vm.prank(OWNER);
-        processor.executeDeposit(depositKey, 0);
-        uint256 balanceAfter = liquidityVault.balanceOf(OWNER);
+        processor.executeDeposit(market, depositKey, 0);
+        uint256 balanceAfter = market.balanceOf(OWNER);
         assertGt(balanceAfter, balanceBefore);
     }
 
@@ -188,11 +239,11 @@ contract TestDeposits is Test {
             Deposit.Input({owner: OWNER, tokenIn: weth, amountIn: 1 ether, executionFee: 0.01 ether, shouldWrap: true});
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 1.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
+        router.createDeposit{value: 1.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(depositKey, 0);
-        uint256 balanceBefore = liquidityVault.balanceOf(OWNER);
+        processor.executeDeposit(market, depositKey, 0);
+        uint256 balanceBefore = market.balanceOf(OWNER);
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
 
@@ -200,17 +251,17 @@ contract TestDeposits is Test {
         (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) =
             Oracle.getMarketTokenPrices(priceFeed, priceFeed.lastUpdateBlock());
         Pool.Values memory values = Pool.Values({
-            longTokenBalance: liquidityVault.longTokenBalance(),
-            shortTokenBalance: liquidityVault.shortTokenBalance(),
-            marketTokenSupply: liquidityVault.totalSupply(),
+            longTokenBalance: market.longTokenBalance(),
+            shortTokenBalance: market.shortTokenBalance(),
+            marketTokenSupply: market.totalSupply(),
             longBaseUnit: 1e18,
             shortBaseUnit: 1e6
         });
-        console.log("LTB: ", liquidityVault.longTokenBalance());
-        console.log("STB: ", liquidityVault.shortTokenBalance());
-        console.log("MTS: ", liquidityVault.totalSupply());
+        console.log("LTB: ", market.longTokenBalance());
+        console.log("STB: ", market.shortTokenBalance());
+        console.log("MTS: ", market.totalSupply());
         Fee.Params memory feeParams =
-            Fee.constructFeeParams(liquidityVault, 50000e6, false, values, longPrices, shortPrices, true);
+            Fee.constructFeeParams(market, 50000e6, false, values, longPrices, shortPrices, true);
         uint256 expectedFee = Fee.calculateForMarketAction(feeParams);
         console.log("Expected Fee: ", expectedFee);
         uint256 amountMinusFee = 50_000e6 - expectedFee;
@@ -229,11 +280,11 @@ contract TestDeposits is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(depositKey, 0);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        depositKey = market.getDepositRequestAtIndex(0).key;
+        processor.executeDeposit(market, depositKey, 0);
         vm.stopPrank();
-        uint256 balanceAfter = liquidityVault.balanceOf(OWNER);
+        uint256 balanceAfter = market.balanceOf(OWNER);
         console.log("Actual Amount Out: ", balanceAfter - balanceBefore);
     }
 
@@ -244,11 +295,11 @@ contract TestDeposits is Test {
             Deposit.Input({owner: OWNER, tokenIn: weth, amountIn: 1 ether, executionFee: 0.01 ether, shouldWrap: true});
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 1.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
+        router.createDeposit{value: 1.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(depositKey, 0);
-        uint256 balanceBefore = liquidityVault.balanceOf(OWNER);
+        processor.executeDeposit(market, depositKey, 0);
+        uint256 balanceBefore = market.balanceOf(OWNER);
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
 
@@ -262,20 +313,20 @@ contract TestDeposits is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(depositKey, 0);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        depositKey = market.getDepositRequestAtIndex(0).key;
+        processor.executeDeposit(market, depositKey, 0);
         vm.stopPrank();
-        uint256 amountReceived = liquidityVault.balanceOf(OWNER) - balanceBefore;
+        uint256 amountReceived = market.balanceOf(OWNER) - balanceBefore;
         console.log("Actual Amount Out: ", amountReceived);
         // Get the value of market tokens
         (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) =
             Oracle.getMarketTokenPrices(priceFeed, priceFeed.lastUpdateBlock());
         uint256 marketTokenPrice = Pool.getMarketTokenPrice(
             Pool.Values({
-                longTokenBalance: liquidityVault.longTokenBalance(),
-                shortTokenBalance: liquidityVault.shortTokenBalance(),
-                marketTokenSupply: liquidityVault.totalSupply(),
+                longTokenBalance: market.longTokenBalance(),
+                shortTokenBalance: market.shortTokenBalance(),
+                marketTokenSupply: market.totalSupply(),
                 longBaseUnit: 1e18,
                 shortBaseUnit: 1e6
             }),
@@ -294,9 +345,9 @@ contract TestDeposits is Test {
         // Call the deposit function with sufficient gas
         vm.startPrank(OWNER);
         WETH(weth).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 1.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(depositKey, 0);
+        router.createDeposit{value: 1.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        processor.executeDeposit(market, depositKey, 0);
         vm.stopPrank();
     }
 }

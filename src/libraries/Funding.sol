@@ -50,21 +50,25 @@ library Funding {
         bool flipsSign;
     }
 
-    function calculateSkewUsd(IMarket market, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function calculateSkewUsd(IMarket market, address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         view
         returns (int256 skewUsd)
     {
-        uint256 longOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, true);
-        uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, false);
+        uint256 longOI = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, true);
+        uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, false);
 
         skewUsd = longOI.toInt256() - shortOI.toInt256();
     }
 
     /// @dev Calculate the funding rate velocity
     /// @dev velocity units = % per second (18 dp)
-    function calculateVelocity(IMarket market, int256 _skew) external view returns (int256 velocity) {
-        IMarket.FundingConfig memory funding = market.getFundingConfig();
+    function calculateVelocity(IMarket market, address _indexToken, int256 _skew)
+        external
+        view
+        returns (int256 velocity)
+    {
+        IMarket.FundingConfig memory funding = market.getFundingConfig(_indexToken);
         uint256 c = mulDiv(funding.maxVelocity, PRECISION, funding.skewScale);
         velocity = mulDivSigned(c.toInt256(), _skew, PRECISION.toInt256());
     }
@@ -72,15 +76,16 @@ library Funding {
     /// @dev Get the total funding fees accumulated for each side
     /// @notice For External Queries
     // @audit - math
-    function getTotalAccumulatedFees(IMarket market)
+    function getTotalAccumulatedFees(IMarket market, address _indexToken)
         external
         view
         returns (uint256 longAccumulatedFees, uint256 shortAccumulatedFees)
     {
-        (uint256 longFundingSinceUpdate, uint256 shortFundingSinceUpdate) = _calculateFeesSinceLastUpdate(market);
+        (uint256 longFundingSinceUpdate, uint256 shortFundingSinceUpdate) =
+            _calculateFeesSinceLastUpdate(market, _indexToken);
 
-        longAccumulatedFees = market.longCumulativeFundingFees() + longFundingSinceUpdate;
-        shortAccumulatedFees = market.shortCumulativeFundingFees() + shortFundingSinceUpdate;
+        longAccumulatedFees = market.getCumulativeFundingFees(_indexToken, true) + longFundingSinceUpdate;
+        shortAccumulatedFees = market.getCumulativeFundingFees(_indexToken, false) + shortFundingSinceUpdate;
     }
 
     /// @dev Returns fees earned and fees owed in collateral tokens
@@ -91,10 +96,10 @@ library Funding {
         returns (uint256 collateralFeeEarned, uint256 collateralFeeOwed)
     {
         // Get the fees accumulated since the last position update
-        uint256 shortAccumulatedFees =
-            _cache.market.shortCumulativeFundingFees() - _position.fundingParams.lastShortCumulativeFunding;
-        uint256 longAccumulatedFees =
-            _cache.market.longCumulativeFundingFees() - _position.fundingParams.lastLongCumulativeFunding;
+        uint256 shortAccumulatedFees = _cache.market.getCumulativeFundingFees(_position.indexToken, false)
+            - _position.fundingParams.lastShortCumulativeFunding;
+        uint256 longAccumulatedFees = _cache.market.getCumulativeFundingFees(_position.indexToken, true)
+            - _position.fundingParams.lastLongCumulativeFunding;
         // Separate Short and Long Fees to Earned and Owed
         uint256 accumulatedFundingEarned;
         uint256 accumulatedFundingOwed;
@@ -110,9 +115,9 @@ library Funding {
         uint256 indexFeeOwed =
             _position.fundingParams.feesOwed + mulDiv(accumulatedFundingOwed, _position.positionSize, PRECISION);
         // Flag avoids unnecessary heavy computation
-        if (_cache.market.lastFundingUpdate() != block.timestamp) {
+        if (_cache.market.getLastFundingUpdate(_position.indexToken) != block.timestamp) {
             (uint256 feesEarnedSinceUpdate, uint256 feesOwedSinceUpdate) =
-                getFeesSinceLastMarketUpdate(_cache.market, _position.isLong);
+                getFeesSinceLastMarketUpdate(_cache.market, _position.indexToken, _position.isLong);
             // Calculate the Total Fees Earned and Owed
             indexFeeEarned += feesEarnedSinceUpdate;
             indexFeeOwed += feesOwedSinceUpdate;
@@ -126,22 +131,21 @@ library Funding {
     }
 
     // Rate to 18 D.P
-    function getCurrentRate(IMarket market) external view returns (int256) {
-        uint256 timeElapsed = block.timestamp - market.lastFundingUpdate();
-        int256 fundingRate = market.fundingRate();
-        int256 fundingRateVelocity = market.fundingRateVelocity();
+    function getCurrentRate(IMarket market, address _indexToken) external view returns (int256) {
+        uint256 timeElapsed = block.timestamp - market.getLastFundingUpdate(_indexToken);
+        (int256 fundingRate, int256 fundingRateVelocity) = market.getFundingRates(_indexToken);
         // currentRate = prevRate + (velocity * timeElapsed)
         return fundingRate + (fundingRateVelocity * int256(timeElapsed));
     }
 
     /// @dev Get the funding fees earned and owed since the last market update
     /// units: fee per index token (18 dp) e.g 0.01e18 = 1%
-    function getFeesSinceLastMarketUpdate(IMarket market, bool _isLong)
+    function getFeesSinceLastMarketUpdate(IMarket market, address _indexToken, bool _isLong)
         public
         view
         returns (uint256 feesEarned, uint256 feesOwed)
     {
-        (uint256 longFees, uint256 shortFees) = _calculateFeesSinceLastUpdate(market);
+        (uint256 longFees, uint256 shortFees) = _calculateFeesSinceLastUpdate(market, _indexToken);
 
         if (_isLong) {
             feesEarned = shortFees;
@@ -204,16 +208,16 @@ library Funding {
      * get the total funding accumulated.
      *
      */
-    function _calculateFeesSinceLastUpdate(IMarket market)
+    function _calculateFeesSinceLastUpdate(IMarket market, address _indexToken)
         internal
         view
         returns (uint256 longFees, uint256 shortFees)
     {
         FundingCache memory cache;
-        IMarket.FundingConfig memory funding = market.getFundingConfig();
+        IMarket.FundingConfig memory funding = market.getFundingConfig(_indexToken);
 
         // If no update, return
-        cache.timeElapsed = block.timestamp - market.lastFundingUpdate();
+        cache.timeElapsed = block.timestamp - market.getLastFundingUpdate(_indexToken);
 
         if (cache.timeElapsed == 0) {
             return (0, 0);
@@ -221,8 +225,7 @@ library Funding {
         // Cache Variables
         cache.maxFundingRate = funding.maxRate;
         cache.minFundingRate = funding.minRate;
-        cache.startingFundingRate = market.fundingRate();
-        cache.velocity = market.fundingRateVelocity();
+        (cache.startingFundingRate, cache.velocity) = market.getFundingRates(_indexToken);
 
         if (cache.velocity == 0) {
             if (cache.startingFundingRate > 0) {

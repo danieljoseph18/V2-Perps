@@ -18,7 +18,7 @@
 pragma solidity 0.8.23;
 
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -32,8 +32,6 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 contract TradeStorage is ITradeStorage, RoleValidation {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SignedMath for int256;
-
-    ILiquidityVault liquidityVault;
 
     uint256 constant PRECISION = 1e18;
     uint256 constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
@@ -55,9 +53,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     uint256 public executionFee;
     uint256 public minBlockDelay;
 
-    constructor(address _liquidityVault, address _roleStorage) RoleValidation(_roleStorage) {
-        liquidityVault = ILiquidityVault(_liquidityVault);
-    }
+    constructor(address _roleStorage) RoleValidation(_roleStorage) {}
 
     function initialise(
         uint256 _liquidationFee, // 5e18 = 5 USD
@@ -165,7 +161,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         uint256 borrowFee;
         (position, fundingFee, borrowFee) = Order.executeCollateralIncrease(position, _params, _cache);
         // Pay Fees -> @audit - units?
-        _payFees(fundingFee, borrowFee, position.isLong);
+        _payFees(_cache.market, fundingFee, borrowFee, position.isLong);
         // Update Final Storage
         openPositions[positionKey] = position;
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
@@ -187,11 +183,11 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         (position, fundingFee, borrowFee) =
             Order.executeCollateralDecrease(position, _params, _cache, minCollateralUsd, liquidationFeeUsd);
         // Pay Fees
-        _payFees(fundingFee, borrowFee, position.isLong);
+        _payFees(_cache.market, fundingFee, borrowFee, position.isLong);
         // Update Final Storage
         openPositions[positionKey] = position;
         // Transfer Tokens to User
-        liquidityVault.transferOutTokens(
+        _cache.market.transferOutTokens(
             _params.request.user,
             _params.request.input.collateralDelta,
             _params.request.input.isLong,
@@ -221,7 +217,9 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // If take profit set, create and store the order
         if (_params.request.input.conditionals.takeProfitSet) position.takeProfitKey = _createTakeProfit(takeProfit);
         // Reserve Liquidity Equal to the Position Size
-        _reserveLiquidity(absSizeDelta, _cache.collateralPrice, _cache.collateralBaseUnit, _params.request.input.isLong);
+        _reserveLiquidity(
+            _cache.market, absSizeDelta, _cache.collateralPrice, _cache.collateralBaseUnit, _params.request.input.isLong
+        );
         // Update Final Storage
         openPositions[positionKey] = position;
         openPositionKeys[_params.request.market][position.isLong].add(positionKey);
@@ -245,9 +243,11 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         uint256 borrowFee;
         (position, sizeDeltaUsd, fundingFee, borrowFee) = Order.increaseExistingPosition(position, _params, _cache);
         // Pay Fees
-        _payFees(fundingFee, borrowFee, position.isLong);
+        _payFees(_cache.market, fundingFee, borrowFee, position.isLong);
         // Reserve Liquidity Equal to the Position Size
-        _reserveLiquidity(sizeDeltaUsd, _cache.collateralPrice, _cache.collateralBaseUnit, position.isLong);
+        _reserveLiquidity(
+            _cache.market, sizeDeltaUsd, _cache.collateralPrice, _cache.collateralBaseUnit, position.isLong
+        );
         // Update Final Storage
         openPositions[positionKey] = position;
     }
@@ -274,12 +274,12 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         (position, decreaseCache) =
             Order.decreaseExistingPosition(position, _params, _cache, minCollateralUsd, liquidationFeeUsd);
         // Pay Fees
-        _payFees(decreaseCache.fundingFee, decreaseCache.borrowFee, position.isLong);
+        _payFees(_cache.market, decreaseCache.fundingFee, decreaseCache.borrowFee, position.isLong);
         // Cached to prevent multi conversion
         address market = address(position.market);
         // Reserve Liquidity Equal to the Position Size
         _unreserveLiquidity(
-            _cache.sizeDeltaUsd.abs(), _cache.collateralPrice, _cache.collateralBaseUnit, position.isLong
+            _cache.market, _cache.sizeDeltaUsd.abs(), _cache.collateralPrice, _cache.collateralBaseUnit, position.isLong
         );
         // Update Final Storage
         openPositions[positionKey] = position;
@@ -294,8 +294,8 @@ contract TradeStorage is ITradeStorage, RoleValidation {
             require(decreaseCache.afterFeeAmount >= lossAmount, "TradeStorage: Loss > Principle");
 
             uint256 userAmount = decreaseCache.afterFeeAmount - lossAmount;
-            liquidityVault.accumulateFees(lossAmount, position.isLong);
-            liquidityVault.transferOutTokens(
+            _cache.market.accumulateFees(lossAmount, position.isLong);
+            _cache.market.transferOutTokens(
                 _params.request.user, userAmount, _params.request.input.isLong, _params.request.input.shouldWrap
             ); // @audit - should unwrap
         } else {
@@ -303,7 +303,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
             if (decreaseCache.decreasePnl > 0) {
                 decreaseCache.afterFeeAmount += decreaseCache.decreasePnl.abs();
             }
-            liquidityVault.transferOutTokens(
+            _cache.market.transferOutTokens(
                 _params.request.user,
                 decreaseCache.afterFeeAmount,
                 _params.request.input.isLong,
@@ -332,9 +332,9 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Pay off Outstanding Funding Fees
         remainingCollateral -= fundingOwed;
         // Pay off Outstanding Funding Fees to Opposite Side
-        liquidityVault.accumulateFundingFees(fundingOwed, !position.isLong);
+        _cache.market.accumulateFundingFees(fundingOwed, !position.isLong);
         // Accumulate earned Funding Fees from Opposite Side
-        liquidityVault.increaseUserClaimableFunding(fundingEarned, !position.isLong);
+        _cache.market.increaseUserClaimableFunding(fundingEarned, !position.isLong);
 
         // Cached to prevent double conversion
         address market = address(_cache.market);
@@ -345,7 +345,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
         // unreserve all of the position liquidity
         _unreserveLiquidity(
-            _cache.sizeDeltaUsd.abs(), _cache.collateralPrice, _cache.collateralBaseUnit, position.isLong
+            _cache.market, _cache.sizeDeltaUsd.abs(), _cache.collateralPrice, _cache.collateralBaseUnit, position.isLong
         );
 
         // calculate the liquidation fee to send to the liquidator
@@ -353,9 +353,9 @@ contract TradeStorage is ITradeStorage, RoleValidation {
             Position.calculateLiquidationFee(_cache.collateralPrice, _cache.collateralBaseUnit, liquidationFeeUsd);
         remainingCollateral -= liqFee;
         // accumulate the rest of the position size as fees
-        liquidityVault.accumulateFees(remainingCollateral, position.isLong);
+        _cache.market.accumulateFees(remainingCollateral, position.isLong);
         // transfer the liquidation fee to the liquidator
-        liquidityVault.transferOutTokens(_liquidator, liqFee, position.isLong, false);
+        _cache.market.transferOutTokens(_liquidator, liqFee, position.isLong, false);
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }
 
@@ -382,6 +382,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     }
 
     function _reserveLiquidity(
+        IMarket market,
         uint256 _sizeDeltaUsd,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
@@ -389,10 +390,11 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     ) internal {
         // Convert Size Delta USD to Collateral Tokens
         uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice));
-        liquidityVault.reserveLiquidity(reserveDelta, _isLong);
+        market.reserveLiquidity(reserveDelta, _isLong);
     }
 
     function _unreserveLiquidity(
+        IMarket market,
         uint256 _sizeDeltaUsd,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
@@ -400,17 +402,17 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     ) internal {
         // Convert Size Delta USD to Collateral Tokens
         uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice));
-        liquidityVault.unreserveLiquidity(reserveDelta, _isLong);
+        market.unreserveLiquidity(reserveDelta, _isLong);
     }
 
     // funding and borrow amounts should be in collateral tokens
-    function _payFees(uint256 _fundingAmount, uint256 _borrowAmount, bool _isLong) internal {
+    function _payFees(IMarket market, uint256 _fundingAmount, uint256 _borrowAmount, bool _isLong) internal {
         // decrease the user's reserved amount
-        liquidityVault.unreserveLiquidity(_fundingAmount + _borrowAmount, _isLong);
+        market.unreserveLiquidity(_fundingAmount + _borrowAmount, _isLong);
         // increase the funding pool
-        liquidityVault.accumulateFundingFees(_fundingAmount, _isLong);
+        market.accumulateFundingFees(_fundingAmount, _isLong);
         // Pay borrowing fees to LPs
-        liquidityVault.accumulateFees(_borrowAmount, _isLong);
+        market.accumulateFees(_borrowAmount, _isLong);
     }
 
     function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory) {

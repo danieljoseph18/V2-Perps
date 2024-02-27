@@ -5,9 +5,7 @@ import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
-import {LiquidityVault} from "../../../src/liquidity/LiquidityVault.sol";
-import {MarketMaker} from "../../../src/markets/MarketMaker.sol";
-import {StateUpdater} from "../../../src/markets/StateUpdater.sol";
+import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
@@ -21,7 +19,7 @@ import {Pool} from "../../../src/liquidity/Pool.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
-import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
@@ -29,15 +27,14 @@ import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 contract TestFunding is Test {
     RoleStorage roleStorage;
     GlobalMarketConfig globalMarketConfig;
-    LiquidityVault liquidityVault;
     MarketMaker marketMaker;
-    StateUpdater stateUpdater;
     IPriceFeed priceFeed; // Deployed in Helper Config
     TradeStorage tradeStorage;
     ReferralStorage referralStorage;
     Processor processor;
     Router router;
     address OWNER;
+    Market market;
 
     address weth;
     address usdc;
@@ -50,16 +47,11 @@ contract TestFunding is Test {
     address USER = makeAddr("USER");
 
     function setUp() public {
-        // Pass some time so block timestamp isn't 0
-        vm.warp(block.timestamp + 1 days);
-        vm.roll(block.number + 1);
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
         globalMarketConfig = contracts.globalMarketConfig;
-        liquidityVault = contracts.liquidityVault;
         marketMaker = contracts.marketMaker;
-        stateUpdater = contracts.stateUpdater;
         priceFeed = contracts.priceFeed;
         tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
@@ -70,6 +62,9 @@ contract TestFunding is Test {
         usdcPriceId = deploy.usdcPriceId();
         weth = deploy.weth();
         usdc = deploy.usdc();
+        // Pass some time so block timestamp isn't 0
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
         // Set Update Data
         bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
             ethPriceId, 250000, 50, -2, 250000, 50, uint64(block.timestamp), uint64(block.timestamp)
@@ -107,8 +102,22 @@ contract TestFunding is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        marketMaker.createNewMarket(weth, ethPriceId, wethData);
+        Pool.VaultConfig memory wethVaultDetails = Pool.VaultConfig({
+            longToken: weth,
+            shortToken: usdc,
+            longBaseUnit: 1e18,
+            shortBaseUnit: 1e6,
+            name: "WETH/USDC",
+            symbol: "WETH/USDC",
+            priceFeed: address(priceFeed),
+            processor: address(processor),
+            minTimeToExpiration: 1 minutes,
+            feeScale: 0.03e18
+        });
+        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
         vm.stopPrank();
+        address wethMarket = marketMaker.tokenToMarkets(weth);
+        market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
             owner: OWNER,
@@ -119,10 +128,10 @@ contract TestFunding is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(input, tokenUpdateData);
-        bytes32 depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(depositKey, 0);
+        processor.executeDeposit(market, depositKey, 0);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -134,18 +143,16 @@ contract TestFunding is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        depositKey = liquidityVault.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(depositKey, 0);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        depositKey = market.getDepositRequestAtIndex(0).key;
+        processor.executeDeposit(market, depositKey, 0);
         vm.stopPrank();
         vm.startPrank(OWNER);
-        address wethMarket = marketMaker.tokenToMarkets(weth);
-        stateUpdater.syncMarkets();
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
-        stateUpdater.setAllocationsWithBits(allocations);
-        assertEq(IMarket(wethMarket).percentageAllocation(), 10000);
+        market.setAllocationsWithBits(allocations);
+        assertEq(market.getAllocation(weth), 10000);
         vm.stopPrank();
         _;
     }
@@ -167,26 +174,25 @@ contract TestFunding is Test {
      * skewScale: 1_000_000e18 // 1 Mil USD
      */
     function testVelocityCalculationForDifferentSkews() public setUpMarkets {
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
         // Different Skews
         int256 heavyLong = 500_000e18;
         int256 heavyShort = -500_000e18;
         int256 balancedLong = 1000e18;
         int256 balancedShort = -1000e18;
         // Calculate Heavy Long Velocity
-        int256 heavyLongVelocity = Funding.calculateVelocity(market, heavyLong);
+        int256 heavyLongVelocity = Funding.calculateVelocity(market, weth, heavyLong);
         int256 expectedHeavyLongVelocity = 0.00015e18;
         assertEq(heavyLongVelocity, expectedHeavyLongVelocity);
         // Calculate Heavy Short Velocity
-        int256 heavyShortVelocity = Funding.calculateVelocity(market, heavyShort);
+        int256 heavyShortVelocity = Funding.calculateVelocity(market, weth, heavyShort);
         int256 expectedHeavyShortVelocity = -0.00015e18;
         assertEq(heavyShortVelocity, expectedHeavyShortVelocity);
         // Calculate Balanced Long Velocity
-        int256 balancedLongVelocity = Funding.calculateVelocity(market, balancedLong);
+        int256 balancedLongVelocity = Funding.calculateVelocity(market, weth, balancedLong);
         int256 expectedBalancedLongVelocity = 0.0000003e18;
         assertEq(balancedLongVelocity, expectedBalancedLongVelocity);
         // Calculate Balanced Short Velocity
-        int256 balancedShortVelocity = Funding.calculateVelocity(market, balancedShort);
+        int256 balancedShortVelocity = Funding.calculateVelocity(market, weth, balancedShort);
         int256 expectedBalancedShortVelocity = -0.0000003e18;
         assertEq(balancedShortVelocity, expectedBalancedShortVelocity);
     }
@@ -224,8 +230,7 @@ contract TestFunding is Test {
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
-        int256 skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
+        int256 skew = Funding.calculateSkewUsd(market, weth, 2500e18, 1e18);
         assertEq(skew, 10_000e18);
 
         // open and execute a short to skew it short
@@ -259,7 +264,7 @@ contract TestFunding is Test {
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
-        skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
+        skew = Funding.calculateSkewUsd(market, weth, 2500e18, 1e18);
         assertEq(skew, -10_000e18);
 
         // open and execute a long to balance it
@@ -291,7 +296,7 @@ contract TestFunding is Test {
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
-        skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
+        skew = Funding.calculateSkewUsd(market, weth, 2500e18, 1e18);
         assertEq(skew, 0);
 
         // open and execute a short to heavily skew
@@ -323,7 +328,7 @@ contract TestFunding is Test {
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
-        skew = Funding.calculateSkewUsd(market, 2500e18, 1e18);
+        skew = Funding.calculateSkewUsd(market, weth, 2500e18, 1e18);
         assertEq(skew, -50_000e18);
     }
 
@@ -365,11 +370,11 @@ contract TestFunding is Test {
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass some time
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
         // get the fees since update and compare with expected values
-        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, true);
+        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, true);
         assertEq(feesEarned, 0);
         assertEq(feesOwed, 14852970000000000);
     }
@@ -410,13 +415,12 @@ contract TestFunding is Test {
 
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
 
         // Pass some time
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
         // get the fees since update and compare with expected values
-        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, false);
+        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
         assertEq(feesEarned, 0);
         assertEq(feesOwed, 29694060000000000);
     }
@@ -460,11 +464,11 @@ contract TestFunding is Test {
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass enough time to get to the boundary
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
         // get the fees since update and compare with expected values
-        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, true);
+        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, true);
         assertEq(feesEarned, 0);
         assertEq(feesOwed, 2.4420149940006e21);
     }
@@ -512,13 +516,12 @@ contract TestFunding is Test {
 
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
 
         // Pass enough time
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
         // get the fees since update and compare with expected values
-        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, false);
+        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
         assertEq(feesEarned, 0);
         assertEq(feesOwed, 2.5169699969988e21);
     }
@@ -558,19 +561,19 @@ contract TestFunding is Test {
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass enough time
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
         // Update the market's funding rate
         vm.prank(address(processor));
-        market.updateFundingRate(2500e18, 1e18);
+        market.updateFundingRate(weth, 2500e18, 1e18);
 
         // Pass some time
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
 
         // get the fees since update and compare with expected values
-        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, true);
+        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, true);
         assertEq(feesEarned, 0);
         assertEq(feesOwed, 3000000000000000000);
     }
@@ -608,7 +611,6 @@ contract TestFunding is Test {
 
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
 
         // Pass enough time to reach boundary
         vm.warp(block.timestamp + 1 days);
@@ -616,14 +618,14 @@ contract TestFunding is Test {
 
         // Update the market's funding rate
         vm.prank(address(processor));
-        market.updateFundingRate(2500e18, 1e18);
+        market.updateFundingRate(weth, 2500e18, 1e18);
 
         // Pass some time
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
 
         // get the fees since update and compare with expected values
-        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, false);
+        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
         assertEq(feesEarned, 0);
         assertEq(feesOwed, 3000000000000000000);
     }
@@ -668,7 +670,7 @@ contract TestFunding is Test {
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass enough time
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+
         vm.warp(block.timestamp + 100);
         vm.roll(block.number + 1);
 
@@ -707,7 +709,7 @@ contract TestFunding is Test {
         vm.roll(block.number + 1);
 
         // get the fees since update and compare with expected values
-        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, false);
+        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
         assertEq(feesEarned, 15159090000000000);
         assertEq(feesOwed, 14835150000000000);
     }
@@ -749,7 +751,7 @@ contract TestFunding is Test {
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
         // Pass enough time
-        IMarket market = IMarket(marketMaker.tokenToMarkets(weth));
+
         vm.warp(block.timestamp + 100);
         vm.roll(block.number + 1);
 
@@ -783,8 +785,7 @@ contract TestFunding is Test {
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
-        int256 fundingRate = market.fundingRate();
-        int256 fundingVelocity = market.fundingRateVelocity();
+        (int256 fundingRate, int256 fundingVelocity) = market.getFundingRates(weth);
 
         console2.log("Funding Rate: ", fundingRate);
         console2.log("Funding Velocity: ", fundingVelocity);
@@ -794,7 +795,7 @@ contract TestFunding is Test {
         vm.roll(block.number + 1);
 
         // get the fees since update and compare with expected values
-        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, false);
+        (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
         /**
          * fundingUntilFlip: 15159090000000000
          * fundingUntilBoundary: 150043793758200000000

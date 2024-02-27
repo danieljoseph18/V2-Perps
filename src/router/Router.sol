@@ -20,7 +20,7 @@ pragma solidity 0.8.23;
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {IVault} from "../liquidity/interfaces/IVault.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
@@ -41,7 +41,6 @@ contract Router is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IWETH;
 
     ITradeStorage private tradeStorage;
-    ILiquidityVault private liquidityVault;
     IMarketMaker private marketMaker;
     IPriceFeed private priceFeed;
     IERC20 private immutable USDC;
@@ -57,7 +56,6 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     constructor(
         address _tradeStorage,
-        address _liquidityVault,
         address _marketMaker,
         address _priceFeed,
         address _usdc,
@@ -66,7 +64,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         tradeStorage = ITradeStorage(_tradeStorage);
-        liquidityVault = ILiquidityVault(_liquidityVault);
         marketMaker = IMarketMaker(_marketMaker);
         priceFeed = IPriceFeed(_priceFeed);
         USDC = IERC20(_usdc);
@@ -76,12 +73,8 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     receive() external payable {}
 
-    function updateConfig(address _tradeStorage, address _liquidityVault, address _marketMaker, address _processor)
-        external
-        onlyAdmin
-    {
+    function updateConfig(address _tradeStorage, address _marketMaker, address _processor) external onlyAdmin {
         tradeStorage = ITradeStorage(_tradeStorage);
-        liquidityVault = ILiquidityVault(_liquidityVault);
         marketMaker = IMarketMaker(_marketMaker);
         processor = IProcessor(_processor);
     }
@@ -90,7 +83,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         priceFeed = _priceFeed;
     }
 
-    function createDeposit(Deposit.Input memory _input, bytes[] memory _priceUpdateData)
+    function createDeposit(IVault vault, Deposit.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
@@ -109,16 +102,16 @@ contract Router is ReentrancyGuard, RoleValidation {
             IERC20(_input.tokenIn).safeTransferFrom(_input.owner, address(processor), _input.amountIn);
         }
         _input.executionFee -= _requestOraclePricing(_input.tokenIn, _priceUpdateData);
-        liquidityVault.createDeposit(_input);
+        vault.createDeposit(_input);
         _sendExecutionFee(_input.executionFee);
     }
 
-    function cancelDeposit(bytes32 _key) external nonReentrant {
+    function cancelDeposit(IVault vault, bytes32 _key) external nonReentrant {
         require(_key != bytes32(0));
-        liquidityVault.cancelDeposit(_key, msg.sender);
+        vault.cancelDeposit(_key, msg.sender);
     }
 
-    function createWithdrawal(Withdrawal.Input memory _input, bytes[] memory _priceUpdateData)
+    function createWithdrawal(IVault vault, Withdrawal.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
@@ -131,15 +124,15 @@ contract Router is ReentrancyGuard, RoleValidation {
         } else {
             require(_input.tokenOut == address(USDC) || _input.tokenOut == address(WETH), "Router: Invalid Token Out");
         }
-        IERC20(address(liquidityVault)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
+        IERC20(address(vault)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
         _input.executionFee -= _requestOraclePricing(_input.tokenOut, _priceUpdateData);
-        liquidityVault.createWithdrawal(_input);
+        vault.createWithdrawal(_input);
         _sendExecutionFee(_input.executionFee);
     }
 
-    function cancelWithdrawal(bytes32 _key) external nonReentrant {
+    function cancelWithdrawal(IVault vault, bytes32 _key) external nonReentrant {
         require(_key != bytes32(0));
-        liquidityVault.cancelWithdrawal(_key, msg.sender);
+        vault.cancelWithdrawal(_key, msg.sender);
     }
 
     function createPositionRequest(Position.Input memory _trade, bytes[] memory _priceUpdateData)

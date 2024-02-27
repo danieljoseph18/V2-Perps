@@ -195,8 +195,11 @@ library Position {
     }
 
     // 1x = 100
-    function checkLeverage(IMarket market, uint256 _sizeUsd, uint256 _collateralUsd) external view {
-        uint256 maxLeverage = market.getMaxLeverage();
+    function checkLeverage(IMarket market, address _indexToken, uint256 _sizeUsd, uint256 _collateralUsd)
+        external
+        view
+    {
+        uint256 maxLeverage = market.getMaxLeverage(_indexToken);
         require(_collateralUsd <= _sizeUsd, "Position: collateral exceeds size");
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
         require(leverage >= MIN_LEVERAGE, "Position: Below Min Leverage");
@@ -224,7 +227,7 @@ library Position {
     {
         // Get Entry Funding & Borrowing Values
         (uint256 longFundingFee, uint256 shortFundingFee, uint256 longBorrowFee, uint256 shortBorrowFee) =
-            _cache.market.getCumulativeFees();
+            _cache.market.getCumulativeFees(_request.input.indexToken);
         // get Trade Value in USD
         position = Data({
             market: _cache.market,

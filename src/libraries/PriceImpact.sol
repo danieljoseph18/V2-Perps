@@ -55,10 +55,12 @@ library PriceImpact {
         // Construct the Cache
         ExecuteCache memory cache;
 
-        cache.impact = market.getImpactConfig();
+        cache.impact = market.getImpactConfig(_request.input.indexToken);
         // Minimize the OI and maximize size delta -> maximizes the impact
-        cache.longOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, true);
-        cache.shortOI = MarketUtils.getOpenInterestUsd(market, _indexPrice, _indexBaseUnit, false);
+        cache.longOI =
+            MarketUtils.getOpenInterestUsd(market, _request.input.indexToken, _indexPrice, _indexBaseUnit, true);
+        cache.shortOI =
+            MarketUtils.getOpenInterestUsd(market, _request.input.indexToken, _indexPrice, _indexBaseUnit, false);
         cache.sizeDeltaUSD = mulDiv(_request.input.sizeDelta, _indexPrice, _indexBaseUnit);
 
         cache.startingSkewLong = cache.longOI >= cache.shortOI;
@@ -88,7 +90,9 @@ library PriceImpact {
             );
         }
 
-        if (priceImpactUsd > 0) priceImpactUsd = _validateImpactDelta(market, priceImpactUsd);
+        if (priceImpactUsd > 0) {
+            priceImpactUsd = _validateImpactDelta(market, _request.input.indexToken, priceImpactUsd);
+        }
 
         // Execute the Price Impact
         impactedPrice = _calculateImpactedPrice(
@@ -154,8 +158,12 @@ library PriceImpact {
         return mulDiv(_sizeDeltaUsd, _tokenUnit, indexTokensAfterImpact);
     }
 
-    function _validateImpactDelta(IMarket market, int256 _priceImpactUsd) internal view returns (int256) {
-        int256 impactPoolUsd = market.impactPoolUsd().toInt256();
+    function _validateImpactDelta(IMarket market, address _indexToken, int256 _priceImpactUsd)
+        internal
+        view
+        returns (int256)
+    {
+        int256 impactPoolUsd = market.getImpactPool(_indexToken).toInt256();
         if (_priceImpactUsd > impactPoolUsd) {
             return impactPoolUsd;
         } else {

@@ -1,7 +1,7 @@
 //SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {ILiquidityVault} from "./interfaces/ILiquidityVault.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {Pool} from "./Pool.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -29,7 +29,7 @@ library Withdrawal {
     }
 
     struct ExecuteParams {
-        ILiquidityVault liquidityVault;
+        IMarket market;
         IProcessor processor;
         IPriceFeed priceFeed;
         Data data;
@@ -98,7 +98,7 @@ library Withdrawal {
 
         // Calculate Fee
         cache.feeParams = Fee.constructFeeParams(
-            _params.liquidityVault,
+            _params.market,
             cache.totalTokensOut,
             _params.isLongToken,
             _params.values,

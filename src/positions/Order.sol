@@ -15,7 +15,7 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {ILiquidityVault} from "../liquidity/interfaces/ILiquidityVault.sol";
+import {IVault} from "../liquidity/interfaces/IVault.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {Test, console} from "forge-std/Test.sol";
 
@@ -79,7 +79,6 @@ library Order {
         ITradeStorage tradeStorage,
         IMarketMaker marketMaker,
         IPriceFeed priceFeed,
-        ILiquidityVault liquidityVault,
         bytes32 _orderKey,
         address _feeReceiver,
         Oracle.TradingEnabled memory _isTradingEnabled
@@ -116,9 +115,10 @@ library Order {
             cache.sizeDeltaUsd = _calculateValueUsd(
                 request.input.sizeDelta, cache.indexPrice, cache.indexBaseUnit, request.input.isIncrease
             );
+
             MarketUtils.validateAllocation(
                 cache.market,
-                liquidityVault,
+                request.input.indexToken,
                 cache.sizeDeltaUsd.abs(),
                 cache.collateralPrice,
                 cache.indexPrice,
@@ -255,7 +255,9 @@ library Order {
             checkMinCollateral(
                 _trade.collateralDelta, _cache.collateralRefPrice, _cache.collateralBaseUnit, _cache.minCollateralUsd
             );
-            Position.checkLeverage(IMarket(_cache.market), _cache.sizeDeltaUsd, _cache.collateralDeltaUsd);
+            Position.checkLeverage(
+                IMarket(_cache.market), _trade.indexToken, _cache.sizeDeltaUsd, _cache.collateralDeltaUsd
+            );
         } else if (_cache.requestType == Position.RequestType.POSITION_INCREASE) {
             // Clear the Conditionals
             _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
@@ -276,7 +278,9 @@ library Order {
             // subtract collateral delta usd
             _cache.collateralAmountUsd += _cache.collateralDeltaUsd;
             // chcek it doesnt go below min leverage
-            Position.checkLeverage(IMarket(_cache.market), _cache.positionSizeUsd, _cache.collateralAmountUsd);
+            Position.checkLeverage(
+                IMarket(_cache.market), _trade.indexToken, _cache.positionSizeUsd, _cache.collateralAmountUsd
+            );
             // Clear the Conditionals
             _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
         } else if (_cache.requestType == Position.RequestType.COLLATERAL_DECREASE) {
@@ -293,7 +297,9 @@ library Order {
             // subtract collateral delta usd
             _cache.collateralAmountUsd -= _cache.collateralDeltaUsd;
             // chcek it doesnt go below min leverage
-            Position.checkLeverage(IMarket(_cache.market), _cache.positionSizeUsd, _cache.collateralAmountUsd);
+            Position.checkLeverage(
+                IMarket(_cache.market), _trade.indexToken, _cache.positionSizeUsd, _cache.collateralAmountUsd
+            );
             // Clear the Conditionals
             _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
         } else {
@@ -324,6 +330,7 @@ library Order {
         // Check the Leverage
         Position.checkLeverage(
             _cache.market,
+            _params.request.input.indexToken,
             mulDiv(position.positionSize, _cache.indexPrice, _cache.indexBaseUnit),
             mulDiv(position.collateralAmount, _cache.collateralPrice, _cache.collateralBaseUnit)
         );
@@ -354,6 +361,7 @@ library Order {
         // Check the Leverage
         Position.checkLeverage(
             _cache.market,
+            _params.request.input.indexToken,
             mulDiv(position.positionSize, _cache.indexPrice, _cache.indexBaseUnit),
             mulDiv(position.collateralAmount, _cache.collateralPrice, _cache.collateralBaseUnit)
         );
@@ -378,7 +386,9 @@ library Order {
         Position.Data memory position = Position.generateNewPosition(_params.request, _cache);
         // Check the Position's Leverage is Valid
         uint256 absSizeDelta = _cache.sizeDeltaUsd.abs();
-        Position.checkLeverage(_cache.market, absSizeDelta, _cache.collateralDeltaUsd.abs());
+        Position.checkLeverage(
+            _cache.market, _params.request.input.indexToken, absSizeDelta, _cache.collateralDeltaUsd.abs()
+        );
         // Return the Position
         return (position, absSizeDelta);
     }
@@ -406,6 +416,7 @@ library Order {
         // Check the Leverage
         Position.checkLeverage(
             _cache.market,
+            _params.request.input.indexToken,
             mulDiv(position.positionSize, _cache.indexPrice, _cache.indexBaseUnit),
             mulDiv(position.collateralAmount, _cache.collateralPrice, _cache.collateralBaseUnit)
         );
@@ -481,14 +492,18 @@ library Order {
     {
         // Borrowing Fees
         _position.borrowingParams.feesOwed = Borrowing.getTotalCollateralFeesOwed(_position, _cache);
-        _position.borrowingParams.lastLongCumulativeBorrowFee = _position.market.longCumulativeBorrowFees();
-        _position.borrowingParams.lastShortCumulativeBorrowFee = _position.market.shortCumulativeBorrowFees();
+        _position.borrowingParams.lastLongCumulativeBorrowFee =
+            _position.market.getCumulativeBorrowFees(_position.indexToken, true);
+        _position.borrowingParams.lastShortCumulativeBorrowFee =
+            _position.market.getCumulativeBorrowFees(_position.indexToken, false);
         _position.borrowingParams.lastBorrowUpdate = block.timestamp;
         // Funding Fees
         (_position.fundingParams.feesEarned, _position.fundingParams.feesOwed) =
             Funding.getTotalPositionFees(_position, _cache);
-        _position.fundingParams.lastLongCumulativeFunding = _position.market.longCumulativeFundingFees();
-        _position.fundingParams.lastShortCumulativeFunding = _position.market.shortCumulativeFundingFees();
+        _position.fundingParams.lastLongCumulativeFunding =
+            _position.market.getCumulativeFundingFees(_position.indexToken, true);
+        _position.fundingParams.lastShortCumulativeFunding =
+            _position.market.getCumulativeFundingFees(_position.indexToken, false);
         _position.fundingParams.lastFundingUpdate = block.timestamp;
         return _position;
     }

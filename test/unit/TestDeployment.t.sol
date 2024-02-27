@@ -5,9 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {Deploy} from "../../script/Deploy.s.sol";
 import {RoleStorage} from "../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../src/markets/GlobalMarketConfig.sol";
-import {LiquidityVault} from "../../src/liquidity/LiquidityVault.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {MarketMaker} from "../../src/markets/MarketMaker.sol";
-import {StateUpdater} from "../../src/markets/StateUpdater.sol";
 import {IPriceFeed} from "../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../src/referrals/ReferralStorage.sol";
@@ -17,9 +16,7 @@ import {Router} from "../../src/router/Router.sol";
 contract TestDeployment is Test {
     RoleStorage roleStorage;
     GlobalMarketConfig globalMarketConfig;
-    LiquidityVault liquidityVault;
     MarketMaker marketMaker;
-    StateUpdater stateUpdater;
     IPriceFeed priceFeed; // Deployed in Helper Config
     TradeStorage tradeStorage;
     ReferralStorage referralStorage;
@@ -32,9 +29,7 @@ contract TestDeployment is Test {
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
         globalMarketConfig = contracts.globalMarketConfig;
-        liquidityVault = contracts.liquidityVault;
         marketMaker = contracts.marketMaker;
-        stateUpdater = contracts.stateUpdater;
         priceFeed = contracts.priceFeed;
         tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
@@ -46,9 +41,7 @@ contract TestDeployment is Test {
     function testDeployment() public {
         assertNotEq(address(roleStorage), address(0));
         assertNotEq(address(globalMarketConfig), address(0));
-        assertNotEq(address(liquidityVault), address(0));
         assertNotEq(address(marketMaker), address(0));
-        assertNotEq(address(stateUpdater), address(0));
         assertNotEq(address(priceFeed), address(0));
         assertNotEq(address(tradeStorage), address(0));
         assertNotEq(address(referralStorage), address(0));

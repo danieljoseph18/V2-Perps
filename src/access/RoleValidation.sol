@@ -39,8 +39,8 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyVault() {
-        if (!roleStorage.hasRole(Roles.VAULT, msg.sender)) revert RoleValidation_AccessDenied();
+    modifier onlyMarket() {
+        if (!roleStorage.hasRole(Roles.MARKET, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
@@ -51,11 +51,6 @@ contract RoleValidation {
 
     modifier onlyRouter() {
         if (!roleStorage.hasRole(Roles.ROUTER, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
-    modifier onlyStateUpdater() {
-        if (!roleStorage.hasRole(Roles.STATE_UPDATER, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 

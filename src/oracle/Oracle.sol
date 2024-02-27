@@ -18,12 +18,13 @@ library Oracle {
     using SignedMath for int64;
     using SignedMath for int32;
 
+    // @gas - use smaller data types
     struct Asset {
         bool isValid;
         address chainlinkPriceFeed; // Chainlink Price Feed Address
         bytes32 priceId; // Pyth Price ID
-        uint256 baseUnit; // 1 Unit of the Token e.g 1e18 for ETH
-        uint256 heartbeatDuration; // Duration after which the price is considered stale
+        uint64 baseUnit; // 1 Unit of the Token e.g 1e18 for ETH
+        uint32 heartbeatDuration; // Duration after which the price is considered stale
         uint256 maxPriceDeviation; // Max Price Deviation from Reference Price
         uint256 priceSpread; // Spread to Apply to Price if Alternative Asset (e.g $0.1 = 0.1e18)
         PriceProvider priceProvider;
@@ -40,7 +41,7 @@ library Oracle {
 
     struct Price {
         uint256 price;
-        uint256 confidence;
+        uint256 confidence; // @gas - use smaller type
     }
 
     enum PriceProvider {
@@ -69,10 +70,10 @@ library Oracle {
         bool prediction;
     }
 
-    uint256 private constant MAX_PERCENTAGE = 1e18; // 100%
-    uint256 private constant SCALING_FACTOR = 1e18;
-    uint256 private constant PRICE_DECIMALS = 18;
-    uint256 private constant CHAINLINK_PRICE_DECIMALS = 8;
+    uint64 private constant MAX_PERCENTAGE = 1e18; // 100%
+    uint64 private constant SCALING_FACTOR = 1e18;
+    uint8 private constant PRICE_DECIMALS = 18;
+    uint8 private constant CHAINLINK_PRICE_DECIMALS = 8;
 
     function isValidAsset(IPriceFeed priceFeed, address _token) external view returns (bool) {
         return priceFeed.getAsset(_token).isValid;
@@ -255,7 +256,7 @@ library Oracle {
         } else if (_asset.pool.poolAddress != address(0)) {
             referencePrice = getAmmPrice(_asset.pool);
         } else if (_asset.priceProvider == PriceProvider.PYTH) {
-            (referencePrice, )= priceFeed.getPriceUnsafe(_asset);
+            (referencePrice,) = priceFeed.getPriceUnsafe(_asset);
         } else {
             revert("Oracle: Invalid Ref Price");
         }
@@ -278,21 +279,20 @@ library Oracle {
     }
 
     // @audit - where is this used? should we max or min the price?
-    function getNetPnl(IPriceFeed priceFeed, IMarket market, uint256 _blockNumber, bool _maximise)
+    function getNetPnl(IPriceFeed priceFeed, IMarket market, address _indexToken, uint256 _blockNumber, bool _maximise)
         external
         view
         returns (int256 netPnl)
     {
-        address indexToken = market.indexToken();
         uint256 indexPrice;
         if (_maximise) {
-            indexPrice = getMaxPrice(priceFeed, indexToken, _blockNumber);
+            indexPrice = getMaxPrice(priceFeed, _indexToken, _blockNumber);
         } else {
-            indexPrice = getMinPrice(priceFeed, indexToken, _blockNumber);
+            indexPrice = getMinPrice(priceFeed, _indexToken, _blockNumber);
         }
         require(indexPrice != 0, "Oracle: Invalid Index Price");
-        uint256 indexBaseUnit = getBaseUnit(priceFeed, indexToken);
-        netPnl = Pricing.getNetPnl(market, indexPrice, indexBaseUnit);
+        uint256 indexBaseUnit = getBaseUnit(priceFeed, _indexToken);
+        netPnl = Pricing.getNetPnl(market, _indexToken, indexPrice, indexBaseUnit);
     }
 
     /// @dev _baseUnit is the base unit of the token0
