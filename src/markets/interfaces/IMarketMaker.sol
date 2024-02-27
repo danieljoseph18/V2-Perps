@@ -23,4 +23,5 @@ interface IMarketMaker {
 
     function tokenToMarkets(address _indexToken) external view returns (address market);
     function getMarkets() external view returns (address[] memory);
+    function isMarket(address _market) external view returns (bool);
 }

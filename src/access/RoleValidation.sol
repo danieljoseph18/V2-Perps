@@ -39,11 +39,6 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyMarket() {
-        if (!roleStorage.hasRole(Roles.MARKET, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
     modifier onlyKeeper() {
         if (!roleStorage.hasRole(Roles.KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
         _;

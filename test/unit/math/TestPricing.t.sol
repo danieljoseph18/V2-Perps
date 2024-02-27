@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console, console2, stdStorage, StdStorage} from "forge-std/Test.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
@@ -31,7 +31,6 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 contract TestPricing is Test {
     using SignedMath for int256;
-    using stdStorage for StdStorage;
 
     RoleStorage roleStorage;
     GlobalMarketConfig globalMarketConfig;
@@ -265,12 +264,18 @@ contract TestPricing is Test {
         _longAverageEntryPrice = bound(_longAverageEntryPrice, 1e18, 10e18);
         _indexPrice = bound(_indexPrice, 1e18, 10e18);
         // Update the storage of the market to vary the oi and entry value
-        stdstore.target(address(market)).sig("longOpenInterest()").with_key(address(this)).checked_write(
-            _longOpenInterest
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(IMarket.getOpenInterest.selector, weth, true),
+            abi.encode(_longOpenInterest)
         );
-        stdstore.target(address(market)).sig("longAverageEntryPrice()").with_key(address(this)).checked_write(
-            _longAverageEntryPrice
+
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(IMarket.getAverageEntryPrice.selector, weth, true),
+            abi.encode(_longAverageEntryPrice)
         );
+
         // fuzz to test expected vs actual values
         uint256 indexValue = mulDiv(_longOpenInterest, _indexPrice, 1e18);
         uint256 entryValue = mulDiv(_longAverageEntryPrice, _longOpenInterest, 1e18);
@@ -289,12 +294,17 @@ contract TestPricing is Test {
         _shortAverageEntryPrice = bound(_shortAverageEntryPrice, 1e18, 10e18);
         _indexPrice = bound(_indexPrice, 1e18, 10e18);
         // Update the storage of the market to vary the oi and entry value
-        stdstore.target(address(market)).sig("shortOpenInterest()").with_key(address(this)).checked_write(
-            _shortOpenInterest
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(IMarket.getOpenInterest.selector, weth, false),
+            abi.encode(_shortOpenInterest)
         );
-        stdstore.target(address(market)).sig("shortAverageEntryPrice()").with_key(address(this)).checked_write(
-            _shortAverageEntryPrice
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(IMarket.getAverageEntryPrice.selector, weth, false),
+            abi.encode(_shortAverageEntryPrice)
         );
+
         // fuzz to test expected vs actual values
         uint256 indexValue = mulDiv(_shortOpenInterest, _indexPrice, 1e18);
         uint256 entryValue = mulDiv(_shortAverageEntryPrice, _shortOpenInterest, 1e18);
@@ -317,17 +327,27 @@ contract TestPricing is Test {
         _shortAverageEntryPrice = bound(_shortAverageEntryPrice, 1e18, 10e18);
         _indexPrice = bound(_indexPrice, 1e18, 10e18);
         // Update the storage of the market to vary the oi and entry value
-        stdstore.target(address(market)).sig("longOpenInterest()").with_key(address(this)).checked_write(
-            _longOpenInterest
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(IMarket.getOpenInterest.selector, weth, true),
+            abi.encode(_longOpenInterest)
         );
-        stdstore.target(address(market)).sig("longAverageEntryPrice()").with_key(address(this)).checked_write(
-            _longAverageEntryPrice
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(IMarket.getAverageEntryPrice.selector, weth, true),
+            abi.encode(_longAverageEntryPrice)
         );
-        stdstore.target(address(market)).sig("shortOpenInterest()").with_key(address(this)).checked_write(
-            _shortOpenInterest
+
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(IMarket.getOpenInterest.selector, weth, false),
+            abi.encode(_shortOpenInterest)
         );
-        stdstore.target(address(market)).sig("shortAverageEntryPrice()").with_key(address(this)).checked_write(
-            _shortAverageEntryPrice
+
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(IMarket.getAverageEntryPrice.selector, weth, false),
+            abi.encode(_shortAverageEntryPrice)
         );
         // fuzz to test expected vs actual values
         int256 longPnl = int256(mulDiv(_longOpenInterest, _indexPrice, 1e18))

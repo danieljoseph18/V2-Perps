@@ -81,6 +81,8 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     // Can use an existing asset vault to attach multiple tokens to it, or
     // create a new asset vault for the token
     // @audit - config vulnerable?
+    /// @dev Once a Market is created, for it to be functional, must grant role
+    /// "MARKET"
     function createNewMarket(
         Pool.VaultConfig memory _vaultDetails,
         address _indexToken, // use a bytes32 asset id instead???
@@ -101,7 +103,6 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         priceFeed.supportAsset(_indexToken, _asset);
         // Create new Market contract
         Market market = new Market(_vaultDetails, defaultConfig, _indexToken, address(roleStorage));
-        roleStorage.grantRole(Roles.MARKET, address(market));
         // Cache
         marketAddress = address(market);
         // Add to Storage
@@ -143,5 +144,9 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
 
     function getMarkets() external view returns (address[] memory) {
         return markets.values();
+    }
+
+    function isMarket(address _market) external view returns (bool) {
+        return markets.contains(_market);
     }
 }

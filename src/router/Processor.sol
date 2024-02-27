@@ -77,6 +77,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
     receive() external payable {}
 
+    modifier onlyMarket() {
+        require(marketMaker.isMarket(msg.sender), "Processor: Invalid Market");
+        _;
+    }
+
     function updateGasLimits(uint256 _base, uint256 _deposit, uint256 _withdrawal, uint256 _position)
         external
         onlyAdmin

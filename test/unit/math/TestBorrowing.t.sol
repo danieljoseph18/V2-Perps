@@ -304,10 +304,13 @@ contract TestBorrowing is Test {
         // Get the current rate
 
         // Set the Cumulative Borrow Fees To 1e18
-        stdstore.target(address(cache.market)).sig("getCumulativeBorrowFees(weth,true)").with_key(address(this)).checked_write(
-            1e18
+        // marketStorage -> borrowing -> longCumulativeBorrowFee
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getCumulativeBorrowFees.selector, weth, true),
+            abi.encode(uint256(1e18)) // Mock return value
         );
-        assertEq(cache.market.getCumulativeBorrowFees(weth,true), 1e18);
+        assertEq(cache.market.getCumulativeBorrowFees(weth, true), 1e18);
 
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
@@ -333,8 +336,10 @@ contract TestBorrowing is Test {
 
         uint256 bonusCumulative = 0.000003e18;
 
-        stdstore.target(address(cache.market)).sig("getCumulativeBorrowFees(weth,true)").with_key(address(this)).checked_write(
-            1e18 + bonusCumulative
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getCumulativeBorrowFees.selector, weth, true),
+            abi.encode(uint256(1e18) + bonusCumulative) // Mock return value
         );
 
         // Cache necessary Variables
@@ -346,7 +351,8 @@ contract TestBorrowing is Test {
         // Calculate Fees Owed
         uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, cache);
         // Index Tokens == Collateral Tokens
-        uint256 expectedFees = (((cache.market.getBorrowingRate(weth, true) * 1 days) + bonusCumulative) * positionSize) / 1e18;
+        uint256 expectedFees =
+            (((cache.market.getBorrowingRate(weth, true) * 1 days) + bonusCumulative) * positionSize) / 1e18;
         assertEq(feesOwed, expectedFees);
     }
 

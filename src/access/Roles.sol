@@ -25,6 +25,4 @@ library Roles {
     bytes32 public constant ADL_KEEPER = keccak256("ADL_KEEPER");
 
     bytes32 public constant LIQUIDATOR = keccak256("LIQUIDATOR");
-
-    bytes32 public constant MARKET = keccak256("MARKET");
 }
