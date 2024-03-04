@@ -9,6 +9,7 @@ import {Pool} from "../../liquidity/Pool.sol";
 interface IMarketMaker {
     event MarketMakerInitialised(address priceStorage);
     event MarketCreated(address market, address indexToken, bytes32 priceId);
+    event TokenAddedToMarket(address market, address indexToken, bytes32 priceId);
     event DefaultConfigSet(IMarket.Config defaultConfig);
 
     function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _processor) external;

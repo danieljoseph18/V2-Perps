@@ -6,9 +6,12 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IWETH} from "../tokens/interfaces/IWETH.sol";
 
 contract ReferralStorage is RoleValidation, IReferralStorage {
     using SafeERC20 for IERC20;
+
+    IWETH weth;
 
     uint256 public constant PRECISION = 1e18;
     address public longToken;
@@ -29,9 +32,15 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
         _;
     }
 
-    constructor(address _longToken, address _shortToken, address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(address _longToken, address _shortToken, address _weth, address _roleStorage) RoleValidation(_roleStorage) {
         longToken = _longToken;
         shortToken = _shortToken;
+        weth = IWETH(_weth);
+    }
+
+    // Wrap any ETH sent to the contract into WETH
+    receive() external payable {
+        IWETH(weth).deposit{value: msg.value}();
     }
 
     function setHandler(address _handler, bool _isActive) external onlyAdmin {
@@ -70,24 +79,24 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
         affiliateRewards[_account][_isLongToken] += _amount;
     }
 
-    function claimAffiliateRewards(address _account) external {
-        uint256 longTokenAmount = affiliateRewards[_account][true];
-        uint256 shortTokenAmount = affiliateRewards[_account][false];
+    function claimAffiliateRewards() external {
+        uint256 longTokenAmount = affiliateRewards[msg.sender][true];
+        uint256 shortTokenAmount = affiliateRewards[msg.sender][false];
         if (longTokenAmount > 0) {
             require(
                 IERC20(longToken).balanceOf(address(this)) >= longTokenAmount, "ReferralStorage: insufficient balance"
             );
-            IERC20(longToken).safeTransfer(_account, longTokenAmount);
-            affiliateRewards[_account][true] = 0;
+            IERC20(longToken).safeTransfer(msg.sender, longTokenAmount);
+            affiliateRewards[msg.sender][true] = 0;
         }
         if (shortTokenAmount > 0) {
             require(
                 IERC20(shortToken).balanceOf(address(this)) >= shortTokenAmount, "ReferralStorage: insufficient balance"
             );
-            IERC20(shortToken).safeTransfer(_account, shortTokenAmount);
-            affiliateRewards[_account][false] = 0;
+            IERC20(shortToken).safeTransfer(msg.sender, shortTokenAmount);
+            affiliateRewards[msg.sender][false] = 0;
         }
-        emit AffiliateRewardsClaimed(_account, longTokenAmount, shortTokenAmount);
+        emit AffiliateRewardsClaimed(msg.sender, longTokenAmount, shortTokenAmount);
     }
 
     function setCodeOwner(bytes32 _code, address _newAccount) external {
@@ -119,12 +128,20 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
     /// @return discountPercentage - 0.1e18 = 10% discount
     function getDiscountForUser(address _account) external view returns (uint256) {
         (, address referrer) = getTraderReferralInfo(_account);
-        return tiers[referrerTiers[referrer]];
+        if (referrer == address(0)){
+            return 0;
+        } else {
+            return tiers[referrerTiers[referrer]];
+        }
     }
 
     function getAffiliateFromUser(address _account) external view returns (address codeOwner) {
         (, address referrer) = getTraderReferralInfo(_account);
         return referrer;
+    }
+
+    function getClaimableAffiliateRewards(address _account, bool _isLong) external view returns (uint256 claimableAmount) {
+        claimableAmount = affiliateRewards[_account][_isLong];
     }
 
     function _setTraderReferralCode(address _account, bytes32 _code) private {

@@ -49,7 +49,7 @@ contract Deploy is Script {
             MarketMaker(address(0)),
             priceFeed,
             TradeStorage(address(0)),
-            ReferralStorage(address(0)),
+            ReferralStorage(payable(address(0))),
             Processor(payable(address(0))),
             Router(payable(address(0))),
             msg.sender
@@ -64,7 +64,7 @@ contract Deploy is Script {
 
         contracts.tradeStorage = new TradeStorage(address(contracts.roleStorage));
 
-        contracts.referralStorage = new ReferralStorage(weth, usdc, address(contracts.roleStorage));
+        contracts.referralStorage = new ReferralStorage(weth, usdc, weth, address(contracts.roleStorage));
 
         contracts.processor = new Processor(
             address(contracts.marketMaker),
@@ -121,6 +121,10 @@ contract Deploy is Script {
         contracts.tradeStorage.initialise(5e18, 0.001e18, 180000 gwei, 2e18, 10);
 
         contracts.processor.updateGasLimits(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);
+
+        contracts.referralStorage.setTier(0, 0.05e18);
+        contracts.referralStorage.setTier(1, 0.1e18);
+        contracts.referralStorage.setTier(2, 0.15e18);
 
         // Set Up Roles
         contracts.roleStorage.grantRole(Roles.CONFIGURATOR, address(contracts.globalMarketConfig));

@@ -127,7 +127,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
             "MarketMaker: Invalid Base Unit"
         );
         require(tokenToMarkets[_indexToken] == address(0), "MarketMaker: Market Exists");
-        require(!markets.contains(address(market)), "MarketMaker: Market Exists");
+        require(markets.contains(address(market)), "MarketMaker: Market Doesn't Exist");
 
         // Set Up Price Oracle
         priceFeed.supportAsset(_indexToken, _asset);
@@ -139,7 +139,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         market.addToken(defaultConfig, _indexToken, _newAllocations);
 
         // Fire Event
-        emit MarketCreated(marketAddress, _indexToken, _priceId);
+        emit TokenAddedToMarket(marketAddress, _indexToken, _priceId);
     }
 
     function getMarkets() external view returns (address[] memory) {

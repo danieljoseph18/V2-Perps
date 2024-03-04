@@ -41,6 +41,7 @@ import {IProcessor} from "./interfaces/IProcessor.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Roles} from "../access/roles.sol";
+import {Test, console} from "forge-std/Test.sol";
 
 /// @dev Needs Processor Role
 // All keeper interactions should come through this contract
@@ -167,6 +168,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // @audit - Need a step to validate the trade doesn't put the market over its
     // allocation (_validateAllocation)
     /// @param _isTradingEnabled: Flag for disabling trading of asset types outside of trading hours
+    // @audit - should we charge for a decrease? Or only increase positions
     function executePosition(
         bytes32 _orderKey,
         address _feeReceiver,
@@ -406,7 +408,8 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     function sendExecutionFee(address payable _to, uint256 _amount) external onlyRouterOrProcessor {
         _to.sendValue(_amount);
     }
-
+    // @audit - discount needs to be halved
+    // 50% goes to the referrer, 50% goes to the user
     function _transferTokensForIncrease(
         Order.ExecuteCache memory _cache,
         Position.Request memory _request,
@@ -414,20 +417,24 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint256 _feeDiscount,
         bool _isLong
     ) internal {
-        // Increment Liquidity market Fee Balance
+        console.log("Fee: ", _fee);
+        console.log("Fee Discount: ", _feeDiscount);
+        // Increment market Fee Balance
         _cache.market.accumulateFees(_fee, _isLong);
-        // Transfer Fee to Liquidity market
+        // Transfer Fee to market
         IERC20(_request.input.collateralToken).safeTransfer(address(_cache.market), _fee);
         // Transfer Fee Discount to Referral Storage
+        uint256 feeRebate;
         if (_feeDiscount > 0) {
+            feeRebate = _feeDiscount / 2; // 50% discount to user, 50% rebate to referrer
             // Increment Referral Storage Fee Balance
-            referralStorage.accumulateAffiliateRewards(_cache.referrer, _isLong, _feeDiscount);
+            referralStorage.accumulateAffiliateRewards(_cache.referrer, _isLong, feeRebate);
             // Transfer Fee Discount to Referral Storage
-            IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), _feeDiscount);
+            IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), feeRebate);
         }
 
         // Transfer Collateral to market
-        uint256 afterFeeAmount = _request.input.collateralDelta - _fee;
+        uint256 afterFeeAmount = _request.input.collateralDelta - (_fee + feeRebate);
         _cache.market.increasePoolBalance(afterFeeAmount, _isLong);
         IERC20(_request.input.collateralToken).safeTransfer(address(_cache.market), afterFeeAmount);
     }

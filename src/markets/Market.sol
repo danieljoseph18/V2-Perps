@@ -286,8 +286,7 @@ contract Market is Vault, IMarket {
         require(!indexTokens.contains(_indexToken), "Market: Token already exists");
         indexTokens.add(_indexToken);
         _setAllocationsWithBits(_newAllocations);
-        MarketStorage storage market = marketStorage[_indexToken];
-        market.config = _config;
+        marketStorage[_indexToken].config = _config;
         marketStorage[_indexToken].funding.lastFundingUpdate = block.timestamp.toUint48();
         marketStorage[_indexToken].borrowing.lastBorrowUpdate = block.timestamp.toUint48();
         emit TokenAdded(_indexToken, _config);

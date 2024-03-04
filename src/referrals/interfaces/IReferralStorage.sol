@@ -32,10 +32,11 @@ interface IReferralStorage {
     function setTraderReferralCodeByUser(bytes32 _code) external;
     function registerCode(bytes32 _code) external;
     function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount) external;
-    function claimAffiliateRewards(address _account) external;
+    function claimAffiliateRewards() external;
     function setCodeOwner(bytes32 _code, address _newAccount) external;
     function govSetCodeOwner(bytes32 _code, address _newAccount) external;
     function getTraderReferralInfo(address _account) external view returns (bytes32, address);
     function getDiscountForUser(address _account) external view returns (uint256);
     function getAffiliateFromUser(address _account) external view returns (address codeOwner);
+    function getClaimableAffiliateRewards(address _account, bool _isLong) external view returns (uint256 claimableAmount);
 }
