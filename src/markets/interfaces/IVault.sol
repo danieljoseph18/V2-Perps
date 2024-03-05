@@ -21,10 +21,10 @@ interface IVault {
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) external;
 
     // Deposit execution
-    function executeDeposit(Deposit.ExecuteParams memory _cache) external;
+    function executeDeposit(Deposit.ExecuteParams memory _params) external;
 
     // Withdrawal execution
-    function executeWithdrawal(Withdrawal.ExecuteParams memory _cache) external;
+    function executeWithdrawal(Withdrawal.ExecuteParams memory _params) external;
 
     // Deposit creation
     function createDeposit(Deposit.Input memory _params) external payable;

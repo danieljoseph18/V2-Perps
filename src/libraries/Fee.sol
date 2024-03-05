@@ -24,7 +24,7 @@ library Fee {
         bool isDeposit;
     }
 
-    struct Cache {
+    struct State {
         uint256 baseFee;
         uint256 sizeDeltaUsd;
         uint256 longTokenValue;
@@ -60,12 +60,12 @@ library Fee {
     }
 
     function calculateForMarketAction(Params memory _params) external view returns (uint256) {
-        Cache memory cache;
+        State memory state;
         // get the base fee
-        cache.baseFee = mulDiv(_params.sizeDelta, _params.market.BASE_FEE(), SCALING_FACTOR);
+        state.baseFee = mulDiv(_params.sizeDelta, _params.market.BASE_FEE(), SCALING_FACTOR);
 
         // Convert skew to USD values and calculate sizeDeltaUsd once
-        cache.sizeDeltaUsd = _params.isLongToken
+        state.sizeDeltaUsd = _params.isLongToken
             ? mulDiv(
                 _params.sizeDelta, _params.longPrices.price + _params.longPrices.confidence, _params.values.longBaseUnit
             )
@@ -74,88 +74,88 @@ library Fee {
             );
 
         // If Size Delta * Price < Base Unit -> Action has no effect on skew
-        if (cache.sizeDeltaUsd == 0) {
+        if (state.sizeDeltaUsd == 0) {
             revert("Fee: Size Delta Too Small");
         }
 
         // Calculate pool balances before and minimise value of pool to maximise the effect on the skew
-        cache.longTokenValue = mulDiv(
+        state.longTokenValue = mulDiv(
             _params.values.longTokenBalance,
             _params.longPrices.price - _params.longPrices.confidence,
             _params.values.longBaseUnit
         );
-        cache.shortTokenValue = mulDiv(
+        state.shortTokenValue = mulDiv(
             _params.values.shortTokenBalance,
             _params.shortPrices.price - _params.shortPrices.confidence,
             _params.values.shortBaseUnit
         );
 
         // Don't want to disincentivise deposits on empty pool
-        if (cache.longTokenValue == 0 && cache.shortTokenValue == 0) {
-            return cache.baseFee;
+        if (state.longTokenValue == 0 && state.shortTokenValue == 0) {
+            return state.baseFee;
         }
 
         // get the skew of the market
-        if (cache.longTokenValue > cache.shortTokenValue) {
-            cache.longSkewBefore = true;
-            cache.skewBefore = cache.longTokenValue - cache.shortTokenValue;
+        if (state.longTokenValue > state.shortTokenValue) {
+            state.longSkewBefore = true;
+            state.skewBefore = state.longTokenValue - state.shortTokenValue;
         } else {
-            cache.longSkewBefore = false;
-            cache.skewBefore = cache.shortTokenValue - cache.longTokenValue;
+            state.longSkewBefore = false;
+            state.skewBefore = state.shortTokenValue - state.longTokenValue;
         }
 
         // Adjust long or short token value based on the operation
         if (_params.isLongToken) {
-            cache.longTokenValue = _params.isDeposit
-                ? cache.longTokenValue += cache.sizeDeltaUsd
-                : cache.longTokenValue -= cache.sizeDeltaUsd;
+            state.longTokenValue = _params.isDeposit
+                ? state.longTokenValue += state.sizeDeltaUsd
+                : state.longTokenValue -= state.sizeDeltaUsd;
         } else {
-            cache.shortTokenValue = _params.isDeposit
-                ? cache.shortTokenValue += cache.sizeDeltaUsd
-                : cache.shortTokenValue -= cache.sizeDeltaUsd;
+            state.shortTokenValue = _params.isDeposit
+                ? state.shortTokenValue += state.sizeDeltaUsd
+                : state.shortTokenValue -= state.sizeDeltaUsd;
         }
 
-        if (cache.longTokenValue > cache.shortTokenValue) {
-            cache.longSkewAfter = true;
-            cache.skewAfter = cache.longTokenValue - cache.shortTokenValue;
+        if (state.longTokenValue > state.shortTokenValue) {
+            state.longSkewAfter = true;
+            state.skewAfter = state.longTokenValue - state.shortTokenValue;
         } else {
-            cache.longSkewAfter = false;
-            cache.skewAfter = cache.shortTokenValue - cache.longTokenValue;
+            state.longSkewAfter = false;
+            state.skewAfter = state.shortTokenValue - state.longTokenValue;
         }
-        cache.skewFlip = cache.longSkewAfter != cache.longSkewBefore;
+        state.skewFlip = state.longSkewAfter != state.longSkewBefore;
 
         // Calculate the additional fee if necessary
-        if (cache.skewFlip || cache.skewAfter > cache.skewBefore) {
+        if (state.skewFlip || state.skewAfter > state.skewBefore) {
             // Get the Delta to Charge the Fee on
             // For Skew Flips, the delta is the skew after the flip -> skew before improved market balance
-            cache.skewDelta = cache.skewFlip ? cache.skewAfter : cache.sizeDeltaUsd;
+            state.skewDelta = state.skewFlip ? state.skewAfter : state.sizeDeltaUsd;
             // Calculate the additional fee
             // Uses the original value for LTV + STV so SkewDelta is never > LTV + STV
-            cache.feeAdditionUsd = mulDiv(
-                cache.skewDelta,
+            state.feeAdditionUsd = mulDiv(
+                state.skewDelta,
                 _params.market.feeScale(),
-                cache.longTokenValue + cache.shortTokenValue + cache.sizeDeltaUsd
+                state.longTokenValue + state.shortTokenValue + state.sizeDeltaUsd
             );
 
             // Convert the additional fee to index tokens
-            cache.indexFee = _params.isLongToken
+            state.indexFee = _params.isLongToken
                 ? mulDiv(
-                    cache.feeAdditionUsd,
+                    state.feeAdditionUsd,
                     _params.values.longBaseUnit,
                     _params.longPrices.price + _params.longPrices.confidence
                 )
                 : mulDiv(
-                    cache.feeAdditionUsd,
+                    state.feeAdditionUsd,
                     _params.values.shortBaseUnit,
                     _params.shortPrices.price + _params.shortPrices.confidence
                 );
 
             // Return base fee + additional fee
-            return cache.baseFee + cache.indexFee;
+            return state.baseFee + state.indexFee;
         }
 
         // If no skew flip and skew improved, return base fee
-        return cache.baseFee;
+        return state.baseFee;
     }
 
     function calculateForPosition(

@@ -35,7 +35,7 @@ library PriceImpact {
 
     uint256 public constant SCALAR = 1e18;
 
-    struct ExecuteCache {
+    struct ExecutionState {
         IMarket.ImpactConfig impact;
         uint256 longOI;
         uint256 shortOI;
@@ -52,41 +52,41 @@ library PriceImpact {
         view
         returns (uint256 impactedPrice, int256 priceImpactUsd)
     {
-        // Construct the Cache
-        ExecuteCache memory cache;
+        // Construct the state
+        ExecutionState memory state;
 
-        cache.impact = market.getImpactConfig(_request.input.indexToken);
+        state.impact = market.getImpactConfig(_request.input.indexToken);
         // Minimize the OI and maximize size delta -> maximizes the impact
-        cache.longOI =
+        state.longOI =
             MarketUtils.getOpenInterestUsd(market, _request.input.indexToken, _indexPrice, _indexBaseUnit, true);
-        cache.shortOI =
+        state.shortOI =
             MarketUtils.getOpenInterestUsd(market, _request.input.indexToken, _indexPrice, _indexBaseUnit, false);
-        cache.sizeDeltaUSD = mulDiv(_request.input.sizeDelta, _indexPrice, _indexBaseUnit);
+        state.sizeDeltaUSD = mulDiv(_request.input.sizeDelta, _indexPrice, _indexBaseUnit);
 
-        cache.startingSkewLong = cache.longOI >= cache.shortOI;
-        cache.skewBefore = cache.startingSkewLong ? cache.longOI - cache.shortOI : cache.shortOI - cache.longOI;
+        state.startingSkewLong = state.longOI >= state.shortOI;
+        state.skewBefore = state.startingSkewLong ? state.longOI - state.shortOI : state.shortOI - state.longOI;
         if (_request.input.isIncrease) {
-            _request.input.isLong ? cache.longOI += cache.sizeDeltaUSD : cache.shortOI += cache.sizeDeltaUSD;
+            _request.input.isLong ? state.longOI += state.sizeDeltaUSD : state.shortOI += state.sizeDeltaUSD;
         } else {
-            _request.input.isLong ? cache.longOI -= cache.sizeDeltaUSD : cache.shortOI -= cache.sizeDeltaUSD;
+            _request.input.isLong ? state.longOI -= state.sizeDeltaUSD : state.shortOI -= state.sizeDeltaUSD;
         }
-        cache.skewAfter = cache.longOI >= cache.shortOI ? cache.longOI - cache.shortOI : cache.shortOI - cache.longOI;
-        cache.skewFlip = cache.longOI >= cache.shortOI != cache.startingSkewLong;
+        state.skewAfter = state.longOI >= state.shortOI ? state.longOI - state.shortOI : state.shortOI - state.longOI;
+        state.skewFlip = state.longOI >= state.shortOI != state.startingSkewLong;
         // Calculate the Price Impact
-        if (cache.skewFlip) {
+        if (state.skewFlip) {
             priceImpactUsd = _calculateSkewFlipImpactUsd(
-                cache.skewBefore,
-                cache.skewAfter,
-                cache.impact.exponent,
-                cache.impact.positiveFactor,
-                cache.impact.negativeFactor
+                state.skewBefore,
+                state.skewAfter,
+                state.impact.exponent,
+                state.impact.positiveFactor,
+                state.impact.negativeFactor
             );
         } else {
             priceImpactUsd = _calculateImpactUsd(
-                cache.skewBefore,
-                cache.skewAfter,
-                cache.impact.exponent,
-                cache.skewAfter >= cache.skewBefore ? cache.impact.negativeFactor : cache.impact.positiveFactor
+                state.skewBefore,
+                state.skewAfter,
+                state.impact.exponent,
+                state.skewAfter >= state.skewBefore ? state.impact.negativeFactor : state.impact.positiveFactor
             );
         }
 
@@ -96,7 +96,7 @@ library PriceImpact {
 
         // Execute the Price Impact
         impactedPrice = _calculateImpactedPrice(
-            cache.sizeDeltaUSD, priceImpactUsd.abs(), _indexBaseUnit, _request.input.sizeDelta, priceImpactUsd
+            state.sizeDeltaUSD, priceImpactUsd.abs(), _indexBaseUnit, _request.input.sizeDelta, priceImpactUsd
         );
         // Check Slippage on Negative Impact
         if (priceImpactUsd < 0) {

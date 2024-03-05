@@ -220,23 +220,23 @@ library Position {
         });
     }
 
-    function generateNewPosition(Request memory _request, Order.ExecuteCache memory _cache)
+    function generateNewPosition(Request memory _request, Order.ExecutionState memory _state)
         external
         view
         returns (Data memory position)
     {
         // Get Entry Funding & Borrowing Values
         (uint256 longFundingFee, uint256 shortFundingFee, uint256 longBorrowFee, uint256 shortBorrowFee) =
-            _cache.market.getCumulativeFees(_request.input.indexToken);
+            _state.market.getCumulativeFees(_request.input.indexToken);
         // get Trade Value in USD
         position = Data({
-            market: _cache.market,
+            market: _state.market,
             indexToken: _request.input.indexToken,
             collateralToken: _request.input.collateralToken,
             user: _request.user,
             collateralAmount: _request.input.collateralDelta,
             positionSize: _request.input.sizeDelta,
-            weightedAvgEntryPrice: _cache.impactedPrice,
+            weightedAvgEntryPrice: _state.impactedPrice,
             isLong: _request.input.isLong,
             borrowingParams: BorrowingParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
             fundingParams: FundingParams(0, 0, block.timestamp, longFundingFee, shortFundingFee),
@@ -267,14 +267,14 @@ library Position {
         tradeValueUsd = mulDiv(_sizeDelta, _signedPrice, _baseUnit);
     }
 
-    function isLiquidatable(Position.Data memory _position, Order.ExecuteCache memory _cache, uint256 liquidationFeeUsd)
-        external
-        view
-        returns (bool)
-    {
-        uint256 collateralValueUsd = mulDiv(_position.collateralAmount, _cache.collateralPrice, PRECISION);
-        uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _cache);
-        int256 pnl = Pricing.calculatePnL(_position, _cache.indexPrice, _cache.indexBaseUnit);
+    function isLiquidatable(
+        Position.Data memory _position,
+        Order.ExecutionState memory _state,
+        uint256 liquidationFeeUsd
+    ) external view returns (bool) {
+        uint256 collateralValueUsd = mulDiv(_position.collateralAmount, _state.collateralPrice, PRECISION);
+        uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _state);
+        int256 pnl = Pricing.calculatePnL(_position, _state.indexPrice, _state.indexBaseUnit);
         uint256 losses = liquidationFeeUsd + totalFeesOwedUsd;
         if (pnl < 0) {
             losses += pnl.abs();
@@ -338,16 +338,16 @@ library Position {
         collateralAmount = mulDiv(indexUsd, _collateralBaseUnit, _collateralPrice);
     }
 
-    function getTotalFeesOwedUsd(Data memory _position, Order.ExecuteCache memory _cache)
+    function getTotalFeesOwedUsd(Data memory _position, Order.ExecutionState memory _state)
         public
         view
         returns (uint256 totalFeesOwedUsd)
     {
-        uint256 borrowingFeeOwed = Borrowing.getTotalCollateralFeesOwed(_position, _cache);
-        uint256 borrowingFeeUsd = mulDiv(borrowingFeeOwed, _cache.collateralPrice, _cache.collateralBaseUnit);
+        uint256 borrowingFeeOwed = Borrowing.getTotalCollateralFeesOwed(_position, _state);
+        uint256 borrowingFeeUsd = mulDiv(borrowingFeeOwed, _state.collateralPrice, _state.collateralBaseUnit);
 
-        (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_position, _cache);
-        uint256 fundingValueUsd = mulDiv(fundingFeeOwed, _cache.collateralPrice, _cache.collateralBaseUnit);
+        (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_position, _state);
+        uint256 fundingValueUsd = mulDiv(fundingFeeOwed, _state.collateralPrice, _state.collateralBaseUnit);
 
         totalFeesOwedUsd = borrowingFeeUsd + fundingValueUsd;
     }

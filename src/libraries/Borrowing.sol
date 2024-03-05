@@ -36,7 +36,7 @@ library Borrowing {
     uint256 private constant PRECISION = 1e18;
     uint256 private constant MAX_FEE_PERCENTAGE = 0.33e18;
 
-    struct BorrowingCache {
+    struct BorrowingState {
         IMarket.BorrowingConfig config;
         UD60x18 openInterestUsd;
         UD60x18 poolBalance;
@@ -63,32 +63,32 @@ library Borrowing {
         uint256 _shortTokenBaseUnit,
         bool _isLong
     ) external view returns (uint256 rate) {
-        BorrowingCache memory cache;
+        BorrowingState memory state;
         // Calculate the new Borrowing Rate
-        cache.config = market.getBorrowingConfig(_indexToken);
-        cache.openInterestUsd =
+        state.config = market.getBorrowingConfig(_indexToken);
+        state.openInterestUsd =
             ud(MarketUtils.getTotalOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit));
-        cache.poolBalance = ud(
+        state.poolBalance = ud(
             MarketUtils.getTotalPoolBalanceUsd(
                 market, _indexToken, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
             )
         );
 
-        cache.borrowingFactor = ud(cache.config.factor);
+        state.borrowingFactor = ud(state.config.factor);
         if (_isLong) {
-            cache.pendingPnl = Pricing.getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
+            state.pendingPnl = Pricing.getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
             // Adjust the OI by the Pending PNL
-            if (cache.pendingPnl > 0) {
-                cache.openInterestUsd = cache.openInterestUsd.add(ud(cache.pendingPnl.toUint256()));
-            } else if (cache.pendingPnl < 0) {
-                cache.openInterestUsd = cache.openInterestUsd.sub(ud(cache.pendingPnl.abs()));
+            if (state.pendingPnl > 0) {
+                state.openInterestUsd = state.openInterestUsd.add(ud(state.pendingPnl.toUint256()));
+            } else if (state.pendingPnl < 0) {
+                state.openInterestUsd = state.openInterestUsd.sub(ud(state.pendingPnl.abs()));
             }
-            cache.adjustedOiExponent = cache.openInterestUsd.powu(cache.config.exponent);
+            state.adjustedOiExponent = state.openInterestUsd.powu(state.config.exponent);
         } else {
-            cache.adjustedOiExponent = cache.openInterestUsd.powu(cache.config.exponent);
+            state.adjustedOiExponent = state.openInterestUsd.powu(state.config.exponent);
         }
 
-        rate = unwrap(cache.borrowingFactor.mul(cache.adjustedOiExponent).div(cache.poolBalance));
+        rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
     }
 
     function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) external view returns (uint256 fee) {
@@ -96,14 +96,14 @@ library Borrowing {
         fee = _rate * timeElapsed;
     }
 
-    function getTotalCollateralFeesOwed(Position.Data calldata _position, Order.ExecuteCache memory _cache)
+    function getTotalCollateralFeesOwed(Position.Data calldata _position, Order.ExecutionState memory _state)
         public
         view
         returns (uint256 collateralFeesOwed)
     {
-        uint256 indexFees = _getTotalPositionFeesOwed(_cache.market, _position);
-        uint256 feesUsd = mulDiv(indexFees, _cache.indexPrice, _cache.indexBaseUnit);
-        collateralFeesOwed = mulDiv(feesUsd, _cache.collateralBaseUnit, _cache.collateralPrice);
+        uint256 indexFees = _getTotalPositionFeesOwed(_state.market, _position);
+        uint256 feesUsd = mulDiv(indexFees, _state.indexPrice, _state.indexBaseUnit);
+        collateralFeesOwed = mulDiv(feesUsd, _state.collateralBaseUnit, _state.collateralPrice);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens

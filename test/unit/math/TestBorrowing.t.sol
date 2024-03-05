@@ -183,7 +183,7 @@ contract TestBorrowing is Test {
      * For Position, Need:
      * borrowParams.feesOwed, positionSize, isLong, borrowParams.lastCumulatives
      *
-     * For Cache, Need:
+     * For state, Need:
      * market, indexPrice, indexBaseUnit, collateralBaseUnit, collateralPrice,
      *
      */
@@ -191,8 +191,8 @@ contract TestBorrowing is Test {
         public
         setUpMarkets
     {
-        Order.ExecuteCache memory cache;
-        cache.market = IMarket(marketMaker.tokenToMarkets(weth));
+        Order.ExecutionState memory state;
+        state.market = IMarket(marketMaker.tokenToMarkets(weth));
         // Open a position to alter the borrowing rate
         Position.Input memory input = Position.Input({
             indexToken: weth,
@@ -237,7 +237,7 @@ contract TestBorrowing is Test {
         _leverage = bound(_leverage, 1, 100);
         uint256 positionSize = _collateral * _leverage;
         Position.Data memory position = Position.Data(
-            cache.market,
+            state.market,
             weth,
             USER,
             weth,
@@ -251,16 +251,16 @@ contract TestBorrowing is Test {
             bytes32(0)
         );
 
-        // Cache necessary Variables
-        cache.indexPrice = 2500e18;
-        cache.indexBaseUnit = 1e18;
-        cache.collateralBaseUnit = 1e18;
-        cache.collateralPrice = 2500e18;
+        // state necessary Variables
+        state.indexPrice = 2500e18;
+        state.indexBaseUnit = 1e18;
+        state.collateralBaseUnit = 1e18;
+        state.collateralPrice = 2500e18;
 
         // Calculate Fees Owed
-        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, cache);
+        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, state);
         // Index Tokens == Collateral Tokens
-        uint256 expectedFees = ((cache.market.getBorrowingRate(weth, true) * 1 days) * positionSize) / 1e18;
+        uint256 expectedFees = ((state.market.getBorrowingRate(weth, true) * 1 days) * positionSize) / 1e18;
         assertEq(feesOwed, expectedFees);
     }
 
@@ -268,8 +268,8 @@ contract TestBorrowing is Test {
         uint256 _collateral,
         uint256 _leverage
     ) public setUpMarkets {
-        Order.ExecuteCache memory cache;
-        cache.market = IMarket(marketMaker.tokenToMarkets(weth));
+        Order.ExecutionState memory state;
+        state.market = IMarket(marketMaker.tokenToMarkets(weth));
         // Open a position to alter the borrowing rate
         Position.Input memory input = Position.Input({
             indexToken: weth,
@@ -313,7 +313,7 @@ contract TestBorrowing is Test {
             abi.encodeWithSelector(Market.getCumulativeBorrowFees.selector, weth, true),
             abi.encode(uint256(1e18)) // Mock return value
         );
-        assertEq(cache.market.getCumulativeBorrowFees(weth, true), 1e18);
+        assertEq(state.market.getCumulativeBorrowFees(weth, true), 1e18);
 
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
@@ -323,7 +323,7 @@ contract TestBorrowing is Test {
         _leverage = bound(_leverage, 1, 100);
         uint256 positionSize = _collateral * _leverage;
         Position.Data memory position = Position.Data(
-            cache.market,
+            state.market,
             weth,
             USER,
             weth,
@@ -345,17 +345,17 @@ contract TestBorrowing is Test {
             abi.encode(uint256(1e18) + bonusCumulative) // Mock return value
         );
 
-        // Cache necessary Variables
-        cache.indexPrice = 2500e18;
-        cache.indexBaseUnit = 1e18;
-        cache.collateralBaseUnit = 1e18;
-        cache.collateralPrice = 2500e18;
+        // state necessary Variables
+        state.indexPrice = 2500e18;
+        state.indexBaseUnit = 1e18;
+        state.collateralBaseUnit = 1e18;
+        state.collateralPrice = 2500e18;
 
         // Calculate Fees Owed
-        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, cache);
+        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, state);
         // Index Tokens == Collateral Tokens
         uint256 expectedFees =
-            (((cache.market.getBorrowingRate(weth, true) * 1 days) + bonusCumulative) * positionSize) / 1e18;
+            (((state.market.getBorrowingRate(weth, true) * 1 days) + bonusCumulative) * positionSize) / 1e18;
         assertEq(feesOwed, expectedFees);
     }
 

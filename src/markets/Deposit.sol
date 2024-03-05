@@ -44,7 +44,7 @@ library Deposit {
         bool isLongToken;
     }
 
-    struct ExecuteCache {
+    struct ExecutionState {
         Oracle.Price longPrices;
         Oracle.Price shortPrices;
         Fee.Params feeParams;
@@ -68,37 +68,37 @@ library Deposit {
         });
     }
 
-    function execute(ExecuteParams memory _params) external view returns (ExecuteCache memory cache) {
-        // If prices were signed, return for the block, else, return cached prices
+    function execute(ExecuteParams memory _params) external view returns (ExecutionState memory state) {
+        // If prices were signed, return for the block, else, return prices
         if (Oracle.priceWasSigned(_params.priceFeed, _params.data.input.tokenIn, _params.data.blockNumber)) {
-            (cache.longPrices, cache.shortPrices) =
+            (state.longPrices, state.shortPrices) =
                 Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
         } else {
-            (cache.longPrices, cache.shortPrices) = Oracle.getLastMarketTokenPrices(_params.priceFeed);
+            (state.longPrices, state.shortPrices) = Oracle.getLastMarketTokenPrices(_params.priceFeed);
         }
 
         // Calculate Fee
-        cache.feeParams = Fee.constructFeeParams(
+        state.feeParams = Fee.constructFeeParams(
             _params.market,
             _params.data.input.amountIn,
             _params.isLongToken,
             _params.values,
-            cache.longPrices,
-            cache.shortPrices,
+            state.longPrices,
+            state.shortPrices,
             true
         );
-        cache.fee = Fee.calculateForMarketAction(cache.feeParams);
-        require(cache.fee > 0, "Deposit: zero fee");
+        state.fee = Fee.calculateForMarketAction(state.feeParams);
+        require(state.fee > 0, "Deposit: zero fee");
 
         // Calculate remaining after fee
-        cache.afterFeeAmount = _params.data.input.amountIn - cache.fee;
+        state.afterFeeAmount = _params.data.input.amountIn - state.fee;
 
         // Calculate Mint amount with the remaining amount
-        cache.mintAmount = Pool.depositTokensToMarketTokens(
+        state.mintAmount = Pool.depositTokensToMarketTokens(
             _params.values,
-            cache.longPrices,
-            cache.shortPrices,
-            cache.afterFeeAmount,
+            state.longPrices,
+            state.shortPrices,
+            state.afterFeeAmount,
             _params.cumulativePnl,
             _params.isLongToken
         );

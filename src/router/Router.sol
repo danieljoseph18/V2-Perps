@@ -20,7 +20,7 @@ pragma solidity 0.8.23;
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IVault} from "../markets/interfaces/IVault.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
@@ -83,7 +83,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         priceFeed = _priceFeed;
     }
 
-    function createDeposit(IVault vault, Deposit.Input memory _input, bytes[] memory _priceUpdateData)
+    function createDeposit(IMarket market, Deposit.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
@@ -102,16 +102,16 @@ contract Router is ReentrancyGuard, RoleValidation {
             IERC20(_input.tokenIn).safeTransferFrom(_input.owner, address(processor), _input.amountIn);
         }
         _input.executionFee -= _requestOraclePricing(_input.tokenIn, _priceUpdateData);
-        vault.createDeposit(_input);
+        market.createDeposit(_input);
         _sendExecutionFee(_input.executionFee);
     }
 
-    function cancelDeposit(IVault vault, bytes32 _key) external nonReentrant {
+    function cancelDeposit(IMarket market, bytes32 _key) external nonReentrant {
         require(_key != bytes32(0));
-        vault.cancelDeposit(_key, msg.sender);
+        market.cancelDeposit(_key, msg.sender);
     }
 
-    function createWithdrawal(IVault vault, Withdrawal.Input memory _input, bytes[] memory _priceUpdateData)
+    function createWithdrawal(IMarket market, Withdrawal.Input memory _input, bytes[] memory _priceUpdateData)
         external
         payable
         nonReentrant
@@ -124,15 +124,15 @@ contract Router is ReentrancyGuard, RoleValidation {
         } else {
             require(_input.tokenOut == address(USDC) || _input.tokenOut == address(WETH), "Router: Invalid Token Out");
         }
-        IERC20(address(vault)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
+        IERC20(address(market)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
         _input.executionFee -= _requestOraclePricing(_input.tokenOut, _priceUpdateData);
-        vault.createWithdrawal(_input);
+        market.createWithdrawal(_input);
         _sendExecutionFee(_input.executionFee);
     }
 
-    function cancelWithdrawal(IVault vault, bytes32 _key) external nonReentrant {
+    function cancelWithdrawal(IMarket market, bytes32 _key) external nonReentrant {
         require(_key != bytes32(0));
-        vault.cancelWithdrawal(_key, msg.sender);
+        market.cancelWithdrawal(_key, msg.sender);
     }
 
     function createPositionRequest(Position.Input memory _trade, bytes[] memory _priceUpdateData)
@@ -142,19 +142,19 @@ contract Router is ReentrancyGuard, RoleValidation {
     {
         Gas.validateExecutionFee(processor, _trade.executionFee, msg.value, Gas.Action.POSITION);
 
-        // Construct the Cache for Order Creation
-        Order.CreateCache memory cache = Order.validateInitialParameters(marketMaker, tradeStorage, priceFeed, _trade);
+        // Construct the state for Order Creation
+        Order.CreationState memory state = Order.validateInitialParameters(marketMaker, tradeStorage, priceFeed, _trade);
 
-        Position.Data memory position = tradeStorage.getPosition(cache.positionKey);
+        Position.Data memory position = tradeStorage.getPosition(state.positionKey);
 
         // Set the Request Type
-        cache.requestType = Position.getRequestType(_trade, position);
+        state.requestType = Position.getRequestType(_trade, position);
 
         // Validate Parameters
-        Order.validateParamsForType(_trade, cache, position.collateralAmount, position.positionSize);
+        Order.validateParamsForType(_trade, state, position.collateralAmount, position.positionSize);
 
         // Construct the Request from the user input
-        Position.Request memory request = Position.createRequest(_trade, cache.market, msg.sender, cache.requestType);
+        Position.Request memory request = Position.createRequest(_trade, state.market, msg.sender, state.requestType);
 
         // Sign Oracle Prices and Subtract Value from Execution Fee
         request.input.executionFee -= _requestOraclePricing(_trade.indexToken, _priceUpdateData);

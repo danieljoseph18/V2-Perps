@@ -40,7 +40,7 @@ library Withdrawal {
         bool shouldUnwrap;
     }
 
-    struct ExecuteCache {
+    struct ExecutionState {
         Oracle.Price longPrices;
         Oracle.Price shortPrices;
         Fee.Params feeParams;
@@ -72,44 +72,44 @@ library Withdrawal {
         });
     }
 
-    function execute(ExecuteParams memory _params) external view returns (ExecuteCache memory cache) {
+    function execute(ExecuteParams memory _params) external view returns (ExecutionState memory state) {
         // get price signed to the block number of the request
         if (Oracle.priceWasSigned(_params.priceFeed, _params.data.input.tokenOut, _params.data.blockNumber)) {
-            (cache.longPrices, cache.shortPrices) =
+            (state.longPrices, state.shortPrices) =
                 Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
         } else {
-            (cache.longPrices, cache.shortPrices) = Oracle.getLastMarketTokenPrices(_params.priceFeed);
+            (state.longPrices, state.shortPrices) = Oracle.getLastMarketTokenPrices(_params.priceFeed);
         }
         // Calculate amountOut
-        cache.totalTokensOut = Pool.withdrawMarketTokensToTokens(
+        state.totalTokensOut = Pool.withdrawMarketTokensToTokens(
             _params.values,
-            cache.longPrices,
-            cache.shortPrices,
+            state.longPrices,
+            state.shortPrices,
             _params.data.input.marketTokenAmountIn,
             _params.cumulativePnl,
             _params.isLongToken
         );
 
         if (_params.isLongToken) {
-            require(cache.totalTokensOut <= _params.values.longTokenBalance, "Withdrawal: insufficient balance");
+            require(state.totalTokensOut <= _params.values.longTokenBalance, "Withdrawal: insufficient balance");
         } else {
-            require(cache.totalTokensOut <= _params.values.shortTokenBalance, "Withdrawal: insufficient balance");
+            require(state.totalTokensOut <= _params.values.shortTokenBalance, "Withdrawal: insufficient balance");
         }
 
         // Calculate Fee
-        cache.feeParams = Fee.constructFeeParams(
+        state.feeParams = Fee.constructFeeParams(
             _params.market,
-            cache.totalTokensOut,
+            state.totalTokensOut,
             _params.isLongToken,
             _params.values,
-            cache.longPrices,
-            cache.shortPrices,
+            state.longPrices,
+            state.shortPrices,
             false
         );
-        cache.fee = Fee.calculateForMarketAction(cache.feeParams);
+        state.fee = Fee.calculateForMarketAction(state.feeParams);
 
         // calculate amount remaining after fee and price impact
-        cache.amountOut = cache.totalTokensOut - cache.fee;
+        state.amountOut = state.totalTokensOut - state.fee;
     }
 
     function _generateKey(address owner, address tokenOut, uint256 marketTokenAmountIn, uint256 blockNumber)

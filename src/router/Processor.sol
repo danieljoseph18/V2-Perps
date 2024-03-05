@@ -179,51 +179,51 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     ) external nonReentrant onlyKeeperOrSelf {
         uint256 initialGas = gasleft();
         uint256 priceUpdateFee = _signLatestPrices(_indexToken, _priceUpdateData, _indexPrice);
-        (Order.ExecuteCache memory cache, Position.Request memory request) = Order.constructExecuteParams(
+        (Order.ExecutionState memory state, Position.Request memory request) = Order.constructExecuteParams(
             tradeStorage, marketMaker, priceFeed, _orderKey, _feeReceiver, _isTradingEnabled
         );
-        _updateImpactPool(cache.market, _indexToken, cache.priceImpactUsd);
-        _updateMarketState(cache, _indexToken, request.input.sizeDelta, request.input.isLong, request.input.isIncrease);
+        _updateImpactPool(state.market, _indexToken, state.priceImpactUsd);
+        _updateMarketState(state, _indexToken, request.input.sizeDelta, request.input.isLong, request.input.isIncrease);
 
         // Calculate Fee
-        cache.fee = Fee.calculateForPosition(
+        state.fee = Fee.calculateForPosition(
             tradeStorage,
             request.input.sizeDelta,
             request.input.collateralDelta,
-            cache.indexPrice,
-            cache.indexBaseUnit,
-            cache.collateralPrice,
-            cache.collateralBaseUnit
+            state.indexPrice,
+            state.indexBaseUnit,
+            state.collateralPrice,
+            state.collateralBaseUnit
         );
         // Calculate & Apply Fee Discount for Referral Code
-        (cache.fee, cache.feeDiscount, cache.referrer) =
-            Referral.applyFeeDiscount(referralStorage, request.user, cache.fee);
+        (state.fee, state.feeDiscount, state.referrer) =
+            Referral.applyFeeDiscount(referralStorage, request.user, state.fee);
 
         // Execute Trade
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            tradeStorage.createNewPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
+            tradeStorage.createNewPosition(Position.Execution(request, _orderKey, _feeReceiver, false), state);
         } else if (request.requestType == Position.RequestType.POSITION_DECREASE) {
-            tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
+            tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), state);
         } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
-            tradeStorage.increaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
+            tradeStorage.increaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), state);
         } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
-            tradeStorage.executeCollateralDecrease(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
+            tradeStorage.executeCollateralDecrease(Position.Execution(request, _orderKey, _feeReceiver, false), state);
         } else if (request.requestType == Position.RequestType.COLLATERAL_INCREASE) {
-            tradeStorage.executeCollateralIncrease(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
+            tradeStorage.executeCollateralIncrease(Position.Execution(request, _orderKey, _feeReceiver, false), state);
         } else if (request.requestType == Position.RequestType.TAKE_PROFIT) {
-            tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
+            tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), state);
         } else if (request.requestType == Position.RequestType.STOP_LOSS) {
-            tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), cache);
+            tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), state);
         } else {
             revert OrderProcessor_InvalidRequestType();
         }
 
         if (request.input.isIncrease) {
-            _transferTokensForIncrease(cache, request, cache.fee, cache.feeDiscount, request.input.isLong);
+            _transferTokensForIncrease(state, request, state.fee, state.feeDiscount, request.input.isLong);
         }
 
         // Emit Trade Executed Event
-        emit ExecutePosition(_orderKey, request, cache.fee, cache.feeDiscount);
+        emit ExecutePosition(_orderKey, request, state.fee, state.feeDiscount);
 
         // Send Execution Fee + Rebate
         // Execution Fee reduced to account for value sent to update Pyth prices
@@ -240,37 +240,37 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         payable
         onlyLiquidationKeeper
     {
-        // need to construct ExecuteCache
-        Order.ExecuteCache memory cache;
+        // need to construct ExecutionState
+        Order.ExecutionState memory state;
         // fetch position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
-        cache.market = position.market;
+        state.market = position.market;
 
         // fetch prices, base units, calculate sizeDeltaUsd, no fee / discount, no ref, no impact
         uint256 updateFee = priceFeed.getPrimaryUpdateFee(_priceData);
         priceFeed.signPriceData{value: updateFee}(position.indexToken, _priceData);
 
         if (position.isLong) {
-            cache.indexPrice = Oracle.getMaxPrice(priceFeed, position.indexToken, block.number);
-            (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) = Oracle.getLastMarketTokenPrices(priceFeed, true);
-            cache.collateralPrice = cache.longMarketTokenPrice;
+            state.indexPrice = Oracle.getMaxPrice(priceFeed, position.indexToken, block.number);
+            (state.longMarketTokenPrice, state.shortMarketTokenPrice) = Oracle.getLastMarketTokenPrices(priceFeed, true);
+            state.collateralPrice = state.longMarketTokenPrice;
         } else {
-            cache.indexPrice = Oracle.getMinPrice(priceFeed, position.indexToken, block.number);
-            (cache.longMarketTokenPrice, cache.shortMarketTokenPrice) =
+            state.indexPrice = Oracle.getMinPrice(priceFeed, position.indexToken, block.number);
+            (state.longMarketTokenPrice, state.shortMarketTokenPrice) =
                 Oracle.getLastMarketTokenPrices(priceFeed, false);
-            cache.collateralPrice = cache.shortMarketTokenPrice;
+            state.collateralPrice = state.shortMarketTokenPrice;
         }
 
-        cache.indexBaseUnit = Oracle.getBaseUnit(priceFeed, position.indexToken);
-        cache.impactedPrice = cache.indexPrice;
-        cache.sizeDeltaUsd = _calculateValueUsd(position.positionSize, cache.indexPrice, cache.indexBaseUnit, false);
-        cache.collateralBaseUnit =
+        state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, position.indexToken);
+        state.impactedPrice = state.indexPrice;
+        state.sizeDeltaUsd = _calculateValueUsd(position.positionSize, state.indexPrice, state.indexBaseUnit, false);
+        state.collateralBaseUnit =
             position.isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
 
         // call _updateMarketState
-        _updateMarketState(cache, position.indexToken, position.positionSize, position.isLong, false);
+        _updateMarketState(state, position.indexToken, position.positionSize, position.isLong, false);
         // liquidate the position
-        try tradeStorage.liquidatePosition(cache, _positionKey, msg.sender) {}
+        try tradeStorage.liquidatePosition(state, _positionKey, msg.sender) {}
         catch {
             revert("Processor: Liquidation Failed");
         }
@@ -334,7 +334,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         bool _isLong,
         bytes[] memory _priceData
     ) external payable onlyAdlKeeper {
-        Order.ExecuteCache memory cache;
+        Order.ExecutionState memory state;
         IMarket.AdlConfig memory adl = market.getAdlConfig(_indexToken);
         // Check ADL is enabled for the market and for the side
         if (_isLong) {
@@ -345,37 +345,37 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Check the position in question is active
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         require(position.positionSize > 0, "ADL: Position not active");
-        // cache the market
-        cache.market = market;
+        // state the market
+        state.market = market;
         // fetch prices, base units, calculate sizeDeltaUsd, no fee / discount, no ref, no impact
         priceFeed.signPriceData{value: msg.value}(position.indexToken, _priceData);
         // Get current pricing and token data
-        cache =
-            Order.retrieveTokenPrices(priceFeed, cache, position.indexToken, block.number, position.isLong, false, true);
+        state =
+            Order.retrieveTokenPrices(priceFeed, state, position.indexToken, block.number, position.isLong, false, true);
         // Get size delta usd
-        cache.sizeDeltaUsd = -int256(mulDiv(_sizeDelta, cache.indexPrice, cache.indexBaseUnit));
+        state.sizeDeltaUsd = -int256(mulDiv(_sizeDelta, state.indexPrice, state.indexBaseUnit));
         // Get starting PNL Factor
         int256 startingPnlFactor = MarketUtils.getPnlFactor(
             market,
             _indexToken,
-            cache.collateralPrice,
-            cache.collateralBaseUnit,
-            cache.indexPrice,
-            cache.indexBaseUnit,
+            state.collateralPrice,
+            state.collateralBaseUnit,
+            state.indexPrice,
+            state.indexBaseUnit,
             _isLong
         );
         // Construct an ADL Order
         Position.Execution memory request = Position.createAdlOrder(position, _sizeDelta);
         // Execute the order
-        tradeStorage.decreaseExistingPosition(request, cache);
+        tradeStorage.decreaseExistingPosition(request, state);
         // Get the new PNL to pool ratio
         int256 newPnlFactor = MarketUtils.getPnlFactor(
             market,
             _indexToken,
-            cache.collateralPrice,
-            cache.collateralBaseUnit,
-            cache.indexPrice,
-            cache.indexBaseUnit,
+            state.collateralPrice,
+            state.collateralBaseUnit,
+            state.indexPrice,
+            state.indexBaseUnit,
             _isLong
         );
         // PNL to pool has reduced
@@ -412,7 +412,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // 50% goes to the referrer, 50% goes to the user
 
     function _transferTokensForIncrease(
-        Order.ExecuteCache memory _cache,
+        Order.ExecutionState memory _state,
         Position.Request memory _request,
         uint256 _fee,
         uint256 _feeDiscount,
@@ -421,23 +421,23 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         console.log("Fee: ", _fee);
         console.log("Fee Discount: ", _feeDiscount);
         // Increment market Fee Balance
-        _cache.market.accumulateFees(_fee, _isLong);
+        _state.market.accumulateFees(_fee, _isLong);
         // Transfer Fee to market
-        IERC20(_request.input.collateralToken).safeTransfer(address(_cache.market), _fee);
+        IERC20(_request.input.collateralToken).safeTransfer(address(_state.market), _fee);
         // Transfer Fee Discount to Referral Storage
         uint256 feeRebate;
         if (_feeDiscount > 0) {
             feeRebate = _feeDiscount / 2; // 50% discount to user, 50% rebate to referrer
             // Increment Referral Storage Fee Balance
-            referralStorage.accumulateAffiliateRewards(_cache.referrer, _isLong, feeRebate);
+            referralStorage.accumulateAffiliateRewards(_state.referrer, _isLong, feeRebate);
             // Transfer Fee Discount to Referral Storage
             IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), feeRebate);
         }
 
         // Transfer Collateral to market
         uint256 afterFeeAmount = _request.input.collateralDelta - (_fee + feeRebate);
-        _cache.market.increasePoolBalance(afterFeeAmount, _isLong);
-        IERC20(_request.input.collateralToken).safeTransfer(address(_cache.market), afterFeeAmount);
+        _state.market.increasePoolBalance(afterFeeAmount, _isLong);
+        IERC20(_request.input.collateralToken).safeTransfer(address(_state.market), afterFeeAmount);
     }
 
     function _calculateValueUsd(uint256 _tokenAmount, uint256 _tokenPrice, uint256 _tokenBaseUnit, bool _isIncrease)
@@ -455,7 +455,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     }
 
     function _updateMarketState(
-        Order.ExecuteCache memory _cache,
+        Order.ExecutionState memory _state,
         address _indexToken,
         uint256 _sizeDelta,
         bool _isLong,
@@ -464,18 +464,18 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
             int256 signedSizeDelta = _isIncrease ? _sizeDelta.toInt256() : -_sizeDelta.toInt256();
-            _cache.market.updateAverageEntryPrice(_indexToken, _cache.impactedPrice, signedSizeDelta, _isLong);
+            _state.market.updateAverageEntryPrice(_indexToken, _state.impactedPrice, signedSizeDelta, _isLong);
             // Average Entry Price relies on OI, so it must be updated before this
-            _cache.market.updateOpenInterest(_indexToken, _sizeDelta, _isLong, _isIncrease);
+            _state.market.updateOpenInterest(_indexToken, _sizeDelta, _isLong, _isIncrease);
         }
-        _cache.market.updateFundingRate(_indexToken, _cache.indexPrice, _cache.indexBaseUnit);
-        _cache.market.updateBorrowingRate(
+        _state.market.updateFundingRate(_indexToken, _state.indexPrice, _state.indexBaseUnit);
+        _state.market.updateBorrowingRate(
             _indexToken,
-            _cache.indexPrice,
-            _cache.indexBaseUnit,
-            _cache.longMarketTokenPrice,
+            _state.indexPrice,
+            _state.indexBaseUnit,
+            _state.longMarketTokenPrice,
             Oracle.getLongBaseUnit(priceFeed),
-            _cache.shortMarketTokenPrice,
+            _state.shortMarketTokenPrice,
             Oracle.getShortBaseUnit(priceFeed),
             _isLong
         );

@@ -52,12 +52,15 @@ interface ITradeStorage {
     function createOrderRequest(Position.Request calldata _request) external;
     function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
-    function executeCollateralIncrease(Position.Execution memory _params, Order.ExecuteCache memory _cache) external;
-    function executeCollateralDecrease(Position.Execution memory _params, Order.ExecuteCache memory _cache) external;
-    function createNewPosition(Position.Execution memory _params, Order.ExecuteCache memory _cache) external;
-    function increaseExistingPosition(Position.Execution memory _params, Order.ExecuteCache memory _cache) external;
-    function decreaseExistingPosition(Position.Execution memory _params, Order.ExecuteCache memory _cache) external;
-    function liquidatePosition(Order.ExecuteCache memory _cache, bytes32 _positionKey, address _liquidator) external;
+    function executeCollateralIncrease(Position.Execution memory _params, Order.ExecutionState memory _state)
+        external;
+    function executeCollateralDecrease(Position.Execution memory _params, Order.ExecutionState memory _state)
+        external;
+    function createNewPosition(Position.Execution memory _params, Order.ExecutionState memory _state) external;
+    function increaseExistingPosition(Position.Execution memory _params, Order.ExecutionState memory _state) external;
+    function decreaseExistingPosition(Position.Execution memory _params, Order.ExecutionState memory _state) external;
+    function liquidatePosition(Order.ExecutionState memory _state, bytes32 _positionKey, address _liquidator)
+        external;
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external;
     function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory);
     function getOrderKeys(bool _isLimit) external view returns (bytes32[] memory orderKeys);

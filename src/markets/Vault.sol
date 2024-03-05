@@ -214,10 +214,10 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
             shortBaseUnit: SHORT_BASE_UNIT
         });
         // Execute Deposit
-        Deposit.ExecuteCache memory cache = Deposit.execute(_params);
+        Deposit.ExecutionState memory state = Deposit.execute(_params);
         // update storage
-        _accumulateFees(cache.fee, _params.isLongToken);
-        _increasePoolBalance(cache.afterFeeAmount, _params.isLongToken);
+        _accumulateFees(state.fee, _params.isLongToken);
+        _increasePoolBalance(state.afterFeeAmount, _params.isLongToken);
         // Transfer tokens into the market
         processor.transferDepositTokens(address(this), _params.data.input.tokenIn, _params.data.input.amountIn);
         // Invariant checks
@@ -227,10 +227,10 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
             _params.data.input.owner,
             _params.data.input.tokenIn,
             _params.data.input.amountIn,
-            cache.mintAmount
+            state.mintAmount
         );
         // mint tokens to user
-        _mint(_params.data.input.owner, cache.mintAmount);
+        _mint(_params.data.input.owner, state.mintAmount);
     }
 
     // Function to create a withdrawal request
@@ -278,11 +278,11 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         // Delete the WIthdrawal from Storage
         _deleteWithdrawal(_params.key);
         // Execute the Withdrawal
-        Withdrawal.ExecuteCache memory cache = Withdrawal.execute(_params);
+        Withdrawal.ExecutionState memory state = Withdrawal.execute(_params);
         // accumulate the fee
-        _accumulateFees(cache.fee, _params.isLongToken);
+        _accumulateFees(state.fee, _params.isLongToken);
         // decrease the pool
-        _decreasePoolBalance(cache.totalTokensOut, _params.isLongToken);
+        _decreasePoolBalance(state.totalTokensOut, _params.isLongToken);
 
         // @audit - add invariant checks
         emit WithdrawalExecuted(
@@ -290,10 +290,10 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
             _params.data.input.owner,
             _params.data.input.tokenOut,
             _params.data.input.marketTokenAmountIn,
-            cache.amountOut
+            state.amountOut
         );
         // transfer tokens to user
-        _transferOutTokens(_params.data.input.owner, cache.amountOut, _params.isLongToken, _params.shouldUnwrap);
+        _transferOutTokens(_params.data.input.owner, state.amountOut, _params.isLongToken, _params.shouldUnwrap);
     }
 
     function accumulateFundingFees(uint256 _amount, bool _isLong) external onlyTradeStorage {
