@@ -12,4 +12,6 @@
 - Unexecutable Orders
 - Referral Spoofing
 - Accounting Exploits
-- Oracle Exploits
+- Rounding Errors (Math)
+- Oracle Exploits (manipulation)
+- Front-running attacks

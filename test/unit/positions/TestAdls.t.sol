@@ -54,6 +54,9 @@ contract TestADLs is Test {
     uint256[] allocations;
 
     address USER = makeAddr("USER");
+    address RANDOM1 = makeAddr("RANDOM1");
+    address RANDOM2 = makeAddr("RANDOM2");
+    address RANDOM3 = makeAddr("RANDOM3");
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -134,13 +137,13 @@ contract TestADLs is Test {
         Deposit.Input memory input = Deposit.Input({
             owner: OWNER,
             tokenIn: weth,
-            amountIn: 20_000 ether,
+            amountIn: 100 ether,
             executionFee: 0.01 ether,
             shouldWrap: true
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 100.01 ether + 1 gwei}(market, input, tokenUpdateData);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
         processor.executeDeposit(market, depositKey, 0);
@@ -149,7 +152,7 @@ contract TestADLs is Test {
         input = Deposit.Input({
             owner: OWNER,
             tokenIn: usdc,
-            amountIn: 50_000_000e6,
+            amountIn: 250_000e6,
             executionFee: 0.01 ether,
             shouldWrap: false
         });
@@ -168,4 +171,74 @@ contract TestADLs is Test {
         vm.stopPrank();
         _;
     }
+
+    function testPositionsInPoolsWithLargePnlToPoolRatiosCanBeAdled() public setUpMarkets {
+        vm.deal(RANDOM1, 1_000_000 ether);
+        vm.deal(RANDOM2, 1_000_000 ether);
+        vm.deal(RANDOM3, 1_000_000 ether);
+        // open several positions on the market
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 10 ether,
+            limitPrice: 0,
+            maxSlippage: 0.9999e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
+        vm.prank(USER);
+        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
+        vm.prank(RANDOM1);
+        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
+        vm.prank(RANDOM2);
+        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
+        vm.prank(RANDOM3);
+        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
+        // Execute the Position
+        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
+        Oracle.TradingEnabled memory tradingEnabled =
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        processor.executePosition(orderKey, USER, tradingEnabled, tokenUpdateData, weth, 0);
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        processor.executePosition(orderKey, RANDOM1, tradingEnabled, tokenUpdateData, weth, 0);
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        processor.executePosition(orderKey, RANDOM2, tradingEnabled, tokenUpdateData, weth, 0);
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        processor.executePosition(orderKey, RANDOM3, tradingEnabled, tokenUpdateData, weth, 0);
+        // move the price so that the pnl to pool ratio is large
+        bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 1000000, 50, -2, 1000000, 50, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        tokenUpdateData[0] = wethUpdateData;
+        priceFeed.signPriceData{value: 0.01 ether}(weth, tokenUpdateData);
+        // adl the positions
+        vm.prank(OWNER);
+        processor.flagForAdl(market, weth, true);
+        // get one of the position keys
+        bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), true);
+        // adl it
+        processor.executeAdl(market, weth, 2 ether, positionKeys[0], true, tokenUpdateData);
+        // validate their size has been reduced
+        Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
+        assertEq(position.positionSize, 2 ether);
+    }
+
+    function testAPositionCanOnlyBeAdldIfItHasBeenFlaggedPrior() public setUpMarkets {}
 }

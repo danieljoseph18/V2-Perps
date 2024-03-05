@@ -23,7 +23,6 @@ import {Position} from "../positions/Position.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {Test, console} from "forge-std/Test.sol";
 
 /*
     weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -39,10 +38,9 @@ library Pricing {
     /// @dev returns PNL in USD
     function calculatePnL(Position.Data memory _position, uint256 _indexPriceUsd, uint256 _indexBaseUnit)
         external
-        view
+        pure
         returns (int256)
     {
-        console.log("Here");
         uint256 entryValue = mulDiv(_position.positionSize, _position.weightedAvgEntryPrice, _indexBaseUnit);
         uint256 currentValue = mulDiv(_position.positionSize, _indexPriceUsd, _indexBaseUnit);
         return _position.isLong

@@ -41,7 +41,6 @@ import {IProcessor} from "./interfaces/IProcessor.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Roles} from "../access/roles.sol";
-import {Test, console} from "forge-std/Test.sol";
 
 /// @dev Needs Processor Role
 // All keeper interactions should come through this contract
@@ -418,8 +417,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint256 _feeDiscount,
         bool _isLong
     ) internal {
-        console.log("Fee: ", _fee);
-        console.log("Fee Discount: ", _feeDiscount);
         // Increment market Fee Balance
         _state.market.accumulateFees(_fee, _isLong);
         // Transfer Fee to market

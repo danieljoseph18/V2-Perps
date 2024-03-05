@@ -7,6 +7,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IVault} from "./interfaces/IVault.sol";
+import {console} from "forge-std/Test.sol";
 
 library MarketUtils {
     using SignedMath for int256;
@@ -94,37 +95,36 @@ library MarketUtils {
         poolUsd = mulDiv(allocationInTokens, _collateralTokenPrice, _collateralBaseUnits);
     }
 
+    // @audit - Math? Should we hard code reserves from the total
+    // Pool, or just calculate as 30% of the free liquidity
     function validateAllocation(
         IMarket market,
         address _indexToken,
         uint256 _sizeDeltaUsd,
         uint256 _collateralTokenPrice,
-        uint256 _indexTokenPrice,
         uint256 _collateralBaseUnit,
-        uint256 _indexBaseUnit,
         bool _isLong
     ) external view {
         // Get Max OI for side
-        uint256 maxOiUsd =
-            getMaxOpenInterestUsd(market, _indexToken, _collateralTokenPrice, _collateralBaseUnit, _isLong);
-        // Get Current OI for side
-        uint256 currentOiUsd = getOpenInterestUsd(market, _indexToken, _indexTokenPrice, _indexBaseUnit, _isLong);
+        uint256 availableUsd =
+            getAvailableOpenInterestUsd(market, _indexToken, _collateralTokenPrice, _collateralBaseUnit, _isLong);
         // Check SizeDelta USD won't push the OI over the max
-        require(currentOiUsd + _sizeDeltaUsd <= maxOiUsd, "MarketUtils: Max OI exceeded");
+        require(_sizeDeltaUsd <= availableUsd, "MarketUtils: Max OI exceeded");
     }
 
-    function getMaxOpenInterestUsd(
+    /// @notice returns the available remaining open interest for a side in USD
+    function getAvailableOpenInterestUsd(
         IMarket market,
         address _indexToken,
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) public view returns (uint256 maxOI) {
+    ) public view returns (uint256 availableOi) {
         // get the allocation and subtract by the markets reserveFactor
-        uint256 allocationUsd =
+        uint256 remainingAllocationUsd =
             getPoolBalanceUsd(market, _indexToken, _collateralTokenPrice, _collateralBaseUnit, _isLong);
         uint256 reserveFactor = market.getReserveFactor(_indexToken);
-        maxOI = allocationUsd - mulDiv(allocationUsd, reserveFactor, SCALAR);
+        availableOi = remainingAllocationUsd - mulDiv(remainingAllocationUsd, reserveFactor, SCALAR);
     }
 
     // The pnl factor is the ratio of the pnl to the pool usd

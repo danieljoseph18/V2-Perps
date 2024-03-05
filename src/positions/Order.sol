@@ -17,7 +17,6 @@ import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
-import {Test, console} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Order {
@@ -121,9 +120,7 @@ library Order {
                 request.input.indexToken,
                 state.sizeDeltaUsd.abs(),
                 state.collateralPrice,
-                state.indexPrice,
                 state.collateralBaseUnit,
-                state.indexBaseUnit,
                 request.input.isLong
             );
         }
@@ -228,8 +225,6 @@ library Order {
         state.sizeDeltaUsd = mulDiv(_trade.sizeDelta, state.indexRefPrice, state.indexBaseUnit);
 
         if (_trade.isLimit) {
-            console.log("Limit Price: ", _trade.limitPrice);
-            console.log("Ref Price: ", state.indexRefPrice);
             require(_trade.limitPrice > 0, "Order: Limit Price");
             if (_trade.isLong) {
                 require(_trade.limitPrice <= state.indexRefPrice, "Order: ref price > limit price");
@@ -437,6 +432,7 @@ library Order {
             decreaseState.sizeDelta =
                 mulDiv(position.positionSize, _params.request.input.collateralDelta, position.collateralAmount);
         }
+        // @audit - is this needed?
         decreaseState.decreasePnl = Pricing.getDecreasePositionPnl(
             _state.indexBaseUnit,
             decreaseState.sizeDelta,

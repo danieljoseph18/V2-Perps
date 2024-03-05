@@ -310,7 +310,7 @@ library Position {
                 collateralDelta: collateralDelta,
                 sizeDelta: _sizeDelta,
                 limitPrice: 0,
-                maxSlippage: 0,
+                maxSlippage: 0.33e18,
                 executionFee: 0,
                 isLong: _position.isLong,
                 isLimit: false,
