@@ -296,6 +296,7 @@ library Oracle {
     }
 
     /// @dev _baseUnit is the base unit of the token0
+    // ONLY EVER USED FOR REFERENCE PRICE -> PRICE IS MANIPULATABLE
     function getAmmPrice(UniswapPool memory _pool) public view returns (uint256 price) {
         if (_pool.poolType == PoolType.UNISWAP_V3) {
             IUniswapV3Pool pool = IUniswapV3Pool(_pool.poolAddress);

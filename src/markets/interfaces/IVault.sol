@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Deposit} from "../../liquidity/Deposit.sol";
-import {Withdrawal} from "../../liquidity/Withdrawal.sol";
+import {Deposit} from "../Deposit.sol";
+import {Withdrawal} from "../Withdrawal.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface IVault {
     // Admin functions
-    function updateFees(uint256 _feeScale) external;
+    function updateFees(address _poolOwner, address _feeDistributor, uint256 _feeScale, uint256 _feePercentageToOwner)
+        external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
 
     // Trading related functions
@@ -92,6 +93,7 @@ interface IVault {
         uint256 _collateralFundingOwed,
         bool _isLong
     );
+    event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
     event TransferInCollateral(address indexed _market, uint256 indexed _collateralDelta, bool _isLong);
     event MarketAdded(address indexed _market);
 }

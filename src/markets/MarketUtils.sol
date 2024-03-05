@@ -6,7 +6,7 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {IVault} from "../liquidity/interfaces/IVault.sol";
+import {IVault} from "./interfaces/IVault.sol";
 
 library MarketUtils {
     using SignedMath for int256;

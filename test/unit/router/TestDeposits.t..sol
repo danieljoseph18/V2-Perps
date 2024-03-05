@@ -12,11 +12,11 @@ import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {Processor} from "../../../src/router/Processor.sol";
 import {Router} from "../../../src/router/Router.sol";
-import {Deposit} from "../../../src/liquidity/Deposit.sol";
-import {Withdrawal} from "../../../src/liquidity/Withdrawal.sol";
+import {Deposit} from "../../../src/markets/Deposit.sol";
+import {Withdrawal} from "../../../src/markets/Withdrawal.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
-import {Pool} from "../../../src/liquidity/Pool.sol";
+import {Pool} from "../../../src/markets/Pool.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
 
@@ -103,12 +103,15 @@ contract TestDeposits is Test {
             shortToken: usdc,
             longBaseUnit: 1e18,
             shortBaseUnit: 1e6,
-            name: "WETH/USDC",
-            symbol: "WETH/USDC",
+            feeScale: 0.03e18,
+            feePercentageToOwner: 0.2e18,
+            minTimeToExpiration: 1 minutes,
             priceFeed: address(priceFeed),
             processor: address(processor),
-            minTimeToExpiration: 1 minutes,
-            feeScale: 0.03e18
+            poolOwner: OWNER,
+            feeDistributor: OWNER,
+            name: "WETH/USDC",
+            symbol: "WETH/USDC"
         });
         marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
         vm.stopPrank();

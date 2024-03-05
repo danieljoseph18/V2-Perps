@@ -15,7 +15,7 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {IVault} from "../liquidity/interfaces/IVault.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {Test, console} from "forge-std/Test.sol";
 

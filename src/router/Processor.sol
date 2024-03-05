@@ -35,8 +35,8 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Gas} from "../libraries/Gas.sol";
-import {Deposit} from "../liquidity/Deposit.sol";
-import {Withdrawal} from "../liquidity/Withdrawal.sol";
+import {Deposit} from "../markets/Deposit.sol";
+import {Withdrawal} from "../markets/Withdrawal.sol";
 import {IProcessor} from "./interfaces/IProcessor.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
@@ -410,6 +410,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     }
     // @audit - discount needs to be halved
     // 50% goes to the referrer, 50% goes to the user
+
     function _transferTokensForIncrease(
         Order.ExecuteCache memory _cache,
         Position.Request memory _request,

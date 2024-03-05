@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IVault} from "../liquidity/interfaces/IVault.sol";
+import {IVault} from "./interfaces/IVault.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -88,8 +88,14 @@ contract GlobalMarketConfig is RoleValidation {
     /**
      * ========================= Fees =========================
      */
-    function updateLiquidityFees(IVault vault, uint256 _feeScale) external onlyModerator {
-        vault.updateFees(_feeScale);
+    function updateLiquidityFees(
+        IVault vault,
+        address _poolOwner,
+        address _feeDistributor,
+        uint256 _feeScale,
+        uint256 _feePercentageToOwner
+    ) external onlyModerator {
+        vault.updateFees(_poolOwner, _feeDistributor, _feeScale, _feePercentageToOwner);
     }
 
     function setTradingFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyModerator {

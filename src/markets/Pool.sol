@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {IVault} from "./interfaces/IVault.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 
 library Pool {
     using SignedMath for int256;
@@ -14,14 +14,17 @@ library Pool {
     struct VaultConfig {
         address longToken;
         address shortToken;
-        uint256 longBaseUnit;
-        uint256 shortBaseUnit;
-        string name;
-        string symbol;
+        uint64 longBaseUnit;
+        uint64 shortBaseUnit;
+        uint64 feeScale;
+        uint64 feePercentageToOwner;
+        uint48 minTimeToExpiration;
         address priceFeed;
         address processor;
-        uint48 minTimeToExpiration;
-        uint256 feeScale;
+        address poolOwner;
+        address feeDistributor;
+        string name;
+        string symbol;
     }
 
     struct Values {

@@ -5,7 +5,7 @@ import {Script} from "forge-std/Script.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
 import {RoleStorage} from "../src/access/RoleStorage.sol";
 import {GlobalMarketConfig} from "../src/markets/GlobalMarketConfig.sol";
-import {Vault} from "../src/liquidity/Vault.sol";
+import {Vault} from "../src/markets/Vault.sol";
 import {MarketMaker} from "../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../src/positions/TradeStorage.sol";

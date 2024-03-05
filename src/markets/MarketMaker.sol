@@ -30,7 +30,7 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IProcessor} from "../router/interfaces/IProcessor.sol";
 import {Roles} from "../access/Roles.sol";
-import {Pool} from "../liquidity/Pool.sol";
+import {Pool} from "./Pool.sol";
 
 /// @dev Needs MarketMaker Role
 contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {

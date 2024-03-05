@@ -12,11 +12,11 @@ import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {Processor} from "../../../src/router/Processor.sol";
 import {Router} from "../../../src/router/Router.sol";
-import {Deposit} from "../../../src/liquidity/Deposit.sol";
-import {Withdrawal} from "../../../src/liquidity/Withdrawal.sol";
+import {Deposit} from "../../../src/markets/Deposit.sol";
+import {Withdrawal} from "../../../src/markets/Withdrawal.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
-import {Pool} from "../../../src/liquidity/Pool.sol";
+import {Pool} from "../../../src/markets/Pool.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
@@ -115,12 +115,15 @@ contract TestMarketAllocations is Test {
             shortToken: usdc,
             longBaseUnit: 1e18,
             shortBaseUnit: 1e6,
-            name: "WETH/USDC",
-            symbol: "WETH/USDC",
+            feeScale: 0.03e18,
+            feePercentageToOwner: 0.2e18,
+            minTimeToExpiration: 1 minutes,
             priceFeed: address(priceFeed),
             processor: address(processor),
-            minTimeToExpiration: 1 minutes,
-            feeScale: 0.03e18
+            poolOwner: OWNER,
+            feeDistributor: OWNER,
+            name: "WETH/USDC",
+            symbol: "WETH/USDC"
         });
         marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
         vm.stopPrank();
@@ -166,15 +169,13 @@ contract TestMarketAllocations is Test {
     }
 
     /**
-        Tests Required:
-
-        - Listing multiple assets under the same market
-        - Dividing liquidity between multiple assets in the same market
-        - Testing data storage for different assets within the same market
-
+     * Tests Required:
+     *
+     *     - Listing multiple assets under the same market
+     *     - Dividing liquidity between multiple assets in the same market
+     *     - Testing data storage for different assets within the same market
      */
-
-     function testCreatingMultipleAssetsUnderTheSameMarket() public {
+    function testCreatingMultipleAssetsUnderTheSameMarket() public {
         // create some assets
         ERC20Mock randomErc = new ERC20Mock();
         ERC20Mock randomErcTwo = new ERC20Mock();
@@ -184,12 +185,15 @@ contract TestMarketAllocations is Test {
             shortToken: usdc,
             longBaseUnit: 1e18,
             shortBaseUnit: 1e6,
-            name: "WETH/USDC",
-            symbol: "WETH/USDC",
+            feeScale: 0.03e18,
+            feePercentageToOwner: 0.2e18,
+            minTimeToExpiration: 1 minutes,
             priceFeed: address(priceFeed),
             processor: address(processor),
-            minTimeToExpiration: 1 minutes,
-            feeScale: 0.03e18
+            poolOwner: OWNER,
+            feeDistributor: OWNER,
+            name: "WETH/USDC",
+            symbol: "WETH/USDC"
         });
         Oracle.Asset memory wethData = Oracle.Asset({
             isValid: true,
@@ -245,13 +249,8 @@ contract TestMarketAllocations is Test {
             pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)
         });
 
-        IMarket marketInterface = IMarket(marketMaker.createNewMarket(
-            wethVaultDetails,
-            weth,
-            ethPriceId,
-            wethData
-        ));
-        
+        IMarket marketInterface = IMarket(marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData));
+
         uint256 firstAllocation = 5000;
         uint256 secondAllocation = 5000;
 
@@ -290,6 +289,5 @@ contract TestMarketAllocations is Test {
         delete allocations;
         allocations.push(encodedAllocation);
         marketMaker.addTokenToMarket(marketInterface, address(randomErcThree), ethPriceId, asset3, allocations);
-     }
-    
+    }
 }

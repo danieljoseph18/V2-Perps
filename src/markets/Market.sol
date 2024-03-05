@@ -25,9 +25,9 @@ import {Pricing} from "../libraries/Pricing.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {Vault} from "../liquidity/Vault.sol";
+import {Vault} from "./Vault.sol";
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
-import {Pool} from "../liquidity/Pool.sol";
+import {Pool} from "./Pool.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract Market is Vault, IMarket {

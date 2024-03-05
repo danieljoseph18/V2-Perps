@@ -6,7 +6,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {Position} from "../positions/Position.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {Pool} from "../liquidity/Pool.sol";
+import {Pool} from "../markets/Pool.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 
 library Fee {

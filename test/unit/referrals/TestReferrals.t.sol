@@ -12,11 +12,11 @@ import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {Processor} from "../../../src/router/Processor.sol";
 import {Router} from "../../../src/router/Router.sol";
-import {Deposit} from "../../../src/liquidity/Deposit.sol";
-import {Withdrawal} from "../../../src/liquidity/Withdrawal.sol";
+import {Deposit} from "../../../src/markets/Deposit.sol";
+import {Withdrawal} from "../../../src/markets/Withdrawal.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
-import {Pool} from "../../../src/liquidity/Pool.sol";
+import {Pool} from "../../../src/markets/Pool.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
@@ -116,12 +116,15 @@ contract TestReferrals is Test {
             shortToken: usdc,
             longBaseUnit: 1e18,
             shortBaseUnit: 1e6,
-            name: "WETH/USDC",
-            symbol: "WETH/USDC",
+            feeScale: 0.03e18,
+            feePercentageToOwner: 0.2e18,
+            minTimeToExpiration: 1 minutes,
             priceFeed: address(priceFeed),
             processor: address(processor),
-            minTimeToExpiration: 1 minutes,
-            feeScale: 0.03e18
+            poolOwner: OWNER,
+            feeDistributor: OWNER,
+            name: "WETH/USDC",
+            symbol: "WETH/USDC"
         });
         marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
         vm.stopPrank();
@@ -167,25 +170,24 @@ contract TestReferrals is Test {
     }
 
     /**
-        Tests Required:
-
-        - Using a referral code for a fee discount
-        - Receiving affiliate rewards for referring another user
-
+     * Tests Required:
+     *
+     *     - Using a referral code for a fee discount
+     *     - Receiving affiliate rewards for referring another user
      */
 
-     /**
-     function calculateForPosition(
-        ITradeStorage tradeStorage,
-        uint256 _sizeDelta,
-        uint256 _collateralDelta,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit
-    ) */
-
-     function testUsingAReferralCodeGrantsAFeeDiscount() public setUpMarkets {
+    /**
+     * function calculateForPosition(
+     *     ITradeStorage tradeStorage,
+     *     uint256 _sizeDelta,
+     *     uint256 _collateralDelta,
+     *     uint256 _indexPrice,
+     *     uint256 _indexBaseUnit,
+     *     uint256 _collateralPrice,
+     *     uint256 _collateralBaseUnit
+     * )
+     */
+    function testUsingAReferralCodeGrantsAFeeDiscount() public setUpMarkets {
         // register an affiliate code
         // create a position
         // use the fee estimation calculation to compare
@@ -219,33 +221,25 @@ contract TestReferrals is Test {
             })
         });
 
-        uint256 fee = Fee.calculateForPosition(tradeStorage, input.sizeDelta, input.collateralDelta, 2500e18, 1e18, 1e18, 1e6);
+        uint256 fee =
+            Fee.calculateForPosition(tradeStorage, input.sizeDelta, input.collateralDelta, 2500e18, 1e18, 1e18, 1e6);
 
-        (uint256 feeWithoutReferralCode,,) = Referral.applyFeeDiscount(
-            referralStorage,
-            USER,
-            fee
-        );
+        (uint256 feeWithoutReferralCode,,) = Referral.applyFeeDiscount(referralStorage, USER, fee);
 
         // set the referral code for the user
         vm.prank(USER);
         referralStorage.setTraderReferralCodeByUser(code);
 
-        (uint256 feeWithReferralCode,,) = Referral.applyFeeDiscount(
-            referralStorage,
-            USER,
-            fee
-        );
+        (uint256 feeWithReferralCode,,) = Referral.applyFeeDiscount(referralStorage, USER, fee);
 
         assertGt(feeWithoutReferralCode, feeWithReferralCode);
-     }
+    }
 
-     /**
-        audit - What happened to the 4 wei
-        - Why is the user not receiving their funds
-      */
-
-     function testReceivingReferralRewardsFromAnAffiliateAccount() public setUpMarkets {
+    /**
+     * audit - What happened to the 4 wei
+     *     - Why is the user not receiving their funds
+     */
+    function testReceivingReferralRewardsFromAnAffiliateAccount() public setUpMarkets {
         // register an affiliate code
         bytes32 code = keccak256(abi.encode("CODE"));
         vm.prank(OWNER);
@@ -288,9 +282,9 @@ contract TestReferrals is Test {
         vm.prank(OWNER);
         referralStorage.claimAffiliateRewards();
         assertEq(referralStorage.getClaimableAffiliateRewards(OWNER, true), 0);
-     }
+    }
 
-     function testIfAPositionRequestIsCancelledAffiliateRewardsCantbeClaimed() public setUpMarkets {
+    function testIfAPositionRequestIsCancelledAffiliateRewardsCantbeClaimed() public setUpMarkets {
         // register an affiliate code
         bytes32 code = keccak256(abi.encode("CODE"));
         vm.prank(OWNER);
@@ -328,7 +322,5 @@ contract TestReferrals is Test {
         vm.prank(OWNER);
         processor.cancelOrderRequest(orderKey, false);
         assertEq(referralStorage.getClaimableAffiliateRewards(OWNER, true), 0);
-     }
-
-    
+    }
 }

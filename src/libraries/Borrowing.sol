@@ -22,7 +22,7 @@ import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {IVault} from "../liquidity/interfaces/IVault.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 import {Pricing} from "./Pricing.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";

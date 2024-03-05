@@ -23,7 +23,7 @@ import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {sd, SD59x18, unwrap} from "@prb/math/SD59x18.sol";
 import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {Pool} from "../liquidity/Pool.sol";
+import {Pool} from "../markets/Pool.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 

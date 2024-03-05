@@ -16,6 +16,7 @@ import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {IProcessor} from "../router/interfaces/IProcessor.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 
 // Stores all funds for the market(s)
 // Each Vault can be associated with 1+ markets
@@ -44,9 +45,13 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
 
     uint48 minTimeToExpiration;
 
+    address public poolOwner;
+    address public feeDistributor;
+
     // Value = Max Bonus Fee
     // Users will be charged a % of this fee based on the skew of the market
     uint256 public feeScale; // 3% = 0.03e18
+    uint256 public feePercentageToOwner; // 50% = 0.5e18
 
     uint256 public longTokenBalance;
     uint256 public shortTokenBalance;
@@ -86,14 +91,27 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         SHORT_BASE_UNIT = _config.shortBaseUnit;
         priceFeed = IPriceFeed(_config.priceFeed);
         processor = IProcessor(_config.processor);
+        poolOwner = _config.poolOwner;
+        feeDistributor = _config.feeDistributor;
         minTimeToExpiration = _config.minTimeToExpiration;
         feeScale = _config.feeScale;
+        feePercentageToOwner = _config.feePercentageToOwner;
     }
 
     receive() external payable {}
 
-    function updateFees(uint256 _feeScale) external onlyConfigurator {
+    function updateFees(address _poolOwner, address _feeDistributor, uint256 _feeScale, uint256 _feePercentageToOwner)
+        external
+        onlyConfigurator
+    {
+        require(_poolOwner != address(0), "Vault: Invalid Pool Owner");
+        require(_feeDistributor != address(0), "Vault: Invalid Fee Distributor");
+        require(_feeScale >= 0 && _feeScale <= 1e18, "Vault: Invalid Fee Scale");
+        require(_feePercentageToOwner >= 0 && _feePercentageToOwner <= 1e18, "Vault: Invalid Fee Percentage");
+        poolOwner = _poolOwner;
+        feeDistributor = _feeDistributor;
         feeScale = _feeScale;
+        feePercentageToOwner = _feePercentageToOwner;
     }
 
     function updateProcessor(IProcessor _processor) external onlyConfigurator {
@@ -104,13 +122,23 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
-    function processFees() external onlyAdmin {
+    function batchWithdrawFees() external onlyAdmin {
         uint256 longFees = longAccumulatedFees;
         uint256 shortFees = shortAccumulatedFees;
         longAccumulatedFees = 0;
         shortAccumulatedFees = 0;
-        IERC20(LONG_TOKEN).safeTransfer(msg.sender, longFees);
-        IERC20(SHORT_TOKEN).safeTransfer(msg.sender, shortFees);
+        // calculate percentages and distribute percentage to owner and feeDistributor
+        uint256 longOwnerFee = mulDiv(longFees, feePercentageToOwner, SCALING_FACTOR);
+        uint256 shortOwnerFee = mulDiv(shortFees, feePercentageToOwner, SCALING_FACTOR);
+        uint256 longDistributorFee = longFees - longOwnerFee;
+        uint256 shortDistributorFee = shortFees - shortOwnerFee;
+        // send out fees
+        IERC20(LONG_TOKEN).safeTransfer(poolOwner, longOwnerFee);
+        IERC20(SHORT_TOKEN).safeTransfer(poolOwner, shortOwnerFee);
+        IERC20(LONG_TOKEN).safeTransfer(feeDistributor, longDistributorFee);
+        IERC20(SHORT_TOKEN).safeTransfer(feeDistributor, shortDistributorFee);
+
+        emit FeesWithdrawn(longFees, shortFees);
     }
 
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
@@ -169,6 +197,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         emit DepositRequestCancelled(_key, deposit.input.owner, deposit.input.tokenIn, deposit.input.amountIn);
     }
 
+    // @audit - ETH should always be wrapped when sent in
     function executeDeposit(Deposit.ExecuteParams memory _params)
         external
         onlyProcessor

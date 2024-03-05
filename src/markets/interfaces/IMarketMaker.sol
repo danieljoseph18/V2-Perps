@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {IMarket} from "./IMarket.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
-import {Pool} from "../../liquidity/Pool.sol";
+import {Pool} from "../Pool.sol";
 
 interface IMarketMaker {
     event MarketMakerInitialised(address priceStorage);
