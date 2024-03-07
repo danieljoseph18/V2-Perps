@@ -106,10 +106,16 @@ library Order {
         state.collateralDeltaUsd = _calculateValueUsd(
             request.input.collateralDelta, state.collateralPrice, state.collateralBaseUnit, request.input.isIncrease
         );
+        /**
+         * execute(
+         *     IMarket market,
+         *     IPriceFeed priceFeed,
+         *     Position.Request memory _request,
+         *     Order.ExecutionState memory _orderState
+         */
         if (request.input.sizeDelta != 0) {
             // Execute Price Impact
-            (state.impactedPrice, state.priceImpactUsd) =
-                PriceImpact.execute(state.market, request, state.indexPrice, state.indexBaseUnit);
+            (state.impactedPrice, state.priceImpactUsd) = PriceImpact.execute(state.market, priceFeed, request, state);
             // state Size Delta USD
             state.sizeDeltaUsd = _calculateValueUsd(
                 request.input.sizeDelta, state.indexPrice, state.indexBaseUnit, request.input.isIncrease

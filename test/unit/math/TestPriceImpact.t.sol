@@ -23,6 +23,7 @@ import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Order} from "../../../src/positions/Order.sol";
 
 contract TestPriceImpact is Test {
     RoleStorage roleStorage;
@@ -199,7 +200,24 @@ contract TestPriceImpact is Test {
         Position.Request memory request = tradeStorage.getOrder(orderKey);
         // Test negative price impact values
 
-        (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, request, 2500.05e18, 1e18);
+        Order.ExecutionState memory orderState = Order.ExecutionState({
+            market: market,
+            indexPrice: 2500e18,
+            indexBaseUnit: 1e18,
+            impactedPrice: 2500.05e18,
+            longMarketTokenPrice: 2500e18,
+            shortMarketTokenPrice: 1e18,
+            sizeDeltaUsd: 0,
+            collateralDeltaUsd: 0,
+            priceImpactUsd: 0,
+            collateralPrice: 1e6,
+            collateralBaseUnit: 1e6,
+            fee: 0,
+            feeDiscount: 0,
+            referrer: address(0)
+        });
+
+        (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, priceFeed, request, orderState);
         uint256 expectedImpactPrice = 2551072469825497887958;
         int256 expectedPriceImpactUsd = -200008000080000000000;
         assertEq(impactedPrice, expectedImpactPrice);
@@ -277,7 +295,24 @@ contract TestPriceImpact is Test {
 
         uint256 impactPool = market.getImpactPool(weth);
         console.log("Impact Pool: ", impactPool);
-        (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, request, 2500.5e18, 1e18);
+        Order.ExecutionState memory orderState = Order.ExecutionState({
+            market: market,
+            indexPrice: 2500e18,
+            indexBaseUnit: 1e18,
+            impactedPrice: 2500.05e18,
+            longMarketTokenPrice: 2500e18,
+            shortMarketTokenPrice: 1e18,
+            sizeDeltaUsd: 0,
+            collateralDeltaUsd: 0,
+            priceImpactUsd: 0,
+            collateralPrice: 1e6,
+            collateralBaseUnit: 1e6,
+            fee: 0,
+            feeDiscount: 0,
+            referrer: address(0)
+        });
+
+        (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, priceFeed, request, orderState);
         int256 expectedPriceImpactUsd = 7503000300000000000000;
         assertEq(priceImpactUsd, expectedPriceImpactUsd);
         uint256 expectedImpactedPrice = 2174291105449423058528;
@@ -350,7 +385,24 @@ contract TestPriceImpact is Test {
         Position.Request memory request = tradeStorage.getOrder(orderKey);
         // Test skew flip price impact values
 
-        (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, request, 2500.5e18, 1e18);
+        Order.ExecutionState memory orderState = Order.ExecutionState({
+            market: market,
+            indexPrice: 2500e18,
+            indexBaseUnit: 1e18,
+            impactedPrice: 2500.05e18,
+            longMarketTokenPrice: 2500e18,
+            shortMarketTokenPrice: 1e18,
+            sizeDeltaUsd: 0,
+            collateralDeltaUsd: 0,
+            priceImpactUsd: 0,
+            collateralPrice: 1e6,
+            collateralBaseUnit: 1e6,
+            fee: 0,
+            feeDiscount: 0,
+            referrer: address(0)
+        });
+
+        (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, priceFeed, request, orderState);
         int256 expectedPriceImpactUsd = -2501.0001e18;
         assertEq(priceImpactUsd, expectedPriceImpactUsd);
         uint256 expectedImpactedPrice = 2564628536556597726142;

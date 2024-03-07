@@ -63,7 +63,9 @@ library MarketUtils {
         uint256 _shortTokenPrice,
         uint256 _longBaseUnit,
         uint256 _shortBaseUnit
-    ) external view returns (uint256 poolBalanceUsd) {
+    ) public view returns (uint256 poolBalanceUsd) {
+        console.log("Long Base Unit: ", _longBaseUnit);
+        console.log("Short Base Unit: ", _shortBaseUnit);
         uint256 longPoolUsd = getPoolBalanceUsd(market, _indexToken, _longTokenPrice, _longBaseUnit, true);
         uint256 shortPoolUsd = getPoolBalanceUsd(market, _indexToken, _shortTokenPrice, _shortBaseUnit, false);
         poolBalanceUsd = longPoolUsd + shortPoolUsd;
@@ -107,13 +109,26 @@ library MarketUtils {
     ) external view {
         // Get Max OI for side
         uint256 availableUsd =
-            getAvailableOpenInterestUsd(market, _indexToken, _collateralTokenPrice, _collateralBaseUnit, _isLong);
+            getAvailableOiUsd(market, _indexToken, _collateralTokenPrice, _collateralBaseUnit, _isLong);
         // Check SizeDelta USD won't push the OI over the max
         require(_sizeDeltaUsd <= availableUsd, "MarketUtils: Max OI exceeded");
     }
 
+    function getTotalAvailableOiUsd(
+        IMarket market,
+        address _indexToken,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice,
+        uint256 _longBaseUnit,
+        uint256 _shortBaseUnit
+    ) external view returns (uint256 totalAvailableOiUsd) {
+        uint256 longOiUsd = getAvailableOiUsd(market, _indexToken, _longTokenPrice, _longBaseUnit, true);
+        uint256 shortOiUsd = getAvailableOiUsd(market, _indexToken, _shortTokenPrice, _shortBaseUnit, false);
+        totalAvailableOiUsd = longOiUsd + shortOiUsd;
+    }
+
     /// @notice returns the available remaining open interest for a side in USD
-    function getAvailableOpenInterestUsd(
+    function getAvailableOiUsd(
         IMarket market,
         address _indexToken,
         uint256 _collateralTokenPrice,

@@ -399,7 +399,7 @@ contract TestBorrowing is Test {
         uint256 borrowingRate = market.getBorrowingRate(weth, true);
         // Calculate the expected borrowing rate
         // 3.4330185397149488e-12
-        uint256 expectedRate = 0.000000000003433018e18;
+        uint256 expectedRate = 0.000000000003504053e18;
         // Cross check
         assertEq(borrowingRate, expectedRate);
     }

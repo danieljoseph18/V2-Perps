@@ -77,10 +77,13 @@ interface IMarket is IVault {
         uint256 exponent;
     }
 
+    // Used to scale price impact per market
+    // Both values lower for less volatile markets
     struct ImpactConfig {
-        uint256 positiveFactor; // 0.01% per $50,000 = 0.0002e18
-        uint256 negativeFactor;
-        uint256 exponent;
+        int256 positiveSkewScalar;
+        int256 positiveLiquidityScalar;
+        int256 negativeSkewScalar;
+        int256 negativeLiquidityScalar;
     }
 
     /**

@@ -111,7 +111,13 @@ contract Deploy is Script {
                 factor: 0.000000035e18, // 0.0000035% per second
                 exponent: 1
             }),
-            impact: IMarket.ImpactConfig({positiveFactor: 0.000001e18, negativeFactor: 0.000002e18, exponent: 2}),
+            // Should never be 0
+            impact: IMarket.ImpactConfig({
+                positiveSkewScalar: 1e18,
+                positiveLiquidityScalar: 1e18,
+                negativeSkewScalar: 1e18,
+                negativeLiquidityScalar: 1e18
+            }),
             adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18, flaggedLong: false, flaggedShort: false})
         });
         contracts.marketMaker.initialise(
