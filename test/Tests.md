@@ -8,6 +8,7 @@
 
 - Test ADLs
 - Test Gas Refunds
+- Test Price Impact calculations more extensively -> especially less liquid markets
 
 ### Common Exploit Tests
 

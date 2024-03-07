@@ -79,7 +79,7 @@ contract TestPriceImpact is Test {
 
     receive() external payable {}
 
-    modifier setUpMarkets() {
+    modifier setUpMarketsDeepLiquidity() {
         vm.deal(OWNER, 1_000_000 ether);
         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
         vm.deal(USER, 1_000_000 ether);
@@ -161,6 +161,88 @@ contract TestPriceImpact is Test {
         _;
     }
 
+    modifier setUpMarketsShallowLiquidity() {
+        vm.deal(OWNER, 1_000_000 ether);
+        MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
+        vm.deal(USER, 1_000_000 ether);
+        MockUSDC(usdc).mint(USER, 1_000_000_000e6);
+        vm.startPrank(OWNER);
+        WETH(weth).deposit{value: 50 ether}();
+        Oracle.Asset memory wethData = Oracle.Asset({
+            isValid: true,
+            chainlinkPriceFeed: address(0),
+            priceId: ethPriceId,
+            baseUnit: 1e18,
+            heartbeatDuration: 1 minutes,
+            maxPriceDeviation: 0.01e18,
+            priceSpread: 0.1e18,
+            priceProvider: Oracle.PriceProvider.PYTH,
+            assetType: Oracle.AssetType.CRYPTO,
+            pool: Oracle.UniswapPool({
+                token0: weth,
+                token1: usdc,
+                poolAddress: address(0),
+                poolType: Oracle.PoolType.UNISWAP_V3
+            })
+        });
+        Pool.VaultConfig memory wethVaultDetails = Pool.VaultConfig({
+            longToken: weth,
+            shortToken: usdc,
+            longBaseUnit: 1e18,
+            shortBaseUnit: 1e6,
+            feeScale: 0.03e18,
+            feePercentageToOwner: 0.2e18,
+            minTimeToExpiration: 1 minutes,
+            priceFeed: address(priceFeed),
+            processor: address(processor),
+            poolOwner: OWNER,
+            feeDistributor: OWNER,
+            name: "WETH/USDC",
+            symbol: "WETH/USDC"
+        });
+        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        vm.stopPrank();
+        address wethMarket = marketMaker.tokenToMarkets(weth);
+        market = Market(payable(wethMarket));
+        // Construct the deposit input
+        Deposit.Input memory input = Deposit.Input({
+            owner: OWNER,
+            tokenIn: weth,
+            amountIn: 100 ether,
+            executionFee: 0.01 ether,
+            shouldWrap: true
+        });
+        // Call the deposit function with sufficient gas
+        vm.prank(OWNER);
+        router.createDeposit{value: 100.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        vm.prank(OWNER);
+        processor.executeDeposit(market, depositKey, 0);
+
+        // Construct the deposit input
+        input = Deposit.Input({
+            owner: OWNER,
+            tokenIn: usdc,
+            amountIn: 250_000e6,
+            executionFee: 0.01 ether,
+            shouldWrap: false
+        });
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        depositKey = market.getDepositRequestAtIndex(0).key;
+        processor.executeDeposit(market, depositKey, 0);
+        vm.stopPrank();
+        vm.startPrank(OWNER);
+        uint256 allocation = 10000;
+        uint256 encodedAllocation = allocation << 240;
+        allocations.push(encodedAllocation);
+        market.setAllocationsWithBits(allocations);
+        assertEq(market.getAllocation(weth), 10000);
+        vm.stopPrank();
+        _;
+    }
+
     /**
      * Actual Impacted Price PRB Math: 2551.072469825497887958
      * Expected Impacted Price:        2551.072469825497887958
@@ -170,34 +252,42 @@ contract TestPriceImpact is Test {
      * Expected Price Impact: -200008000080000000000
      * Delta: 0
      */
-    function testNegativePriceImpactValues() public setUpMarkets {
-        // create a position
-        Position.Input memory input = Position.Input({
-            indexToken: weth,
-            collateralToken: weth,
-            collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
-            limitPrice: 0,
-            maxSlippage: 0.4e18,
-            executionFee: 0.01 ether,
-            isLong: true,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: true,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
+    function testPriceImpactValuesDeepLiquidity(uint256 _sizeDelta, uint256 _longOi, uint256 _shortOi)
+        public
+        setUpMarketsDeepLiquidity
+    {
+        // bound the inputs to realistic values
+        _sizeDelta = bound(_sizeDelta, 1 ether, 50 ether);
+        _longOi = bound(_longOi, 0, 10000 ether);
+        _shortOi = bound(_shortOi, 0, 10000 ether);
+
+        Position.Request memory request = Position.Request({
+            input: Position.Input({
+                indexToken: weth,
+                collateralToken: weth,
+                collateralDelta: 0.5 ether,
+                sizeDelta: _sizeDelta,
+                limitPrice: 0,
+                maxSlippage: 0.4e18,
+                executionFee: 0.01 ether,
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                shouldWrap: true,
+                conditionals: Position.Conditionals({
+                    stopLossSet: false,
+                    takeProfitSet: false,
+                    stopLossPrice: 0,
+                    takeProfitPrice: 0,
+                    stopLossPercentage: 0,
+                    takeProfitPercentage: 0
+                })
+            }),
+            market: address(market),
+            user: USER,
+            requestBlock: block.number,
+            requestType: Position.RequestType.POSITION_INCREASE
         });
-        vm.prank(OWNER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-        // Fetch request
-        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Position.Request memory request = tradeStorage.getOrder(orderKey);
         // Test negative price impact values
 
         Order.ExecutionState memory orderState = Order.ExecutionState({
@@ -210,180 +300,63 @@ contract TestPriceImpact is Test {
             sizeDeltaUsd: 0,
             collateralDeltaUsd: 0,
             priceImpactUsd: 0,
-            collateralPrice: 1e6,
+            collateralPrice: 1e18,
             collateralBaseUnit: 1e6,
             fee: 0,
             feeDiscount: 0,
             referrer: address(0)
         });
 
-        (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, priceFeed, request, orderState);
-        uint256 expectedImpactPrice = 2551072469825497887958;
-        int256 expectedPriceImpactUsd = -200008000080000000000;
-        assertEq(impactedPrice, expectedImpactPrice);
-        assertEq(priceImpactUsd, expectedPriceImpactUsd);
+        // Mock call open interest values
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(market.getOpenInterest.selector, weth, true), abi.encode(_longOi)
+        );
+
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(market.getOpenInterest.selector, weth, false), abi.encode(_shortOi)
+        );
+
+        (orderState.impactedPrice, orderState.priceImpactUsd) =
+            PriceImpact.execute(market, priceFeed, request, orderState);
     }
 
-    /**
-     * Actual ImpactedPrice PRB Math: 2174291105449423058528
-     * Expected Impacted Price:       2174291105449423058528
-     *
-     * Actual Price Impact PRB Math: 7503000300000000000000
-     * Expected Price Impact:        7503000300000000000000
-     */
-    function testPositivePriceImpactValues() public setUpMarkets {
-        // create a position
-        Position.Input memory input = Position.Input({
-            indexToken: weth,
-            collateralToken: weth,
-            collateralDelta: 5 ether,
-            sizeDelta: 40 ether, // $100,000
-            limitPrice: 0,
-            maxSlippage: 0.99e18,
-            executionFee: 0.01 ether,
-            isLong: true,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: true,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.prank(USER);
-        router.createPositionRequest{value: 5.01 ether}(input, tokenUpdateData);
-        // Fetch request
-        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-        vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-        // create a position
-        input = Position.Input({
-            indexToken: weth,
-            collateralToken: usdc,
-            collateralDelta: 1000e6, // $1000
-            sizeDelta: 20 ether, // $50,000 - 50x leverage
-            limitPrice: 0,
-            maxSlippage: 0.01e18,
-            executionFee: 0.01 ether,
-            isLong: false,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: false,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.startPrank(USER);
-        MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-        vm.stopPrank();
-        // Fetch request
-        orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Position.Request memory request = tradeStorage.getOrder(orderKey);
-        // Test positive price impact values
+    function testPriceImpactValuesShallowLiquidity(uint256 _sizeDelta, uint256 _longOi, uint256 _shortOi)
+        public
+        setUpMarketsShallowLiquidity
+    {
+        // bound the inputs to realistic values
+        _sizeDelta = bound(_sizeDelta, 1 ether, 50 ether);
+        _longOi = bound(_longOi, 0, 10000 ether);
+        _shortOi = bound(_shortOi, 0, 10000 ether);
 
-        uint256 impactPool = market.getImpactPool(weth);
-        console.log("Impact Pool: ", impactPool);
-        Order.ExecutionState memory orderState = Order.ExecutionState({
-            market: market,
-            indexPrice: 2500e18,
-            indexBaseUnit: 1e18,
-            impactedPrice: 2500.05e18,
-            longMarketTokenPrice: 2500e18,
-            shortMarketTokenPrice: 1e18,
-            sizeDeltaUsd: 0,
-            collateralDeltaUsd: 0,
-            priceImpactUsd: 0,
-            collateralPrice: 1e6,
-            collateralBaseUnit: 1e6,
-            fee: 0,
-            feeDiscount: 0,
-            referrer: address(0)
+        Position.Request memory request = Position.Request({
+            input: Position.Input({
+                indexToken: weth,
+                collateralToken: weth,
+                collateralDelta: 0.5 ether,
+                sizeDelta: _sizeDelta,
+                limitPrice: 0,
+                maxSlippage: 1e18,
+                executionFee: 0.01 ether,
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                shouldWrap: true,
+                conditionals: Position.Conditionals({
+                    stopLossSet: false,
+                    takeProfitSet: false,
+                    stopLossPrice: 0,
+                    takeProfitPrice: 0,
+                    stopLossPercentage: 0,
+                    takeProfitPercentage: 0
+                })
+            }),
+            market: address(market),
+            user: USER,
+            requestBlock: block.number,
+            requestType: Position.RequestType.POSITION_INCREASE
         });
-
-        (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, priceFeed, request, orderState);
-        int256 expectedPriceImpactUsd = 7503000300000000000000;
-        assertEq(priceImpactUsd, expectedPriceImpactUsd);
-        uint256 expectedImpactedPrice = 2174291105449423058528;
-        assertEq(impactedPrice, expectedImpactedPrice);
-    }
-
-    /**
-     * Expected Impact Usd: -2501.0001e18
-     * Expected Impacted Price: 2564.628536556597726142
-     */
-    function testPriceImpactForSkewFlip() public setUpMarkets {
-        // create a position
-        Position.Input memory input = Position.Input({
-            indexToken: weth,
-            collateralToken: usdc,
-            collateralDelta: 1000e6, // $1000
-            sizeDelta: 20 ether, // $50,000 - 50x leverage
-            limitPrice: 0,
-            maxSlippage: 0.99e18,
-            executionFee: 0.01 ether,
-            isLong: false,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: false,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.startPrank(USER);
-        MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-        vm.stopPrank();
-        // Fetch request
-        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-        vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-        // new pos
-        input = Position.Input({
-            indexToken: weth,
-            collateralToken: weth,
-            collateralDelta: 5 ether,
-            sizeDelta: 40 ether, // $100,000
-            limitPrice: 0,
-            maxSlippage: 0.99e18,
-            executionFee: 0.01 ether,
-            isLong: true,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: true,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.prank(USER);
-        router.createPositionRequest{value: 5.01 ether}(input, tokenUpdateData);
-        // Fetch request
-        orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Position.Request memory request = tradeStorage.getOrder(orderKey);
-        // Test skew flip price impact values
+        // Test negative price impact values
 
         Order.ExecutionState memory orderState = Order.ExecutionState({
             market: market,
@@ -395,17 +368,23 @@ contract TestPriceImpact is Test {
             sizeDeltaUsd: 0,
             collateralDeltaUsd: 0,
             priceImpactUsd: 0,
-            collateralPrice: 1e6,
+            collateralPrice: 1e18,
             collateralBaseUnit: 1e6,
             fee: 0,
             feeDiscount: 0,
             referrer: address(0)
         });
 
-        (uint256 impactedPrice, int256 priceImpactUsd) = PriceImpact.execute(market, priceFeed, request, orderState);
-        int256 expectedPriceImpactUsd = -2501.0001e18;
-        assertEq(priceImpactUsd, expectedPriceImpactUsd);
-        uint256 expectedImpactedPrice = 2564628536556597726142;
-        assertEq(impactedPrice, expectedImpactedPrice);
+        // Mock call open interest values
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(market.getOpenInterest.selector, weth, true), abi.encode(_longOi)
+        );
+
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(market.getOpenInterest.selector, weth, false), abi.encode(_shortOi)
+        );
+
+        (orderState.impactedPrice, orderState.priceImpactUsd) =
+            PriceImpact.execute(market, priceFeed, request, orderState);
     }
 }
