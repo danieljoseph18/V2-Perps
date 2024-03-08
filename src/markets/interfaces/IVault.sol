@@ -15,7 +15,6 @@ interface IVault {
     function reserveLiquidity(uint256 _amount, bool _isLong) external;
     function unreserveLiquidity(uint256 _amount, bool _isLong) external;
     function accumulateFees(uint256 _amount, bool _isLong) external;
-    function accumulateFundingFees(uint256 _amount, bool _isLong) external;
     function decreasePoolBalance(uint256 _amount, bool _isLong) external;
     function increasePoolBalance(uint256 _amount, bool _isLong) external;
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) external;
@@ -33,9 +32,6 @@ interface IVault {
     // Withdrawal creation
     function createWithdrawal(Withdrawal.Input memory _params) external payable;
     function cancelWithdrawal(bytes32 _key, address _caller) external;
-
-    // Funding
-    function increaseUserClaimableFunding(uint256 _amount, bool _isLong) external;
 
     // Getter
     function feeScale() external view returns (uint256);
@@ -86,12 +82,7 @@ interface IVault {
     event FeesAccumulated(uint256 amount, bool _isLong);
     event TransferOutTokens(address _market, address indexed _to, uint256 _collateralDelta, bool _isLong);
     event PositionCollateralLiquidated(
-        address indexed _liquidator,
-        uint256 indexed _liqFee,
-        address _market,
-        uint256 _totalCollateral,
-        uint256 _collateralFundingOwed,
-        bool _isLong
+        address indexed _liquidator, uint256 indexed _liqFee, address _market, uint256 _totalCollateral, bool _isLong
     );
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
     event TransferInCollateral(address indexed _market, uint256 indexed _collateralDelta, bool _isLong);

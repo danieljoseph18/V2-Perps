@@ -32,7 +32,6 @@ interface ITradeStorage {
     );
     event PositionCreated(bytes32 indexed _positionKey, Position.Data indexed _position);
     event FundingFeeProcessed(address indexed _user, uint256 indexed _fundingFee);
-    event FundingParamsUpdated(bytes32 indexed _positionKey, Position.FundingParams indexed _fundingParams);
     event BorrowingFeesProcessed(address indexed _user, uint256 indexed _borrowingFee);
     event BorrowingParamsUpdated(bytes32 indexed _positionKey, Position.BorrowingParams indexed _borrowingParams);
     event TakeProfitSet(

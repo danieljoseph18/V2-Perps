@@ -15,7 +15,6 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {IVault} from "../markets/interfaces/IVault.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
 
 // Library for Handling Trade related logic
@@ -34,7 +33,7 @@ library Order {
         uint256 sizeDelta;
         int256 decreasePnl;
         uint256 afterFeeAmount;
-        uint256 fundingFee;
+        int256 fundingFee;
         uint256 borrowFee;
     }
 
@@ -106,13 +105,7 @@ library Order {
         state.collateralDeltaUsd = _calculateValueUsd(
             request.input.collateralDelta, state.collateralPrice, state.collateralBaseUnit, request.input.isIncrease
         );
-        /**
-         * execute(
-         *     IMarket market,
-         *     IPriceFeed priceFeed,
-         *     Position.Request memory _request,
-         *     Order.ExecutionState memory _orderState
-         */
+
         if (request.input.sizeDelta != 0) {
             // Execute Price Impact
             (state.impactedPrice, state.priceImpactUsd) = PriceImpact.execute(state.market, priceFeed, request, state);
@@ -315,59 +308,66 @@ library Order {
 
     // @audit - check the position isn't put below min leverage
     // @audit - should we process fees before updating the fee parameters?
+    // No Funding Involvement
     function executeCollateralIncrease(
         Position.Data memory _position,
         Position.Execution calldata _params,
         ExecutionState memory _state
-    ) external view returns (Position.Data memory position, uint256 fundingFeeOwed, uint256 borrowFeeOwed) {
+    ) external view returns (Position.Data memory, uint256 borrowFeeOwed) {
         // Update the Fee Parameters
-        position = _updateFeeParameters(_position, _state);
-        // Process any Outstanding Fees
-        uint256 afterFeeAmount;
-        (position, afterFeeAmount, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _state);
+        _position = _updateFeeParameters(_position, _state);
+        // Process any Outstanding Borrow Fees
+        (_position, borrowFeeOwed) = _processBorrowFees(_position, _params, _state);
+        // Calculate the amount of collateral left after fees
+        uint256 afterFeeAmount = _params.request.input.collateralDelta - borrowFeeOwed;
         require(afterFeeAmount > 0, "Order: After Fee");
         // Edit the Position for Increase
-        position = _editPosition(position, _state, afterFeeAmount, 0, true);
+        _position = _editPosition(_position, _state, afterFeeAmount, 0, true);
         // Check the Leverage
         Position.checkLeverage(
             _state.market,
             _params.request.input.indexToken,
-            mulDiv(position.positionSize, _state.indexPrice, _state.indexBaseUnit),
-            mulDiv(position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
+            mulDiv(_position.positionSize, _state.indexPrice, _state.indexBaseUnit),
+            mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
+        return (_position, borrowFeeOwed);
     }
 
+    // No Funding Involvement
     function executeCollateralDecrease(
         Position.Data memory _position,
         Position.Execution calldata _params,
         ExecutionState memory _state,
         uint256 _minCollateralUsd,
         uint256 _liquidationFeeUsd
-    ) external view returns (Position.Data memory position, uint256 fundingFeeOwed, uint256 borrowFeeOwed) {
+    ) external view returns (Position.Data memory, uint256 borrowFeeOwed) {
         // Update the Fee Parameters
-        position = _updateFeeParameters(_position, _state);
-        // Process any Outstanding Fees
-        (position,, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _state);
-        // Edit the Position
-        position = _editPosition(position, _state, _params.request.input.collateralDelta, 0, false);
+        _position = _updateFeeParameters(_position, _state);
+        // Process any Outstanding Borrow  Fees
+        (_position, borrowFeeOwed) = _processBorrowFees(_position, _params, _state);
+        // Edit the Position (subtract full collateral delta)
+        _position = _editPosition(_position, _state, _params.request.input.collateralDelta, 0, false);
         // Check if the Decrease puts the position below the min collateral threshold
         require(
             checkMinCollateral(
-                position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit, _minCollateralUsd
+                _position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit, _minCollateralUsd
             ),
             "Order: Min Collat"
         );
         // Check if the Decrease makes the Position Liquidatable
-        require(!_checkIsLiquidatable(position, _state, _liquidationFeeUsd), "Order: Liquidatable");
+        require(!_checkIsLiquidatable(_position, _state, _liquidationFeeUsd), "Order: Liquidatable");
         // Check the Leverage
         Position.checkLeverage(
             _state.market,
             _params.request.input.indexToken,
-            mulDiv(position.positionSize, _state.indexPrice, _state.indexBaseUnit),
-            mulDiv(position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
+            mulDiv(_position.positionSize, _state.indexPrice, _state.indexBaseUnit),
+            mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
+
+        return (_position, borrowFeeOwed);
     }
 
+    // No Funding Involvement
     function createNewPosition(
         Position.Execution calldata _params,
         ExecutionState memory _state,
@@ -394,6 +394,8 @@ library Order {
         return (position, absSizeDelta);
     }
 
+    // Realise all previous funding and borrowing fees
+    // For funding - reset the earnings after charging the previous amount
     function increaseExistingPosition(
         Position.Data memory _position,
         Position.Execution calldata _params,
@@ -401,16 +403,18 @@ library Order {
     )
         external
         view
-        returns (Position.Data memory position, uint256 sizeDeltaUsd, uint256 fundingFeeOwed, uint256 borrowFeeOwed)
+        returns (Position.Data memory, uint256 sizeDeltaUsd, uint256 borrowFeeOwed, int256 fundingFeeOwed)
     {
         // Update the Fee Parameters
-        position = _updateFeeParameters(_position, _state);
-        // Process any Outstanding Fees
-        (position,, fundingFeeOwed, borrowFeeOwed) = _processFees(position, _params, _state);
+        _position = _updateFeeParameters(_position, _state);
+        // Process any Outstanding Borrow Fees
+        (_position, borrowFeeOwed) = _processBorrowFees(_position, _params, _state);
+        // Process any Outstanding Funding Fees
+        (_position, fundingFeeOwed) = _processFundingFees(_position, _params, _state);
 
         // Update the Existing Position
-        position = _editPosition(
-            position, _state, _params.request.input.collateralDelta, _params.request.input.sizeDelta, true
+        _position = _editPosition(
+            _position, _state, _params.request.input.collateralDelta, _params.request.input.sizeDelta, true
         );
 
         sizeDeltaUsd = _state.sizeDeltaUsd.abs();
@@ -418,9 +422,11 @@ library Order {
         Position.checkLeverage(
             _state.market,
             _params.request.input.indexToken,
-            mulDiv(position.positionSize, _state.indexPrice, _state.indexBaseUnit),
-            mulDiv(position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
+            mulDiv(_position.positionSize, _state.indexPrice, _state.indexBaseUnit),
+            mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
+
+        return (_position, sizeDeltaUsd, borrowFeeOwed, fundingFeeOwed);
     }
 
     function decreaseExistingPosition(
@@ -429,44 +435,56 @@ library Order {
         ExecutionState memory _state,
         uint256 _minCollateralUsd,
         uint256 _liquidationFeeUsd
-    ) external view returns (Position.Data memory position, DecreaseState memory decreaseState) {
-        position = _updateFeeParameters(_position, _state);
+    ) external view returns (Position.Data memory, DecreaseState memory decreaseState) {
+        _position = _updateFeeParameters(_position, _state);
 
-        if (_params.request.input.collateralDelta == position.collateralAmount) {
-            decreaseState.sizeDelta = position.positionSize;
+        if (_params.request.input.collateralDelta == _position.collateralAmount) {
+            decreaseState.sizeDelta = _position.positionSize;
         } else {
             decreaseState.sizeDelta =
-                mulDiv(position.positionSize, _params.request.input.collateralDelta, position.collateralAmount);
+                mulDiv(_position.positionSize, _params.request.input.collateralDelta, _position.collateralAmount);
         }
-        // @audit - is this needed?
+
         decreaseState.decreasePnl = Pricing.getDecreasePositionPnl(
             _state.indexBaseUnit,
             decreaseState.sizeDelta,
-            position.weightedAvgEntryPrice,
+            _position.weightedAvgEntryPrice,
             _state.impactedPrice,
             _state.collateralPrice,
             _state.collateralBaseUnit,
-            position.isLong
+            _position.isLong
         );
 
-        position =
-            _editPosition(position, _state, _params.request.input.collateralDelta, decreaseState.sizeDelta, false);
+        // Process any Outstanding Borrow Fees
+        (_position, decreaseState.borrowFee) = _processBorrowFees(_position, _params, _state);
+        // Process any Outstanding Funding Fees
+        (_position, decreaseState.fundingFee) = _processFundingFees(_position, _params, _state);
 
-        (position, decreaseState.afterFeeAmount, decreaseState.fundingFee, decreaseState.borrowFee) =
-            _processFees(position, _params, _state);
+        _position =
+            _editPosition(_position, _state, _params.request.input.collateralDelta, decreaseState.sizeDelta, false);
+
+        // Calculate the amount of collateral left after fees
+        decreaseState.afterFeeAmount = _params.request.input.collateralDelta - decreaseState.borrowFee;
+        if (decreaseState.fundingFee < 0) {
+            decreaseState.afterFeeAmount -= decreaseState.fundingFee.abs();
+        } else {
+            decreaseState.afterFeeAmount += decreaseState.fundingFee.abs();
+        }
 
         // Check if the Decrease puts the position below the min collateral threshold
         // Only check these if it's not a full decrease
-        if (position.collateralAmount != 0) {
+        if (_position.collateralAmount != 0) {
             require(
                 checkMinCollateral(
-                    position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit, _minCollateralUsd
+                    _position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit, _minCollateralUsd
                 ),
                 "Order: Min Collat"
             );
             // Check if the Decrease makes the Position Liquidatable
-            require(!_checkIsLiquidatable(position, _state, _liquidationFeeUsd), "Order: Liquidatable");
+            require(!_checkIsLiquidatable(_position, _state, _liquidationFeeUsd), "Order: Liquidatable");
         }
+
+        return (_position, decreaseState);
     }
 
     // Checks if a position meets the minimum collateral threshold
@@ -494,19 +512,8 @@ library Order {
     {
         // Borrowing Fees
         _position.borrowingParams.feesOwed = Borrowing.getTotalCollateralFeesOwed(_position, _state);
-        _position.borrowingParams.lastLongCumulativeBorrowFee =
-            _position.market.getCumulativeBorrowFees(_position.indexToken, true);
-        _position.borrowingParams.lastShortCumulativeBorrowFee =
-            _position.market.getCumulativeBorrowFees(_position.indexToken, false);
-        _position.borrowingParams.lastBorrowUpdate = block.timestamp;
-        // Funding Fees
-        (_position.fundingParams.feesEarned, _position.fundingParams.feesOwed) =
-            Funding.getTotalPositionFees(_position, _state);
-        _position.fundingParams.lastLongCumulativeFunding =
-            _position.market.getCumulativeFundingFees(_position.indexToken, true);
-        _position.fundingParams.lastShortCumulativeFunding =
-            _position.market.getCumulativeFundingFees(_position.indexToken, false);
-        _position.fundingParams.lastFundingUpdate = block.timestamp;
+        (_position.borrowingParams.lastLongCumulativeBorrowFee, _position.borrowingParams.lastShortCumulativeBorrowFee)
+        = _position.market.getCumulativeBorrowFees(_position.indexToken);
         return _position;
     }
 
@@ -517,45 +524,30 @@ library Order {
         uint256 _collateralDelta,
         uint256 _sizeDelta,
         bool _isIncrease
-    ) internal pure returns (Position.Data memory) {
+    ) internal view returns (Position.Data memory) {
+        _position.lastUpdate = block.timestamp;
         if (_isIncrease) {
             // Increase the Position's collateral
             _position.collateralAmount += _collateralDelta;
             if (_sizeDelta > 0) {
-                _position = _updatePositionForIncrease(_position, _sizeDelta, _state.impactedPrice);
+                _position.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
+                    _position.weightedAvgEntryPrice, _position.positionSize, _sizeDelta.toInt256(), _state.impactedPrice
+                );
+                _position.positionSize += _sizeDelta;
             }
         } else {
             _position.collateralAmount -= _collateralDelta;
             if (_sizeDelta > 0) {
-                _position = _updatePositionForDecrease(_position, _sizeDelta, _state.impactedPrice);
+                _position.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
+                    _position.weightedAvgEntryPrice,
+                    _position.positionSize,
+                    -_sizeDelta.toInt256(),
+                    _state.impactedPrice
+                );
+                _position.positionSize -= _sizeDelta;
             }
         }
         return _position;
-    }
-
-    function _updatePositionForIncrease(Position.Data memory _position, uint256 _sizeDelta, uint256 _price)
-        internal
-        pure
-        returns (Position.Data memory)
-    {
-        _position.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
-            _position.weightedAvgEntryPrice, _position.positionSize, _sizeDelta.toInt256(), _price
-        );
-        _position.positionSize += _sizeDelta;
-        return _position;
-    }
-
-    // @audit - state variables for gas savings
-    function _updatePositionForDecrease(Position.Data memory position, uint256 _sizeDelta, uint256 _price)
-        internal
-        pure
-        returns (Position.Data memory)
-    {
-        position.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
-            position.weightedAvgEntryPrice, position.positionSize, -_sizeDelta.toInt256(), _price
-        );
-        position.positionSize -= _sizeDelta;
-        return position;
     }
 
     // @gas - duplicate in position
@@ -568,56 +560,41 @@ library Order {
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
         uint256 totalFeesOwedUsd = Position.getTotalFeesOwedUsd(_position, _state);
         int256 pnl = Pricing.calculatePnL(_position, _state.indexPrice, _state.indexBaseUnit);
-        uint256 losses = _liquidationFeeUsd + totalFeesOwedUsd;
-        if (pnl < 0) {
-            losses += pnl.abs();
-        }
-        if (collateralValueUsd <= losses) {
-            isLiquidatable = true;
-        } else {
-            isLiquidatable = false;
-        }
+        uint256 losses = _liquidationFeeUsd + totalFeesOwedUsd + (pnl < 0 ? pnl.abs() : 0);
+        isLiquidatable = collateralValueUsd <= losses;
     }
 
-    function _processFees(
+    function _processFundingFees(
         Position.Data memory _position,
         Position.Execution calldata _params,
         ExecutionState memory _state
-    )
-        internal
-        view
-        returns (Position.Data memory position, uint256 afterFeeAmount, uint256 fundingFee, uint256 borrowFee)
-    {
-        (position, fundingFee) = _subtractFundingFee(_position, _params.request.input.collateralDelta);
+    ) internal view returns (Position.Data memory, int256 fundingFee) {
+        // Calculate and subtract the funding fee
+        (int256 fundingFeeUsd, int256 nextFundingAccrued) = Funding.getFeeForPositionChange(
+            _state.market,
+            _params.request.input.indexToken,
+            _state.indexPrice,
+            _state.sizeDeltaUsd,
+            _position.lastFundingAccrued
+        );
+        _position.lastFundingAccrued = nextFundingAccrued;
+        // Convert funding fee to collateral amount
+        fundingFee = fundingFeeUsd < 0
+            ? -_convertValueToCollateral(fundingFeeUsd.abs(), _state.collateralPrice, _state.collateralBaseUnit).toInt256()
+            : _convertValueToCollateral(fundingFeeUsd.abs(), _state.collateralPrice, _state.collateralBaseUnit).toInt256();
 
-        (position, borrowFee) = _subtractBorrowingFee(position, _state, _params.request.input.collateralDelta);
-        afterFeeAmount = _params.request.input.collateralDelta - fundingFee - borrowFee;
-
-        return (position, afterFeeAmount, fundingFee, borrowFee);
+        return (_position, fundingFee);
     }
 
-    function _subtractFundingFee(Position.Data memory _position, uint256 _collateralDelta)
-        internal
-        pure
-        returns (Position.Data memory, uint256 fundingAmountOwed)
-    {
-        require(_position.fundingParams.feesOwed <= _collateralDelta, "Order: Fee > CollateralDelta");
-        fundingAmountOwed = _position.fundingParams.feesOwed;
-        // Subtract the Fees Owed
-        _position.fundingParams.feesOwed = 0;
-
-        return (_position, fundingAmountOwed);
-    }
-
-    /// @dev Returns borrow fee in collateral tokens (original value is in index tokens)
-    function _subtractBorrowingFee(
+    function _processBorrowFees(
         Position.Data memory _position,
-        ExecutionState memory _state,
-        uint256 _collateralDelta
+        Position.Execution calldata _params,
+        ExecutionState memory _state
     ) internal view returns (Position.Data memory, uint256 borrowFee) {
+        // Calculate and subtract the Borrowing Fee
         borrowFee = Borrowing.getTotalCollateralFeesOwed(_position, _state);
         _position.borrowingParams.feesOwed = 0;
-        require(borrowFee <= _collateralDelta, "Order: Fee > CollateralDelta");
+        require(borrowFee <= _params.request.input.collateralDelta, "Order: Fee > CollateralDelta");
 
         return (_position, borrowFee);
     }
@@ -627,13 +604,16 @@ library Order {
         pure
         returns (int256 valueUsd)
     {
-        // Flip sign if decreasing position
         uint256 absValueUsd = Position.getTradeValueUsd(_tokenAmount, _tokenPrice, _tokenBaseUnit);
-        if (_isIncrease) {
-            valueUsd = absValueUsd.toInt256();
-        } else {
-            valueUsd = -1 * absValueUsd.toInt256();
-        }
+        valueUsd = _isIncrease ? absValueUsd.toInt256() : -(absValueUsd).toInt256();
+    }
+
+    function _convertValueToCollateral(uint256 _valueUsd, uint256 _collateralPrice, uint256 _collateralBaseUnit)
+        internal
+        pure
+        returns (uint256 collateralAmount)
+    {
+        collateralAmount = mulDiv(_valueUsd, _collateralBaseUnit, _collateralPrice);
     }
 
     // @audit - We're giving the position extra size by using max price

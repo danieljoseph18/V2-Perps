@@ -52,6 +52,7 @@ library Borrowing {
      * Long Fee Calculation: borrowing factor * (open interest in usd + pending pnl) ^ (borrowing exponent factor) / (pool usd)
      * Short Fee Calculation: borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
      */
+    // @audit - does the last update time affect this?
     function calculateRate(
         IMarket market,
         address _indexToken,
@@ -129,9 +130,9 @@ library Borrowing {
     {
         // get cumulative borrowing fees since last update
         uint256 borrowFee = _position.isLong
-            ? market.getCumulativeBorrowFees(_position.indexToken, true)
+            ? market.getCumulativeBorrowFee(_position.indexToken, true)
                 - _position.borrowingParams.lastLongCumulativeBorrowFee
-            : market.getCumulativeBorrowFees(_position.indexToken, false)
+            : market.getCumulativeBorrowFee(_position.indexToken, false)
                 - _position.borrowingParams.lastShortCumulativeBorrowFee;
         borrowFee += _calculatePendingFees(market, _position.indexToken, _position.isLong);
         if (borrowFee == 0) {

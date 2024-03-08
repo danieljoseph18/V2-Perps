@@ -186,9 +186,10 @@ contract TestPricing is Test {
             0.5 ether,
             8 ether,
             2500e18,
+            block.timestamp,
+            market.getFundingAccrued(weth),
             true,
-            Position.BorrowingParams(0, 0, 0, 0),
-            Position.FundingParams(0, 0, 0, 0, 0),
+            Position.BorrowingParams(0, 0, 0),
             bytes32(0),
             bytes32(0)
         );
@@ -212,9 +213,10 @@ contract TestPricing is Test {
             2500e6,
             8 ether,
             2500e18,
+            block.timestamp,
+            market.getFundingAccrued(weth),
             false,
-            Position.BorrowingParams(0, 0, 0, 0),
-            Position.FundingParams(0, 0, 0, 0, 0),
+            Position.BorrowingParams(0, 0, 0),
             bytes32(0),
             bytes32(0)
         );

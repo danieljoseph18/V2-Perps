@@ -236,6 +236,7 @@ contract TestBorrowing is Test {
         _collateral = bound(_collateral, 1, 100_000 ether);
         _leverage = bound(_leverage, 1, 100);
         uint256 positionSize = _collateral * _leverage;
+
         Position.Data memory position = Position.Data(
             state.market,
             weth,
@@ -244,9 +245,10 @@ contract TestBorrowing is Test {
             _collateral,
             positionSize,
             2500e18,
+            block.timestamp,
+            state.market.getFundingAccrued(weth),
             true,
-            Position.BorrowingParams(0, 0, 0, 0),
-            Position.FundingParams(0, 0, 0, 0, 0),
+            Position.BorrowingParams(0, 0, 0),
             bytes32(0),
             bytes32(0)
         );
@@ -313,7 +315,7 @@ contract TestBorrowing is Test {
             abi.encodeWithSelector(Market.getCumulativeBorrowFees.selector, weth, true),
             abi.encode(uint256(1e18)) // Mock return value
         );
-        assertEq(state.market.getCumulativeBorrowFees(weth, true), 1e18);
+        assertEq(state.market.getCumulativeBorrowFee(weth, true), 1e18);
 
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
@@ -330,9 +332,10 @@ contract TestBorrowing is Test {
             _collateral,
             positionSize,
             2500e18,
+            block.timestamp,
+            state.market.getFundingAccrued(weth),
             true,
-            Position.BorrowingParams(0, 0, 1e18, 0),
-            Position.FundingParams(0, 0, 0, 0, 0),
+            Position.BorrowingParams(0, 0, 0),
             bytes32(0),
             bytes32(0)
         );

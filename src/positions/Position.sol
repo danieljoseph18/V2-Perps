@@ -45,26 +45,18 @@ library Position {
         uint256 collateralAmount;
         uint256 positionSize;
         uint256 weightedAvgEntryPrice;
+        uint256 lastUpdate;
+        int256 lastFundingAccrued;
         bool isLong;
         BorrowingParams borrowingParams;
-        FundingParams fundingParams;
         bytes32 stopLossKey;
         bytes32 takeProfitKey;
     }
 
     struct BorrowingParams {
         uint256 feesOwed;
-        uint256 lastBorrowUpdate;
         uint256 lastLongCumulativeBorrowFee;
         uint256 lastShortCumulativeBorrowFee;
-    }
-
-    struct FundingParams {
-        uint256 feesEarned;
-        uint256 feesOwed;
-        uint256 lastFundingUpdate;
-        uint256 lastLongCumulativeFunding;
-        uint256 lastShortCumulativeFunding;
     }
 
     struct Conditionals {
@@ -226,8 +218,8 @@ library Position {
         returns (Data memory position)
     {
         // Get Entry Funding & Borrowing Values
-        (uint256 longFundingFee, uint256 shortFundingFee, uint256 longBorrowFee, uint256 shortBorrowFee) =
-            _state.market.getCumulativeFees(_request.input.indexToken);
+        (uint256 longBorrowFee, uint256 shortBorrowFee) =
+            _state.market.getCumulativeBorrowFees(_request.input.indexToken);
         // get Trade Value in USD
         position = Data({
             market: _state.market,
@@ -237,9 +229,10 @@ library Position {
             collateralAmount: _request.input.collateralDelta,
             positionSize: _request.input.sizeDelta,
             weightedAvgEntryPrice: _state.impactedPrice,
+            lastUpdate: block.timestamp,
+            lastFundingAccrued: _state.market.getFundingAccrued(_request.input.indexToken),
             isLong: _request.input.isLong,
-            borrowingParams: BorrowingParams(0, block.timestamp, longBorrowFee, shortBorrowFee),
-            fundingParams: FundingParams(0, 0, block.timestamp, longFundingFee, shortFundingFee),
+            borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
             stopLossKey: bytes32(0),
             takeProfitKey: bytes32(0)
         });
@@ -346,10 +339,7 @@ library Position {
         uint256 borrowingFeeOwed = Borrowing.getTotalCollateralFeesOwed(_position, _state);
         uint256 borrowingFeeUsd = mulDiv(borrowingFeeOwed, _state.collateralPrice, _state.collateralBaseUnit);
 
-        (, uint256 fundingFeeOwed) = Funding.getTotalPositionFees(_position, _state);
-        uint256 fundingValueUsd = mulDiv(fundingFeeOwed, _state.collateralPrice, _state.collateralBaseUnit);
-
-        totalFeesOwedUsd = borrowingFeeUsd + fundingValueUsd;
+        totalFeesOwedUsd = borrowingFeeUsd;
     }
 
     function getMarketKey(address _indexToken) external pure returns (bytes32 marketKey) {

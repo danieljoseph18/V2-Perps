@@ -519,10 +519,6 @@ contract TestRequestExecution is Test {
         router.createPositionRequest{value: 0.014 ether}(input, tokenUpdateData);
         // execute the request
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        (int256 fundingRate, int256 fundingRateVelocity) = market.getFundingRates(weth);
-        console2.log("Funding Velocity Before: ", fundingRateVelocity);
-        console2.log("Funding Rate Before: ", fundingRate);
-        (uint256 predictedLongFees, uint256 predictedShortFees) = Funding.getTotalAccumulatedFees(market, weth);
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // check the market parameters
@@ -534,15 +530,8 @@ contract TestRequestExecution is Test {
         assertEq(lastBorrowingUpdate, block.timestamp);
         uint256 lastFundingUpdate = market.getLastFundingUpdate(weth);
         assertEq(lastFundingUpdate, block.timestamp);
-        (fundingRate, fundingRateVelocity) = market.getFundingRates(weth);
-        console2.log("Funding Rate After: ", fundingRate);
-        assertNotEq(fundingRate, 0);
-        console2.log("Funding Velocity After: ", fundingRateVelocity);
-        assertNotEq(fundingRateVelocity, 0);
         uint256 longBorrowingRate = market.getLastBorrowingUpdate(weth);
         assertNotEq(longBorrowingRate, 0);
-        assertEq(predictedLongFees, market.getCumulativeFundingFees(weth, true));
-        assertEq(predictedShortFees, market.getCumulativeFundingFees(weth, false));
     }
 
     function testPositionFeesAreCalculatedCorrectly() public setUpMarkets {

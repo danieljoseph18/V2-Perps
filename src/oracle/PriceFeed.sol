@@ -86,6 +86,11 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     // if status is unknown, invalidate
     // Need to avoid precision loss
     /// @dev Price update data must always contain long / short token prices
+    /**
+     * audit - Need a primary and secondary strategy for each market / token that is listed.
+     * The primary strategy provides the main price to be used. E.g Pyth, Chainlink
+     * The secondary strategy provides a reference price to check the validity of the primary price.
+     */
     function signPriceData(address _token, bytes[] calldata _priceUpdateData)
         external
         payable

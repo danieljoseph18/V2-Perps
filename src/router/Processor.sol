@@ -465,6 +465,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             // Average Entry Price relies on OI, so it must be updated before this
             _state.market.updateOpenInterest(_indexToken, _sizeDelta, _isLong, _isIncrease);
         }
+        // @audit should this be before or after the OI update?
         _state.market.updateFundingRate(_indexToken, _state.indexPrice, _state.indexBaseUnit);
         _state.market.updateBorrowingRate(
             _indexToken,

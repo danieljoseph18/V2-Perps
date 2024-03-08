@@ -95,40 +95,23 @@ contract Market is Vault, IMarket {
         nonReentrant
         onlyProcessor
     {
-        // Calculate time since last funding update
         FundingValues memory funding = marketStorage[_indexToken].funding;
-        uint256 timeElapsed = block.timestamp - funding.lastFundingUpdate;
 
-        // Add the previous velocity to the funding rate
-        if (timeElapsed > 0) {
-            // Update Cumulative Fees
-            (funding.longCumulativeFundingFees, funding.shortCumulativeFundingFees) =
-                Funding.getTotalAccumulatedFees(this, _indexToken);
-            int256 deltaRate = funding.fundingRateVelocity * timeElapsed.toInt256();
-            // if funding rate addition puts it above / below limit, set to limit
-            if (funding.fundingRate + deltaRate >= marketStorage[_indexToken].config.funding.maxRate) {
-                funding.fundingRate = marketStorage[_indexToken].config.funding.maxRate;
-            } else if (funding.fundingRate + deltaRate <= marketStorage[_indexToken].config.funding.minRate) {
-                funding.fundingRate = marketStorage[_indexToken].config.funding.minRate;
-            } else {
-                funding.fundingRate += deltaRate;
-            }
-        }
+        // Calculate the skew in USD
+        int256 skewUsd = Funding.calculateSkewUsd(this, _indexToken, _indexPrice, _indexBaseUnit);
 
-        // Calculate the new velocity
-        int256 skew = Funding.calculateSkewUsd(this, _indexToken, _indexPrice, _indexBaseUnit);
-        funding.fundingRateVelocity = Funding.calculateVelocity(this, _indexToken, skew);
+        // Calculate the current funding velocity
+        funding.fundingRateVelocity = Funding.getCurrentVelocity(this, _indexToken, skewUsd);
+
+        // Calculate the current funding rate
+        (funding.fundingRate, funding.fundingAccruedUsd) = Funding.recompute(this, _indexToken, _indexPrice);
+
+        // Update storage
         funding.lastFundingUpdate = block.timestamp.toUint48();
 
-        // Update Storage
         marketStorage[_indexToken].funding = funding;
 
-        emit FundingUpdated(
-            funding.fundingRate,
-            funding.fundingRateVelocity,
-            funding.longCumulativeFundingFees,
-            funding.shortCumulativeFundingFees
-        );
+        emit FundingUpdated(funding.fundingRate, funding.fundingRateVelocity, funding.fundingAccruedUsd);
     }
 
     // Function to calculate borrowing fees per second
@@ -138,6 +121,7 @@ contract Market is Vault, IMarket {
 
     /// @dev Call every time OI is updated (trade open / close)
     // Needs fix -> Should be for both sides
+    // @audit
     function updateBorrowingRate(
         address _indexToken,
         uint256 _indexPrice,
@@ -295,31 +279,11 @@ contract Market is Vault, IMarket {
     /**
      *  ========================= Getters  =========================
      */
-    function getCumulativeFees(address _indexToken)
-        external
-        view
-        returns (
-            uint256 _longCumulativeFundingFees,
-            uint256 _shortCumulativeFundingFees,
-            uint256 _longCumulativeBorrowFees,
-            uint256 _shortCumulativeBorrowFees
-        )
-    {
-        return (
-            marketStorage[_indexToken].funding.longCumulativeFundingFees,
-            marketStorage[_indexToken].funding.shortCumulativeFundingFees,
-            marketStorage[_indexToken].borrowing.longCumulativeBorrowFees,
-            marketStorage[_indexToken].borrowing.shortCumulativeBorrowFees
-        );
+    function getCumulativeBorrowFees(address _indexToken) external view returns (uint256 longFees, uint256 shortFees) {
+        return (getCumulativeBorrowFee(_indexToken, true), getCumulativeBorrowFee(_indexToken, false));
     }
 
-    function getCumulativeFundingFees(address _indexToken, bool _isLong) external view returns (uint256) {
-        return _isLong
-            ? marketStorage[_indexToken].funding.longCumulativeFundingFees
-            : marketStorage[_indexToken].funding.shortCumulativeFundingFees;
-    }
-
-    function getCumulativeBorrowFees(address _indexToken, bool _isLong) external view returns (uint256) {
+    function getCumulativeBorrowFee(address _indexToken, bool _isLong) public view returns (uint256) {
         return _isLong
             ? marketStorage[_indexToken].borrowing.longCumulativeBorrowFees
             : marketStorage[_indexToken].borrowing.shortCumulativeBorrowFees;
@@ -331,6 +295,10 @@ contract Market is Vault, IMarket {
 
     function getFundingRates(address _indexToken) external view returns (int256, int256) {
         return (marketStorage[_indexToken].funding.fundingRate, marketStorage[_indexToken].funding.fundingRateVelocity);
+    }
+
+    function getFundingAccrued(address _indexToken) external view returns (int256) {
+        return marketStorage[_indexToken].funding.fundingAccruedUsd;
     }
 
     function getLastBorrowingUpdate(address _indexToken) external view returns (uint48) {

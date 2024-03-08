@@ -103,8 +103,6 @@ contract Deploy is Script {
             // Skew Scale = Skew for Max Velocity
             funding: IMarket.FundingConfig({
                 maxVelocity: 0.0003e18, // 0.03%
-                maxRate: 0.03e18, // 3%
-                minRate: -0.03e18, // -3%
                 skewScale: 1_000_000e18 // 1 Mil USD
             }),
             borrowing: IMarket.BorrowingConfig({

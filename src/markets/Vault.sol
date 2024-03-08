@@ -62,15 +62,10 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     uint256 public longTokensReserved;
     uint256 public shortTokensReserved;
 
-    uint256 public longClaimableFunding; // in Short Tokens
-    uint256 public shortClaimableFunding; // in Long Tokens
-
     mapping(bytes32 => Deposit.Data) private depositRequests;
     EnumerableSet.Bytes32Set private depositKeys;
     mapping(bytes32 => Withdrawal.Data) private withdrawalRequests;
     EnumerableSet.Bytes32Set private withdrawalKeys;
-
-    mapping(address user => mapping(bool isLong => uint256 claimable)) public userClaimableFunding;
 
     modifier orderExists(bytes32 _key, bool _isDeposit) {
         if (_isDeposit) {
@@ -294,26 +289,6 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         );
         // transfer tokens to user
         _transferOutTokens(_params.data.input.owner, state.amountOut, _params.isLongToken, _params.shouldUnwrap);
-    }
-
-    function accumulateFundingFees(uint256 _amount, bool _isLong) external onlyTradeStorage {
-        _isLong ? longClaimableFunding += _amount : shortClaimableFunding += _amount;
-    }
-
-    function subtractFundingFees(uint256 _amount, bool _isLong) external onlyProcessor {
-        _isLong ? longClaimableFunding -= _amount : shortClaimableFunding -= _amount;
-    }
-
-    function increaseUserClaimableFunding(uint256 _amount, bool _isLong) external onlyTradeStorage {
-        userClaimableFunding[msg.sender][_isLong] += _amount;
-    }
-
-    function claimFundingFees(bool _isLong) external nonReentrant {
-        uint256 amount = userClaimableFunding[msg.sender][_isLong];
-        require(amount > 0, "Vault: Insufficient claimable funds");
-        userClaimableFunding[msg.sender][_isLong] = 0;
-        _isLong ? longClaimableFunding -= amount : shortClaimableFunding -= amount;
-        _transferOutTokens(msg.sender, amount, _isLong, false);
     }
 
     function _deleteWithdrawal(bytes32 _key) internal {

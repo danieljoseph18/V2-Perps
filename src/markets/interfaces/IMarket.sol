@@ -21,8 +21,8 @@ interface IMarket is IVault {
         uint48 lastFundingUpdate;
         int256 fundingRate;
         int256 fundingRateVelocity;
-        uint256 longCumulativeFundingFees;
-        uint256 shortCumulativeFundingFees;
+        // The value (in USD) of total market funding accumulated.
+        int256 fundingAccruedUsd;
     }
 
     struct BorrowingValues {
@@ -66,10 +66,8 @@ interface IMarket is IVault {
     }
 
     struct FundingConfig {
-        uint256 maxVelocity;
-        int256 maxRate;
-        int256 minRate;
-        uint256 skewScale; // Sensitivity to Market Skew
+        int256 maxVelocity; // Max funding Velocity
+        int256 skewScale; // Sensitivity to Market Skew
     }
 
     struct BorrowingConfig {
@@ -93,12 +91,7 @@ interface IMarket is IVault {
     event TokenRemoved(address indexed indexToken);
     event MarketConfigUpdated(address indexed indexToken, Config config);
     event AdlStateUpdated(address indexed indexToken, bool isFlaggedForAdl);
-    event FundingUpdated(
-        int256 fundingRate,
-        int256 fundingRateVelocity,
-        uint256 longCumulativeFundingFees,
-        uint256 shortCumulativeFundingFees
-    );
+    event FundingUpdated(int256 fundingRate, int256 fundingRateVelocity, int256 fundingAccruedUsd);
     event BorrowingRatesUpdated(address indexed indexToken, uint256 longBorrowingRate, uint256 shortBorrowingRate);
     event AverageEntryPriceUpdated(
         address indexed indexToken, uint256 longAverageEntryPrice, uint256 shortAverageEntryPrice
@@ -128,16 +121,6 @@ interface IMarket is IVault {
         external;
     function updateImpactPool(address _indexToken, int256 _priceImpactUsd) external;
 
-    function getCumulativeFees(address _indexToken)
-        external
-        view
-        returns (
-            uint256 _longCumulativeFundingFees,
-            uint256 _shortCumulativeFundingFees,
-            uint256 _longCumulativeBorrowFees,
-            uint256 _shortCumulativeBorrowFees
-        );
-
     function getConfig(address _indexToken) external view returns (Config memory);
     function getBorrowingConfig(address _indexToken) external view returns (BorrowingConfig memory);
     function getFundingConfig(address _indexToken) external view returns (FundingConfig memory);
@@ -149,8 +132,9 @@ interface IMarket is IVault {
     function getAllocation(address _indexToken) external view returns (uint256);
     function getOpenInterest(address _indexToken, bool _isLong) external view returns (uint256);
     function getAverageEntryPrice(address _indexToken, bool _isLong) external view returns (uint256);
-    function getCumulativeFundingFees(address _indexToken, bool _isLong) external view returns (uint256);
-    function getCumulativeBorrowFees(address _indexToken, bool _isLong) external view returns (uint256);
+    function getFundingAccrued(address _indexToken) external view returns (int256);
+    function getCumulativeBorrowFees(address _indexToken) external view returns (uint256, uint256);
+    function getCumulativeBorrowFee(address _indexToken, bool _isLong) external view returns (uint256);
     function getLastFundingUpdate(address _indexToken) external view returns (uint48);
     function getLastBorrowingUpdate(address _indexToken) external view returns (uint48);
     function getFundingRates(address _indexToken) external view returns (int256, int256);
