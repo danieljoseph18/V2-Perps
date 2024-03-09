@@ -58,26 +58,23 @@ library Borrowing {
         address _indexToken,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice,
-        uint256 _longTokenBaseUnit,
-        uint256 _shortTokenBaseUnit,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
         bool _isLong
     ) external view returns (uint256 rate) {
         BorrowingState memory state;
         // Calculate the new Borrowing Rate
         state.config = market.getBorrowingConfig(_indexToken);
-        state.openInterestUsd =
-            ud(MarketUtils.getTotalOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit));
-        state.poolBalance = ud(
-            MarketUtils.getTotalPoolBalanceUsd(
-                market, _indexToken, _longTokenPrice, _shortTokenPrice, _longTokenBaseUnit, _shortTokenBaseUnit
-            )
-        );
-
         state.borrowingFactor = ud(state.config.factor);
         if (_isLong) {
+            // get the long open interest
+            state.openInterestUsd =
+                ud(MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, true));
+            // get the long pending pnl
             state.pendingPnl = Pricing.getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
+            // get the long pool balance
+            state.poolBalance =
+                ud(MarketUtils.getPoolBalanceUsd(market, _indexToken, _collateralPrice, _collateralBaseUnit, true));
             // Adjust the OI by the Pending PNL
             if (state.pendingPnl > 0) {
                 state.openInterestUsd = state.openInterestUsd.add(ud(state.pendingPnl.toUint256()));
@@ -85,11 +82,19 @@ library Borrowing {
                 state.openInterestUsd = state.openInterestUsd.sub(ud(state.pendingPnl.abs()));
             }
             state.adjustedOiExponent = state.openInterestUsd.powu(state.config.exponent);
+            // calculate the long rate
+            rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
         } else {
+            // get the short open interest
+            state.openInterestUsd =
+                ud(MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, false));
+            // get the short pool balance
+            state.poolBalance =
+                ud(MarketUtils.getPoolBalanceUsd(market, _indexToken, _collateralPrice, _collateralBaseUnit, false));
+            // calculate the short rate
             state.adjustedOiExponent = state.openInterestUsd.powu(state.config.exponent);
+            rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
         }
-
-        rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
     }
 
     function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) external view returns (uint256 fee) {

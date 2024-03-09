@@ -141,29 +141,13 @@ contract Market is Vault, IMarket {
             borrowing.longCumulativeBorrowFees +=
                 Borrowing.calculateFeesSinceUpdate(borrowing.longBorrowingRate, lastUpdate);
             borrowing.longBorrowingRate = Borrowing.calculateRate(
-                this,
-                _indexToken,
-                _indexPrice,
-                _indexBaseUnit,
-                _longTokenPrice,
-                _shortTokenPrice,
-                _longBaseUnit,
-                _shortBaseUnit,
-                true
+                this, _indexToken, _indexPrice, _indexBaseUnit, _longTokenPrice, _longBaseUnit, true
             );
         } else {
             borrowing.shortCumulativeBorrowFees +=
                 Borrowing.calculateFeesSinceUpdate(borrowing.shortBorrowingRate, lastUpdate);
             borrowing.shortBorrowingRate = Borrowing.calculateRate(
-                this,
-                _indexToken,
-                _indexPrice,
-                _indexBaseUnit,
-                _longTokenPrice,
-                _shortTokenPrice,
-                _longBaseUnit,
-                _shortBaseUnit,
-                false
+                this, _indexToken, _indexPrice, _indexBaseUnit, _shortTokenPrice, _shortBaseUnit, false
             );
         }
         borrowing.lastBorrowUpdate = uint48(block.timestamp);
