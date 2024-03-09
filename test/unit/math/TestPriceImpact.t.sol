@@ -302,6 +302,8 @@ contract TestPriceImpact is Test {
             priceImpactUsd: 0,
             collateralPrice: 1e18,
             collateralBaseUnit: 1e6,
+            fundingFee: 0,
+            borrowFee: 0,
             fee: 0,
             feeDiscount: 0,
             referrer: address(0)
@@ -370,6 +372,8 @@ contract TestPriceImpact is Test {
             priceImpactUsd: 0,
             collateralPrice: 1e18,
             collateralBaseUnit: 1e6,
+            fundingFee: 0,
+            borrowFee: 0,
             fee: 0,
             feeDiscount: 0,
             referrer: address(0)

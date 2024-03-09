@@ -33,8 +33,7 @@ library Order {
         uint256 sizeDelta;
         int256 decreasePnl;
         uint256 afterFeeAmount;
-        int256 fundingFee;
-        uint256 borrowFee;
+        uint256 positionFee;
     }
 
     // stated Values for Execution
@@ -50,6 +49,8 @@ library Order {
         int256 priceImpactUsd;
         uint256 collateralPrice;
         uint256 collateralBaseUnit;
+        int256 fundingFee;
+        uint256 borrowFee;
         uint256 fee;
         uint256 feeDiscount;
         address referrer;
@@ -311,15 +312,17 @@ library Order {
     // No Funding Involvement
     function executeCollateralIncrease(
         Position.Data memory _position,
-        Position.Execution calldata _params,
+        Position.Execution memory _params,
         ExecutionState memory _state
-    ) external view returns (Position.Data memory, uint256 borrowFeeOwed) {
+    ) external view returns (Position.Data memory, ExecutionState memory) {
+        // Subtract fee from collateral delta
+        _params.request.input.collateralDelta -= _state.fee;
         // Update the Fee Parameters
         _position = _updateFeeParameters(_position, _state);
         // Process any Outstanding Borrow Fees
-        (_position, borrowFeeOwed) = _processBorrowFees(_position, _params, _state);
+        (_position, _state.borrowFee) = _processBorrowFees(_position, _params, _state);
         // Calculate the amount of collateral left after fees
-        uint256 afterFeeAmount = _params.request.input.collateralDelta - borrowFeeOwed;
+        uint256 afterFeeAmount = _params.request.input.collateralDelta - _state.borrowFee;
         require(afterFeeAmount > 0, "Order: After Fee");
         // Edit the Position for Increase
         _position = _editPosition(_position, _state, afterFeeAmount, 0, true);
@@ -330,21 +333,23 @@ library Order {
             mulDiv(_position.positionSize, _state.indexPrice, _state.indexBaseUnit),
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
-        return (_position, borrowFeeOwed);
+        return (_position, _state);
     }
 
     // No Funding Involvement
     function executeCollateralDecrease(
         Position.Data memory _position,
-        Position.Execution calldata _params,
+        Position.Execution memory _params,
         ExecutionState memory _state,
         uint256 _minCollateralUsd,
         uint256 _liquidationFeeUsd
-    ) external view returns (Position.Data memory, uint256 borrowFeeOwed) {
+    ) external view returns (Position.Data memory, ExecutionState memory) {
+        // Subtract Fee from Collateral Delta
+        _params.request.input.collateralDelta -= _state.fee;
         // Update the Fee Parameters
         _position = _updateFeeParameters(_position, _state);
         // Process any Outstanding Borrow  Fees
-        (_position, borrowFeeOwed) = _processBorrowFees(_position, _params, _state);
+        (_position, _state.borrowFee) = _processBorrowFees(_position, _params, _state);
         // Edit the Position (subtract full collateral delta)
         _position = _editPosition(_position, _state, _params.request.input.collateralDelta, 0, false);
         // Check if the Decrease puts the position below the min collateral threshold
@@ -364,15 +369,22 @@ library Order {
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
 
-        return (_position, borrowFeeOwed);
+        return (_position, _state);
     }
 
     // No Funding Involvement
+    // @audit - need to conver fee from index token to collateral token
     function createNewPosition(
-        Position.Execution calldata _params,
+        Position.Execution memory _params,
         ExecutionState memory _state,
         uint256 _minCollateralUsd
-    ) external view returns (Position.Data memory, uint256 sizeUsd) {
+    ) external view returns (Position.Data memory, ExecutionState memory) {
+        // Convert fee from index token to collateral token
+        _state.fee = Position.convertIndexAmountToCollateral(
+            _state.fee, _state.indexPrice, _state.indexBaseUnit, _state.collateralPrice, _state.collateralBaseUnit
+        );
+        // Subtract Fee from Collateral Delta
+        _params.request.input.collateralDelta -= _state.fee;
         // Check that the Position meets the minimum collateral threshold
         require(
             checkMinCollateral(
@@ -391,26 +403,36 @@ library Order {
             _state.market, _params.request.input.indexToken, absSizeDelta, _state.collateralDeltaUsd.abs()
         );
         // Return the Position
-        return (position, absSizeDelta);
+        return (position, _state);
     }
 
     // Realise all previous funding and borrowing fees
     // For funding - reset the earnings after charging the previous amount
     function increaseExistingPosition(
         Position.Data memory _position,
-        Position.Execution calldata _params,
+        Position.Execution memory _params,
         ExecutionState memory _state
-    )
-        external
-        view
-        returns (Position.Data memory, uint256 sizeDeltaUsd, uint256 borrowFeeOwed, int256 fundingFeeOwed)
-    {
+    ) external view returns (Position.Data memory, ExecutionState memory, uint256 sizeDeltaUsd, uint256 positionFee) {
+        // Subtract Fee from Collateral Delta - @audit - can I move down to where other fees are subtracted?
+        positionFee = Position.convertIndexAmountToCollateral(
+            _state.fee, _state.indexPrice, _state.indexBaseUnit, _state.collateralPrice, _state.collateralBaseUnit
+        );
+        _params.request.input.collateralDelta -= positionFee;
         // Update the Fee Parameters
         _position = _updateFeeParameters(_position, _state);
         // Process any Outstanding Borrow Fees
-        (_position, borrowFeeOwed) = _processBorrowFees(_position, _params, _state);
+        (_position, _state.borrowFee) = _processBorrowFees(_position, _params, _state);
         // Process any Outstanding Funding Fees
-        (_position, fundingFeeOwed) = _processFundingFees(_position, _params, _state);
+        (_position, _state.fundingFee) = _processFundingFees(_position, _params, _state);
+        // Settle outstanding fees
+        _params.request.input.collateralDelta -= _state.borrowFee;
+        if (_state.fundingFee < 0) {
+            _params.request.input.collateralDelta -= _state.fundingFee.abs();
+        } else {
+            // @audit - counts as position profit, need to handle accordingly
+            // essentially subtract profit from LPs and add to position
+            _params.request.input.collateralDelta += _state.fundingFee.abs();
+        }
 
         // Update the Existing Position
         _position = _editPosition(
@@ -426,16 +448,22 @@ library Order {
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
 
-        return (_position, sizeDeltaUsd, borrowFeeOwed, fundingFeeOwed);
+        return (_position, _state, sizeDeltaUsd, positionFee);
     }
 
     function decreaseExistingPosition(
         Position.Data memory _position,
-        Position.Execution calldata _params,
+        Position.Execution memory _params,
         ExecutionState memory _state,
         uint256 _minCollateralUsd,
         uint256 _liquidationFeeUsd
-    ) external view returns (Position.Data memory, DecreaseState memory decreaseState) {
+    ) external view returns (Position.Data memory, DecreaseState memory decreaseState, ExecutionState memory) {
+        // Subtract Fee from Collateral Delta
+        decreaseState.positionFee = Position.convertIndexAmountToCollateral(
+            _state.fee, _state.indexPrice, _state.indexBaseUnit, _state.collateralPrice, _state.collateralBaseUnit
+        );
+        _params.request.input.collateralDelta -= decreaseState.positionFee;
+        // Update the Fee Parameters
         _position = _updateFeeParameters(_position, _state);
 
         if (_params.request.input.collateralDelta == _position.collateralAmount) {
@@ -456,19 +484,19 @@ library Order {
         );
 
         // Process any Outstanding Borrow Fees
-        (_position, decreaseState.borrowFee) = _processBorrowFees(_position, _params, _state);
+        (_position, _state.borrowFee) = _processBorrowFees(_position, _params, _state);
         // Process any Outstanding Funding Fees
-        (_position, decreaseState.fundingFee) = _processFundingFees(_position, _params, _state);
+        (_position, _state.fundingFee) = _processFundingFees(_position, _params, _state);
 
         _position =
             _editPosition(_position, _state, _params.request.input.collateralDelta, decreaseState.sizeDelta, false);
 
         // Calculate the amount of collateral left after fees
-        decreaseState.afterFeeAmount = _params.request.input.collateralDelta - decreaseState.borrowFee;
-        if (decreaseState.fundingFee < 0) {
-            decreaseState.afterFeeAmount -= decreaseState.fundingFee.abs();
+        decreaseState.afterFeeAmount = _params.request.input.collateralDelta - _state.borrowFee;
+        if (_state.fundingFee < 0) {
+            decreaseState.afterFeeAmount -= _state.fundingFee.abs();
         } else {
-            decreaseState.afterFeeAmount += decreaseState.fundingFee.abs();
+            decreaseState.afterFeeAmount += _state.fundingFee.abs();
         }
 
         // Check if the Decrease puts the position below the min collateral threshold
@@ -484,7 +512,7 @@ library Order {
             require(!_checkIsLiquidatable(_position, _state, _liquidationFeeUsd), "Order: Liquidatable");
         }
 
-        return (_position, decreaseState);
+        return (_position, decreaseState, _state);
     }
 
     // Checks if a position meets the minimum collateral threshold
@@ -566,7 +594,7 @@ library Order {
 
     function _processFundingFees(
         Position.Data memory _position,
-        Position.Execution calldata _params,
+        Position.Execution memory _params,
         ExecutionState memory _state
     ) internal view returns (Position.Data memory, int256 fundingFee) {
         // Calculate and subtract the funding fee
@@ -588,7 +616,7 @@ library Order {
 
     function _processBorrowFees(
         Position.Data memory _position,
-        Position.Execution calldata _params,
+        Position.Execution memory _params,
         ExecutionState memory _state
     ) internal view returns (Position.Data memory, uint256 borrowFee) {
         // Calculate and subtract the Borrowing Fee

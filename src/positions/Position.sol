@@ -49,6 +49,11 @@ library Position {
         int256 lastFundingAccrued;
         bool isLong;
         BorrowingParams borrowingParams;
+        /**
+         * While SL / TPs are separate entities (decrease orders), tieing them to a position lets
+         * us close them simultaneously with the position, to prevent the issue
+         * of orders being left open after a position is closed.
+         */
         bytes32 stopLossKey;
         bytes32 takeProfitKey;
     }

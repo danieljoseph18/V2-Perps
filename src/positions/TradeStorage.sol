@@ -28,7 +28,7 @@ import {Order} from "./Order.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Invariant} from "../libraries/Invariant.sol";
 
-/// @dev Needs TradeStorage Role
+/// @dev Needs TradeStorage Role & Fee Accumulator
 /// @dev Need to add liquidity reservation for positions
 contract TradeStorage is ITradeStorage, RoleValidation {
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -58,31 +58,31 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function initialise(
         uint256 _liquidationFee, // 5e18 = 5 USD
-        uint256 _tradingFee, // 0.001e18 = 0.1%
+        uint256 _positionFee, // 0.001e18 = 0.1%
         uint256 _executionFee, // 0.001 ether
         uint256 _minCollateralUsd, // 2e18 = 2 USD
         uint256 _minBlockDelay // e.g 1 minutes
     ) external onlyAdmin {
         require(!isInitialised, "TradeStorage: Already Initialised");
         liquidationFeeUsd = _liquidationFee;
-        tradingFee = _tradingFee;
+        tradingFee = _positionFee;
         executionFee = _executionFee;
         minCollateralUsd = _minCollateralUsd;
         minBlockDelay = _minBlockDelay;
         isInitialised = true;
-        emit TradeStorageInitialised(_liquidationFee, _tradingFee, _executionFee);
+        emit TradeStorageInitialised(_liquidationFee, _positionFee, _executionFee);
     }
 
     function setMinBlockDelay(uint256 _minBlockDelay) external onlyConfigurator {
         minBlockDelay = _minBlockDelay;
     }
 
-    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyConfigurator {
+    function setFees(uint256 _liquidationFee, uint256 _positionFee) external onlyConfigurator {
         require(_liquidationFee <= MAX_LIQUIDATION_FEE && _liquidationFee != 0, "TradeStorage: Invalid Liquidation Fee");
-        require(_tradingFee <= MAX_TRADING_FEE && _tradingFee != 0, "TradeStorage: Invalid Trading Fee");
+        require(_positionFee <= MAX_TRADING_FEE && _positionFee != 0, "TradeStorage: Invalid Trading Fee");
         liquidationFeeUsd = _liquidationFee;
-        tradingFee = _tradingFee;
-        emit FeesSet(_liquidationFee, _tradingFee);
+        tradingFee = _positionFee;
+        emit FeesSet(_liquidationFee, _positionFee);
     }
 
     /// @dev Adds Order to EnumerableSet
@@ -159,14 +159,14 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in Library
-        (Position.Data memory positionAfter, uint256 borrowFee) =
-            Order.executeCollateralIncrease(positionBefore, _params, _state);
+        Position.Data memory positionAfter;
+        (positionAfter, _state) = Order.executeCollateralIncrease(positionBefore, _params, _state);
         // Validate the Position Change
         Invariant.validateCollateralEdit(
-            positionBefore, positionAfter, _params.request.input.collateralDelta, _state.fee, borrowFee, true
+            positionBefore, positionAfter, _params.request.input.collateralDelta, _state.fee, _state.borrowFee, true
         );
         // Pay Fees -> @audit - units? @audit - accounting
-        _payFees(_state.market, borrowFee, _params.request.input.isLong);
+        _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
         // Update Final Storage
         openPositions[positionKey] = positionAfter;
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
@@ -184,14 +184,15 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in Library
-        (Position.Data memory positionAfter, uint256 borrowFee) =
+        Position.Data memory positionAfter;
+        (positionAfter, _state) =
             Order.executeCollateralDecrease(positionBefore, _params, _state, minCollateralUsd, liquidationFeeUsd);
         // Validate the Position Change
         Invariant.validateCollateralEdit(
-            positionBefore, positionAfter, _params.request.input.collateralDelta, _state.fee, borrowFee, true
+            positionBefore, positionAfter, _params.request.input.collateralDelta, _state.fee, _state.borrowFee, false
         );
         // Pay Fees
-        _payFees(_state.market, borrowFee, _params.request.input.isLong);
+        _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
         // Update Final Storage
         openPositions[positionKey] = positionAfter;
         // Transfer Tokens to User
@@ -216,8 +217,13 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in the Library
-        (Position.Data memory position, uint256 absSizeDelta) =
-            Order.createNewPosition(_params, _state, minCollateralUsd);
+        // @audit - logic?
+        Position.Data memory position;
+        (position, _state) = Order.createNewPosition(_params, _state, minCollateralUsd);
+        // Validate the New Position
+        Invariant.validateNewPosition(
+            _params.request.input.collateralDelta, position.collateralAmount, _state.fee, _state.feeDiscount
+        );
         // If Request has conditionals, create the SL / TP
         (Position.Request memory stopLoss, Position.Request memory takeProfit) =
             Order.constructConditionalOrders(position, _params.request.input.conditionals, _state.indexPrice);
@@ -225,9 +231,15 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         if (_params.request.input.conditionals.stopLossSet) position.stopLossKey = _createStopLoss(stopLoss);
         // If take profit set, create and store the order
         if (_params.request.input.conditionals.takeProfitSet) position.takeProfitKey = _createTakeProfit(takeProfit);
+        // Pay fees
+        _payFees(_state.market, 0, _state.fee, _params.request.input.isLong);
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(
-            _state.market, absSizeDelta, _state.collateralPrice, _state.collateralBaseUnit, _params.request.input.isLong
+            _state.market,
+            _state.sizeDeltaUsd.abs(),
+            _state.collateralPrice,
+            _state.collateralBaseUnit,
+            _params.request.input.isLong
         );
         // Update Final Storage
         openPositions[positionKey] = position;
@@ -243,23 +255,35 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
-        Position.Data memory position = openPositions[positionKey];
-        require(Position.exists(position), "TradeStorage: Position Doesn't Exist");
+        Position.Data memory positionBefore = openPositions[positionKey];
+        require(Position.exists(positionBefore), "TradeStorage: Position Doesn't Exist");
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in the Library
+        Position.Data memory positionAfter;
         uint256 sizeDeltaUsd;
-        uint256 borrowFee;
-        int256 fundingFee;
-        (position, sizeDeltaUsd, borrowFee, fundingFee) = Order.increaseExistingPosition(position, _params, _state);
+        uint256 positionFee;
+        (positionAfter, _state, sizeDeltaUsd, positionFee) =
+            Order.increaseExistingPosition(positionBefore, _params, _state);
+        // Validate the Position Change
+        Invariant.validateIncreasePosition(
+            positionBefore,
+            positionAfter,
+            _params.request.input.collateralDelta,
+            _state.fee,
+            _state.feeDiscount,
+            _state.fundingFee,
+            _state.borrowFee,
+            _params.request.input.sizeDelta
+        );
         // Pay Fees
-        _payFees(_state.market, borrowFee, position.isLong);
+        _payFees(_state.market, _state.borrowFee, positionFee, _params.request.input.isLong);
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(
-            _state.market, sizeDeltaUsd, _state.collateralPrice, _state.collateralBaseUnit, position.isLong
+            _state.market, sizeDeltaUsd, _state.collateralPrice, _state.collateralBaseUnit, _params.request.input.isLong
         );
         // Update Final Storage
-        openPositions[positionKey] = position;
+        openPositions[positionKey] = positionAfter;
     }
 
     // @audit - SETTLE ALL PREVIOUS FUNDING AND START ACCUMULATING AT NEW RATE OR CLOSE
@@ -269,43 +293,60 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
-        Position.Data memory position = openPositions[positionKey];
-        require(Position.exists(position), "TradeStorage: Position Doesn't Exist");
+        Position.Data memory positionBefore = openPositions[positionKey];
+        require(Position.exists(positionBefore), "TradeStorage: Position Doesn't Exist");
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // If SL / TP, clear from the position
         if (_params.request.requestType == Position.RequestType.STOP_LOSS) {
-            position.stopLossKey = bytes32(0);
+            positionBefore.stopLossKey = bytes32(0);
         } else if (_params.request.requestType == Position.RequestType.TAKE_PROFIT) {
-            position.takeProfitKey = bytes32(0);
+            positionBefore.takeProfitKey = bytes32(0);
         }
         // Perform Execution in the Library
+        Position.Data memory positionAfter;
         Order.DecreaseState memory decreaseState;
-        (position, decreaseState) =
-            Order.decreaseExistingPosition(position, _params, _state, minCollateralUsd, liquidationFeeUsd);
+        (positionAfter, decreaseState, _state) =
+            Order.decreaseExistingPosition(positionBefore, _params, _state, minCollateralUsd, liquidationFeeUsd);
+        // Validate the Position Change
+        Invariant.validateDecreasePosition(
+            positionBefore,
+            positionAfter,
+            _params.request.input.collateralDelta,
+            _state.fee,
+            _state.feeDiscount,
+            _state.fundingFee,
+            decreaseState.decreasePnl,
+            _state.borrowFee,
+            _params.request.input.sizeDelta
+        );
         // Pay Fees
-        _payFees(_state.market, decreaseState.borrowFee, position.isLong);
+        _payFees(_state.market, _state.borrowFee, decreaseState.positionFee, _params.request.input.isLong);
         // stated to prevent multi conversion
-        address market = address(position.market);
+        address market = address(positionBefore.market);
         // Reserve Liquidity Equal to the Position Size
         _unreserveLiquidity(
-            _state.market, _state.sizeDeltaUsd.abs(), _state.collateralPrice, _state.collateralBaseUnit, position.isLong
+            _state.market,
+            _state.sizeDeltaUsd.abs(),
+            _state.collateralPrice,
+            _state.collateralBaseUnit,
+            _params.request.input.isLong
         );
         // Update Final Storage
-        openPositions[positionKey] = position;
+        openPositions[positionKey] = positionAfter;
         // Delete the Position if Full Decrease
-        if (position.positionSize == 0 || position.collateralAmount == 0) {
-            _deletePosition(positionKey, market, position.isLong);
+        if (positionAfter.positionSize == 0 || positionAfter.collateralAmount == 0) {
+            _deletePosition(positionKey, market, _params.request.input.isLong);
         }
         // Handle PNL
-        int256 pnl = decreaseState.decreasePnl + decreaseState.fundingFee;
+        int256 pnl = decreaseState.decreasePnl + _state.fundingFee;
         if (pnl < 0) {
             // Loss scenario
             uint256 lossAmount = pnl.abs(); // Convert the negative pnl to a positive value for calculations
             require(decreaseState.afterFeeAmount >= lossAmount, "TradeStorage: Loss > Principle");
 
             uint256 userAmount = decreaseState.afterFeeAmount - lossAmount;
-            _state.market.accumulateFees(lossAmount, position.isLong);
+            _state.market.accumulateFees(lossAmount, _params.request.input.isLong);
             _state.market.transferOutTokens(
                 _params.request.user, userAmount, _params.request.input.isLong, _params.request.input.shouldWrap
             ); // @audit - should unwrap
@@ -411,11 +452,12 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     }
 
     // funding and borrow amounts should be in collateral tokens
-    function _payFees(IMarket market, uint256 _borrowAmount, bool _isLong) internal {
-        // decrease the user's reserved amount
-        market.unreserveLiquidity(_borrowAmount, _isLong);
+    // @audit - should funding fees be accounted for or go directly through LPs?
+    function _payFees(IMarket market, uint256 _borrowAmount, uint256 _positionFee, bool _isLong) internal {
+        // decrease the user's reserved amount // @audit???
+        // market.unreserveLiquidity(_borrowAmount, _isLong);
         // Pay borrowing fees to LPs
-        market.accumulateFees(_borrowAmount, _isLong);
+        market.accumulateFees(_borrowAmount + _positionFee, _isLong);
     }
 
     function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory) {
