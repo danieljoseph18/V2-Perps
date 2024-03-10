@@ -183,15 +183,13 @@ contract TestFee is Test {
     }
 
     function testCalculatingFeesForASinglePosition(uint256 _sizeDelta) public setUpMarkets {
-        _sizeDelta = bound(_sizeDelta, 1, 1_000_000_000e18);
-        // convert size delta to usd
-        uint256 sizeDeltaUsd = mulDiv(_sizeDelta, 2500e18, 1e18);
+        _sizeDelta = bound(_sizeDelta, 1, 1_000_000_000e30);
         // convert size delta usd to collateral
-        uint256 sizeDeltaCollateral = mulDiv(sizeDeltaUsd, 1e18, 2500e18);
+        uint256 sizeDeltaCollateral = mulDiv(_sizeDelta, 1e18, 2500e30);
         // calculate expected fee
         uint256 expectedFee = mulDiv(sizeDeltaCollateral, tradeStorage.tradingFee(), 1e18);
         // calculate fee
-        uint256 fee = Fee.calculateForPosition(tradeStorage, _sizeDelta, 0, 2500e18, 1e18, 2500e18, 1e18);
+        uint256 fee = Fee.calculateForPosition(tradeStorage, _sizeDelta, 0, 2500e30, 1e18);
         assertEq(fee, expectedFee);
     }
 

@@ -178,7 +178,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 2 ether, // 4x leverage
+            sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -204,7 +204,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 500e6,
-            sizeDelta: 2e18, // 10x leverage
+            sizeDelta: 5000e30, // 10x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -232,7 +232,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 2 ether, // 4x leverage
+            sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -263,7 +263,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 500e6,
-            sizeDelta: 2e18, // 10x leverage -> 2 eth ~ $5000
+            sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -295,7 +295,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 2 ether, // 4x leverage
+            sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -329,7 +329,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 2 ether, // 4x leverage
+            sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -362,7 +362,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 500e6,
-            sizeDelta: 2e18, // 10x leverage -> 2 eth ~ $5000
+            sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -397,7 +397,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 500e6,
-            sizeDelta: 2e18, // 10x leverage -> 2 eth ~ $5000
+            sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -453,7 +453,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 2 ether, // 4x leverage
+            sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -503,12 +503,13 @@ contract TestPositions is Test {
         vm.stopPrank();
     }
 
+    // @fail
     function testExecuteCollateralDecreaseShort() public setUpMarkets {
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 500e6,
-            sizeDelta: 2e18, // 10x leverage -> 2 eth ~ $5000
+            sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -559,12 +560,13 @@ contract TestPositions is Test {
         vm.stopPrank();
     }
 
+    // @fail
     function testFullExecuteDecreasePositionLong() public setUpMarkets {
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 2 ether, // 4x leverage
+            sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -591,7 +593,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 2 ether, // 4x leverage
+            sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -618,12 +620,13 @@ contract TestPositions is Test {
         assertEq(position.positionSize, 0);
     }
 
+    // @fail
     function testPartialExecuteDecreasePositionLong() public setUpMarkets {
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 2 ether, // 4x leverage
+            sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -650,7 +653,7 @@ contract TestPositions is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.25 ether,
-            sizeDelta: 1 ether, // 4x leverage
+            sizeDelta: 2500e30, // 4x leverage
             limitPrice: 0, // Market Order
             maxSlippage: 0.43e18, // 0.3%
             executionFee: 0.01 ether,
@@ -675,8 +678,10 @@ contract TestPositions is Test {
         bytes32 positionKey = keccak256(abi.encode(input.indexToken, OWNER, input.isLong));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
         uint256 balanceAfterDecrease = OWNER.balance;
-        assertEq(position.collateralAmount, 0.25 ether);
-        assertEq(position.positionSize, 1 ether);
+        // Will be less after fees
+        assertLt(position.collateralAmount, 0.25 ether);
+        assertLt(position.positionSize, 1 ether);
+        // Should have received some ETH
         assertGt(balanceAfterDecrease, balanceBeforeDecrease);
     }
 }

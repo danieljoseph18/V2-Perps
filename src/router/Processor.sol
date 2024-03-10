@@ -41,6 +41,7 @@ import {IProcessor} from "./interfaces/IProcessor.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Roles} from "../access/roles.sol";
+import {console} from "forge-std/Test.sol";
 
 /// @dev Needs Processor Role
 // All keeper interactions should come through this contract
@@ -189,13 +190,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             tradeStorage,
             request.input.sizeDelta,
             request.input.collateralDelta,
-            state.indexPrice,
-            state.indexBaseUnit,
             state.collateralPrice,
             state.collateralBaseUnit
         );
         // Calculate & Apply Fee Discount for Referral Code
-        (state.fee, state.feeDiscount, state.referrer) =
+        (state.fee, state.affiliateRebate, state.referrer) =
             Referral.applyFeeDiscount(referralStorage, request.user, state.fee);
 
         // Execute Trade
@@ -218,11 +217,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         }
 
         if (request.input.isIncrease) {
-            _transferTokensForIncrease(state, request, state.fee, state.feeDiscount, request.input.isLong);
+            _transferTokensForIncrease(state, request, state.fee, state.affiliateRebate, request.input.isLong);
         }
 
         // Emit Trade Executed Event
-        emit ExecutePosition(_orderKey, request, state.fee, state.feeDiscount);
+        emit ExecutePosition(_orderKey, request, state.fee, state.affiliateRebate);
 
         // Send Execution Fee + Rebate
         // Execution Fee reduced to account for value sent to update Pyth prices
@@ -262,7 +261,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
         state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, position.indexToken);
         state.impactedPrice = state.indexPrice;
-        state.sizeDeltaUsd = _calculateValueUsd(position.positionSize, state.indexPrice, state.indexBaseUnit, false);
+
         state.collateralBaseUnit =
             position.isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
 
@@ -301,19 +300,22 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         require(market != IMarket(address(0)), "ADL: Invalid market");
         // get current price
         uint256 indexPrice = Oracle.getReferencePrice(priceFeed, _indexToken);
-        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexToken);
         uint256 collateralPrice;
         uint256 collateralBaseUnit;
         if (_isLong) {
             (collateralPrice,) = Oracle.getLastMarketTokenPrices(priceFeed, true);
             collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
         } else {
-            (, collateralPrice) = Oracle.getLastMarketTokenPrices(priceFeed, true);
+            (, collateralPrice) = Oracle.getLastMarketTokenPrices(priceFeed, false);
             collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
         }
+        console.log("Collateral Price: ", collateralPrice);
+        console.log("Index Price: ", indexPrice);
         // fetch pnl to pool ratio
+        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexToken);
+
         int256 pnlFactor = MarketUtils.getPnlFactor(
-            market, _indexToken, collateralPrice, collateralBaseUnit, indexPrice, indexBaseUnit, _isLong
+            market, _indexToken, indexPrice, indexBaseUnit, collateralPrice, collateralBaseUnit, _isLong
         );
         // fetch max pnl to pool ratio
         uint256 maxPnlFactor = market.getMaxPnlFactor(_indexToken);
@@ -351,16 +353,18 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Get current pricing and token data
         state =
             Order.retrieveTokenPrices(priceFeed, state, position.indexToken, block.number, position.isLong, false, true);
-        // Get size delta usd
-        state.sizeDeltaUsd = -int256(mulDiv(_sizeDelta, state.indexPrice, state.indexBaseUnit));
+
+        // Set the impacted price to the index price => 0 price impact on ADLs
+        state.impactedPrice = state.indexPrice;
+        state.priceImpactUsd = 0;
         // Get starting PNL Factor
         int256 startingPnlFactor = MarketUtils.getPnlFactor(
             market,
             _indexToken,
-            state.collateralPrice,
-            state.collateralBaseUnit,
             state.indexPrice,
             state.indexBaseUnit,
+            state.collateralPrice,
+            state.collateralBaseUnit,
             _isLong
         );
         // Construct an ADL Order
@@ -371,10 +375,10 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         int256 newPnlFactor = MarketUtils.getPnlFactor(
             market,
             _indexToken,
-            state.collateralPrice,
-            state.collateralBaseUnit,
             state.indexPrice,
             state.indexBaseUnit,
+            state.collateralPrice,
+            state.collateralBaseUnit,
             _isLong
         );
         // PNL to pool has reduced
@@ -414,27 +418,33 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         Order.ExecutionState memory _state,
         Position.Request memory _request,
         uint256 _fee,
-        uint256 _feeDiscount,
+        uint256 _affiliateRebate,
         bool _isLong
     ) internal {
-        // Increment market Fee Balance
-        _state.market.accumulateFees(_fee, _isLong);
-        // Transfer Fee to market
-        IERC20(_request.input.collateralToken).safeTransfer(address(_state.market), _fee);
         // Transfer Fee Discount to Referral Storage
-        uint256 feeRebate;
-        if (_feeDiscount > 0) {
-            feeRebate = _feeDiscount / 2; // 50% discount to user, 50% rebate to referrer
+        if (_affiliateRebate > 0) {
+            // If units need to be converted (not a collateral edit) convert them
+            uint256 rebate;
+            if (
+                _request.requestType != Position.RequestType.COLLATERAL_INCREASE
+                    || _request.requestType != Position.RequestType.COLLATERAL_DECREASE
+            ) {
+                rebate =
+                    Position.convertUsdToCollateral(_affiliateRebate, _state.collateralPrice, _state.collateralBaseUnit);
+            } else {
+                rebate = _affiliateRebate;
+            }
             // Increment Referral Storage Fee Balance
-            referralStorage.accumulateAffiliateRewards(_state.referrer, _isLong, feeRebate);
+            referralStorage.accumulateAffiliateRewards(_state.referrer, _isLong, rebate);
             // Transfer Fee Discount to Referral Storage
-            IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), feeRebate);
+            IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), rebate);
         }
 
         // Transfer Collateral to market
-        uint256 afterFeeAmount = _request.input.collateralDelta - (_fee + feeRebate);
+        uint256 afterFeeAmount = _request.input.collateralDelta - _affiliateRebate - _fee;
         _state.market.increasePoolBalance(afterFeeAmount, _isLong);
-        IERC20(_request.input.collateralToken).safeTransfer(address(_state.market), afterFeeAmount);
+        _state.market.accumulateFees(_fee, _isLong);
+        IERC20(_request.input.collateralToken).safeTransfer(address(_state.market), afterFeeAmount + _fee);
     }
 
     function _calculateValueUsd(uint256 _tokenAmount, uint256 _tokenPrice, uint256 _tokenBaseUnit, bool _isIncrease)
@@ -466,16 +476,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             _state.market.updateOpenInterest(_indexToken, _sizeDelta, _isLong, _isIncrease);
         }
         // @audit should this be before or after the OI update?
+        uint256 collateralPrice = _isLong ? _state.longMarketTokenPrice : _state.shortMarketTokenPrice;
+        uint256 collateralBaseUnit = _isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
         _state.market.updateFundingRate(_indexToken, _state.indexPrice, _state.indexBaseUnit);
         _state.market.updateBorrowingRate(
-            _indexToken,
-            _state.indexPrice,
-            _state.indexBaseUnit,
-            _state.longMarketTokenPrice,
-            Oracle.getLongBaseUnit(priceFeed),
-            _state.shortMarketTokenPrice,
-            Oracle.getShortBaseUnit(priceFeed),
-            _isLong
+            _indexToken, _state.indexPrice, _state.indexBaseUnit, collateralPrice, collateralBaseUnit, _isLong
         );
     }
 

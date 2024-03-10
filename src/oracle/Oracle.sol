@@ -72,7 +72,7 @@ library Oracle {
 
     uint64 private constant MAX_PERCENTAGE = 1e18; // 100%
     uint64 private constant SCALING_FACTOR = 1e18;
-    uint8 private constant PRICE_DECIMALS = 18;
+    uint8 private constant PRICE_DECIMALS = 30;
     uint8 private constant CHAINLINK_PRICE_DECIMALS = 8;
 
     function isValidAsset(IPriceFeed priceFeed, address _token) external view returns (bool) {
@@ -279,11 +279,14 @@ library Oracle {
     }
 
     // @audit - where is this used? should we max or min the price?
-    function getNetPnl(IPriceFeed priceFeed, IMarket market, address _indexToken, uint256 _blockNumber, bool _maximise)
-        external
-        view
-        returns (int256 netPnl)
-    {
+    function getNetPnl(
+        IPriceFeed priceFeed,
+        IMarket market,
+        address _indexToken,
+        uint256 _indexBaseUnit,
+        uint256 _blockNumber,
+        bool _maximise
+    ) external view returns (int256 netPnl) {
         uint256 indexPrice;
         if (_maximise) {
             indexPrice = getMaxPrice(priceFeed, _indexToken, _blockNumber);
@@ -291,8 +294,7 @@ library Oracle {
             indexPrice = getMinPrice(priceFeed, _indexToken, _blockNumber);
         }
         require(indexPrice != 0, "Oracle: Invalid Index Price");
-        uint256 indexBaseUnit = getBaseUnit(priceFeed, _indexToken);
-        netPnl = Pricing.getNetPnl(market, _indexToken, indexPrice, indexBaseUnit);
+        netPnl = Pricing.getNetPnl(market, _indexToken, indexPrice, _indexBaseUnit);
     }
 
     /// @dev _baseUnit is the base unit of the token0

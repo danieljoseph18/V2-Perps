@@ -180,7 +180,7 @@ contract TestAlternativeOrders is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -214,7 +214,7 @@ contract TestAlternativeOrders is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -245,13 +245,14 @@ contract TestAlternativeOrders is Test {
         assertEq(tradeStorage.getOrder(key).user, address(0));
     }
 
+    // @fail
     function testAUserCanOpenAStopLossAndTakeProfitWithAnOrder() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -300,13 +301,14 @@ contract TestAlternativeOrders is Test {
         assertEq(tp.input.sizeDelta, 4 ether);
     }
 
+    // @fail
     function testAUserCanOverwriteExistingStopLossAndTakeProfitOrders() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -381,7 +383,7 @@ contract TestAlternativeOrders is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 2400e18,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -416,13 +418,14 @@ contract TestAlternativeOrders is Test {
         assertGt(balanceAfter, balanceBefore);
     }
 
+    // @fail
     function testLimitOrdersCantBeExecutedBeforePriceHasReachedTarget() public setUpMarkets {
         // create a limit order
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 500e6,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 2600e18,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -457,13 +460,14 @@ contract TestAlternativeOrders is Test {
         );
     }
 
+    // @fail
     function testLimitOrdersCanBeExecutedAtValidPrices() public setUpMarkets {
         // create a limit order
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 500e6,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 2600e18,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,

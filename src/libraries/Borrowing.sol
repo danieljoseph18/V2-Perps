@@ -68,8 +68,7 @@ library Borrowing {
         state.borrowingFactor = ud(state.config.factor);
         if (_isLong) {
             // get the long open interest
-            state.openInterestUsd =
-                ud(MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, true));
+            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, true));
             // get the long pending pnl
             state.pendingPnl = Pricing.getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
             // get the long pool balance
@@ -86,8 +85,7 @@ library Borrowing {
             rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
         } else {
             // get the short open interest
-            state.openInterestUsd =
-                ud(MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, false));
+            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, false));
             // get the short pool balance
             state.poolBalance =
                 ud(MarketUtils.getPoolBalanceUsd(market, _indexToken, _collateralPrice, _collateralBaseUnit, false));
@@ -107,8 +105,7 @@ library Borrowing {
         view
         returns (uint256 collateralFeesOwed)
     {
-        uint256 indexFees = _getTotalPositionFeesOwed(_state.market, _position);
-        uint256 feesUsd = mulDiv(indexFees, _state.indexPrice, _state.indexBaseUnit);
+        uint256 feesUsd = _getTotalPositionFeesOwed(_state.market, _position);
         collateralFeesOwed = mulDiv(feesUsd, _state.collateralBaseUnit, _state.collateralPrice);
     }
 

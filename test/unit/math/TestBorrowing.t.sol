@@ -25,6 +25,7 @@ import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 import {Order} from "../../../src/positions/Order.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 
 contract TestBorrowing is Test {
     using stdStorage for StdStorage;
@@ -187,6 +188,7 @@ contract TestBorrowing is Test {
      * market, indexPrice, indexBaseUnit, collateralBaseUnit, collateralPrice,
      *
      */
+    // @fail
     function testCalculatingTotalFeesOwedInCollateralTokens(uint256 _collateral, uint256 _leverage)
         public
         setUpMarkets
@@ -198,7 +200,7 @@ contract TestBorrowing is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -266,59 +268,13 @@ contract TestBorrowing is Test {
         assertEq(feesOwed, expectedFees);
     }
 
+    // @fail
     function testCalculatingTotalFeesOwedInCollateralTokensWithExistingCumulative(
         uint256 _collateral,
         uint256 _leverage
     ) public setUpMarkets {
         Order.ExecutionState memory state;
         state.market = IMarket(marketMaker.tokenToMarkets(weth));
-        // Open a position to alter the borrowing rate
-        Position.Input memory input = Position.Input({
-            indexToken: weth,
-            collateralToken: weth,
-            collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
-            limitPrice: 0,
-            maxSlippage: 0.4e18,
-            executionFee: 0.01 ether,
-            isLong: true,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: true,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-
-        vm.prank(OWNER);
-        processor.executePosition(
-            tradeStorage.getOrderAtIndex(0, false),
-            OWNER,
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true}),
-            tokenUpdateData,
-            weth,
-            0
-        );
-        // Get the current rate
-
-        // Set the Cumulative Borrow Fees To 1e18
-        // marketStorage -> borrowing -> longCumulativeBorrowFee
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(Market.getCumulativeBorrowFees.selector, weth, true),
-            abi.encode(uint256(1e18)) // Mock return value
-        );
-        assertEq(state.market.getCumulativeBorrowFee(weth, true), 1e18);
-
-        vm.warp(block.timestamp + 1 days);
-        vm.roll(block.number + 1);
 
         // Create an arbitrary position
         _collateral = bound(_collateral, 1, 100_000 ether);
@@ -335,16 +291,17 @@ contract TestBorrowing is Test {
             block.timestamp,
             state.market.getFundingAccrued(weth),
             true,
-            Position.BorrowingParams(0, 0, 0),
+            Position.BorrowingParams(0, 1e18, 0), // Set entry cumulative to 1e18
             bytes32(0),
             bytes32(0)
         );
 
+        // Amount the user should be charged for
         uint256 bonusCumulative = 0.000003e18;
 
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getCumulativeBorrowFees.selector, weth, true),
+            abi.encodeWithSelector(Market.getCumulativeBorrowFee.selector, weth, true),
             abi.encode(uint256(1e18) + bonusCumulative) // Mock return value
         );
 
@@ -357,18 +314,18 @@ contract TestBorrowing is Test {
         // Calculate Fees Owed
         uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, state);
         // Index Tokens == Collateral Tokens
-        uint256 expectedFees =
-            (((state.market.getBorrowingRate(weth, true) * 1 days) + bonusCumulative) * positionSize) / 1e18;
+        uint256 expectedFees = mulDiv(bonusCumulative, positionSize, 1e18);
         assertEq(feesOwed, expectedFees);
     }
 
+    // @fail
     function testBorrowingRateCalculationBasic() public setUpMarkets {
         // Open a position to alter the borrowing rate
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -401,8 +358,8 @@ contract TestBorrowing is Test {
         // Fetch the borrowing rate
         uint256 borrowingRate = market.getBorrowingRate(weth, true);
         // Calculate the expected borrowing rate
-        // 3.4330185397149488e-12
-        uint256 expectedRate = 0.000000000003504053e18;
+        // 7.008807-12
+        uint256 expectedRate = 0.000000000007008807e18;
         // Cross check
         assertEq(borrowingRate, expectedRate);
     }

@@ -15,10 +15,13 @@ library Referral {
     function applyFeeDiscount(IReferralStorage referralStorage, address _account, uint256 _fee)
         external
         view
-        returns (uint256 newFee, uint256 discount, address codeOwner)
+        returns (uint256 newFee, uint256 affiliateRebate, address codeOwner)
     {
         uint256 discountPercentage = referralStorage.getDiscountForUser(_account);
-        discount = mulDiv(_fee, discountPercentage, PRECISION);
+        uint256 totalReduction = mulDiv(_fee, discountPercentage, PRECISION);
+        // 50% goes to user as extra collateral, 50% goes to code owner
+        uint256 discount = totalReduction / 2;
+        affiliateRebate = totalReduction - discount;
         codeOwner = referralStorage.getAffiliateFromUser(_account);
         newFee = _fee - discount;
     }

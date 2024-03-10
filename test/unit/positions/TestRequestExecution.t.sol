@@ -165,7 +165,7 @@ contract TestRequestExecution is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -208,7 +208,7 @@ contract TestRequestExecution is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -247,7 +247,7 @@ contract TestRequestExecution is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -303,7 +303,7 @@ contract TestRequestExecution is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -349,7 +349,7 @@ contract TestRequestExecution is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -379,13 +379,14 @@ contract TestRequestExecution is Test {
         console.log("Profit Received: ", balanceAfter - balanceBefore);
     }
 
+    // @fail
     function testAUserAccruesLossesIfClosingAnUnprofitablePosition() public setUpMarkets {
         // Create a request
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -431,7 +432,7 @@ contract TestRequestExecution is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -462,6 +463,7 @@ contract TestRequestExecution is Test {
         console.log("Amount Out: ", balanceAfter - balanceBefore);
     }
 
+    // @fail
     function testMarketStateIsUpdatedForEachPositionExecution() public setUpMarkets {
         // Pass some time
         vm.warp(block.timestamp + 1 days);
@@ -470,8 +472,8 @@ contract TestRequestExecution is Test {
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
-            collateralDelta: 0.004 ether,
-            sizeDelta: 0.04 ether,
+            collateralDelta: 0.04 ether,
+            sizeDelta: 1000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -489,7 +491,7 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 0.014 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.09 ether}(input, tokenUpdateData);
         // execute the request
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         Oracle.TradingEnabled memory tradingEnabled =
@@ -501,7 +503,7 @@ contract TestRequestExecution is Test {
         vm.roll(block.number + 1);
         // check the market parameters
         uint256 longOpenInterest = market.getOpenInterest(weth, true);
-        assertEq(longOpenInterest, 0.04 ether);
+        assertEq(longOpenInterest, 0.4 ether);
         uint256 longAverageEntryPrice = market.getAverageEntryPrice(weth, true);
         assertNotEq(longAverageEntryPrice, 0);
         // Update the Price
@@ -516,14 +518,14 @@ contract TestRequestExecution is Test {
         tokenUpdateData[1] = usdcUpdateData;
         // create a request
         vm.prank(USER);
-        router.createPositionRequest{value: 0.014 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.09 ether}(input, tokenUpdateData);
         // execute the request
         orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // check the market parameters
         longOpenInterest = market.getOpenInterest(weth, true);
-        assertEq(longOpenInterest, 0.08 ether);
+        assertEq(longOpenInterest, 0.8 ether);
         uint256 newLongWaep = market.getAverageEntryPrice(weth, true);
         assertNotEq(newLongWaep, longAverageEntryPrice);
         uint256 lastBorrowingUpdate = market.getLastBorrowingUpdate(weth);
@@ -534,13 +536,14 @@ contract TestRequestExecution is Test {
         assertNotEq(longBorrowingRate, 0);
     }
 
+    // @fail
     function testPositionFeesAreCalculatedCorrectly() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -560,11 +563,11 @@ contract TestRequestExecution is Test {
         vm.prank(OWNER);
         router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
         // predict the fee owed
-        uint256 sizeInCollateral = Position.convertIndexAmountToCollateral(4 ether, 2500.5e18, 1e18, 1e18, 1e6);
+        uint256 sizeInCollateral = Position.convertUsdToCollateral(10_000e30, 1e18, 1e6);
         assertEq(sizeInCollateral, 1.0002e10);
         uint256 predictedFee = (sizeInCollateral * 0.001e18) / 1e18;
         // compare it with the fee owed from the contract
-        uint256 fee = Fee.calculateForPosition(tradeStorage, 4 ether, 0.5 ether, 2500.5e18, 1e18, 1e18, 1e6);
+        uint256 fee = Fee.calculateForPosition(tradeStorage, 10_000e30, 0.5 ether, 1e18, 1e6);
         assertEq(predictedFee, fee);
     }
 }

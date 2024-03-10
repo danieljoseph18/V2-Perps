@@ -20,7 +20,7 @@ pragma solidity 0.8.23;
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Position} from "../positions/Position.sol";
-import {mulDiv} from "@prb/math/Common.sol";
+import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
@@ -33,47 +33,50 @@ library Pricing {
     using SignedMath for int256;
     using SafeCast for uint256;
 
-    uint256 public constant PRICE_PRECISION = 1e18;
+    uint256 public constant PRICE_PRECISION = 1e30;
 
     /// @dev returns PNL in USD
-    function calculatePnL(Position.Data memory _position, uint256 _indexPriceUsd, uint256 _indexBaseUnit)
+    /// @dev returns PNL in USD
+    // PNL = (Current Price - Average Entry Price) * (Position Value / Average Entry Price)
+    function calculatePnL(Position.Data memory _position, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         pure
         returns (int256)
     {
-        uint256 entryValue = mulDiv(_position.positionSize, _position.weightedAvgEntryPrice, _indexBaseUnit);
-        uint256 currentValue = mulDiv(_position.positionSize, _indexPriceUsd, _indexBaseUnit);
-        return _position.isLong
-            ? currentValue.toInt256() - entryValue.toInt256()
-            : entryValue.toInt256() - currentValue.toInt256();
+        int256 priceDelta = _indexPrice.toInt256() - _position.weightedAvgEntryPrice.toInt256();
+        uint256 entryIndexAmount = mulDiv(_position.positionSize, _indexBaseUnit, _position.weightedAvgEntryPrice);
+        if (_position.isLong) {
+            return mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
+        } else {
+            return -mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
+        }
     }
 
     /**
-     * WAEP = ∑(Position Size in Index Tokens) / ∑(Entry Price * Position Size in Index Tokens)
+     * WAEP = ∑(Position Size in USD) / ∑(Entry Price in USD * Position Size in USD)
      */
     function calculateWeightedAverageEntryPrice(
         uint256 _prevAverageEntryPrice,
-        uint256 _totalIndexSize, // Total Index Tokens in Position / Market
+        uint256 _prevPositionSize,
         int256 _sizeDelta,
         uint256 _indexPrice
     ) external pure returns (uint256) {
-        uint256 absSizeDelta = _sizeDelta.abs();
         if (_sizeDelta <= 0) {
             // If full close, Avg Entry Price is reset to 0
-            if (absSizeDelta == _totalIndexSize) return 0;
+            if (_sizeDelta == -_prevPositionSize.toInt256()) return 0;
             // Else, Avg Entry Price doesn't change for decrease
             else return _prevAverageEntryPrice;
         }
 
-        uint256 nextIndexSize;
-        uint256 nextTotalEntryValue;
-
         // Increasing position size
-        nextIndexSize = _totalIndexSize + absSizeDelta;
-        nextTotalEntryValue = (_prevAverageEntryPrice * _totalIndexSize) + (_indexPrice * absSizeDelta);
+        uint256 newPositionSize = _prevPositionSize + _sizeDelta.abs();
 
-        // @audit - precision
-        return nextTotalEntryValue / nextIndexSize;
+        uint256 numerator = _prevAverageEntryPrice * _prevPositionSize;
+        numerator += _indexPrice * _sizeDelta.abs();
+
+        uint256 newAverageEntryPrice = numerator / newPositionSize;
+
+        return newAverageEntryPrice;
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
@@ -82,21 +85,14 @@ library Pricing {
         view
         returns (int256 netPnl)
     {
-        // Get OI in USD
+        uint256 openInterest = market.getOpenInterest(_indexToken, _isLong);
+        uint256 averageEntryPrice = market.getAverageEntryPrice(_indexToken, _isLong);
+        int256 priceDelta = _indexPrice.toInt256() - averageEntryPrice.toInt256();
+        uint256 entryIndexAmount = mulDiv(openInterest, _indexBaseUnit, averageEntryPrice);
         if (_isLong) {
-            // get index value
-            uint256 indexValue = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, true);
-            // get entry value
-            uint256 entryValue = MarketUtils.getTotalEntryValueUsd(market, _indexToken, _indexBaseUnit, _isLong);
-            // return index value - entry value
-            netPnl = indexValue.toInt256() - entryValue.toInt256();
+            netPnl = mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
-            // get entry value
-            uint256 entryValue = MarketUtils.getTotalEntryValueUsd(market, _indexToken, _indexBaseUnit, _isLong);
-            // get index value
-            uint256 indexValue = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, false);
-            // return entry value - index value
-            netPnl = entryValue.toInt256() - indexValue.toInt256();
+            netPnl = -mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         }
     }
 
@@ -110,31 +106,25 @@ library Pricing {
         return longPnl + shortPnl;
     }
 
-    /// RealisedPNL=(Current price − Weighted average entry price)×(Realised position size/Current price)
-    /// int256 pnl = int256(amountToRealise * currentTokenPrice) - int256(amountToRealise * userPos.entryPriceWeighted);
     /// @dev Returns fractional PNL in USD
     function getDecreasePositionPnl(
-        uint256 _indexBaseUnit,
-        uint256 _sizeDelta,
-        uint256 _averageEntryPrice,
+        uint256 _sizeDeltaUsd,
+        uint256 _averageEntryPriceUsd,
         uint256 _indexPrice,
-        uint256 _collateralPrice,
+        uint256 _indexBaseUnit,
+        uint256 _collateralPriceUsd,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external pure returns (int256 decreasePositionPnl) {
-        // only realise a percentage equivalent to the percentage of the position being closed
-        uint256 entryValue = mulDiv(_sizeDelta, _averageEntryPrice, _indexBaseUnit);
-        uint256 exitValue = mulDiv(_sizeDelta, _indexPrice, _indexBaseUnit);
-        // if long, > 0 is profit, < 0 is loss
-        // if short, > 0 is loss, < 0 is profit
+        int256 priceDelta = _indexPrice.toInt256() - _averageEntryPriceUsd.toInt256();
+        uint256 entryIndexAmount = mulDiv(_sizeDeltaUsd, _indexBaseUnit, _averageEntryPriceUsd);
         int256 pnlUsd;
         if (_isLong) {
-            pnlUsd = exitValue.toInt256() - entryValue.toInt256();
+            pnlUsd = mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
-            pnlUsd = entryValue.toInt256() - exitValue.toInt256();
+            pnlUsd = -mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         }
-        // Convert PNL USD to Collateral Tokens
-        uint256 pnlCollateral = mulDiv(pnlUsd.abs(), _collateralBaseUnit, _collateralPrice);
+        uint256 pnlCollateral = mulDiv(pnlUsd.abs(), _collateralBaseUnit, _collateralPriceUsd);
         return pnlUsd > 0 ? pnlCollateral.toInt256() : -pnlCollateral.toInt256();
     }
 }

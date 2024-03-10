@@ -203,7 +203,7 @@ contract TestReferrals is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -221,8 +221,7 @@ contract TestReferrals is Test {
             })
         });
 
-        uint256 fee =
-            Fee.calculateForPosition(tradeStorage, input.sizeDelta, input.collateralDelta, 2500e18, 1e18, 1e18, 1e6);
+        uint256 fee = Fee.calculateForPosition(tradeStorage, input.sizeDelta, input.collateralDelta, 1e18, 1e6);
 
         (uint256 feeWithoutReferralCode,,) = Referral.applyFeeDiscount(referralStorage, USER, fee);
 
@@ -239,6 +238,7 @@ contract TestReferrals is Test {
      * audit - What happened to the 4 wei
      *     - Why is the user not receiving their funds
      */
+    // @fail
     function testReceivingReferralRewardsFromAnAffiliateAccount() public setUpMarkets {
         // register an affiliate code
         bytes32 code = keccak256(abi.encode("CODE"));
@@ -252,7 +252,7 @@ contract TestReferrals is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
@@ -297,7 +297,7 @@ contract TestReferrals is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,

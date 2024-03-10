@@ -86,10 +86,6 @@ contract Market is Vault, IMarket {
         emit AdlStateUpdated(_indexToken, _isFlaggedForAdl);
     }
 
-    /// @dev Called for every position entry / exit
-    // Rate can be lagging if lack of updates to positions
-    // @audit -> Should only be called for execution, not requests
-    // Pricing data must be accurate
     function updateFundingRate(address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         nonReentrant
@@ -114,42 +110,30 @@ contract Market is Vault, IMarket {
         emit FundingUpdated(funding.fundingRate, funding.fundingRateVelocity, funding.fundingAccruedUsd);
     }
 
-    // Function to calculate borrowing fees per second
-    /*
-        borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
-    */
-
-    /// @dev Call every time OI is updated (trade open / close)
-    // Needs fix -> Should be for both sides
-    // @audit
     function updateBorrowingRate(
         address _indexToken,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
-        uint256 _longTokenPrice,
-        uint256 _longBaseUnit,
-        uint256 _shortTokenPrice,
-        uint256 _shortBaseUnit,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
         bool _isLong
     ) external nonReentrant onlyProcessor {
         BorrowingValues memory borrowing = marketStorage[_indexToken].borrowing;
-        // If time elapsed = 0, return
-        uint48 lastUpdate = borrowing.lastBorrowUpdate;
 
-        // update cumulative fees with current borrowing rate
         if (_isLong) {
             borrowing.longCumulativeBorrowFees +=
-                Borrowing.calculateFeesSinceUpdate(borrowing.longBorrowingRate, lastUpdate);
+                Borrowing.calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
             borrowing.longBorrowingRate = Borrowing.calculateRate(
-                this, _indexToken, _indexPrice, _indexBaseUnit, _longTokenPrice, _longBaseUnit, true
+                this, _indexToken, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, true
             );
         } else {
             borrowing.shortCumulativeBorrowFees +=
-                Borrowing.calculateFeesSinceUpdate(borrowing.shortBorrowingRate, lastUpdate);
+                Borrowing.calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
             borrowing.shortBorrowingRate = Borrowing.calculateRate(
-                this, _indexToken, _indexPrice, _indexBaseUnit, _shortTokenPrice, _shortBaseUnit, false
+                this, _indexToken, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, false
             );
         }
+
         borrowing.lastBorrowUpdate = uint48(block.timestamp);
 
         // Update Storage
@@ -158,48 +142,49 @@ contract Market is Vault, IMarket {
         emit BorrowingRatesUpdated(_indexToken, borrowing.longBorrowingRate, borrowing.shortBorrowingRate);
     }
 
-    /// @dev Updates Weighted Average Entry Price => Used to Track PNL For a Market
-    function updateAverageEntryPrice(address _indexToken, uint256 _price, int256 _sizeDelta, bool _isLong)
+    function updateAverageEntryPrice(address _indexToken, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
         external
         onlyProcessor
     {
-        require(_price != 0, "Market: Price is 0");
-        if (_sizeDelta == 0) return; // No Change
+        require(_priceUsd != 0, "Market: Price is 0");
+        if (_sizeDeltaUsd == 0) return; // No Change
 
         PnlValues memory pnl = marketStorage[_indexToken].pnl;
 
         if (_isLong) {
-            pnl.longAverageEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
-                pnl.longAverageEntryPrice, marketStorage[_indexToken].openInterest.longOpenInterest, _sizeDelta, _price
+            pnl.longAverageEntryPriceUsd = Pricing.calculateWeightedAverageEntryPrice(
+                pnl.longAverageEntryPriceUsd,
+                marketStorage[_indexToken].openInterest.longOpenInterest,
+                _sizeDeltaUsd,
+                _priceUsd
             );
         } else {
-            pnl.shortAverageEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
-                pnl.shortAverageEntryPrice,
+            pnl.shortAverageEntryPriceUsd = Pricing.calculateWeightedAverageEntryPrice(
+                pnl.shortAverageEntryPriceUsd,
                 marketStorage[_indexToken].openInterest.shortOpenInterest,
-                _sizeDelta,
-                _price
+                _sizeDeltaUsd,
+                _priceUsd
             );
         }
 
         // Update Storage
         marketStorage[_indexToken].pnl = pnl;
 
-        emit AverageEntryPriceUpdated(_indexToken, pnl.longAverageEntryPrice, pnl.shortAverageEntryPrice);
+        emit AverageEntryPriceUpdated(_indexToken, pnl.longAverageEntryPriceUsd, pnl.shortAverageEntryPriceUsd);
     }
 
-    /// @dev Only Order Processor
-    function updateOpenInterest(address _indexToken, uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd)
+    function updateOpenInterest(address _indexToken, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
         external
         onlyProcessor
     {
         if (_shouldAdd) {
             _isLong
-                ? marketStorage[_indexToken].openInterest.longOpenInterest += _indexTokenAmount
-                : marketStorage[_indexToken].openInterest.shortOpenInterest += _indexTokenAmount;
+                ? marketStorage[_indexToken].openInterest.longOpenInterest += _sizeDeltaUsd
+                : marketStorage[_indexToken].openInterest.shortOpenInterest += _sizeDeltaUsd;
         } else {
             _isLong
-                ? marketStorage[_indexToken].openInterest.longOpenInterest -= _indexTokenAmount
-                : marketStorage[_indexToken].openInterest.shortOpenInterest -= _indexTokenAmount;
+                ? marketStorage[_indexToken].openInterest.longOpenInterest -= _sizeDeltaUsd
+                : marketStorage[_indexToken].openInterest.shortOpenInterest -= _sizeDeltaUsd;
         }
         emit OpenInterestUpdated(
             _indexToken,
@@ -277,7 +262,7 @@ contract Market is Vault, IMarket {
         return marketStorage[_indexToken].funding.lastFundingUpdate;
     }
 
-    function getFundingRates(address _indexToken) external view returns (int256, int256) {
+    function getFundingRates(address _indexToken) external view returns (int256 rate, int256 velocity) {
         return (marketStorage[_indexToken].funding.fundingRate, marketStorage[_indexToken].funding.fundingRateVelocity);
     }
 
@@ -339,8 +324,8 @@ contract Market is Vault, IMarket {
 
     function getAverageEntryPrice(address _indexToken, bool _isLong) external view returns (uint256) {
         return _isLong
-            ? marketStorage[_indexToken].pnl.longAverageEntryPrice
-            : marketStorage[_indexToken].pnl.shortAverageEntryPrice;
+            ? marketStorage[_indexToken].pnl.longAverageEntryPriceUsd
+            : marketStorage[_indexToken].pnl.shortAverageEntryPriceUsd;
     }
 
     function getImpactPool(address _indexToken) external view returns (uint256) {

@@ -252,12 +252,13 @@ contract TestPriceImpact is Test {
      * Expected Price Impact: -200008000080000000000
      * Delta: 0
      */
+    // @fail
     function testPriceImpactValuesDeepLiquidity(uint256 _sizeDelta, uint256 _longOi, uint256 _shortOi)
         public
         setUpMarketsDeepLiquidity
     {
         // bound the inputs to realistic values
-        _sizeDelta = bound(_sizeDelta, 1 ether, 50 ether);
+        _sizeDelta = bound(_sizeDelta, 2500e30, 125000e30);
         _longOi = bound(_longOi, 0, 10000 ether);
         _shortOi = bound(_shortOi, 0, 10000 ether);
 
@@ -297,7 +298,6 @@ contract TestPriceImpact is Test {
             impactedPrice: 2500.05e18,
             longMarketTokenPrice: 2500e18,
             shortMarketTokenPrice: 1e18,
-            sizeDeltaUsd: 0,
             collateralDeltaUsd: 0,
             priceImpactUsd: 0,
             collateralPrice: 1e18,
@@ -305,7 +305,7 @@ contract TestPriceImpact is Test {
             fundingFee: 0,
             borrowFee: 0,
             fee: 0,
-            feeDiscount: 0,
+            affiliateRebate: 0,
             referrer: address(0)
         });
 
@@ -322,12 +322,13 @@ contract TestPriceImpact is Test {
             PriceImpact.execute(market, priceFeed, request, orderState);
     }
 
+    // @fail
     function testPriceImpactValuesShallowLiquidity(uint256 _sizeDelta, uint256 _longOi, uint256 _shortOi)
         public
         setUpMarketsShallowLiquidity
     {
         // bound the inputs to realistic values
-        _sizeDelta = bound(_sizeDelta, 1 ether, 50 ether);
+        _sizeDelta = bound(_sizeDelta, 2500e30, 125000e30);
         _longOi = bound(_longOi, 0, 10000 ether);
         _shortOi = bound(_shortOi, 0, 10000 ether);
 
@@ -367,7 +368,6 @@ contract TestPriceImpact is Test {
             impactedPrice: 2500.05e18,
             longMarketTokenPrice: 2500e18,
             shortMarketTokenPrice: 1e18,
-            sizeDeltaUsd: 0,
             collateralDeltaUsd: 0,
             priceImpactUsd: 0,
             collateralPrice: 1e18,
@@ -375,7 +375,7 @@ contract TestPriceImpact is Test {
             fundingFee: 0,
             borrowFee: 0,
             fee: 0,
-            feeDiscount: 0,
+            affiliateRebate: 0,
             referrer: address(0)
         });
 

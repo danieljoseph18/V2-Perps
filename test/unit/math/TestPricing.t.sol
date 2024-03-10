@@ -174,6 +174,7 @@ contract TestPricing is Test {
      * - Market PNL Calculations
      * - Decrease Position PNL Calculations
      */
+    // @fail
     function testCalculatePnlForAPositionLong(uint256 _price) public setUpMarkets {
         // Construct a Position
         _price = bound(_price, 2000e18, 3000e18);
@@ -201,6 +202,7 @@ contract TestPricing is Test {
         assertEq(pnl, expectedPnl);
     }
 
+    // @fail
     function testCalculatePnlForPositionShort(uint256 _price) public setUpMarkets {
         // Construct a Position
         _price = bound(_price, 2000e18, 3000e18);
@@ -259,6 +261,7 @@ contract TestPricing is Test {
 
     // MarketUtils.getOpenInterestUsd
     // MarketUtils.getTotalEntryValueUsd
+    // @fail
     function testGettingThePnlForAnEntireMarketLong(
         uint256 _longOpenInterest,
         uint256 _longAverageEntryPrice,
@@ -289,6 +292,7 @@ contract TestPricing is Test {
         assertEq(actualPnl, expectedPnl, "Calculated PNL does not match expected PNL");
     }
 
+    // @fail
     function testGettingThePnlForAnEntireMarketShort(
         uint256 _shortOpenInterest,
         uint256 _shortAverageEntryPrice,
@@ -318,6 +322,7 @@ contract TestPricing is Test {
         assertEq(actualPnl, expectedPnl, "Calculated PNL does not match expected PNL");
     }
 
+    // @fail
     function testGettingTheCombinedPnlForAnEntireMarket(
         uint256 _longOpenInterest,
         uint256 _longAverageEntryPrice,
@@ -365,6 +370,7 @@ contract TestPricing is Test {
         assertEq(actualPnl, expectedPnl, "Calculated PNL does not match expected PNL");
     }
 
+    // @fail
     function testCalculationForDecreasePositionPnl(
         uint256 _sizeDelta,
         uint256 _averageEntryPrice,
@@ -383,7 +389,7 @@ contract TestPricing is Test {
 
         // Directly use the `getDecreasePositionPnl` function to get the PNL in collateral terms
         int256 actualPnlCollateral = Pricing.getDecreasePositionPnl(
-            1e18, _sizeDelta, _averageEntryPrice, _indexPrice, _collateralPrice, 1e18, true
+            1e18, _sizeDelta, _averageEntryPrice, _indexPrice, 1e18, _collateralPrice, true
         );
 
         // Convert the expected PNL from USD to collateral tokens. This step aligns with how `getDecreasePositionPnl` function works.

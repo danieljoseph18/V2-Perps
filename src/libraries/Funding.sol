@@ -35,15 +35,16 @@ library Funding {
 
     uint256 constant PRECISION = 1e18;
     int256 constant SIGNED_PRECISION = 1e18;
+    int256 constant PRICE_PRECISION = 1e30;
     int256 constant SECONDS_IN_DAY = 86400;
 
-    function calculateSkewUsd(IMarket market, address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function calculateSkewUsd(IMarket market, address _indexToken, uint256 _indexPrice)
         external
         view
         returns (int256 skewUsd)
     {
-        uint256 longOI = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, true);
-        uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, _indexBaseUnit, false);
+        uint256 longOI = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, true);
+        uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, false);
 
         skewUsd = longOI.toInt256() - shortOI.toInt256();
     }
@@ -52,13 +53,13 @@ library Funding {
         IMarket market,
         address _indexToken,
         uint256 _indexPrice,
-        int256 _sizeDeltaUsd,
+        uint256 _sizeDelta,
         int256 _entryFundingAccrued
     ) external view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
         // Ensure the sizeDeltaUsd is positive
-        if (_sizeDeltaUsd < 0) _sizeDeltaUsd *= -1;
         (, nextFundingAccrued) = _calculateNextFunding(market, _indexToken, _indexPrice);
-        fundingFeeUsd = mulDivSigned(_sizeDeltaUsd, nextFundingAccrued - _entryFundingAccrued, SIGNED_PRECISION);
+        // Both Values in USD -> 30 D.P: Divide by Price precision to get 30 D.P value
+        fundingFeeUsd = mulDivSigned(_sizeDelta.toInt256(), nextFundingAccrued - _entryFundingAccrued, PRICE_PRECISION);
     }
 
     /// @dev Calculate the funding rate velocity
@@ -123,8 +124,9 @@ library Funding {
         fundingRate = getCurrentFundingRate(market, _indexToken);
         (int256 storedFundingRate,) = market.getFundingRates(_indexToken);
         // Minus sign is needed as funding flows in the opposite direction of the skew
-        int256 avgFundingRate = -SignedMath.average(storedFundingRate, fundingRate);
-        // What does this do and why?
+        // Essentially taking an average, where Signed Precision == units
+        int256 avgFundingRate = -mulDivSigned(storedFundingRate, fundingRate, 2 * SIGNED_PRECISION);
+
         unrecordedFunding = mulDivSigned(
             mulDivSigned(avgFundingRate, _getProportionalFundingElapsed(market, _indexToken), SIGNED_PRECISION),
             _indexPrice.toInt256(),

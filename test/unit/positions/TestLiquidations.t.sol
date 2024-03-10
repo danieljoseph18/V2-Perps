@@ -169,13 +169,14 @@ contract TestLiquidations is Test {
         _;
     }
 
+    // @fail
     function testLiquidatingAPositionThatGoesUnder() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,

@@ -41,12 +41,12 @@ library PriceImpact {
 
     uint256 public constant SCALAR = 1e18;
     int256 public constant SIGNED_SCALAR = 1e18;
+    uint256 private constant PRICE_PRECISION = 1e30;
 
     struct ExecutionState {
         IMarket.ImpactConfig impact;
         uint256 longOi;
         uint256 shortOi;
-        uint256 sizeDeltaUsd;
         uint256 totalOiBefore;
         uint256 totalOiAfter;
         int256 skewBefore;
@@ -70,15 +70,10 @@ library PriceImpact {
         ExecutionState memory state;
 
         state.impact = market.getImpactConfig(_request.input.indexToken);
-        state.longOi = MarketUtils.getOpenInterestUsd(
-            market, _request.input.indexToken, _orderState.indexPrice, _orderState.indexBaseUnit, true
-        );
-        state.shortOi = MarketUtils.getOpenInterestUsd(
-            market, _request.input.indexToken, _orderState.indexPrice, _orderState.indexBaseUnit, false
-        );
-        state.sizeDeltaUsd = mulDiv(_request.input.sizeDelta, _orderState.indexPrice, _orderState.indexBaseUnit);
+        state.longOi = MarketUtils.getOpenInterestUsd(market, _request.input.indexToken, _orderState.indexPrice, true);
+        state.shortOi = MarketUtils.getOpenInterestUsd(market, _request.input.indexToken, _orderState.indexPrice, false);
 
-        require(state.sizeDeltaUsd != 0, "PriceImpact: Size delta is 0");
+        require(_request.input.sizeDelta != 0, "PriceImpact: Size delta is 0");
 
         // Calculate the impact on available liquidity
         uint256 availableOi = MarketUtils.getTotalAvailableOiUsd(
@@ -91,35 +86,35 @@ library PriceImpact {
         );
         // Can't trade on an empty pool
         require(availableOi > 0, "PriceImpact: No available liquidity");
-        state.oiPercentage = mulDiv(state.sizeDeltaUsd, SCALAR, availableOi).toInt256();
+        state.oiPercentage = mulDiv(_request.input.sizeDelta, SCALAR, availableOi).toInt256();
 
         state.totalOiBefore = state.longOi + state.shortOi;
 
         state.skewBefore = state.longOi.toInt256() - state.shortOi.toInt256();
 
         if (_request.input.isIncrease) {
-            _request.input.isLong ? state.longOi += state.sizeDeltaUsd : state.shortOi += state.sizeDeltaUsd;
-            state.totalOiAfter = state.totalOiBefore + state.sizeDeltaUsd;
+            _request.input.isLong ? state.longOi += _request.input.sizeDelta : state.shortOi += _request.input.sizeDelta;
+            state.totalOiAfter = state.totalOiBefore + _request.input.sizeDelta;
         } else {
-            _request.input.isLong ? state.longOi -= state.sizeDeltaUsd : state.shortOi -= state.sizeDeltaUsd;
-            state.totalOiAfter = state.totalOiBefore - state.sizeDeltaUsd;
+            _request.input.isLong ? state.longOi -= _request.input.sizeDelta : state.shortOi -= _request.input.sizeDelta;
+            state.totalOiAfter = state.totalOiBefore - _request.input.sizeDelta;
         }
 
         state.skewAfter = state.longOi.toInt256() - state.shortOi.toInt256();
 
         // If total open interest before or after is zero, calculate impact accordingly
         if (state.totalOiBefore == 0 || state.totalOiAfter == 0) {
-            priceImpactUsd = _calculateImpactOnEmptyPool(state);
+            priceImpactUsd = _calculateImpactOnEmptyPool(state, _request.input.sizeDelta);
         } else {
-            // Check if a skew flip has occurred
-            bool skewFlip = state.skewBefore * state.skewAfter < 0;
+            // Compare the MSBs to determine whether a skew flip has occurred
+            bool skewFlip = (state.skewBefore ^ state.skewAfter) < 0;
 
             // If Skew Flip -> positive impact until skew = 0, and negative impact after, then combine
             // If no skew flip, impact within bounds
             priceImpactUsd = skewFlip
                 ? _calculateFlipImpact(
                     state.impact,
-                    state.sizeDeltaUsd.toInt256(),
+                    _request.input.sizeDelta.toInt256(),
                     state.totalOiBefore.toInt256(),
                     state.totalOiAfter.toInt256(),
                     state.skewBefore,
@@ -128,7 +123,7 @@ library PriceImpact {
                 )
                 : _calculateImpactWithinBounds(
                     state.impact,
-                    state.sizeDeltaUsd.toInt256(),
+                    _request.input.sizeDelta.toInt256(),
                     state.totalOiBefore.toInt256(),
                     state.totalOiAfter.toInt256(),
                     state.skewBefore,
@@ -142,13 +137,7 @@ library PriceImpact {
             priceImpactUsd = _validateImpactDelta(market, _request.input.indexToken, priceImpactUsd);
         }
         // calculate the impacted price
-        impactedPrice = _calculateImpactedPrice(
-            state.sizeDeltaUsd,
-            priceImpactUsd.abs(),
-            _orderState.indexBaseUnit,
-            _request.input.sizeDelta,
-            priceImpactUsd
-        );
+        impactedPrice = _calculateImpactedPrice(_request.input.sizeDelta, _orderState.indexPrice, priceImpactUsd);
         // check the slippage if negative
         if (priceImpactUsd < 0) {
             _checkSlippage(impactedPrice, _orderState.indexPrice, _request.input.maxSlippage);
@@ -167,7 +156,12 @@ library PriceImpact {
      * If total oi after is 0, return 0 to avoid incentivizing this case. Otherwise users would receive a positive impact
      * for full-closing the open interest, as 0 skew = is technically a perfect balance.
      */
-    function _calculateImpactOnEmptyPool(ExecutionState memory _state) internal pure returns (int256 priceImpact) {
+    function _calculateImpactOnEmptyPool(ExecutionState memory _state, uint256 _sizeDelta)
+        internal
+        view
+        returns (int256 priceImpact)
+    {
+        console.log("Failing in empty pool impact");
         if (_state.totalOiAfter == 0) return 0;
 
         require(_state.totalOiBefore == 0, "PriceImpact: Invalid state");
@@ -191,7 +185,7 @@ library PriceImpact {
         if (totalImpact < -1e18 || totalImpact > 0) {
             revert PriceImpact_InvalidTotalImpact(totalImpact);
         }
-        priceImpact = mulDivSigned(_state.sizeDeltaUsd.toInt256(), totalImpact, SIGNED_SCALAR);
+        priceImpact = mulDivSigned(_sizeDelta.toInt256(), totalImpact, SIGNED_SCALAR);
         console2.log("Price Impact: ", priceImpact);
     }
 
@@ -211,7 +205,8 @@ library PriceImpact {
         int256 _skewBefore,
         int256 _skewAfter,
         int256 _oiPercentage
-    ) internal pure returns (int256 priceImpactUsd) {
+    ) internal view returns (int256 priceImpactUsd) {
+        console.log("Failing in impact within bounds");
         int256 skewScalar;
         int256 liquidityScalar;
         // If Price Impact is Positive
@@ -222,18 +217,21 @@ library PriceImpact {
             skewScalar = _impact.negativeSkewScalar;
             liquidityScalar = _impact.negativeLiquidityScalar;
         }
-
+        console2.log("First Mul Div: ", mulDivSigned(_skewBefore, SIGNED_SCALAR, _totalOiBefore));
+        console2.log("Second Mul Div: ", mulDivSigned(_skewAfter, SIGNED_SCALAR, _totalOiAfter));
         int256 skewImpact = mulDivSigned(
             skewScalar,
             mulDivSigned(_skewBefore, SIGNED_SCALAR, _totalOiBefore)
                 - mulDivSigned(_skewAfter, SIGNED_SCALAR, _totalOiAfter),
             SIGNED_SCALAR
         );
+        console2.log("Bounds Skew Impact: ", skewImpact);
         int256 liquidityImpact = mulDivSigned(liquidityScalar, _oiPercentage, SIGNED_SCALAR);
-
+        console2.log("Bounds Liquidity Impact: ", liquidityImpact);
         int256 totalImpact = mulDivSigned(skewImpact, liquidityImpact, SIGNED_SCALAR);
-
+        console2.log("Bounds Total Impact: ", totalImpact);
         priceImpactUsd = mulDivSigned(_sizeDeltaUsd, totalImpact, SIGNED_SCALAR);
+        console2.log("Bounds Price Impact: ", priceImpactUsd);
     }
 
     // impact is positive toward 0, so positive impact is simply the skew factor before
@@ -250,7 +248,8 @@ library PriceImpact {
         int256 _skewBefore,
         int256 _skewAfter,
         int256 _oiPercentage
-    ) internal pure returns (int256 priceImpactUsd) {
+    ) internal view returns (int256 priceImpactUsd) {
+        console.log("Failing in flip impact");
         // Calculate the positive impact before the sign flips
         int256 positiveImpact = _calculateImpactWithinBounds(
             _impact, _sizeDeltaUsd, _totalOiBefore, _totalOiAfter, _skewBefore, 0, _oiPercentage
@@ -274,18 +273,23 @@ library PriceImpact {
         require(slippage <= _maxSlippage, "slippage exceeds max");
     }
 
-    function _calculateImpactedPrice(
-        uint256 _sizeDeltaUsd,
-        uint256 _absPriceImpactUsd,
-        uint256 _tokenUnit,
-        uint256 _amountIn,
-        int256 _priceImpactUsd
-    ) internal pure returns (uint256) {
-        uint256 impactPercentage = mulDiv(_absPriceImpactUsd, _tokenUnit, _sizeDeltaUsd);
-        uint256 absImpactAmount = mulDiv(_amountIn, impactPercentage, SCALAR);
-        uint256 indexTokensAfterImpact = _priceImpactUsd > 0 ? _amountIn + absImpactAmount : _amountIn - absImpactAmount;
-
-        return mulDiv(_sizeDeltaUsd, _tokenUnit, indexTokensAfterImpact);
+    /**
+     * Get the impacted percentage of the size delta
+     * Impact the price by the same percentage
+     * Return the impacted price
+     */
+    function _calculateImpactedPrice(uint256 _sizeDeltaUsd, uint256 _indexPrice, int256 _priceImpactUsd)
+        internal
+        pure
+        returns (uint256 impactedPrice)
+    {
+        uint256 percentageImpact = mulDiv(_priceImpactUsd.abs(), SCALAR, _sizeDeltaUsd);
+        uint256 impactToPrice = mulDiv(percentageImpact, _indexPrice, SCALAR);
+        if (_priceImpactUsd < 0) {
+            impactedPrice = _indexPrice - impactToPrice;
+        } else {
+            impactedPrice = _indexPrice + impactToPrice;
+        }
     }
 
     function _validateImpactDelta(IMarket market, address _indexToken, int256 _priceImpactUsd)

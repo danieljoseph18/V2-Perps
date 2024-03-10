@@ -29,6 +29,7 @@ import {Order} from "../../../src/positions/Order.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
+import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 
 contract TestADLs is Test {
     using SignedMath for int256;
@@ -137,13 +138,13 @@ contract TestADLs is Test {
         Deposit.Input memory input = Deposit.Input({
             owner: OWNER,
             tokenIn: weth,
-            amountIn: 100 ether,
+            amountIn: 10_000 ether,
             executionFee: 0.01 ether,
             shouldWrap: true
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 100.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 10_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
         processor.executeDeposit(market, depositKey, 0);
@@ -152,7 +153,7 @@ contract TestADLs is Test {
         input = Deposit.Input({
             owner: OWNER,
             tokenIn: usdc,
-            amountIn: 250_000e6,
+            amountIn: 25_000_000e6,
             executionFee: 0.01 ether,
             shouldWrap: false
         });
@@ -172,6 +173,7 @@ contract TestADLs is Test {
         _;
     }
 
+    // @audit - why so many calls to getPnl?
     function testPositionsInPoolsWithLargePnlToPoolRatiosCanBeAdled() public setUpMarkets {
         vm.deal(RANDOM1, 1_000_000 ether);
         vm.deal(RANDOM2, 1_000_000 ether);
@@ -181,7 +183,7 @@ contract TestADLs is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 10 ether,
+            sizeDelta: 25_000e30,
             limitPrice: 0,
             maxSlippage: 0.9999e18,
             executionFee: 0.01 ether,
@@ -222,11 +224,15 @@ contract TestADLs is Test {
         processor.executePosition(orderKey, RANDOM2, tradingEnabled, tokenUpdateData, weth, 0);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
         processor.executePosition(orderKey, RANDOM3, tradingEnabled, tokenUpdateData, weth, 0);
+
+        vm.warp(block.timestamp + 10);
+        vm.roll(block.number + 1);
         // move the price so that the pnl to pool ratio is large
         bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
             ethPriceId, 1000000, 50, -2, 1000000, 50, uint64(block.timestamp), uint64(block.timestamp)
         );
         tokenUpdateData[0] = wethUpdateData;
+        vm.prank(OWNER);
         priceFeed.signPriceData{value: 0.01 ether}(weth, tokenUpdateData);
         // adl the positions
         vm.prank(OWNER);
@@ -234,10 +240,15 @@ contract TestADLs is Test {
         // get one of the position keys
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), true);
         // adl it
-        processor.executeAdl(market, weth, 2 ether, positionKeys[0], true, tokenUpdateData);
+        /**
+         * @audit - precision loss in size delta - why is it 1999999999999999983 instead of 2 ether?
+         * Precision loss of 17
+         * @audit - impacted price is 0 - if no impact set it to price
+         */
+        processor.executeAdl{value: 0.01 ether}(market, weth, 5000e30, positionKeys[0], true, tokenUpdateData);
         // validate their size has been reduced
         Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
-        assertEq(position.positionSize, 2 ether);
+        assertEq(position.positionSize, 20_000e30);
     }
 
     function testAPositionCanOnlyBeAdldIfItHasBeenFlaggedPrior() public setUpMarkets {}

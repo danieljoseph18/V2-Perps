@@ -136,6 +136,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         emit FeesWithdrawn(longFees, shortFees);
     }
 
+    // @audit - Should NEVER be able to transfer out tokens reserved for positions
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
         onlyTradeStorage
@@ -314,6 +315,9 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     }
 
     function _transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) internal {
+        uint256 available =
+            _isLongToken ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
+        require(_amount <= available, "Vault: Insufficient Available Tokens");
         if (_shouldUnwrap) {
             require(_isLongToken == true, "Vault: Invalid Unwrap Token");
             IWETH(LONG_TOKEN).withdraw(_amount);

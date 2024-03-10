@@ -8,7 +8,7 @@ import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract MockPriceFeed is MockPyth, IPriceFeed {
-    uint256 public constant PRICE_PRECISION = 1e18;
+    uint256 public constant PRICE_PRECISION = 1e30;
 
     // shift the 1s by (256 - 32) to get (256 - 32) 0s followed by 32 1s
     uint256 public constant BITMASK_32 = type(uint256).max >> (256 - 32);
@@ -19,7 +19,7 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
 
     uint256 public constant MAX_PRICE_PER_WORD = 10;
 
-    uint256 public constant PRICE_DECIMALS = 18;
+    uint256 public constant PRICE_DECIMALS = 30;
 
     uint256 public constant DEFAULT_SPREAD = 0.001e18; // 0.1%
 

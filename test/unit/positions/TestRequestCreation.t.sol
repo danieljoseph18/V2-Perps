@@ -162,6 +162,7 @@ contract TestRequestCreation is Test {
     // CONDITIONALS //
     //////////////////
 
+    // @fail
     function testFuzzingConditionalValues(
         uint256 _stopLossPrice,
         uint256 _takeProfitPrice,
@@ -176,7 +177,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 4 ether,
-            sizeDelta: 40 ether,
+            sizeDelta: 100_000e30,
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -210,7 +211,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 4 ether,
-            sizeDelta: 40 ether,
+            sizeDelta: 100_000e30,
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: _executionFee,
@@ -240,7 +241,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 10_000e6,
-            sizeDelta: 40 ether,
+            sizeDelta: 100_000e30,
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: _executionFee,
@@ -273,7 +274,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 4 ether,
-            sizeDelta: 40 ether,
+            sizeDelta: 100_000e30,
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: _executionFee,
@@ -299,13 +300,14 @@ contract TestRequestCreation is Test {
     // LIMIT PRICE//
     ////////////////
 
+    // @fail
     function testFuzzingInvalidLimitPrices(uint256 _limitPrice) public setUpMarkets {
         vm.assume(_limitPrice > 2500e18);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 4 ether,
-            sizeDelta: 40 ether,
+            sizeDelta: 100_000e30,
             limitPrice: _limitPrice,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -333,7 +335,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 10_000e6,
-            sizeDelta: 40 ether,
+            sizeDelta: 100_000e30,
             limitPrice: _limitPrice,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -363,7 +365,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: 4 ether,
-            sizeDelta: 40 ether,
+            sizeDelta: 100_000e30,
             limitPrice: _limitPrice,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -390,7 +392,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: 10_000e6,
-            sizeDelta: 40 ether,
+            sizeDelta: 100_000e30,
             limitPrice: _limitPrice,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -418,7 +420,7 @@ contract TestRequestCreation is Test {
     ////////////////
 
     function testFuzzingSizeDeltaAboveBound(uint256 _sizeDelta) public setUpMarkets {
-        vm.assume(_sizeDelta > 400 ether);
+        vm.assume(_sizeDelta > 1_000_000e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -446,7 +448,7 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingSizeDeltaBelowBound(uint256 _sizeDelta) public setUpMarkets {
-        vm.assume(_sizeDelta < 4 ether);
+        vm.assume(_sizeDelta < 10_000e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -474,7 +476,7 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingSizeDeltaWithinBounds(uint256 _sizeDelta) public setUpMarkets {
-        _sizeDelta = bound(_sizeDelta, 4 ether, 400 ether);
+        _sizeDelta = bound(_sizeDelta, 10_000e30, 1_000_000e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -501,7 +503,7 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingSizeDeltaWithinBoundsShort(uint256 _sizeDelta) public setUpMarkets {
-        _sizeDelta = bound(_sizeDelta, 4 ether, 400 ether);
+        _sizeDelta = bound(_sizeDelta, 10_000e30, 1_000_000e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,
@@ -533,13 +535,14 @@ contract TestRequestCreation is Test {
     // COLLATERAL DELTA //
     //////////////////////
 
+    // @fail
     function testFuzzingCollateralDeltaBelowBound(uint256 _collateralDelta) public setUpMarkets {
-        vm.assume(_collateralDelta < 0.04 ether);
+        vm.assume(_collateralDelta < 100e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: _collateralDelta,
-            sizeDelta: 4 ether, // 10k
+            sizeDelta: 10_000e30, // 10k
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -567,7 +570,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: _collateralDelta,
-            sizeDelta: 4 ether, // 10k
+            sizeDelta: 10_000e30, // 10k
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -592,12 +595,12 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingCollateralDeltaAboveBound(uint256 _collateralDelta) public setUpMarkets {
-        vm.assume(_collateralDelta > 4 ether);
+        vm.assume(_collateralDelta > 10_000e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: _collateralDelta,
-            sizeDelta: 4 ether, // 10k
+            sizeDelta: 10_000e30, // 10k
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -619,14 +622,15 @@ contract TestRequestCreation is Test {
         router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input, tokenUpdateData);
     }
 
+    // @fail
     function testFuzzingCollateralDeltaWithinBounds(uint256 _collateralDelta) public setUpMarkets {
         // Bound the input between 1 and 4 ether
-        _collateralDelta = bound(_collateralDelta, 0.04 ether, 4 ether);
+        _collateralDelta = bound(_collateralDelta, 100e30, 10_000e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
             collateralDelta: _collateralDelta,
-            sizeDelta: 4 ether, // 10k
+            sizeDelta: 10_000e30, // 10k
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -654,7 +658,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: usdc,
             collateralDelta: _collateralDelta,
-            sizeDelta: 4 ether, // 10k
+            sizeDelta: 10_000e30, // 10k
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -682,7 +686,7 @@ contract TestRequestCreation is Test {
             indexToken: _randomToken,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,
@@ -709,7 +713,7 @@ contract TestRequestCreation is Test {
             indexToken: weth,
             collateralToken: _randomToken,
             collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
+            sizeDelta: 10_000e30,
             limitPrice: 0,
             maxSlippage: 0.003e18,
             executionFee: 0.01 ether,

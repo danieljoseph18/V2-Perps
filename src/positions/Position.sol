@@ -26,6 +26,7 @@ import {Pricing} from "../libraries/Pricing.sol";
 import {Order} from "../positions/Order.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {console, console2} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -43,7 +44,7 @@ library Position {
         address user;
         address collateralToken; // WETH long, USDC short
         uint256 collateralAmount;
-        uint256 positionSize;
+        uint256 positionSize; // USD
         uint256 weightedAvgEntryPrice;
         uint256 lastUpdate;
         int256 lastFundingAccrued;
@@ -78,7 +79,7 @@ library Position {
         address indexToken;
         address collateralToken;
         uint256 collateralDelta;
-        uint256 sizeDelta;
+        uint256 sizeDelta; // USD
         uint256 limitPrice;
         uint256 maxSlippage;
         uint256 executionFee;
@@ -141,11 +142,23 @@ library Position {
             if (_trade.isIncrease) {
                 requestType = RequestType.POSITION_INCREASE;
             } else {
-                require(_position.positionSize >= _trade.sizeDelta, "Position: Size < SizeDelta");
-                require(_position.collateralAmount >= _trade.collateralDelta, "Position: Delta > Collateral");
+                /**
+                 * Possible Size Delta & Collateral Delta can be > Size / Collateral Amount.
+                 * In this case, it's a full close.
+                 * Set Size Delta to = Position Size & Collateral Delta to = Collateral Amount
+                 */
                 requestType = RequestType.POSITION_DECREASE;
             }
         }
+    }
+
+    /// @dev Handle case where size/collateral delta > position size/collateral amount
+    function checkForFullClose(Input memory _trade, Data calldata _position) external pure returns (Input memory) {
+        if (_trade.sizeDelta >= _position.positionSize || _trade.collateralDelta >= _position.collateralAmount) {
+            _trade.sizeDelta = _position.positionSize;
+            _trade.collateralDelta = _position.collateralAmount;
+        }
+        return _trade;
     }
 
     function validateCreatePosition(
@@ -196,6 +209,8 @@ library Position {
         external
         view
     {
+        console.log("Collateral Delta USD: ", _collateralUsd);
+        console.log("Size Delta USD: ", _sizeUsd);
         uint256 maxLeverage = market.getMaxLeverage(_indexToken);
         require(_collateralUsd <= _sizeUsd, "Position: collateral exceeds size");
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
@@ -271,9 +286,14 @@ library Position {
         uint256 liquidationFeeUsd
     ) external view returns (bool) {
         uint256 collateralValueUsd = mulDiv(_position.collateralAmount, _state.collateralPrice, PRECISION);
+        console.log("Collateral Value USD: ", collateralValueUsd);
         uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _state);
+        console.log("Total Fees Owed USD: ", totalFeesOwedUsd);
+        console.log("Index Price: ", _state.indexPrice);
         int256 pnl = Pricing.calculatePnL(_position, _state.indexPrice, _state.indexBaseUnit);
+        console2.log("PnL: ", pnl);
         uint256 losses = liquidationFeeUsd + totalFeesOwedUsd;
+        console.log("Losses: ", losses);
         if (pnl < 0) {
             losses += pnl.abs();
         }
@@ -300,7 +320,17 @@ library Position {
         returns (Execution memory execution)
     {
         // calculate collateral delta from size delta
+        console.log("Collateral Amount: ", _position.collateralAmount);
+        console.log("Position Size: ", _position.positionSize);
+        console.log("Size Delta: ", _sizeDelta);
+        /**
+         * Getting precision loss of 2 when calculating collateral delta
+         * Values are: Collateral Amount = 489991996799039744, size Delta = 2 ether, position size = 10 ether
+         * Expected Collateral Delta = 489991996799039744 * 0.2 = 97998399359807948.8
+         * Actual Collateral Delta = 97998399359807948
+         */
         uint256 collateralDelta = mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
+        console.log("Collateral Delta: ", collateralDelta);
         Request memory request = Request({
             input: Input({
                 indexToken: _position.indexToken,
@@ -334,6 +364,14 @@ library Position {
     ) external pure returns (uint256 collateralAmount) {
         uint256 indexUsd = mulDiv(_indexAmount, _indexPrice, _indexBaseUnit);
         collateralAmount = mulDiv(indexUsd, _collateralBaseUnit, _collateralPrice);
+    }
+
+    function convertUsdToCollateral(uint256 _usdAmount, uint256 _collateralPrice, uint256 _collateralBaseUnit)
+        external
+        pure
+        returns (uint256 collateralAmount)
+    {
+        collateralAmount = mulDiv(_usdAmount, _collateralBaseUnit, _collateralPrice);
     }
 
     function getTotalFeesOwedUsd(Data memory _position, Order.ExecutionState memory _state)

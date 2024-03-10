@@ -162,17 +162,14 @@ library Fee {
         ITradeStorage tradeStorage,
         uint256 _sizeDelta,
         uint256 _collateralDelta,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit
     ) external view returns (uint256 fee) {
         uint256 feePercentage = tradeStorage.tradingFee();
         // convert index amount to collateral amount
         if (_sizeDelta != 0) {
-            uint256 sizeInCollateral = Position.convertIndexAmountToCollateral(
-                _sizeDelta, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit
-            );
+            uint256 sizeInCollateral =
+                Position.convertUsdToCollateral(_sizeDelta, _collateralPrice, _collateralBaseUnit);
             // calculate fee
             fee = mulDiv(sizeInCollateral, feePercentage, SCALING_FACTOR);
         } else {

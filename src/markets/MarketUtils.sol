@@ -15,26 +15,25 @@ library MarketUtils {
 
     uint256 public constant SCALAR = 1e18;
     uint256 public constant MAX_ALLOCATION = 10000;
+    uint256 constant PRICE_PRECISION = 1e30;
 
-    function getOpenInterestUsd(
-        IMarket market,
-        address _indexToken,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
-        bool _isLong
-    ) public view returns (uint256 longOiUsd) {
+    function getOpenInterestUsd(IMarket market, address _indexToken, uint256 _indexPrice, bool _isLong)
+        public
+        view
+        returns (uint256 longOiUsd)
+    {
         return _isLong
-            ? mulDiv(market.getOpenInterest(_indexToken, true), _indexPrice, _indexBaseUnit)
-            : mulDiv(market.getOpenInterest(_indexToken, false), _indexPrice, _indexBaseUnit);
+            ? mulDiv(market.getOpenInterest(_indexToken, true), _indexPrice, PRICE_PRECISION)
+            : mulDiv(market.getOpenInterest(_indexToken, false), _indexPrice, PRICE_PRECISION);
     }
 
-    function getTotalOpenInterestUsd(IMarket market, address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function getTotalOpenInterestUsd(IMarket market, address _indexToken, uint256 _indexPrice)
         external
         view
         returns (uint256 totalOiUsd)
     {
-        uint256 longOIUSD = mulDiv(market.getOpenInterest(_indexToken, true), _indexPrice, _indexBaseUnit);
-        uint256 shortOIUSD = mulDiv(market.getOpenInterest(_indexToken, false), _indexPrice, _indexBaseUnit);
+        uint256 longOIUSD = mulDiv(market.getOpenInterest(_indexToken, true), _indexPrice, PRICE_PRECISION);
+        uint256 shortOIUSD = mulDiv(market.getOpenInterest(_indexToken, false), _indexPrice, PRICE_PRECISION);
         return longOIUSD + shortOIUSD;
     }
 
@@ -97,8 +96,6 @@ library MarketUtils {
         poolUsd = mulDiv(allocationInTokens, _collateralTokenPrice, _collateralBaseUnits);
     }
 
-    // @audit - Math? Should we hard code reserves from the total
-    // Pool, or just calculate as 30% of the free liquidity
     function validateAllocation(
         IMarket market,
         address _indexToken,
@@ -146,13 +143,13 @@ library MarketUtils {
     function getPnlFactor(
         IMarket market,
         address _indexToken,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
         bool _isLong
     ) external view returns (int256 pnlFactor) {
-        // get pool usd ( if 0 return 0)
+        // get pool usd (if 0 return 0)
         uint256 poolUsd = getPoolBalanceUsd(market, _indexToken, _collateralPrice, _collateralBaseUnit, _isLong);
         if (poolUsd == 0) {
             return 0;

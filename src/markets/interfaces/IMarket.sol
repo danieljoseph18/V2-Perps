@@ -39,8 +39,8 @@ interface IMarket is IVault {
     }
 
     struct PnlValues {
-        uint256 longAverageEntryPrice;
-        uint256 shortAverageEntryPrice;
+        uint256 longAverageEntryPriceUsd;
+        uint256 shortAverageEntryPriceUsd;
     }
 
     /**
@@ -94,9 +94,9 @@ interface IMarket is IVault {
     event FundingUpdated(int256 fundingRate, int256 fundingRateVelocity, int256 fundingAccruedUsd);
     event BorrowingRatesUpdated(address indexed indexToken, uint256 longBorrowingRate, uint256 shortBorrowingRate);
     event AverageEntryPriceUpdated(
-        address indexed indexToken, uint256 longAverageEntryPrice, uint256 shortAverageEntryPrice
+        address indexed indexToken, uint256 longAverageEntryPriceUsd, uint256 shortAverageEntryPriceUsd
     );
-    event OpenInterestUpdated(address indexed indexToken, uint256 longOpenInterest, uint256 shortOpenInterest);
+    event OpenInterestUpdated(address indexed indexToken, uint256 longOpenInterestUsd, uint256 shortOpenInterestUsd);
 
     /**
      * ================ Functions ================
@@ -110,15 +110,13 @@ interface IMarket is IVault {
         address _indexToken,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
-        uint256 _longTokenPrice,
-        uint256 _longBaseUnit,
-        uint256 _shortTokenPrice,
-        uint256 _shortBaseUnit,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
         bool _isLong
     ) external;
-    function updateAverageEntryPrice(address _indexToken, uint256 _price, int256 _sizeDelta, bool _isLong) external;
-    function updateOpenInterest(address _indexToken, uint256 _indexTokenAmount, bool _isLong, bool _shouldAdd)
+    function updateAverageEntryPrice(address _indexToken, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
         external;
+    function updateOpenInterest(address _indexToken, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd) external;
     function updateImpactPool(address _indexToken, int256 _priceImpactUsd) external;
 
     function getConfig(address _indexToken) external view returns (Config memory);

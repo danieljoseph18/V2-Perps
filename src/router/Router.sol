@@ -150,6 +150,10 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Set the Request Type
         state.requestType = Position.getRequestType(_trade, position);
 
+        if (state.requestType == Position.RequestType.POSITION_DECREASE) {
+            _trade = Position.checkForFullClose(_trade, position);
+        }
+
         // Validate Parameters
         Order.validateParamsForType(_trade, state, position.collateralAmount, position.positionSize);
 
