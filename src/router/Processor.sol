@@ -41,7 +41,6 @@ import {IProcessor} from "./interfaces/IProcessor.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Roles} from "../access/roles.sol";
-import {console} from "forge-std/Test.sol";
 
 /// @dev Needs Processor Role
 // All keeper interactions should come through this contract
@@ -79,7 +78,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     receive() external payable {}
 
     modifier onlyMarket() {
-        require(marketMaker.isMarket(msg.sender), "Processor: Invalid Market");
+        if (!marketMaker.isMarket(msg.sender)) revert Processor_AccessDenied();
         _;
     }
 
@@ -108,7 +107,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         onlyKeeper
     {
         uint256 initialGas = gasleft();
-        require(_key != bytes32(0), "E: Invalid Key");
+        if (_key == bytes32(0)) revert Processor_InvalidKey();
         // Fetch the request
         Deposit.ExecuteParams memory params;
         params.market = market;
@@ -138,7 +137,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         onlyKeeper
     {
         uint256 initialGas = gasleft();
-        require(_key != bytes32(0), "E: Invalid Key");
+        if (_key == bytes32(0)) revert Processor_InvalidKey();
         // Fetch the request
         Withdrawal.ExecuteParams memory params;
         params.market = market;
@@ -193,6 +192,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             state.collateralPrice,
             state.collateralBaseUnit
         );
+
         // Calculate & Apply Fee Discount for Referral Code
         (state.fee, state.affiliateRebate, state.referrer) =
             Referral.applyFeeDiscount(referralStorage, request.user, state.fee);
@@ -213,7 +213,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         } else if (request.requestType == Position.RequestType.STOP_LOSS) {
             tradeStorage.decreaseExistingPosition(Position.Execution(request, _orderKey, _feeReceiver, false), state);
         } else {
-            revert OrderProcessor_InvalidRequestType();
+            revert Processor_InvalidRequestType();
         }
 
         if (request.input.isIncrease) {
@@ -279,13 +279,15 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Fetch the Request
         Position.Request memory request = tradeStorage.getOrder(_key);
         // Check it exists
-        require(request.user != address(0), "Router: Request Doesn't Exist");
+        if (request.user == address(0)) revert Processor_RequestDoesNotExist();
         // Check if the caller's permissions
         if (!roleStorage.hasRole(Roles.KEEPER, msg.sender)) {
             // Check the caller is the position owner
-            require(msg.sender == request.user, "Router: Not Position Owner");
+            if (msg.sender != request.user) revert Processor_NotPositionOwner();
             // Check sufficient time has passed
-            require(block.number >= request.requestBlock + tradeStorage.minBlockDelay(), "Router: Insufficient Delay");
+            if (block.number < request.requestBlock + tradeStorage.minBlockDelay()) {
+                revert Processor_InsufficientDelay();
+            }
         }
         // Cancel the Request
         tradeStorage.cancelOrderRequest(_key, _isLimit);
@@ -297,7 +299,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     }
 
     function flagForAdl(IMarket market, address _indexToken, bool _isLong) external onlyAdlKeeper {
-        require(market != IMarket(address(0)), "ADL: Invalid market");
+        if (market == IMarket(address(0))) revert Processor_InvalidMarket();
         // get current price
         uint256 indexPrice = Oracle.getReferencePrice(priceFeed, _indexToken);
         uint256 collateralPrice;
@@ -309,8 +311,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             (, collateralPrice) = Oracle.getLastMarketTokenPrices(priceFeed, false);
             collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
         }
-        console.log("Collateral Price: ", collateralPrice);
-        console.log("Index Price: ", indexPrice);
+
         // fetch pnl to pool ratio
         uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexToken);
 
@@ -339,13 +340,13 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         IMarket.AdlConfig memory adl = market.getAdlConfig(_indexToken);
         // Check ADL is enabled for the market and for the side
         if (_isLong) {
-            require(adl.flaggedLong, "ADL: Long side not flagged");
+            if (!adl.flaggedLong) revert Processor_LongSideNotFlagged();
         } else {
-            require(adl.flaggedShort, "ADL: Short side not flagged");
+            if (!adl.flaggedShort) revert Processor_ShortSideNotFlagged();
         }
         // Check the position in question is active
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
-        require(position.positionSize > 0, "ADL: Position not active");
+        if (position.positionSize == 0) revert Processor_PositionNotActive();
         // state the market
         state.market = market;
         // fetch prices, base units, calculate sizeDeltaUsd, no fee / discount, no ref, no impact
@@ -382,7 +383,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             _isLong
         );
         // PNL to pool has reduced
-        require(newPnlFactor < startingPnlFactor, "ADL: PNL Factor not reduced");
+        if (newPnlFactor >= startingPnlFactor) revert Processor_PNLFactorNotReduced();
         // Check if the new PNL to pool ratio is greater than
         // the min PNL factor after ADL (~20%)
         // If not, unflag for ADL
@@ -401,8 +402,8 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // @audit - review logic
     function executePriceUpdate(address _token, uint256 _price, uint256 _block) external onlyKeeper {
         uint256 initialGas = gasleft();
-        require(_price > 0, "Processor: Invalid Price");
-        require(priceFeed.getPrice(_token, _block).price == 0, "Processor: Price Already Updated");
+        if (_price == 0) revert Processor_InvalidPrice();
+        if (priceFeed.getPrice(_token, _block).price != 0) revert Processor_PriceAlreadyUpdated();
         priceFeed.setAssetPrice(_token, _price, _block);
         Gas.refundPriceUpdateGas(this, initialGas, payable(msg.sender));
     }
@@ -475,10 +476,10 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             // Average Entry Price relies on OI, so it must be updated before this
             _state.market.updateOpenInterest(_indexToken, _sizeDelta, _isLong, _isIncrease);
         }
-        // @audit should this be before or after the OI update?
+        // @audit should this be before or after the OI / AEP update?
         uint256 collateralPrice = _isLong ? _state.longMarketTokenPrice : _state.shortMarketTokenPrice;
         uint256 collateralBaseUnit = _isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
-        _state.market.updateFundingRate(_indexToken, _state.indexPrice, _state.indexBaseUnit);
+        _state.market.updateFundingRate(_indexToken, _state.indexPrice);
         _state.market.updateBorrowingRate(
             _indexToken, _state.indexPrice, _state.indexBaseUnit, collateralPrice, collateralBaseUnit, _isLong
         );
@@ -504,7 +505,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Update fee paid to Pyth: needs to be accounted for
         priceFeed.signPriceData{value: updateFee}(_indexToken, _priceUpdateData);
         if (asset.priceProvider != Oracle.PriceProvider.PYTH) {
-            require(_indexPrice > 0, "Processor: Invalid Index Price");
+            if (_indexPrice == 0) revert Processor_InvalidPrice();
             // fee accounted for in gas costs
             priceFeed.setAssetPrice(_indexToken, _indexPrice, block.number);
         }

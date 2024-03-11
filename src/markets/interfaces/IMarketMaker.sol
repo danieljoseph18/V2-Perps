@@ -12,6 +12,15 @@ interface IMarketMaker {
     event TokenAddedToMarket(address market, address indexToken, bytes32 priceId);
     event DefaultConfigSet(IMarket.Config defaultConfig);
 
+    error MarketMaker_AlreadyInitialised();
+    error MarketMaker_InvalidAddress();
+    error MarketMaker_InvalidPriceId();
+    error MarketMaker_InvalidBaseUnit();
+    error MarketMaker_MarketExists();
+    error MarketMaker_InvalidPriceFeed();
+    error MarketMaker_InvalidProcessor();
+    error MarketMaker_MarketDoesNotExist();
+
     function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _processor) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;

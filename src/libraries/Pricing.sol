@@ -18,7 +18,6 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Position} from "../positions/Position.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -38,7 +37,7 @@ library Pricing {
     /// @dev returns PNL in USD
     /// @dev returns PNL in USD
     // PNL = (Current Price - Average Entry Price) * (Position Value / Average Entry Price)
-    function calculatePnL(Position.Data memory _position, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function getPositionPnl(Position.Data memory _position, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         pure
         returns (int256)
@@ -80,13 +79,16 @@ library Pricing {
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
-    function getPnl(IMarket market, address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
-        public
-        view
-        returns (int256 netPnl)
-    {
+    function getMarketPnl(
+        IMarket market,
+        address _indexToken,
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
+        bool _isLong
+    ) public view returns (int256 netPnl) {
         uint256 openInterest = market.getOpenInterest(_indexToken, _isLong);
         uint256 averageEntryPrice = market.getAverageEntryPrice(_indexToken, _isLong);
+        if (openInterest == 0 || averageEntryPrice == 0) return 0;
         int256 priceDelta = _indexPrice.toInt256() - averageEntryPrice.toInt256();
         uint256 entryIndexAmount = mulDiv(openInterest, _indexBaseUnit, averageEntryPrice);
         if (_isLong) {
@@ -96,13 +98,13 @@ library Pricing {
         }
     }
 
-    function getNetPnl(IMarket market, address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function getNetMarketPnl(IMarket market, address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         view
         returns (int256)
     {
-        int256 longPnl = getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
-        int256 shortPnl = getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, false);
+        int256 longPnl = getMarketPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
+        int256 shortPnl = getMarketPnl(market, _indexToken, _indexPrice, _indexBaseUnit, false);
         return longPnl + shortPnl;
     }
 

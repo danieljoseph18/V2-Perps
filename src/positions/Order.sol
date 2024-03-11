@@ -16,12 +16,27 @@ import {Fee} from "../libraries/Fee.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
-import {console, console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Order {
     using SignedMath for int256;
     using SafeCast for uint256;
+
+    error Order_InvalidSlippage();
+    error Order_InvalidCollateralDelta();
+    error Order_MarketDoesNotExist();
+    error Order_InvalidLimitPrice();
+    error Order_RefPriceGreaterThanLimitPrice();
+    error Order_RefPriceLessThanLimitPrice();
+    error Order_InvalidRequestType();
+    error Order_FeeExceedsDelta();
+    error Order_MinCollateralThreshold();
+    error Order_LiquidatablePosition();
+    error Order_FeesExceedCollateralDelta();
+    error Order_LossesExceedPrinciple();
+    error Order_InvalidPriceRetrieval();
+    error Order_InvalidRequestKey();
+    error Order_InvalidFeeReceiver();
 
     uint256 internal constant PRECISION = 1e18;
     uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
@@ -33,7 +48,6 @@ library Order {
     struct DecreaseState {
         int256 decreasePnl;
         uint256 afterFeeAmount;
-        uint256 positionFee;
     }
 
     // stated Values for Execution
@@ -81,8 +95,8 @@ library Order {
     ) external view returns (ExecutionState memory state, Position.Request memory request) {
         // Fetch and validate request from key
         request = tradeStorage.getOrder(_orderKey);
-        require(request.user != address(0), "Order: Request Key");
-        require(_feeReceiver != address(0), "Order: Fee Receiver");
+        if (request.user == address(0)) revert Order_InvalidRequestKey();
+        if (_feeReceiver == address(0)) revert Order_InvalidFeeReceiver();
         // Get the asset and validate trading is enabled
         Oracle.validateTradingHours(priceFeed, request.input.indexToken, _isTradingEnabled);
         // Fetch and validate price
@@ -199,8 +213,8 @@ library Order {
         IPriceFeed priceFeed,
         Position.Input memory _trade
     ) external view returns (CreationState memory state) {
-        require(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE, "Order: Slippage");
-        require(_trade.collateralDelta != 0, "Order: Collateral Delta");
+        if (!(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE)) revert Order_InvalidSlippage();
+        if (_trade.collateralDelta == 0) revert Order_InvalidCollateralDelta();
 
         if (_trade.isLong) {
             state.collateralRefPrice = Oracle.getLongReferencePrice(priceFeed);
@@ -209,7 +223,7 @@ library Order {
         }
 
         state.market = marketMaker.tokenToMarkets(_trade.indexToken);
-        require(state.market != address(0), "Order: Market Doesn't Exist");
+        if (state.market == address(0)) revert Order_MarketDoesNotExist();
 
         state.positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
 
@@ -218,11 +232,11 @@ library Order {
         state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.indexToken);
 
         if (_trade.isLimit) {
-            require(_trade.limitPrice > 0, "Order: Limit Price");
+            if (_trade.limitPrice == 0) revert Order_InvalidLimitPrice();
             if (_trade.isLong) {
-                require(_trade.limitPrice <= state.indexRefPrice, "Order: ref price > limit price");
+                if (_trade.limitPrice > state.indexRefPrice) revert Order_RefPriceGreaterThanLimitPrice();
             } else {
-                require(_trade.limitPrice >= state.indexRefPrice, "Order: ref price < limit price");
+                if (_trade.limitPrice < state.indexRefPrice) revert Order_RefPriceLessThanLimitPrice();
             }
         }
 
@@ -283,7 +297,7 @@ library Order {
             // Clear the Conditionals
             _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
         } else {
-            revert("Order: Invalid Request Type");
+            revert Order_InvalidRequestType();
         }
         return _state;
     }
@@ -311,8 +325,8 @@ library Order {
         // Process any Outstanding Borrow Fees
         (_position, _state.borrowFee) = _processBorrowFees(_position, _params, _state);
         // Calculate the amount of collateral left after fees
+        if (_state.borrowFee >= _params.request.input.collateralDelta) revert Order_FeeExceedsDelta();
         uint256 afterFeeAmount = _params.request.input.collateralDelta - _state.borrowFee;
-        require(afterFeeAmount > 0, "Order: After Fee");
         // Edit the Position for Increase
         _position = _editPosition(_position, _state, afterFeeAmount, 0, true);
         // Check the Leverage
@@ -340,14 +354,12 @@ library Order {
         // Edit the Position (subtract full collateral delta)
         _position = _editPosition(_position, _state, _params.request.input.collateralDelta, 0, false);
         // Check if the Decrease puts the position below the min collateral threshold
-        require(
-            checkMinCollateral(
+        if (
+            !checkMinCollateral(
                 _position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit, _minCollateralUsd
-            ),
-            "Order: Min Collat"
-        );
-        // Check if the Decrease makes the Position Liquidatable
-        require(!_checkIsLiquidatable(_position, _state, _liquidationFeeUsd), "Order: Liquidatable");
+            )
+        ) revert Order_MinCollateralThreshold();
+        if (_checkIsLiquidatable(_position, _state, _liquidationFeeUsd)) revert Order_LiquidatablePosition();
         // Check the Leverage
         Position.checkLeverage(
             _state.market,
@@ -366,8 +378,6 @@ library Order {
         ExecutionState memory _state,
         uint256 _minCollateralUsd
     ) external view returns (Position.Data memory, ExecutionState memory) {
-        // Convert fee from index token to collateral token
-        _state.fee = Position.convertUsdToCollateral(_state.fee, _state.collateralPrice, _state.collateralBaseUnit);
         // Subtract Fee from Collateral Delta
         _params.request.input.collateralDelta -= _state.fee;
         // Subtract the fee paid to the refferer
@@ -378,15 +388,14 @@ library Order {
             _params.request.input.collateralDelta -= _state.affiliateRebate;
         }
         // Check that the Position meets the minimum collateral threshold
-        require(
-            checkMinCollateral(
+        if (
+            !checkMinCollateral(
                 _params.request.input.collateralDelta,
                 _state.collateralPrice,
                 _state.collateralBaseUnit,
                 _minCollateralUsd
-            ),
-            "Order: Min Collat"
-        );
+            )
+        ) revert Order_MinCollateralThreshold();
         // Generate the Position
         Position.Data memory position = Position.generateNewPosition(_params.request, _state);
         // Check the Position's Leverage is Valid
@@ -406,10 +415,9 @@ library Order {
         Position.Data memory _position,
         Position.Execution memory _params,
         ExecutionState memory _state
-    ) external view returns (Position.Data memory, ExecutionState memory, uint256 positionFee) {
+    ) external view returns (Position.Data memory, ExecutionState memory) {
         // Subtract Fee from Collateral Delta - @audit - can I move down to where other fees are subtracted?
-        positionFee = Position.convertUsdToCollateral(_state.fee, _state.collateralPrice, _state.collateralBaseUnit);
-        _params.request.input.collateralDelta -= positionFee;
+        _params.request.input.collateralDelta -= _state.fee;
         // Update the Fee Parameters
         _position = _updateFeeParameters(_position, _state);
         // Process any Outstanding Borrow Fees
@@ -427,7 +435,7 @@ library Order {
             _params.request.input.collateralDelta += _state.fundingFee.abs();
         }
 
-        require(feesToSettle < _params.request.input.collateralDelta, "Order: Fees Exceed Delta");
+        if (feesToSettle >= _params.request.input.collateralDelta) revert Order_FeesExceedCollateralDelta();
         // Subtract fees from collateral delta
         _params.request.input.collateralDelta -= feesToSettle;
         // Update the Existing Position
@@ -442,7 +450,7 @@ library Order {
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
 
-        return (_position, _state, positionFee);
+        return (_position, _state);
     }
 
     function decreaseExistingPosition(
@@ -452,9 +460,6 @@ library Order {
         uint256 _minCollateralUsd,
         uint256 _liquidationFeeUsd
     ) external view returns (Position.Data memory, DecreaseState memory decreaseState, ExecutionState memory) {
-        // Convert Fee from Index Token to Collateral Token
-        decreaseState.positionFee =
-            Position.convertUsdToCollateral(_state.fee, _state.collateralPrice, _state.collateralBaseUnit);
         // Update the Fee Parameters
         _position = _updateFeeParameters(_position, _state);
 
@@ -468,10 +473,6 @@ library Order {
             isFullDecrease = true;
         }
 
-        console.log("Position Size: ", _position.positionSize);
-        console.log("Collateral Delta: ", _params.request.input.collateralDelta);
-        console.log("Collateral Amount: ", _position.collateralAmount);
-
         // Process any Outstanding Borrow Fees
         (_position, _state.borrowFee) = _processBorrowFees(_position, _params, _state);
         // Process any Outstanding Funding Fees
@@ -483,7 +484,7 @@ library Order {
             _position, _state, _params.request.input.collateralDelta, _params.request.input.sizeDelta, false
         );
 
-        uint256 losses = _state.borrowFee + decreaseState.positionFee;
+        uint256 losses = _state.borrowFee + _state.fee;
 
         /**
          * Subtract any losses owed from the position.
@@ -493,25 +494,21 @@ library Order {
             losses += decreaseState.decreasePnl.abs();
         }
 
-        require(losses < _params.request.input.collateralDelta, "Order: Losses Exceed Principle");
+        if (losses >= _params.request.input.collateralDelta) revert Order_LossesExceedPrinciple();
 
         // Calculate the amount of collateral left after fees
         decreaseState.afterFeeAmount = _params.request.input.collateralDelta - losses;
-
-        console.log("After Fee Amount After PnL: ", decreaseState.afterFeeAmount);
 
         // Check if the Decrease puts the position below the min collateral threshold
         // Only check these if it's not a full decrease
         // @audit - what to check if it IS a full decrease?
         if (!isFullDecrease) {
-            require(
-                checkMinCollateral(
+            if (
+                !checkMinCollateral(
                     _position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit, _minCollateralUsd
-                ),
-                "Order: Min Collat"
-            );
-            // Check if the Decrease makes the Position Liquidatable
-            require(!_checkIsLiquidatable(_position, _state, _liquidationFeeUsd), "Order: Liquidatable");
+                )
+            ) revert Order_MinCollateralThreshold();
+            if (_checkIsLiquidatable(_position, _state, _liquidationFeeUsd)) revert Order_LiquidatablePosition();
         }
 
         return (_position, decreaseState, _state);
@@ -589,7 +586,7 @@ library Order {
         uint256 collateralValueUsd =
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
         uint256 totalFeesOwedUsd = Position.getTotalFeesOwedUsd(_position, _state);
-        int256 pnl = Pricing.calculatePnL(_position, _state.indexPrice, _state.indexBaseUnit);
+        int256 pnl = Pricing.getPositionPnl(_position, _state.indexPrice, _state.indexBaseUnit);
         uint256 losses = _liquidationFeeUsd + totalFeesOwedUsd + (pnl < 0 ? pnl.abs() : 0);
         isLiquidatable = collateralValueUsd <= losses;
     }
@@ -642,9 +639,9 @@ library Order {
     ) internal view returns (Position.Data memory, uint256 borrowFee) {
         // Calculate and subtract the Borrowing Fee
         borrowFee = Borrowing.getTotalCollateralFeesOwed(_position, _state);
-        console.log("Borrow Fee: ", borrowFee);
+
         _position.borrowingParams.feesOwed = 0;
-        require(borrowFee <= _params.request.input.collateralDelta, "Order: Fee > CollateralDelta");
+        if (borrowFee > _params.request.input.collateralDelta) revert Order_FeeExceedsDelta();
 
         return (_position, borrowFee);
     }
@@ -660,12 +657,9 @@ library Order {
 
     function _convertValueToCollateral(uint256 _valueUsd, uint256 _collateralPrice, uint256 _collateralBaseUnit)
         internal
-        view
+        pure
         returns (uint256 collateralAmount)
     {
-        console.log("Value: ", _valueUsd);
-        console.log("Collateral Price: ", _collateralPrice);
-        console.log("Collateral Base Unit: ", _collateralBaseUnit);
         collateralAmount = mulDiv(_valueUsd, _collateralBaseUnit, _collateralPrice);
     }
 
@@ -710,6 +704,8 @@ library Order {
                 : _isIncrease
                     ? Oracle.getMinPrice(priceFeed, _indexToken, priceFetchBlock)
                     : Oracle.getMaxPrice(priceFeed, _indexToken, priceFetchBlock);
+
+        if (_state.indexPrice == 0) revert Order_InvalidPriceRetrieval();
 
         // Market Token Prices and Base Units
         (_state.longMarketTokenPrice, _state.shortMarketTokenPrice) = _fetchLatest

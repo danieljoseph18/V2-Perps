@@ -18,6 +18,10 @@ library Deposit {
     uint256 public constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
     uint256 public constant SCALING_FACTOR = 1e18;
 
+    error Deposit_InvalidOwner();
+    error Deposit_DepositNotExpired();
+    error Deposit_ZeroFee();
+
     struct Input {
         address owner;
         address tokenIn;
@@ -54,8 +58,8 @@ library Deposit {
     }
 
     function validateCancellation(Data memory _data, address _caller) internal view {
-        require(_data.input.owner == _caller, "Deposit: invalid owner");
-        require(_data.expirationTimestamp < block.timestamp, "Deposit: deposit not expired");
+        if (_data.input.owner != _caller) revert Deposit_InvalidOwner();
+        if (_data.expirationTimestamp >= block.timestamp) revert Deposit_DepositNotExpired();
     }
 
     function create(Input memory _input, uint48 _minTimeToExpiration) external view returns (Data memory data) {
@@ -88,7 +92,7 @@ library Deposit {
             true
         );
         state.fee = Fee.calculateForMarketAction(state.feeParams);
-        require(state.fee > 0, "Deposit: zero fee");
+        if (state.fee == 0) revert Deposit_ZeroFee();
 
         // Calculate remaining after fee
         state.afterFeeAmount = _params.data.input.amountIn - state.fee;

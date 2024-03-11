@@ -27,7 +27,6 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {Order} from "./Order.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Invariant} from "../libraries/Invariant.sol";
-import {console, console2} from "forge-std/Test.sol";
 
 /// @dev Needs TradeStorage Role & Fee Accumulator
 /// @dev Need to add liquidity reservation for positions
@@ -64,7 +63,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         uint256 _minCollateralUsd, // 2e18 = 2 USD
         uint256 _minBlockDelay // e.g 1 minutes
     ) external onlyAdmin {
-        require(!isInitialised, "TradeStorage: Already Initialised");
+        if (isInitialised) revert TradeStorage_AlreadyInitialised();
         liquidationFeeUsd = _liquidationFee;
         tradingFee = _positionFee;
         executionFee = _executionFee;
@@ -79,8 +78,10 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     }
 
     function setFees(uint256 _liquidationFee, uint256 _positionFee) external onlyConfigurator {
-        require(_liquidationFee <= MAX_LIQUIDATION_FEE && _liquidationFee != 0, "TradeStorage: Invalid Liquidation Fee");
-        require(_positionFee <= MAX_TRADING_FEE && _positionFee != 0, "TradeStorage: Invalid Trading Fee");
+        if (!(_liquidationFee <= MAX_LIQUIDATION_FEE && _liquidationFee != 0)) {
+            revert TradeStorage_InvalidLiquidationFee();
+        }
+        if (!(_positionFee <= MAX_TRADING_FEE && _positionFee != 0)) revert TradeStorage_InvalidTradingFee();
         liquidationFeeUsd = _liquidationFee;
         tradingFee = _positionFee;
         emit FeesSet(_liquidationFee, _positionFee);
@@ -95,7 +96,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Create a Storage Pointer to the Order Set
         EnumerableSet.Bytes32Set storage orderSet = _request.input.isLimit ? limitOrderKeys : marketOrderKeys;
         // Check if the Order already exists
-        require(!orderSet.contains(orderKey), "TradeStorage: Order Already Exists");
+        if (orderSet.contains(orderKey)) revert TradeStorage_OrderAlreadyExists();
         // Add the Order to the Set
         orderSet.add(orderKey);
         orders[orderKey] = _request;
@@ -106,7 +107,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     /// @dev Create a SL / TP Order or update an existing one
     function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external onlyRouter {
         Position.Data memory position = openPositions[_positionKey];
-        require(Position.exists(position), "TradeStorage: Position Doesn't Exist");
+        if (!Position.exists(position)) revert TradeStorage_PositionDoesNotExist();
         // construct the SL / TP orders
         // Uses WAEP as ref price
         (Position.Request memory stopLoss, Position.Request memory takeProfit) =
@@ -140,7 +141,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Create a Storage Pointer to the Order Set
         EnumerableSet.Bytes32Set storage orderKeys = _isLimit ? limitOrderKeys : marketOrderKeys;
         // Check if the Order exists
-        require(orderKeys.contains(_orderKey), "TradeStorage: Order Doesn't Exist");
+        if (!orderKeys.contains(_orderKey)) revert TradeStorage_OrderDoesNotExist();
         // Remove the Order from the Set
         orderKeys.remove(_orderKey);
         delete orders[_orderKey];
@@ -156,7 +157,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory positionBefore = openPositions[positionKey];
-        require(Position.exists(positionBefore), "TradeStorage: Position Doesn't Exist");
+        if (!Position.exists(positionBefore)) revert TradeStorage_PositionDoesNotExist();
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in Library
@@ -186,7 +187,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory positionBefore = openPositions[positionKey];
-        require(Position.exists(positionBefore), "TradeStorage: Position Doesn't Exist");
+        if (!Position.exists(positionBefore)) revert TradeStorage_PositionDoesNotExist();
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in Library
@@ -221,7 +222,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     {
         // Check the Position doesn't exist
         bytes32 positionKey = Position.generateKey(_params.request);
-        require(!Position.exists(openPositions[positionKey]), "TradeStorage: Position Exists");
+        if (Position.exists(openPositions[positionKey])) revert TradeStorage_PositionExists();
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in the Library
@@ -264,30 +265,32 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory positionBefore = openPositions[positionKey];
-        require(Position.exists(positionBefore), "TradeStorage: Position Doesn't Exist");
+        if (!Position.exists(positionBefore)) revert TradeStorage_PositionDoesNotExist();
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in the Library
         Position.Data memory positionAfter;
-        uint256 sizeDeltaUsd;
-        uint256 positionFee;
-        (positionAfter, _state, positionFee) = Order.increaseExistingPosition(positionBefore, _params, _state);
+        (positionAfter, _state) = Order.increaseExistingPosition(positionBefore, _params, _state);
         // Validate the Position Change
         Invariant.validateIncreasePosition(
             positionBefore,
             positionAfter,
             _params.request.input.collateralDelta,
-            positionFee,
+            _state.fee,
             _state.affiliateRebate,
             _state.fundingFee,
             _state.borrowFee,
             _params.request.input.sizeDelta
         );
         // Pay Fees
-        _payFees(_state.market, _state.borrowFee, positionFee, _params.request.input.isLong);
+        _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(
-            _state.market, sizeDeltaUsd, _state.collateralPrice, _state.collateralBaseUnit, _params.request.input.isLong
+            _state.market,
+            _params.request.input.sizeDelta,
+            _state.collateralPrice,
+            _state.collateralBaseUnit,
+            _params.request.input.isLong
         );
         // Update Final Storage
         openPositions[positionKey] = positionAfter;
@@ -301,7 +304,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
         Position.Data memory positionBefore = openPositions[positionKey];
-        require(Position.exists(positionBefore), "TradeStorage: Position Doesn't Exist");
+        if (!Position.exists(positionBefore)) revert TradeStorage_PositionDoesNotExist();
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // If SL / TP, clear from the position
@@ -320,14 +323,14 @@ contract TradeStorage is ITradeStorage, RoleValidation {
             positionBefore,
             positionAfter,
             decreaseState.afterFeeAmount,
-            decreaseState.positionFee,
+            _state.fee,
             _state.affiliateRebate,
             decreaseState.decreasePnl,
             _state.borrowFee,
             _params.request.input.sizeDelta
         );
         // Pay Fees
-        _payFees(_state.market, _state.borrowFee, decreaseState.positionFee, _params.request.input.isLong);
+        _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
         // stated to prevent multi conversion
         address market = address(positionBefore.market);
         // Unreserve Liquidity Equal to the Position Size
@@ -348,8 +351,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         uint256 amountOut = decreaseState.decreasePnl > 0
             ? decreaseState.afterFeeAmount + decreaseState.decreasePnl.abs() // Profit Case
             : decreaseState.afterFeeAmount; // Loss / Break Even Case
-        console2.log("Decrease PNL: ", decreaseState.decreasePnl);
-        console2.log("After Fee Amount: ", decreaseState.afterFeeAmount);
+
         _state.market.transferOutTokens(
             _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.shouldWrap
         );
@@ -365,8 +367,8 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     {
         /* Update Initial Storage */
         Position.Data memory position = openPositions[_positionKey];
-        require(Position.exists(position), "TradeStorage: Position Doesn't Exist");
-        require(Position.isLiquidatable(position, _state, liquidationFeeUsd), "TradeStorage: Not Liquidatable");
+        if (!Position.exists(position)) revert TradeStorage_PositionDoesNotExist();
+        if (!Position.isLiquidatable(position, _state, liquidationFeeUsd)) revert TradeStorage_NotLiquidatable();
 
         uint256 remainingCollateral = position.collateralAmount;
 

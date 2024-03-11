@@ -14,14 +14,21 @@ library Gas {
         POSITION
     }
 
+    error Gas_InsufficientMsgValue(uint256 valueSent, uint256 executionFee);
+    error Gas_InsufficientExecutionFee(uint256 executionFee, uint256 minExecutionFee);
+
     function validateExecutionFee(IProcessor processor, uint256 _executionFee, uint256 _msgValue, Action _action)
         external
         view
     {
-        require(_msgValue >= _executionFee, "Gas: Insufficient msg value");
+        if (_msgValue < _executionFee) {
+            revert Gas_InsufficientMsgValue(_msgValue, _executionFee);
+        }
         uint256 expectedGasLimit = getLimitForAction(processor, _action);
         uint256 minExecutionFee = getMinExecutionFee(processor, expectedGasLimit);
-        require(_executionFee >= minExecutionFee, "Gas: Insufficient execution fee");
+        if (_executionFee < minExecutionFee) {
+            revert Gas_InsufficientExecutionFee(_executionFee, minExecutionFee);
+        }
     }
 
     // @audit - is this vulnerable?

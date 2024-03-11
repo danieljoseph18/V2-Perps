@@ -245,7 +245,6 @@ contract TestAlternativeOrders is Test {
         assertEq(tradeStorage.getOrder(key).user, address(0));
     }
 
-    // @fail
     function testAUserCanOpenAStopLossAndTakeProfitWithAnOrder() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({
@@ -263,8 +262,8 @@ contract TestAlternativeOrders is Test {
             conditionals: Position.Conditionals({
                 stopLossSet: true,
                 takeProfitSet: true,
-                stopLossPrice: 2400e18,
-                takeProfitPrice: 2600e18,
+                stopLossPrice: 2400e30,
+                takeProfitPrice: 2600e30,
                 stopLossPercentage: 1e18,
                 takeProfitPercentage: 1e18
             })
@@ -297,11 +296,10 @@ contract TestAlternativeOrders is Test {
 
         assertEq(sl.user, USER);
         assertEq(tp.user, USER);
-        assertEq(sl.input.sizeDelta, 4 ether);
-        assertEq(tp.input.sizeDelta, 4 ether);
+        assertEq(sl.input.sizeDelta, 10_000e30);
+        assertEq(tp.input.sizeDelta, 10_000e30);
     }
 
-    // @fail
     function testAUserCanOverwriteExistingStopLossAndTakeProfitOrders() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({
@@ -319,8 +317,8 @@ contract TestAlternativeOrders is Test {
             conditionals: Position.Conditionals({
                 stopLossSet: true,
                 takeProfitSet: true,
-                stopLossPrice: 2400e18,
-                takeProfitPrice: 2600e18,
+                stopLossPrice: 2400e30,
+                takeProfitPrice: 2600e30,
                 stopLossPercentage: 1e18,
                 takeProfitPercentage: 1e18
             })
@@ -352,8 +350,8 @@ contract TestAlternativeOrders is Test {
         Position.Conditionals memory newConditionals = Position.Conditionals({
             stopLossSet: true,
             takeProfitSet: true,
-            stopLossPrice: 2300e18,
-            takeProfitPrice: 2700e18,
+            stopLossPrice: 2300e30,
+            takeProfitPrice: 2700e30,
             stopLossPercentage: 0.5e18,
             takeProfitPercentage: 0.5e18
         });
@@ -369,8 +367,8 @@ contract TestAlternativeOrders is Test {
 
         assertEq(sl.user, USER);
         assertEq(tp.user, USER);
-        assertEq(sl.input.sizeDelta, 2 ether);
-        assertEq(tp.input.sizeDelta, 2 ether);
+        assertEq(sl.input.sizeDelta, 5000e30);
+        assertEq(tp.input.sizeDelta, 5000e30);
 
         // check the old sl / tp were deleted
         assertEq(tradeStorage.getOrder(slBefore).user, address(0));
@@ -384,7 +382,7 @@ contract TestAlternativeOrders is Test {
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
-            limitPrice: 2400e18,
+            limitPrice: 2400e30,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
             isLong: true,
@@ -394,8 +392,8 @@ contract TestAlternativeOrders is Test {
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
-                stopLossPrice: 2400e18,
-                takeProfitPrice: 2600e18,
+                stopLossPrice: 2400e30,
+                takeProfitPrice: 2600e30,
                 stopLossPercentage: 1e18,
                 takeProfitPercentage: 1e18
             })
@@ -418,7 +416,6 @@ contract TestAlternativeOrders is Test {
         assertGt(balanceAfter, balanceBefore);
     }
 
-    // @fail
     function testLimitOrdersCantBeExecutedBeforePriceHasReachedTarget() public setUpMarkets {
         // create a limit order
         Position.Input memory input = Position.Input({
@@ -426,7 +423,7 @@ contract TestAlternativeOrders is Test {
             collateralToken: usdc,
             collateralDelta: 500e6,
             sizeDelta: 10_000e30,
-            limitPrice: 2600e18,
+            limitPrice: 2600e30,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
             isLong: false,
@@ -460,7 +457,6 @@ contract TestAlternativeOrders is Test {
         );
     }
 
-    // @fail
     function testLimitOrdersCanBeExecutedAtValidPrices() public setUpMarkets {
         // create a limit order
         Position.Input memory input = Position.Input({
@@ -468,7 +464,7 @@ contract TestAlternativeOrders is Test {
             collateralToken: usdc,
             collateralDelta: 500e6,
             sizeDelta: 10_000e30,
-            limitPrice: 2600e18,
+            limitPrice: 2600e30,
             maxSlippage: 0.4e18,
             executionFee: 0.01 ether,
             isLong: false,

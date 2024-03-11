@@ -21,11 +21,8 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Position} from "../positions/Position.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {sd} from "@prb/math/SD59x18.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {Order} from "../positions/Order.sol";
 
 /// @dev Library for Funding Related Calculations
 library Funding {
@@ -38,13 +35,9 @@ library Funding {
     int256 constant PRICE_PRECISION = 1e30;
     int256 constant SECONDS_IN_DAY = 86400;
 
-    function calculateSkewUsd(IMarket market, address _indexToken, uint256 _indexPrice)
-        external
-        view
-        returns (int256 skewUsd)
-    {
-        uint256 longOI = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, true);
-        uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, false);
+    function calculateSkewUsd(IMarket market, address _indexToken) external view returns (int256 skewUsd) {
+        uint256 longOI = MarketUtils.getOpenInterestUsd(market, _indexToken, true);
+        uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _indexToken, false);
 
         skewUsd = longOI.toInt256() - shortOI.toInt256();
     }

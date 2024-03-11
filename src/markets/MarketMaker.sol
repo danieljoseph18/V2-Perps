@@ -20,11 +20,7 @@ pragma solidity 0.8.23;
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {Funding} from "../libraries/Funding.sol";
-import {Borrowing} from "../libraries/Borrowing.sol";
-import {Pricing} from "../libraries/Pricing.sol";
-import {Market} from "./Market.sol";
-import {IMarket} from "./interfaces/IMarket.sol";
+import {Market, IMarket} from "./Market.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
@@ -54,7 +50,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         external
         onlyAdmin
     {
-        require(!isInitialised, "MarketMaker: Already Initialised");
+        if (isInitialised) revert MarketMaker_AlreadyInitialised();
         priceFeed = IPriceFeed(_priceFeed);
         processor = IProcessor(_processor);
         defaultConfig = _defaultConfig;
@@ -89,15 +85,14 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         bytes32 _priceId,
         Oracle.Asset memory _asset
     ) external onlyAdmin returns (address marketAddress) {
-        require(_indexToken != address(0), "MarketMaker: Invalid Address");
-        require(_priceId != bytes32(0), "MarketMaker: Invalid Price Id");
-        require(
-            _asset.baseUnit == 1e18 || _asset.baseUnit == 1e8 || _asset.baseUnit == 1e6,
-            "MarketMaker: Invalid Base Unit"
-        );
-        require(tokenToMarkets[_indexToken] == address(0), "MarketMaker: Market Exists");
-        require(_vaultDetails.priceFeed == address(priceFeed), "MarketMaker: Invalid Price Feed");
-        require(_vaultDetails.processor == address(processor), "MarketMaker: Invalid Processor");
+        if (_indexToken == address(0)) revert MarketMaker_InvalidAddress();
+        if (_priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
+        if (_asset.baseUnit != 1e18 && _asset.baseUnit != 1e8 && _asset.baseUnit != 1e6) {
+            revert MarketMaker_InvalidBaseUnit();
+        }
+        if (tokenToMarkets[_indexToken] != address(0)) revert MarketMaker_MarketExists();
+        if (_vaultDetails.priceFeed != address(priceFeed)) revert MarketMaker_InvalidPriceFeed();
+        if (_vaultDetails.processor != address(processor)) revert MarketMaker_InvalidProcessor();
 
         // Set Up Price Oracle
         priceFeed.supportAsset(_indexToken, _asset);
@@ -120,14 +115,13 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         Oracle.Asset memory _asset,
         uint256[] calldata _newAllocations
     ) external onlyAdmin {
-        require(_indexToken != address(0), "MarketMaker: Invalid Address");
-        require(_priceId != bytes32(0), "MarketMaker: Invalid Price Id");
-        require(
-            _asset.baseUnit == 1e18 || _asset.baseUnit == 1e8 || _asset.baseUnit == 1e6,
-            "MarketMaker: Invalid Base Unit"
-        );
-        require(tokenToMarkets[_indexToken] == address(0), "MarketMaker: Market Exists");
-        require(markets.contains(address(market)), "MarketMaker: Market Doesn't Exist");
+        if (_indexToken == address(0)) revert MarketMaker_InvalidAddress();
+        if (_priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
+        if (_asset.baseUnit != 1e18 && _asset.baseUnit != 1e8 && _asset.baseUnit != 1e6) {
+            revert MarketMaker_InvalidBaseUnit();
+        }
+        if (tokenToMarkets[_indexToken] != address(0)) revert MarketMaker_MarketExists();
+        if (!markets.contains(address(market))) revert MarketMaker_MarketDoesNotExist();
 
         // Set Up Price Oracle
         priceFeed.supportAsset(_indexToken, _asset);

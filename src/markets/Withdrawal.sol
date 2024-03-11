@@ -57,9 +57,14 @@ library Withdrawal {
         uint256 amountOut
     );
 
+    error Withdrawal_InvalidOwner();
+    error Withdrawal_DepositNotExpired();
+    error Withdrawal_InsufficientLongBalance();
+    error Withdrawal_InsufficientShortBalance();
+
     function validateCancellation(Data memory _data, address _caller) internal view {
-        require(_data.input.owner == _caller, "Withdrawal: invalid owner");
-        require(_data.expirationTimestamp < block.timestamp, "Withdrawal: deposit not expired");
+        if (_data.input.owner != _caller) revert Withdrawal_InvalidOwner();
+        if (_data.expirationTimestamp >= block.timestamp) revert Withdrawal_DepositNotExpired();
     }
 
     function create(Input memory _input, uint48 _minTimeToExpiration) external view returns (Data memory data) {
@@ -91,9 +96,9 @@ library Withdrawal {
         );
 
         if (_params.isLongToken) {
-            require(state.totalTokensOut <= _params.values.longTokenBalance, "Withdrawal: insufficient balance");
+            if (state.totalTokensOut > _params.values.longTokenBalance) revert Withdrawal_InsufficientLongBalance();
         } else {
-            require(state.totalTokensOut <= _params.values.shortTokenBalance, "Withdrawal: insufficient balance");
+            if (state.totalTokensOut > _params.values.shortTokenBalance) revert Withdrawal_InsufficientShortBalance();
         }
 
         // Calculate Fee

@@ -26,7 +26,7 @@ import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 import {Pricing} from "../../../src/libraries/Pricing.sol";
 import {Order} from "../../../src/positions/Order.sol";
-import {mulDiv} from "@prb/math/Common.sol";
+import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 contract TestPricing is Test {
@@ -174,10 +174,9 @@ contract TestPricing is Test {
      * - Market PNL Calculations
      * - Decrease Position PNL Calculations
      */
-    // @fail
     function testCalculatePnlForAPositionLong(uint256 _price) public setUpMarkets {
         // Construct a Position
-        _price = bound(_price, 2000e18, 3000e18);
+        _price = bound(_price, 2000e30, 3000e30);
 
         Position.Data memory position = Position.Data(
             market,
@@ -185,8 +184,8 @@ contract TestPricing is Test {
             USER,
             weth,
             0.5 ether,
-            8 ether,
-            2500e18,
+            20_000e30,
+            2500e30,
             block.timestamp,
             market.getFundingAccrued(weth),
             true,
@@ -195,17 +194,21 @@ contract TestPricing is Test {
             bytes32(0)
         );
         // Check the PNL vs the expected PNL
-        int256 pnl = Pricing.calculatePnL(position, _price, 1e18);
-        uint256 entryValue = mulDiv(8 ether, 2500e18, 1e18);
-        uint256 currentValue = mulDiv(8 ether, _price, 1e18);
-        int256 expectedPnl = int256(currentValue) - int256(entryValue);
+        int256 pnl = Pricing.getPositionPnl(position, _price, 1e18);
+        int256 priceDelta = int256(_price) - int256(position.weightedAvgEntryPrice);
+        uint256 entryIndexAmount = mulDiv(position.positionSize, 1e18, position.weightedAvgEntryPrice);
+        int256 expectedPnl;
+        if (position.isLong) {
+            expectedPnl = int256(priceDelta) * int256(entryIndexAmount) / 1e18;
+        } else {
+            expectedPnl = -int256(priceDelta) * int256(entryIndexAmount) / 1e18;
+        }
         assertEq(pnl, expectedPnl);
     }
 
-    // @fail
     function testCalculatePnlForPositionShort(uint256 _price) public setUpMarkets {
         // Construct a Position
-        _price = bound(_price, 2000e18, 3000e18);
+        _price = bound(_price, 2000e30, 3000e30);
 
         Position.Data memory position = Position.Data(
             market,
@@ -213,8 +216,8 @@ contract TestPricing is Test {
             USER,
             usdc,
             2500e6,
-            8 ether,
-            2500e18,
+            20_000e30,
+            2500e30,
             block.timestamp,
             market.getFundingAccrued(weth),
             false,
@@ -223,54 +226,62 @@ contract TestPricing is Test {
             bytes32(0)
         );
         // Check the PNL vs the expected PNL
-        int256 pnl = Pricing.calculatePnL(position, _price, 1e18);
-        uint256 entryValue = mulDiv(8 ether, 2500e18, 1e18);
-        uint256 currentValue = mulDiv(8 ether, _price, 1e18);
-        int256 expectedPnl = int256(entryValue) - int256(currentValue);
+        int256 pnl = Pricing.getPositionPnl(position, _price, 1e18);
+        int256 priceDelta = int256(_price) - int256(position.weightedAvgEntryPrice);
+        uint256 entryIndexAmount = mulDiv(position.positionSize, 1e18, position.weightedAvgEntryPrice);
+        int256 expectedPnl;
+        if (position.isLong) {
+            expectedPnl = int256(priceDelta) * int256(entryIndexAmount) / 1e18;
+        } else {
+            expectedPnl = -int256(priceDelta) * int256(entryIndexAmount) / 1e18;
+        }
         assertEq(pnl, expectedPnl);
     }
 
     function testWaepIsCorrectlyCalculatedForAnArrayOfPrices(
         uint256 _prevAverageEntryPrice,
-        uint256 _totalIndexSize,
+        uint256 _prevPositionSize,
         int256 _sizeDelta,
         uint256 _indexPrice
     ) public {
-        _totalIndexSize = bound(_totalIndexSize, 1, 1_000_000_000_000e18);
-        _indexPrice = bound(_indexPrice, 1e18, 10e18);
-        _prevAverageEntryPrice = bound(_prevAverageEntryPrice, 1e18, 10e18);
-        _sizeDelta = bound(_sizeDelta, -int256(_totalIndexSize), int256(_totalIndexSize));
+        _prevPositionSize = bound(_prevPositionSize, 1, 1_000_000_000_000e30);
+        _indexPrice = bound(_indexPrice, 1e30, 10e30);
+        _prevAverageEntryPrice = bound(_prevAverageEntryPrice, 1e30, 10e30);
+        _sizeDelta = bound(_sizeDelta, -int256(_prevPositionSize), int256(_prevPositionSize));
 
-        uint256 expectedWAEP;
+        uint256 expectedWaep;
         if (_sizeDelta <= 0) {
-            if (_sizeDelta.abs() == _totalIndexSize) {
-                expectedWAEP = 0;
-            } else {
-                expectedWAEP = _prevAverageEntryPrice;
-            }
+            // If full close, Avg Entry Price is reset to 0
+            if (_sizeDelta == -int256(_prevPositionSize)) expectedWaep = 0;
+            // Else, Avg Entry Price doesn't change for decrease
+            else expectedWaep = _prevAverageEntryPrice;
         } else {
-            uint256 nextIndexSize = _totalIndexSize + _sizeDelta.abs();
-            uint256 nextTotalEntryValue = (_prevAverageEntryPrice * _totalIndexSize) + (_indexPrice * _sizeDelta.abs());
-            expectedWAEP = nextTotalEntryValue / nextIndexSize;
+            uint256 newPositionSize = _prevPositionSize + _sizeDelta.abs();
+
+            uint256 numerator = _prevAverageEntryPrice * _prevPositionSize;
+            numerator += _indexPrice * _sizeDelta.abs();
+
+            expectedWaep = numerator / newPositionSize;
         }
 
-        uint256 actualWAEP =
-            Pricing.calculateWeightedAverageEntryPrice(_prevAverageEntryPrice, _totalIndexSize, _sizeDelta, _indexPrice);
-        assertEq(actualWAEP, expectedWAEP, "Calculated WAEP does not match expected WAEP");
+        uint256 actualWaep = Pricing.calculateWeightedAverageEntryPrice(
+            _prevAverageEntryPrice, _prevPositionSize, _sizeDelta, _indexPrice
+        );
+        assertEq(actualWaep, expectedWaep, "Calculated WAEP does not match expected WAEP");
     }
 
     // MarketUtils.getOpenInterestUsd
     // MarketUtils.getTotalEntryValueUsd
-    // @fail
+
     function testGettingThePnlForAnEntireMarketLong(
         uint256 _longOpenInterest,
         uint256 _longAverageEntryPrice,
         uint256 _indexPrice
     ) public setUpMarkets {
         // Bound the inputs
-        _longOpenInterest = bound(_longOpenInterest, 1e18, 1_000_000_000e18);
-        _longAverageEntryPrice = bound(_longAverageEntryPrice, 1e18, 10e18);
-        _indexPrice = bound(_indexPrice, 1e18, 10e18);
+        _longOpenInterest = bound(_longOpenInterest, 1e30, 1_000_000_000e30);
+        _longAverageEntryPrice = bound(_longAverageEntryPrice, 1e30, 10e30);
+        _indexPrice = bound(_indexPrice, 1e30, 10e30);
         // Update the storage of the market to vary the oi and entry value
         vm.mockCall(
             address(market),
@@ -285,23 +296,22 @@ contract TestPricing is Test {
         );
 
         // fuzz to test expected vs actual values
-        uint256 indexValue = mulDiv(_longOpenInterest, _indexPrice, 1e18);
-        uint256 entryValue = mulDiv(_longAverageEntryPrice, _longOpenInterest, 1e18);
-        int256 expectedPnl = int256(indexValue) - int256(entryValue);
-        int256 actualPnl = Pricing.getPnl(market, weth, _indexPrice, 1e18, true);
+        int256 priceDelta = int256(_indexPrice) - int256(_longAverageEntryPrice);
+        uint256 entryIndexAmount = mulDiv(_longOpenInterest, 1e18, _longAverageEntryPrice);
+        int256 expectedPnl = priceDelta * int256(entryIndexAmount) / 1e18;
+        int256 actualPnl = Pricing.getMarketPnl(market, weth, _indexPrice, 1e18, true);
         assertEq(actualPnl, expectedPnl, "Calculated PNL does not match expected PNL");
     }
 
-    // @fail
     function testGettingThePnlForAnEntireMarketShort(
         uint256 _shortOpenInterest,
         uint256 _shortAverageEntryPrice,
         uint256 _indexPrice
     ) public setUpMarkets {
         // Bound the inputs
-        _shortOpenInterest = bound(_shortOpenInterest, 1e18, 1_000_000_000e18);
-        _shortAverageEntryPrice = bound(_shortAverageEntryPrice, 1e18, 10e18);
-        _indexPrice = bound(_indexPrice, 1e18, 10e18);
+        _shortOpenInterest = bound(_shortOpenInterest, 1e30, 1_000_000_000e30);
+        _shortAverageEntryPrice = bound(_shortAverageEntryPrice, 1e30, 10e30);
+        _indexPrice = bound(_indexPrice, 1e30, 10e30);
         // Update the storage of the market to vary the oi and entry value
         vm.mockCall(
             address(market),
@@ -315,14 +325,13 @@ contract TestPricing is Test {
         );
 
         // fuzz to test expected vs actual values
-        uint256 indexValue = mulDiv(_shortOpenInterest, _indexPrice, 1e18);
-        uint256 entryValue = mulDiv(_shortAverageEntryPrice, _shortOpenInterest, 1e18);
-        int256 expectedPnl = int256(entryValue) - int256(indexValue);
-        int256 actualPnl = Pricing.getPnl(market, weth, _indexPrice, 1e18, false);
+        int256 priceDelta = int256(_indexPrice) - int256(_shortAverageEntryPrice);
+        uint256 entryIndexAmount = mulDiv(_shortOpenInterest, 1e18, _shortAverageEntryPrice);
+        int256 expectedPnl = -priceDelta * int256(entryIndexAmount) / 1e18;
+        int256 actualPnl = Pricing.getMarketPnl(market, weth, _indexPrice, 1e18, false);
         assertEq(actualPnl, expectedPnl, "Calculated PNL does not match expected PNL");
     }
 
-    // @fail
     function testGettingTheCombinedPnlForAnEntireMarket(
         uint256 _longOpenInterest,
         uint256 _longAverageEntryPrice,
@@ -331,11 +340,11 @@ contract TestPricing is Test {
         uint256 _indexPrice
     ) public setUpMarkets {
         // Bound the inputs
-        _longOpenInterest = bound(_longOpenInterest, 1e18, 1_000_000_000e18);
-        _longAverageEntryPrice = bound(_longAverageEntryPrice, 1e18, 10e18);
-        _shortOpenInterest = bound(_shortOpenInterest, 1e18, 1_000_000_000e18);
-        _shortAverageEntryPrice = bound(_shortAverageEntryPrice, 1e18, 10e18);
-        _indexPrice = bound(_indexPrice, 1e18, 10e18);
+        _longOpenInterest = bound(_longOpenInterest, 1e30, 1_000_000_000e30);
+        _longAverageEntryPrice = bound(_longAverageEntryPrice, 1e30, 10e30);
+        _shortOpenInterest = bound(_shortOpenInterest, 1e30, 1_000_000_000e30);
+        _shortAverageEntryPrice = bound(_shortAverageEntryPrice, 1e30, 10e30);
+        _indexPrice = bound(_indexPrice, 1e30, 10e30);
         // Update the storage of the market to vary the oi and entry value
         vm.mockCall(
             address(market),
@@ -360,17 +369,22 @@ contract TestPricing is Test {
             abi.encode(_shortAverageEntryPrice)
         );
         // fuzz to test expected vs actual values
-        int256 longPnl = int256(mulDiv(_longOpenInterest, _indexPrice, 1e18))
-            - int256(mulDiv(_longAverageEntryPrice, _longOpenInterest, 1e18));
-        int256 shortPnl = int256(mulDiv(_shortAverageEntryPrice, _shortOpenInterest, 1e18))
-            - int256(mulDiv(_shortOpenInterest, _indexPrice, 1e18));
+        int256 longPnl;
+        {
+            longPnl = (int256(_indexPrice) - int256(_longAverageEntryPrice))
+                * int256(mulDiv(_longOpenInterest, 1e18, _longAverageEntryPrice)) / 1e18;
+        }
+        int256 shortPnl;
+        {
+            shortPnl = -1 * (int256(_indexPrice) - int256(_shortAverageEntryPrice))
+                * int256(mulDiv(_shortOpenInterest, 1e18, _shortAverageEntryPrice)) / 1e18;
+        }
         int256 expectedPnl = longPnl + shortPnl;
 
-        int256 actualPnl = Pricing.getNetPnl(market, weth, _indexPrice, 1e18);
+        int256 actualPnl = Pricing.getNetMarketPnl(market, weth, _indexPrice, 1e18);
         assertEq(actualPnl, expectedPnl, "Calculated PNL does not match expected PNL");
     }
 
-    // @fail
     function testCalculationForDecreasePositionPnl(
         uint256 _sizeDelta,
         uint256 _averageEntryPrice,
@@ -378,30 +392,35 @@ contract TestPricing is Test {
         uint256 _collateralPrice
     ) public {
         // Adjust bounds to ensure meaningful test values
-        _sizeDelta = bound(_sizeDelta, 1e18, 1_000_000_000e18);
-        _averageEntryPrice = bound(_averageEntryPrice, 1e18, 10e18);
-        _indexPrice = bound(_indexPrice, 1e18, 10e18);
-        _collateralPrice = bound(_collateralPrice, 1e18, 10e18);
+        _sizeDelta = bound(_sizeDelta, 1e30, 1_000_000_000e30);
+        _averageEntryPrice = bound(_averageEntryPrice, 1e30, 10e30);
+        _indexPrice = bound(_indexPrice, 1e30, 10e30);
+        _collateralPrice = bound(_collateralPrice, 1e30, 10e30);
 
         // Calculate the expected PNL in USD terms
-        int256 expectedPnlUsd =
-            int256(mulDiv(_sizeDelta, _indexPrice, 1e18)) - int256(mulDiv(_sizeDelta, _averageEntryPrice, 1e18));
+        int256 priceDelta = int256(_indexPrice) - int256(_averageEntryPrice);
+        uint256 entryIndexAmount = mulDiv(_sizeDelta, 1e18, _averageEntryPrice);
+        int256 pnlUsd = mulDivSigned(priceDelta, int256(entryIndexAmount), int256(1e18));
+        uint256 pnlCollateral = mulDiv(pnlUsd.abs(), 1e18, _collateralPrice);
+        int256 expectedPnl = pnlUsd > 0 ? int256(pnlCollateral) : -int256(pnlCollateral);
 
         // Directly use the `getDecreasePositionPnl` function to get the PNL in collateral terms
+        /**
+         * uint256 _sizeDeltaUsd,
+         *     uint256 _averageEntryPriceUsd,
+         *     uint256 _indexPrice,
+         *     uint256 _indexBaseUnit,
+         *     uint256 _collateralPriceUsd,
+         *     uint256 _collateralBaseUnit,
+         *     bool _isLong
+         */
         int256 actualPnlCollateral = Pricing.getDecreasePositionPnl(
-            1e18, _sizeDelta, _averageEntryPrice, _indexPrice, 1e18, _collateralPrice, true
+            _sizeDelta, _averageEntryPrice, _indexPrice, 1e18, _collateralPrice, 1e18, true
         );
-
-        // Convert the expected PNL from USD to collateral tokens. This step aligns with how `getDecreasePositionPnl` function works.
-        int256 expectedPnlCollateral = expectedPnlUsd > 0
-            ? int256(mulDiv(uint256(expectedPnlUsd), 1e18, _collateralPrice))
-            : -int256(mulDiv(uint256(-expectedPnlUsd), 1e18, _collateralPrice));
 
         // Assert that the actual PNL in collateral matches the expected PNL in collateral, considering the conversion and rounding
         assertEq(
-            actualPnlCollateral,
-            expectedPnlCollateral,
-            "Calculated PNL in collateral does not match expected PNL in collateral."
+            actualPnlCollateral, expectedPnl, "Calculated PNL in collateral does not match expected PNL in collateral."
         );
     }
 }

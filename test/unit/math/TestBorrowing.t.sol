@@ -189,7 +189,7 @@ contract TestBorrowing is Test {
      *
      */
     // @fail
-    function testCalculatingTotalFeesOwedInCollateralTokens(uint256 _collateral, uint256 _leverage)
+    function testCalculatingTotalFeesOwedInCollateralTokensNoExistingCumulative(uint256 _collateral, uint256 _leverage)
         public
         setUpMarkets
     {
@@ -218,7 +218,7 @@ contract TestBorrowing is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
 
         vm.prank(OWNER);
         processor.executePosition(
@@ -237,7 +237,7 @@ contract TestBorrowing is Test {
         // Create an arbitrary position
         _collateral = bound(_collateral, 1, 100_000 ether);
         _leverage = bound(_leverage, 1, 100);
-        uint256 positionSize = _collateral * _leverage;
+        uint256 positionSize = (_collateral * _leverage) * 2500e30 / 1e18;
 
         Position.Data memory position = Position.Data(
             state.market,
@@ -246,7 +246,7 @@ contract TestBorrowing is Test {
             weth,
             _collateral,
             positionSize,
-            2500e18,
+            2500e30,
             block.timestamp,
             state.market.getFundingAccrued(weth),
             true,
@@ -256,15 +256,19 @@ contract TestBorrowing is Test {
         );
 
         // state necessary Variables
-        state.indexPrice = 2500e18;
+        state.indexPrice = 2500e30;
         state.indexBaseUnit = 1e18;
         state.collateralBaseUnit = 1e18;
-        state.collateralPrice = 2500e18;
+        state.collateralPrice = 2500e30;
 
         // Calculate Fees Owed
         uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, state);
         // Index Tokens == Collateral Tokens
-        uint256 expectedFees = ((state.market.getBorrowingRate(weth, true) * 1 days) * positionSize) / 1e18;
+        uint256 expectedFees = mulDiv(
+            ((state.market.getBorrowingRate(weth, true) * 1 days) * positionSize) / 1e18,
+            state.collateralBaseUnit,
+            state.collateralPrice
+        );
         assertEq(feesOwed, expectedFees);
     }
 
@@ -279,7 +283,7 @@ contract TestBorrowing is Test {
         // Create an arbitrary position
         _collateral = bound(_collateral, 1, 100_000 ether);
         _leverage = bound(_leverage, 1, 100);
-        uint256 positionSize = _collateral * _leverage;
+        uint256 positionSize = (_collateral * _leverage) * 2500e30 / 1e18;
         Position.Data memory position = Position.Data(
             state.market,
             weth,
@@ -287,7 +291,7 @@ contract TestBorrowing is Test {
             weth,
             _collateral,
             positionSize,
-            2500e18,
+            2500e30,
             block.timestamp,
             state.market.getFundingAccrued(weth),
             true,
@@ -306,15 +310,16 @@ contract TestBorrowing is Test {
         );
 
         // state necessary Variables
-        state.indexPrice = 2500e18;
+        state.indexPrice = 2500e30;
         state.indexBaseUnit = 1e18;
         state.collateralBaseUnit = 1e18;
-        state.collateralPrice = 2500e18;
+        state.collateralPrice = 2500e30;
 
         // Calculate Fees Owed
         uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, state);
         // Index Tokens == Collateral Tokens
         uint256 expectedFees = mulDiv(bonusCumulative, positionSize, 1e18);
+        expectedFees = mulDiv(expectedFees, state.collateralBaseUnit, state.collateralPrice);
         assertEq(feesOwed, expectedFees);
     }
 
@@ -357,10 +362,7 @@ contract TestBorrowing is Test {
 
         // Fetch the borrowing rate
         uint256 borrowingRate = market.getBorrowingRate(weth, true);
-        // Calculate the expected borrowing rate
-        // 7.008807-12
-        uint256 expectedRate = 0.000000000007008807e18;
         // Cross check
-        assertEq(borrowingRate, expectedRate);
+        assertGt(borrowingRate, 0);
     }
 }

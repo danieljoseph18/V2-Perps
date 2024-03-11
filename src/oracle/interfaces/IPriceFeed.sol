@@ -8,6 +8,9 @@ import {Oracle} from "../Oracle.sol";
 interface IPriceFeed {
     event PriceDataSigned(address token, uint256 block, PythStructs.Price priceData);
 
+    error PriceFeed_InsufficientFee();
+    error PriceFeed_InvalidToken();
+
     function supportAsset(address _token, Oracle.Asset memory _asset) external;
     function unsupportAsset(address _token) external;
     function signPriceData(address _token, bytes[] calldata _priceUpdateData) external payable;

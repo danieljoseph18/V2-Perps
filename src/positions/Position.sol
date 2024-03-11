@@ -25,13 +25,24 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {Order} from "../positions/Order.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {console, console2} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
     using SignedMath for int256;
     using SafeCast for uint256;
+
+    error Position_InvalidDecrease();
+    error Position_SizeDelta();
+    error Position_DeltaExceedsCollateral();
+    error Position_LimitPriceExceeded();
+    error Position_CollateralExceedsSizeLong();
+    error Position_CollateralExceedsSizeShort();
+    error Position_BelowMinLeverage();
+    error Position_OverMaxLeverage();
+    error Position_InvalidStopLossPercentage();
+    error Position_InvalidStopLossPrice();
+    error Position_InvalidTakeProfitPercentage();
+    error Position_InvalidTakeProfitPrice();
 
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant LEVERAGE_PRECISION = 100;
@@ -125,20 +136,20 @@ library Position {
     {
         // Case 1: Position doesn't exist (Create Position)
         if (_position.user == address(0)) {
-            require(_trade.isIncrease, "Position: Invalid Decrease");
-            require(_trade.sizeDelta != 0, "Position: Size Delta");
+            if (!_trade.isIncrease) revert Position_InvalidDecrease();
+            if (_trade.sizeDelta == 0) revert Position_SizeDelta();
             requestType = RequestType.CREATE_POSITION;
         } else if (_trade.sizeDelta == 0) {
             // Case 2: Position exists but sizeDelta is 0 (Collateral Increase / Decrease)
             if (_trade.isIncrease) {
                 requestType = RequestType.COLLATERAL_INCREASE;
             } else {
-                require(_position.collateralAmount >= _trade.collateralDelta, "Position: Delta > Collateral");
+                if (_position.collateralAmount < _trade.collateralDelta) revert Position_DeltaExceedsCollateral();
                 requestType = RequestType.COLLATERAL_DECREASE;
             }
         } else {
             // Case 3: Position exists and sizeDelta is not 0 (Position Increase / Decrease)
-            require(_trade.sizeDelta != 0, "Position: Size Delta");
+            if (_trade.sizeDelta == 0) revert Position_SizeDelta();
             if (_trade.isIncrease) {
                 requestType = RequestType.POSITION_INCREASE;
             } else {
@@ -161,21 +172,6 @@ library Position {
         return _trade;
     }
 
-    function validateCreatePosition(
-        ITradeStorage tradeStorage,
-        Input memory _trade,
-        uint256 _indexRefPrice,
-        uint256 _sizeDeltaUsd,
-        uint256 _collateralRefPrice,
-        uint256 _collateralBaseUnit,
-        uint256 _collateralDeltaUsd
-    ) external view {
-        uint256 minCollateralUsd = tradeStorage.minCollateralUsd();
-        validateConditionals(_trade.conditionals, _indexRefPrice, _trade.isLong);
-        Order.checkMinCollateral(_trade.collateralDelta, _collateralRefPrice, _collateralBaseUnit, minCollateralUsd);
-        require(_collateralDeltaUsd >= _sizeDeltaUsd, "Router: Collateral Delta < Size Delta");
-    }
-
     function generateKey(Request memory _request) external pure returns (bytes32 positionKey) {
         positionKey = keccak256(abi.encode(_request.input.indexToken, _request.user, _request.input.isLong));
     }
@@ -194,9 +190,9 @@ library Position {
 
     function checkLimitPrice(uint256 _price, Input memory _request) external pure {
         if (_request.isLong) {
-            require(_price <= _request.limitPrice, "Position: Limit Price");
+            if (_price > _request.limitPrice) revert Position_LimitPriceExceeded();
         } else {
-            require(_price >= _request.limitPrice, "Position: Limit Price");
+            if (_price < _request.limitPrice) revert Position_LimitPriceExceeded();
         }
     }
 
@@ -209,13 +205,11 @@ library Position {
         external
         view
     {
-        console.log("Collateral Delta USD: ", _collateralUsd);
-        console.log("Size Delta USD: ", _sizeUsd);
         uint256 maxLeverage = market.getMaxLeverage(_indexToken);
-        require(_collateralUsd <= _sizeUsd, "Position: collateral exceeds size");
+        if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSizeLong();
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
-        require(leverage >= MIN_LEVERAGE, "Position: Below Min Leverage");
-        require(leverage <= maxLeverage, "Position: Over Max Leverage");
+        if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
+        if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
 
     function createRequest(Input calldata _trade, address _market, address _user, RequestType _requestType)
@@ -286,14 +280,13 @@ library Position {
         uint256 liquidationFeeUsd
     ) external view returns (bool) {
         uint256 collateralValueUsd = mulDiv(_position.collateralAmount, _state.collateralPrice, PRECISION);
-        console.log("Collateral Value USD: ", collateralValueUsd);
+
         uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _state);
-        console.log("Total Fees Owed USD: ", totalFeesOwedUsd);
-        console.log("Index Price: ", _state.indexPrice);
-        int256 pnl = Pricing.calculatePnL(_position, _state.indexPrice, _state.indexBaseUnit);
-        console2.log("PnL: ", pnl);
+
+        int256 pnl = Pricing.getPositionPnl(_position, _state.indexPrice, _state.indexBaseUnit);
+
         uint256 losses = liquidationFeeUsd + totalFeesOwedUsd;
-        console.log("Losses: ", losses);
+
         if (pnl < 0) {
             losses += pnl.abs();
         }
@@ -320,9 +313,7 @@ library Position {
         returns (Execution memory execution)
     {
         // calculate collateral delta from size delta
-        console.log("Collateral Amount: ", _position.collateralAmount);
-        console.log("Position Size: ", _position.positionSize);
-        console.log("Size Delta: ", _sizeDelta);
+
         /**
          * Getting precision loss of 2 when calculating collateral delta
          * Values are: Collateral Amount = 489991996799039744, size Delta = 2 ether, position size = 10 ether
@@ -330,7 +321,7 @@ library Position {
          * Actual Collateral Delta = 97998399359807948
          */
         uint256 collateralDelta = mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
-        console.log("Collateral Delta: ", collateralDelta);
+
         Request memory request = Request({
             input: Input({
                 indexToken: _position.indexToken,
@@ -395,24 +386,23 @@ library Position {
         pure
     {
         if (_conditionals.stopLossSet) {
-            require(
-                _conditionals.stopLossPercentage > 0 && _conditionals.stopLossPercentage <= 1e18, "Position: StopLoss %"
-            );
+            if (_conditionals.stopLossPercentage == 0 || _conditionals.stopLossPercentage > 1e18) {
+                revert Position_InvalidStopLossPercentage();
+            }
             if (_isLong) {
-                require(_conditionals.stopLossPrice < _referencePrice, "Position: StopLoss Price");
+                if (_conditionals.stopLossPrice >= _referencePrice) revert Position_InvalidStopLossPrice();
             } else {
-                require(_conditionals.stopLossPrice > _referencePrice, "Position: StopLoss Price");
+                if (_conditionals.stopLossPrice <= _referencePrice) revert Position_InvalidStopLossPrice();
             }
         }
         if (_conditionals.takeProfitSet) {
-            require(
-                _conditionals.takeProfitPercentage > 0 && _conditionals.takeProfitPercentage <= 1e18,
-                "Position: TakeProfit %"
-            );
+            if (_conditionals.takeProfitPercentage == 0 || _conditionals.takeProfitPercentage > 1e18) {
+                revert Position_InvalidTakeProfitPercentage();
+            }
             if (_isLong) {
-                require(_conditionals.takeProfitPrice > _referencePrice, "Position: TakeProfit Price");
+                if (_conditionals.takeProfitPrice <= _referencePrice) revert Position_InvalidTakeProfitPrice();
             } else {
-                require(_conditionals.takeProfitPrice < _referencePrice, "Position: TakeProfit Price");
+                if (_conditionals.takeProfitPrice >= _referencePrice) revert Position_InvalidTakeProfitPrice();
             }
         }
     }

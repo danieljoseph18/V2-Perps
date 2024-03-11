@@ -43,7 +43,7 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
     uint256 public tokenPrecision;
 
     modifier validFee(bytes[] calldata _priceUpdateData) {
-        require(msg.value >= getUpdateFee(_priceUpdateData), "Oracle: Insufficient fee");
+        if (msg.value < getUpdateFee(_priceUpdateData)) revert PriceFeed_InsufficientFee();
         _;
     }
 
@@ -103,7 +103,7 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
         validFee(_priceUpdateData)
     {
         Oracle.Asset memory indexAsset = assets[_token];
-        require(indexAsset.isValid, "Oracle: Invalid Token");
+        if (!indexAsset.isValid) revert PriceFeed_InvalidToken();
         uint256 currentBlock = block.number;
         // Check if the price has already been signed for _token
         if (prices[_token][currentBlock].price != 0) {

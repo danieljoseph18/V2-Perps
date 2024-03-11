@@ -41,6 +41,15 @@ interface ITradeStorage {
         bytes32 indexed _positionKey, uint256 indexed _stopLossPrice, uint256 indexed _stopLossPercentage
     );
 
+    error TradeStorage_AlreadyInitialised();
+    error TradeStorage_InvalidLiquidationFee();
+    error TradeStorage_InvalidTradingFee();
+    error TradeStorage_OrderAlreadyExists();
+    error TradeStorage_PositionDoesNotExist();
+    error TradeStorage_OrderDoesNotExist();
+    error TradeStorage_PositionExists();
+    error TradeStorage_NotLiquidatable();
+
     function initialise(
         uint256 _liquidationFee,
         uint256 _tradingFee,

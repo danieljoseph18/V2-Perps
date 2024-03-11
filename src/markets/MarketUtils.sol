@@ -6,8 +6,6 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {IVault} from "./interfaces/IVault.sol";
-import {console} from "forge-std/Test.sol";
 
 library MarketUtils {
     using SignedMath for int256;
@@ -17,42 +15,14 @@ library MarketUtils {
     uint256 public constant MAX_ALLOCATION = 10000;
     uint256 constant PRICE_PRECISION = 1e30;
 
-    function getOpenInterestUsd(IMarket market, address _indexToken, uint256 _indexPrice, bool _isLong)
+    error MarketUtils_MaxOiExceeded();
+
+    function getOpenInterestUsd(IMarket market, address _indexToken, bool _isLong)
         public
         view
         returns (uint256 longOiUsd)
     {
-        return _isLong
-            ? mulDiv(market.getOpenInterest(_indexToken, true), _indexPrice, PRICE_PRECISION)
-            : mulDiv(market.getOpenInterest(_indexToken, false), _indexPrice, PRICE_PRECISION);
-    }
-
-    function getTotalOpenInterestUsd(IMarket market, address _indexToken, uint256 _indexPrice)
-        external
-        view
-        returns (uint256 totalOiUsd)
-    {
-        uint256 longOIUSD = mulDiv(market.getOpenInterest(_indexToken, true), _indexPrice, PRICE_PRECISION);
-        uint256 shortOIUSD = mulDiv(market.getOpenInterest(_indexToken, false), _indexPrice, PRICE_PRECISION);
-        return longOIUSD + shortOIUSD;
-    }
-
-    function getTotalEntryValueUsd(IMarket market, address _indexToken, uint256 _indexBaseUnit, bool _isLong)
-        external
-        view
-        returns (uint256 entryValueUsd)
-    {
-        uint256 averageEntryPrice;
-        uint256 indexOI;
-        if (_isLong) {
-            averageEntryPrice = market.getAverageEntryPrice(_indexToken, true);
-            indexOI = market.getOpenInterest(_indexToken, true);
-        } else {
-            averageEntryPrice = market.getAverageEntryPrice(_indexToken, false);
-            indexOI = market.getOpenInterest(_indexToken, false);
-        }
-
-        entryValueUsd = mulDiv(averageEntryPrice, indexOI, _indexBaseUnit);
+        return _isLong ? market.getOpenInterest(_indexToken, true) : market.getOpenInterest(_indexToken, false);
     }
 
     function getTotalPoolBalanceUsd(
@@ -63,8 +33,6 @@ library MarketUtils {
         uint256 _longBaseUnit,
         uint256 _shortBaseUnit
     ) public view returns (uint256 poolBalanceUsd) {
-        console.log("Long Base Unit: ", _longBaseUnit);
-        console.log("Short Base Unit: ", _shortBaseUnit);
         uint256 longPoolUsd = getPoolBalanceUsd(market, _indexToken, _longTokenPrice, _longBaseUnit, true);
         uint256 shortPoolUsd = getPoolBalanceUsd(market, _indexToken, _shortTokenPrice, _shortBaseUnit, false);
         poolBalanceUsd = longPoolUsd + shortPoolUsd;
@@ -108,7 +76,7 @@ library MarketUtils {
         uint256 availableUsd =
             getAvailableOiUsd(market, _indexToken, _collateralTokenPrice, _collateralBaseUnit, _isLong);
         // Check SizeDelta USD won't push the OI over the max
-        require(_sizeDeltaUsd <= availableUsd, "MarketUtils: Max OI exceeded");
+        if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 
     function getTotalAvailableOiUsd(
@@ -155,7 +123,7 @@ library MarketUtils {
             return 0;
         }
         // get pnl
-        int256 pnl = Pricing.getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, _isLong);
+        int256 pnl = Pricing.getMarketPnl(market, _indexToken, _indexPrice, _indexBaseUnit, _isLong);
 
         uint256 factor = mulDiv(pnl.abs(), SCALAR, poolUsd);
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;

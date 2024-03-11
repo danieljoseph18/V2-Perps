@@ -6,7 +6,6 @@ import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Oracle} from "./Oracle.sol";
-import {IChainlinkFeed} from "./interfaces/IChainlinkFeed.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract PriceFeed is IPriceFeed, RoleValidation {
@@ -47,7 +46,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     uint256 public tokenPrecision;
 
     modifier validFee(bytes[] calldata _priceUpdateData) {
-        require(msg.value >= pyth.getUpdateFee(_priceUpdateData), "PriceFeed: Insufficient fee");
+        if (msg.value < pyth.getUpdateFee(_priceUpdateData)) revert PriceFeed_InsufficientFee();
         _;
     }
 
@@ -98,7 +97,7 @@ contract PriceFeed is IPriceFeed, RoleValidation {
     {
         // Check if the token is whitelisted
         Oracle.Asset memory indexAsset = assets[_token];
-        require(indexAsset.isValid, "Oracle: Invalid Token");
+        if (!indexAsset.isValid) revert PriceFeed_InvalidToken();
         // Check Sequencer Uptime
         Oracle.isSequencerUp(this);
         uint256 currentBlock = block.number;

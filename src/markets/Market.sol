@@ -25,8 +25,8 @@ import {Pricing} from "../libraries/Pricing.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {Vault} from "./Vault.sol";
-import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 import {Pool} from "./Pool.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
@@ -62,7 +62,7 @@ contract Market is Vault, IMarket {
     }
 
     function removeToken(address _indexToken, uint256[] calldata _newAllocations) external onlyAdmin {
-        require(indexTokens.contains(_indexToken), "Market: Token does not exist");
+        if (!indexTokens.contains(_indexToken)) revert Market_TokenDoesNotExist();
         indexTokens.remove(_indexToken);
         _setAllocationsWithBits(_newAllocations);
         delete marketStorage[_indexToken];
@@ -86,15 +86,11 @@ contract Market is Vault, IMarket {
         emit AdlStateUpdated(_indexToken, _isFlaggedForAdl);
     }
 
-    function updateFundingRate(address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit)
-        external
-        nonReentrant
-        onlyProcessor
-    {
+    function updateFundingRate(address _indexToken, uint256 _indexPrice) external nonReentrant onlyProcessor {
         FundingValues memory funding = marketStorage[_indexToken].funding;
 
         // Calculate the skew in USD
-        int256 skewUsd = Funding.calculateSkewUsd(this, _indexToken, _indexPrice, _indexBaseUnit);
+        int256 skewUsd = Funding.calculateSkewUsd(this, _indexToken);
 
         // Calculate the current funding velocity
         funding.fundingRateVelocity = Funding.getCurrentVelocity(this, _indexToken, skewUsd);
@@ -146,7 +142,7 @@ contract Market is Vault, IMarket {
         external
         onlyProcessor
     {
-        require(_priceUsd != 0, "Market: Price is 0");
+        if (_priceUsd == 0) revert Market_PriceIsZero();
         if (_sizeDeltaUsd == 0) return; // No Change
 
         PnlValues memory pnl = marketStorage[_indexToken].pnl;
@@ -177,6 +173,7 @@ contract Market is Vault, IMarket {
         external
         onlyProcessor
     {
+        // Update the open interest
         if (_shouldAdd) {
             _isLong
                 ? marketStorage[_indexToken].openInterest.longOpenInterest += _sizeDeltaUsd
@@ -232,11 +229,11 @@ contract Market is Vault, IMarket {
             }
         }
 
-        require(total == TOTAL_ALLOCATION, "StateUpdater: Invalid Cumulative Allocation");
+        if (total != TOTAL_ALLOCATION) revert Market_InvalidCumulativeAllocation();
     }
 
     function _addToken(Config memory _config, address _indexToken, uint256[] memory _newAllocations) internal {
-        require(!indexTokens.contains(_indexToken), "Market: Token already exists");
+        if (indexTokens.contains(_indexToken)) revert Market_TokenAlreadyExists();
         indexTokens.add(_indexToken);
         _setAllocationsWithBits(_newAllocations);
         marketStorage[_indexToken].config = _config;

@@ -169,7 +169,6 @@ contract TestLiquidations is Test {
         _;
     }
 
-    // @fail
     function testLiquidatingAPositionThatGoesUnder() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({

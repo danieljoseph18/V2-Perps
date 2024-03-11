@@ -2,11 +2,9 @@
 pragma solidity 0.8.23;
 
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
-import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {Pricing} from "../libraries/Pricing.sol";
 import {IChainlinkFeed} from "./interfaces/IChainlinkFeed.sol";
 import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
 import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol";
@@ -17,6 +15,21 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 library Oracle {
     using SignedMath for int64;
     using SignedMath for int32;
+
+    error Oracle_SequencerDown();
+    error Oracle_ForexTradingDisabled();
+    error Oracle_EquityTradingDisabled();
+    error Oracle_CommodityTradingDisabled();
+    error Oracle_PredictionTradingDisabled();
+    error Oracle_UnrecognisedAssetType();
+    error Oracle_InvalidTokenPrices();
+    error Oracle_PriceTooHigh();
+    error Oracle_PriceTooLow();
+    error Oracle_InvalidChainlinkPrice();
+    error Oracle_StaleChainlinkPrice();
+    error Oracle_InvalidRefPrice();
+    error Oracle_InvalidIndexPrice();
+    error Oracle_InvalidPoolType();
 
     // @gas - use smaller data types
     struct Asset {
@@ -98,7 +111,7 @@ library Oracle {
             // Answer == 1: Sequencer is down
             bool isUp = answer == 0;
             if (!isUp) {
-                revert("Oracle: Sequencer is down");
+                revert Oracle_SequencerDown();
             }
         }
     }
@@ -111,15 +124,15 @@ library Oracle {
         if (asset.assetType == AssetType.CRYPTO) {
             return;
         } else if (asset.assetType == AssetType.FX) {
-            require(_isEnabled.forex, "Oracle: Forex Trading Disabled");
+            if (!_isEnabled.forex) revert Oracle_ForexTradingDisabled();
         } else if (asset.assetType == AssetType.EQUITY) {
-            require(_isEnabled.equity, "Oracle: Equity Trading Disabled");
+            if (!_isEnabled.equity) revert Oracle_EquityTradingDisabled();
         } else if (asset.assetType == AssetType.COMMODITY) {
-            require(_isEnabled.commodity, "Oracle: Commodity Trading Disabled");
+            if (!_isEnabled.commodity) revert Oracle_CommodityTradingDisabled();
         } else if (asset.assetType == AssetType.PREDICTION) {
-            require(_isEnabled.prediction, "Oracle: Prediction Trading Disabled");
+            if (!_isEnabled.prediction) revert Oracle_PredictionTradingDisabled();
         } else {
-            revert("Oracle: Unrecognised Asset Type");
+            revert Oracle_UnrecognisedAssetType();
         }
     }
 
@@ -178,7 +191,7 @@ library Oracle {
             longPrice = longPrices.price - longPrices.confidence;
             shortPrice = shortPrices.price - shortPrices.confidence;
         }
-        require(longPrice > 0 && shortPrice > 0, "Oracle: invalid token prices");
+        if (longPrice == 0 || shortPrice == 0) revert Oracle_InvalidTokenPrices();
     }
 
     function getMarketTokenPrices(IPriceFeed priceFeed, uint256 _blockNumber)
@@ -215,14 +228,14 @@ library Oracle {
             longPrice = longBasePrice - longConfidence;
             shortPrice = shortBasePrice - shortConfidence;
         }
-        require(longPrice > 0 && shortPrice > 0, "Oracle: invalid token prices");
+        if (longPrice == 0 || shortPrice == 0) revert Oracle_InvalidTokenPrices();
     }
 
     function validatePriceRange(Asset memory _asset, Price memory _priceData, uint256 _refPrice) external pure {
         // check the price is within the range
         uint256 maxPriceDeviation = mulDiv(_refPrice, _asset.maxPriceDeviation, MAX_PERCENTAGE);
-        require(_priceData.price + _priceData.confidence <= _refPrice + maxPriceDeviation, "Oracle: Price too high");
-        require(_priceData.price - _priceData.confidence >= _refPrice - maxPriceDeviation, "Oracle: Price too low");
+        if (_priceData.price + _priceData.confidence > _refPrice + maxPriceDeviation) revert Oracle_PriceTooHigh();
+        if (_priceData.price - _priceData.confidence < _refPrice - maxPriceDeviation) revert Oracle_PriceTooLow();
     }
 
     function getReferencePrice(IPriceFeed priceFeed, address _token) public view returns (uint256 referencePrice) {
@@ -250,15 +263,15 @@ library Oracle {
         if (_asset.chainlinkPriceFeed != address(0)) {
             IChainlinkFeed chainlinkFeed = IChainlinkFeed(_asset.chainlinkPriceFeed);
             (, int256 _price,, uint256 timestamp,) = chainlinkFeed.latestRoundData();
-            require(_price > 0, "Oracle: Invalid Chainlink Price");
-            require(timestamp > block.timestamp - _asset.heartbeatDuration, "Oracle: Stale Chainlink Price");
+            if (_price <= 0) revert Oracle_InvalidChainlinkPrice();
+            if (timestamp <= block.timestamp - _asset.heartbeatDuration) revert Oracle_StaleChainlinkPrice();
             referencePrice = mulDiv(uint256(_price), _asset.baseUnit, 10 ** CHAINLINK_PRICE_DECIMALS);
         } else if (_asset.pool.poolAddress != address(0)) {
             referencePrice = getAmmPrice(_asset.pool);
         } else if (_asset.priceProvider == PriceProvider.PYTH) {
             (referencePrice,) = priceFeed.getPriceUnsafe(_asset);
         } else {
-            revert("Oracle: Invalid Ref Price");
+            revert Oracle_InvalidRefPrice();
         }
     }
 
@@ -278,33 +291,12 @@ library Oracle {
         return priceFeed.getPrice(_token, _block).price != 0;
     }
 
-    // @audit - where is this used? should we max or min the price?
-    function getNetPnl(
-        IPriceFeed priceFeed,
-        IMarket market,
-        address _indexToken,
-        uint256 _indexBaseUnit,
-        uint256 _blockNumber,
-        bool _maximise
-    ) external view returns (int256 netPnl) {
-        uint256 indexPrice;
-        if (_maximise) {
-            indexPrice = getMaxPrice(priceFeed, _indexToken, _blockNumber);
-        } else {
-            indexPrice = getMinPrice(priceFeed, _indexToken, _blockNumber);
-        }
-        require(indexPrice != 0, "Oracle: Invalid Index Price");
-        netPnl = Pricing.getNetPnl(market, _indexToken, indexPrice, _indexBaseUnit);
-    }
-
     /// @dev _baseUnit is the base unit of the token0
     // ONLY EVER USED FOR REFERENCE PRICE -> PRICE IS MANIPULATABLE
     function getAmmPrice(UniswapPool memory _pool) public view returns (uint256 price) {
         if (_pool.poolType == PoolType.UNISWAP_V3) {
             IUniswapV3Pool pool = IUniswapV3Pool(_pool.poolAddress);
             (uint160 sqrtPriceX96,,,,,,) = pool.slot0();
-            // Convert the sqrtPriceX96 to price with 18 decimals
-            // price = sqrtPriceX96^2 / 2^192 to convert to token0 per token1 price
             uint256 baseUnit = 10 ** ERC20(_pool.token0).decimals();
             UD60x18 numerator = ud(uint256(sqrtPriceX96)).powu(2).mul(ud(baseUnit));
             UD60x18 denominator = ud(2).powu(192);
@@ -324,7 +316,7 @@ library Oracle {
             }
             return price;
         } else {
-            revert("Oracle: Invalid Pool Type");
+            revert Oracle_InvalidPoolType();
         }
     }
 }

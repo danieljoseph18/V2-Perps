@@ -13,6 +13,12 @@ interface IReferralStorage {
     event GovSetCodeOwner(bytes32 code, address newAccount);
     event AffiliateRewardsClaimed(address account, uint256 longTokenAmount, uint256 shortTokenAmount);
 
+    error ReferralStorage_InvalidTotalDiscount();
+    error ReferralStorage_InvalidCode();
+    error ReferralStorage_CodeAlreadyExists();
+    error ReferralStorage_InsufficientBalance();
+    error ReferralStorage_Forbidden();
+
     // Public State Variables
     function PRECISION() external view returns (uint256);
     function longToken() external view returns (address);
@@ -38,5 +44,8 @@ interface IReferralStorage {
     function getTraderReferralInfo(address _account) external view returns (bytes32, address);
     function getDiscountForUser(address _account) external view returns (uint256);
     function getAffiliateFromUser(address _account) external view returns (address codeOwner);
-    function getClaimableAffiliateRewards(address _account, bool _isLong) external view returns (uint256 claimableAmount);
+    function getClaimableAffiliateRewards(address _account, bool _isLong)
+        external
+        view
+        returns (uint256 claimableAmount);
 }

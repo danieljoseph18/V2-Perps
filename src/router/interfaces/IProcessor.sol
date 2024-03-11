@@ -6,13 +6,29 @@ import {IMarket} from "../../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface IProcessor {
-    error OrderProcessor_InvalidRequestType();
-
     event ExecutePosition(bytes32 indexed _orderKey, Position.Request _request, uint256 _fee, uint256 _feeDiscount);
     event GasLimitsUpdated(
         uint256 indexed depositGasLimit, uint256 indexed withdrawalGasLimit, uint256 indexed positionGasLimit
     );
     event AdlExecuted(IMarket indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
+
+    error Processor_AccessDenied();
+    error Processor_InvalidMarket();
+    error Processor_InvalidKey();
+    error Processor_ExecuteDepositFailed();
+    error Processor_ExecuteWithdrawalFailed();
+    error Processor_InvalidRequestType();
+    error Processor_LiquidationFailed();
+    error Processor_RequestDoesNotExist();
+    error Processor_NotPositionOwner();
+    error Processor_InsufficientDelay();
+    error Processor_PTPRatioNotExceeded();
+    error Processor_LongSideNotFlagged();
+    error Processor_ShortSideNotFlagged();
+    error Processor_PositionNotActive();
+    error Processor_PNLFactorNotReduced();
+    error Processor_InvalidPrice();
+    error Processor_PriceAlreadyUpdated();
 
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function transferDepositTokens(address _vault, address _token, uint256 _amount) external;

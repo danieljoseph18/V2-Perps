@@ -69,9 +69,9 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
 
     modifier orderExists(bytes32 _key, bool _isDeposit) {
         if (_isDeposit) {
-            require(depositKeys.contains(_key), "Vault: invalid key");
+            if (!depositKeys.contains(_key)) revert Vault_InvalidKey();
         } else {
-            require(withdrawalKeys.contains(_key), "Vault: invalid key");
+            if (!withdrawalKeys.contains(_key)) revert Vault_InvalidKey();
         }
         _;
     }
@@ -99,10 +99,10 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         external
         onlyConfigurator
     {
-        require(_poolOwner != address(0), "Vault: Invalid Pool Owner");
-        require(_feeDistributor != address(0), "Vault: Invalid Fee Distributor");
-        require(_feeScale >= 0 && _feeScale <= 1e18, "Vault: Invalid Fee Scale");
-        require(_feePercentageToOwner >= 0 && _feePercentageToOwner <= 1e18, "Vault: Invalid Fee Percentage");
+        if (_poolOwner == address(0)) revert Vault_InvalidPoolOwner();
+        if (_feeDistributor == address(0)) revert Vault_InvalidFeeDistributor();
+        if (_feeScale < 0 || _feeScale > 1e18) revert Vault_InvalidFeeScale();
+        if (_feePercentageToOwner < 0 || _feePercentageToOwner > 1e18) revert Vault_InvalidFeePercentage();
         poolOwner = _poolOwner;
         feeDistributor = _feeDistributor;
         feeScale = _feeScale;
@@ -317,9 +317,9 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     function _transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) internal {
         uint256 available =
             _isLongToken ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
-        require(_amount <= available, "Vault: Insufficient Available Tokens");
+        if (_amount > available) revert Vault_InsufficientAvailableTokens();
         if (_shouldUnwrap) {
-            require(_isLongToken == true, "Vault: Invalid Unwrap Token");
+            if (_isLongToken != true) revert Vault_InvalidUnwrapToken();
             IWETH(LONG_TOKEN).withdraw(_amount);
             payable(_to).sendValue(_amount);
         } else {

@@ -3,10 +3,20 @@ pragma solidity 0.8.23;
 
 import {Position} from "../positions/Position.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {console, console2} from "forge-std/Test.sol";
 
 library Invariant {
     using SignedMath for int256;
+
+    error Invariant_CollateralDelta();
+    error Invariant_InvalidCollateralIncrease();
+    error Invariant_InvalidCollateralDecrease();
+    error Invariant_NewPosition();
+    error Invariant_IncreasePositionCollateral();
+    error Invariant_IncreasePositionSize();
+    error Invariant_InvalidIncreasePosition();
+    error Invariant_DecreasePositionCollateral();
+    error Invariant_DecreasePositionSize();
+    error Invariant_InvalidDecreasePosition();
 
     function validateCollateralIncrease(
         Position.Data memory _positionBefore,
@@ -15,18 +25,12 @@ library Invariant {
         uint256 _positionFee,
         uint256 _borrowFee,
         uint256 _affiliateRebate
-    ) external view {
+    ) external pure {
         // ensure the position collateral has changed by the correct amount
         uint256 expectedCollateralDelta = _collateralDelta - _positionFee - _borrowFee - _affiliateRebate;
-        console.log("Trading Fee: ", _positionFee);
-        console.log("Rebate: ", _affiliateRebate);
-        console.log("expectedCollateralDelta: ", expectedCollateralDelta);
-        console.log("Collateral Amount After: ", _positionAfter.collateralAmount);
-        console.log("Collateral Amount Before: ", _positionBefore.collateralAmount);
-        require(
-            _positionAfter.collateralAmount == _positionBefore.collateralAmount + expectedCollateralDelta,
-            "Invariant: Collateral Delta"
-        );
+        if (_positionAfter.collateralAmount != _positionBefore.collateralAmount + expectedCollateralDelta) {
+            revert Invariant_CollateralDelta();
+        }
 
         // hash the other variables from before and after, then compare them to ensure nothing else has changed
         bytes32 sigBefore = keccak256(
@@ -54,7 +58,9 @@ library Invariant {
             )
         );
 
-        require(sigBefore == sigAfter, "Invariant: Invalid Collateral Edit");
+        if (sigBefore != sigAfter) {
+            revert Invariant_InvalidCollateralIncrease();
+        }
     }
 
     function validateCollateralDecrease(
@@ -64,19 +70,12 @@ library Invariant {
         uint256 _positionFee, // trading fee not charged on collateral delta
         uint256 _borrowFee,
         uint256 _affiliateRebate
-    ) external view {
+    ) external pure {
         // ensure the position collateral has changed by the correct amount
         uint256 expectedCollateralDelta = _collateralDelta + _positionFee + _borrowFee + _affiliateRebate;
-        console.log("Trading Fee: ", _positionFee);
-        console.log("Borrow Fee: ", _borrowFee);
-        console.log("Rebate: ", _affiliateRebate);
-        console.log("expectedCollateralDelta: ", expectedCollateralDelta);
-        console.log("Collateral Amount After: ", _positionAfter.collateralAmount);
-        console.log("Collateral Amount Before: ", _positionBefore.collateralAmount);
-        require(
-            _positionAfter.collateralAmount == _positionBefore.collateralAmount - expectedCollateralDelta,
-            "Invariant: Collateral Delta"
-        );
+        if (_positionAfter.collateralAmount != _positionBefore.collateralAmount - expectedCollateralDelta) {
+            revert Invariant_CollateralDelta();
+        }
 
         // hash the other variables from before and after, then compare them to ensure nothing else has changed
         bytes32 sigBefore = keccak256(
@@ -104,7 +103,9 @@ library Invariant {
             )
         );
 
-        require(sigBefore == sigAfter, "Invariant: Invalid Collateral Edit");
+        if (sigBefore != sigAfter) {
+            revert Invariant_InvalidCollateralDecrease();
+        }
     }
 
     function validateNewPosition(
@@ -112,12 +113,10 @@ library Invariant {
         uint256 _positionCollateral,
         uint256 _positionFee,
         uint256 _affiliateRebate
-    ) external view {
-        console.log("collateralIn: ", _collateralIn);
-        console.log("positionCollateral: ", _positionCollateral);
-        console.log("tradingFee: ", _positionFee);
-        console.log("feeDiscount: ", _affiliateRebate);
-        require(_collateralIn == _positionCollateral + _positionFee + _affiliateRebate, "Invariant: New Position");
+    ) external pure {
+        if (_collateralIn != _positionCollateral + _positionFee + _affiliateRebate) {
+            revert Invariant_NewPosition();
+        }
     }
 
     function validateIncreasePosition(
@@ -129,29 +128,19 @@ library Invariant {
         int256 _fundingFee,
         uint256 _borrowFee,
         uint256 _sizeDelta
-    ) external view {
+    ) external pure {
         uint256 expectedCollateralDelta = _collateralIn - _positionFee - _affiliateRebate - _borrowFee;
         if (_fundingFee < 0) {
             expectedCollateralDelta -= _fundingFee.abs();
         } else {
             expectedCollateralDelta += _fundingFee.abs();
         }
-        console.log("Collateral In: ", _collateralIn);
-        console.log("Position Fee: ", _positionFee);
-        console.log("Rebate: ", _affiliateRebate);
-        console2.log("Funding Fee: ", _fundingFee);
-        console.log("Borrow Fee: ", _borrowFee);
-        console.log("Expected Collateral Delta: ", expectedCollateralDelta);
-        console.log("Collateral Amount After: ", _positionAfter.collateralAmount);
-        console.log("Collateral Amount Before: ", _positionBefore.collateralAmount);
-        require(
-            _positionAfter.collateralAmount == _positionBefore.collateralAmount + expectedCollateralDelta,
-            "Invariant: Increase Position Collateral"
-        );
-        require(
-            _positionAfter.positionSize == _positionBefore.positionSize + _sizeDelta,
-            "Invariant: Increase Position Size"
-        );
+        if (_positionAfter.collateralAmount != _positionBefore.collateralAmount + expectedCollateralDelta) {
+            revert Invariant_IncreasePositionCollateral();
+        }
+        if (_positionAfter.positionSize != _positionBefore.positionSize + _sizeDelta) {
+            revert Invariant_IncreasePositionSize();
+        }
         // Validate the variables that shouldn't have changed, haven't
         bytes32 sigBefore;
         {
@@ -181,7 +170,9 @@ library Invariant {
                 )
             );
         }
-        require(sigBefore == sigAfter, "Invariant: Invalid Increase Position");
+        if (sigBefore != sigAfter) {
+            revert Invariant_InvalidIncreasePosition();
+        }
     }
 
     function validateDecreasePosition(
@@ -193,7 +184,7 @@ library Invariant {
         int256 _pnl,
         uint256 _borrowFee,
         uint256 _sizeDelta
-    ) external view {
+    ) external pure {
         // Amount out should = collateralDelta +- pnl += fundingFee - borrow fee - trading fee
         /**
          * collat before should = collat after + collateralDelta + fees + pnl
@@ -203,18 +194,13 @@ library Invariant {
         // Account for funding / pnl paid out from collateral
         if (_pnl < 0) expectedCollateralDelta += _pnl.abs();
 
-        require(
-            _positionBefore.collateralAmount == _positionAfter.collateralAmount + expectedCollateralDelta,
-            "Invariant: Decrease Position Collateral"
-        );
-        console.log("Position Size Before: ", _positionBefore.positionSize);
-        console.log("Position Size After: ", _positionAfter.positionSize);
-        console.log("Size Delta: ", _sizeDelta);
+        if (_positionBefore.collateralAmount != _positionAfter.collateralAmount + expectedCollateralDelta) {
+            revert Invariant_DecreasePositionCollateral();
+        }
         // @audit - need to account for price impact??
-        require(
-            _positionBefore.positionSize == _positionAfter.positionSize + _sizeDelta,
-            "Invariant: Decrease Position Size"
-        );
+        if (_positionBefore.positionSize != _positionAfter.positionSize + _sizeDelta) {
+            revert Invariant_DecreasePositionSize();
+        }
         // Validate the variables that shouldn't have changed, haven't
         bytes32 sigBefore;
         {
@@ -244,6 +230,8 @@ library Invariant {
                 )
             );
         }
-        require(sigBefore == sigAfter, "Invariant: Invalid Decrease Position");
+        if (sigBefore != sigAfter) {
+            revert Invariant_InvalidDecreasePosition();
+        }
     }
 }

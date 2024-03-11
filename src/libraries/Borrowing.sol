@@ -22,19 +22,15 @@ import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {IVault} from "../markets/interfaces/IVault.sol";
 import {Pricing} from "./Pricing.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Order} from "../positions/Order.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
-    using SafeCast for int256;
     using SignedMath for int256;
 
     uint256 private constant PRECISION = 1e18;
-    uint256 private constant MAX_FEE_PERCENTAGE = 0.33e18;
 
     struct BorrowingState {
         IMarket.BorrowingConfig config;
@@ -68,15 +64,15 @@ library Borrowing {
         state.borrowingFactor = ud(state.config.factor);
         if (_isLong) {
             // get the long open interest
-            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, true));
+            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _indexToken, true));
             // get the long pending pnl
-            state.pendingPnl = Pricing.getPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
+            state.pendingPnl = Pricing.getMarketPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
             // get the long pool balance
             state.poolBalance =
                 ud(MarketUtils.getPoolBalanceUsd(market, _indexToken, _collateralPrice, _collateralBaseUnit, true));
             // Adjust the OI by the Pending PNL
             if (state.pendingPnl > 0) {
-                state.openInterestUsd = state.openInterestUsd.add(ud(state.pendingPnl.toUint256()));
+                state.openInterestUsd = state.openInterestUsd.add(ud(uint256(state.pendingPnl)));
             } else if (state.pendingPnl < 0) {
                 state.openInterestUsd = state.openInterestUsd.sub(ud(state.pendingPnl.abs()));
             }
@@ -85,7 +81,7 @@ library Borrowing {
             rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
         } else {
             // get the short open interest
-            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _indexToken, _indexPrice, false));
+            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _indexToken, false));
             // get the short pool balance
             state.poolBalance =
                 ud(MarketUtils.getPoolBalanceUsd(market, _indexToken, _collateralPrice, _collateralBaseUnit, false));
@@ -113,22 +109,18 @@ library Borrowing {
     function _getTotalPositionFeesOwed(IMarket market, Position.Data calldata _position)
         internal
         view
-        returns (uint256 indexTotalFeesOwed)
+        returns (uint256 feesOwedUsd)
     {
         uint256 feeSinceUpdate = _getFeesSinceLastPositionUpdate(market, _position);
-        indexTotalFeesOwed = feeSinceUpdate + _position.borrowingParams.feesOwed;
-        uint256 maxPayableFee = mulDiv(_position.positionSize, MAX_FEE_PERCENTAGE, PRECISION);
-        if (indexTotalFeesOwed > maxPayableFee) {
-            indexTotalFeesOwed = maxPayableFee;
-        }
+        feesOwedUsd = feeSinceUpdate + _position.borrowingParams.feesOwed;
     }
 
     /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
-    /// @dev Units: Fees in Tokens (% of fees applied to position size)
+    /// @dev Units: Fees in USD (% of fees applied to position size)
     function _getFeesSinceLastPositionUpdate(IMarket market, Position.Data calldata _position)
         internal
         view
-        returns (uint256 indexFeesSinceUpdate)
+        returns (uint256 feesUsd)
     {
         // get cumulative borrowing fees since last update
         uint256 borrowFee = _position.isLong
@@ -138,9 +130,9 @@ library Borrowing {
                 - _position.borrowingParams.lastShortCumulativeBorrowFee;
         borrowFee += _calculatePendingFees(market, _position.indexToken, _position.isLong);
         if (borrowFee == 0) {
-            indexFeesSinceUpdate = 0;
+            feesUsd = 0;
         } else {
-            indexFeesSinceUpdate = mulDiv(_position.positionSize, borrowFee, PRECISION);
+            feesUsd = mulDiv(_position.positionSize, borrowFee, PRECISION);
         }
     }
 

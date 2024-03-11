@@ -17,7 +17,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IVault} from "./interfaces/IVault.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -33,6 +32,9 @@ contract GlobalMarketConfig is RoleValidation {
     IProcessor public processor;
     Router public router;
     IPriceFeed public priceFeed;
+
+    error GlobalMarketConfig_PriceFeedNotSet();
+    error GlobalMarketConfig_MarketDoesNotExist();
 
     constructor(
         address _tradeStorage,
@@ -66,9 +68,9 @@ contract GlobalMarketConfig is RoleValidation {
     /**
      * ========================= Replace Contracts =========================
      */
-    function updatePriceFeeds(IVault vault) external onlyModerator {
-        require(address(priceFeed) != address(0), "PriceFeed not set");
-        vault.updatePriceFeed(priceFeed);
+    function updatePriceFeeds(IMarket market) external onlyModerator {
+        if (address(priceFeed) == address(0)) revert GlobalMarketConfig_PriceFeedNotSet();
+        market.updatePriceFeed(priceFeed);
         marketMaker.updatePriceFeed(priceFeed);
         processor.updatePriceFeed(priceFeed);
         router.updatePriceFeed(priceFeed);
@@ -81,7 +83,7 @@ contract GlobalMarketConfig is RoleValidation {
         external
         onlyModerator
     {
-        require(address(market) != address(0), "Market does not exist");
+        if (address(market) == address(0)) revert GlobalMarketConfig_MarketDoesNotExist();
         market.updateConfig(_config, _indexToken);
     }
 
@@ -89,13 +91,13 @@ contract GlobalMarketConfig is RoleValidation {
      * ========================= Fees =========================
      */
     function updateLiquidityFees(
-        IVault vault,
+        IMarket market,
         address _poolOwner,
         address _feeDistributor,
         uint256 _feeScale,
         uint256 _feePercentageToOwner
     ) external onlyModerator {
-        vault.updateFees(_poolOwner, _feeDistributor, _feeScale, _feePercentageToOwner);
+        market.updateFees(_poolOwner, _feeDistributor, _feeScale, _feePercentageToOwner);
     }
 
     function setTradingFees(uint256 _liquidationFee, uint256 _tradingFee) external onlyModerator {

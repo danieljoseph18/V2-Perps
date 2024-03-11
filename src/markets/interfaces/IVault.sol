@@ -87,4 +87,12 @@ interface IVault {
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
     event TransferInCollateral(address indexed _market, uint256 indexed _collateralDelta, bool _isLong);
     event MarketAdded(address indexed _market);
+
+    error Vault_InvalidKey();
+    error Vault_InvalidPoolOwner();
+    error Vault_InvalidFeeDistributor();
+    error Vault_InvalidFeeScale();
+    error Vault_InvalidFeePercentage();
+    error Vault_InsufficientAvailableTokens();
+    error Vault_InvalidUnwrapToken();
 }

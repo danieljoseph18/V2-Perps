@@ -28,11 +28,13 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
     mapping(address => mapping(bool isLongToken => uint256 affiliateRewards)) public affiliateRewards;
 
     modifier onlyHandler() {
-        require(isHandler[msg.sender], "ReferralStorage: forbidden");
+        if (!isHandler[msg.sender]) revert ReferralStorage_Forbidden();
         _;
     }
 
-    constructor(address _longToken, address _shortToken, address _weth, address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(address _longToken, address _shortToken, address _weth, address _roleStorage)
+        RoleValidation(_roleStorage)
+    {
         longToken = _longToken;
         shortToken = _shortToken;
         weth = IWETH(_weth);
@@ -49,7 +51,7 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
     }
 
     function setTier(uint256 _tierId, uint256 _totalDiscount) external override onlyAdmin {
-        require(_totalDiscount <= PRECISION, "ReferralStorage: invalid totalDiscount");
+        if (_totalDiscount > PRECISION) revert ReferralStorage_InvalidTotalDiscount();
         tiers[_tierId] = _totalDiscount;
         emit SetTier(_tierId, _totalDiscount);
     }
@@ -68,8 +70,8 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
     }
 
     function registerCode(bytes32 _code) external {
-        require(_code != bytes32(0), "ReferralStorage: invalid _code");
-        require(codeOwners[_code] == address(0), "ReferralStorage: code already exists");
+        if (_code == bytes32(0)) revert ReferralStorage_InvalidCode();
+        if (codeOwners[_code] != address(0)) revert ReferralStorage_CodeAlreadyExists();
 
         codeOwners[_code] = msg.sender;
         emit RegisterCode(msg.sender, _code);
@@ -83,16 +85,16 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
         uint256 longTokenAmount = affiliateRewards[msg.sender][true];
         uint256 shortTokenAmount = affiliateRewards[msg.sender][false];
         if (longTokenAmount > 0) {
-            require(
-                IERC20(longToken).balanceOf(address(this)) >= longTokenAmount, "ReferralStorage: insufficient balance"
-            );
+            if (IERC20(longToken).balanceOf(address(this)) < longTokenAmount) {
+                revert ReferralStorage_InsufficientBalance();
+            }
             IERC20(longToken).safeTransfer(msg.sender, longTokenAmount);
             affiliateRewards[msg.sender][true] = 0;
         }
         if (shortTokenAmount > 0) {
-            require(
-                IERC20(shortToken).balanceOf(address(this)) >= shortTokenAmount, "ReferralStorage: insufficient balance"
-            );
+            if (IERC20(shortToken).balanceOf(address(this)) < shortTokenAmount) {
+                revert ReferralStorage_InsufficientBalance();
+            }
             IERC20(shortToken).safeTransfer(msg.sender, shortTokenAmount);
             affiliateRewards[msg.sender][false] = 0;
         }
@@ -100,17 +102,17 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
     }
 
     function setCodeOwner(bytes32 _code, address _newAccount) external {
-        require(_code != bytes32(0), "ReferralStorage: invalid _code");
+        if (_code == bytes32(0)) revert ReferralStorage_InvalidCode();
 
         address account = codeOwners[_code];
-        require(msg.sender == account, "ReferralStorage: forbidden");
+        if (msg.sender != account) revert ReferralStorage_Forbidden();
 
         codeOwners[_code] = _newAccount;
         emit SetCodeOwner(msg.sender, _newAccount, _code);
     }
 
     function govSetCodeOwner(bytes32 _code, address _newAccount) external override onlyAdmin {
-        require(_code != bytes32(0), "ReferralStorage: invalid _code");
+        if (_code == bytes32(0)) revert ReferralStorage_InvalidCode();
 
         codeOwners[_code] = _newAccount;
         emit GovSetCodeOwner(_code, _newAccount);
@@ -128,7 +130,7 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
     /// @return discountPercentage - 0.1e18 = 10% discount
     function getDiscountForUser(address _account) external view returns (uint256) {
         (, address referrer) = getTraderReferralInfo(_account);
-        if (referrer == address(0)){
+        if (referrer == address(0)) {
             return 0;
         } else {
             return tiers[referrerTiers[referrer]];
@@ -140,7 +142,11 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
         return referrer;
     }
 
-    function getClaimableAffiliateRewards(address _account, bool _isLong) external view returns (uint256 claimableAmount) {
+    function getClaimableAffiliateRewards(address _account, bool _isLong)
+        external
+        view
+        returns (uint256 claimableAmount)
+    {
         claimableAmount = affiliateRewards[_account][_isLong];
     }
 

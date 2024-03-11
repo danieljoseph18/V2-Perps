@@ -162,15 +162,14 @@ contract TestRequestCreation is Test {
     // CONDITIONALS //
     //////////////////
 
-    // @fail
     function testFuzzingConditionalValues(
         uint256 _stopLossPrice,
         uint256 _takeProfitPrice,
         uint256 _stopLossPercentage,
         uint256 _takeProfitPercentage
     ) external setUpMarkets {
-        _stopLossPrice = bound(_stopLossPrice, 1, 2487.5e18);
-        _takeProfitPrice = bound(_takeProfitPrice, 2512.5e18, 5000e18);
+        _stopLossPrice = bound(_stopLossPrice, 1, 2487.5e30);
+        _takeProfitPrice = bound(_takeProfitPrice, 2512.5e30, 5000e30);
         _stopLossPercentage = bound(_stopLossPercentage, 1, 1e18);
         _takeProfitPercentage = bound(_takeProfitPercentage, 1, 1e18);
         Position.Input memory input = Position.Input({
@@ -302,7 +301,7 @@ contract TestRequestCreation is Test {
 
     // @fail
     function testFuzzingInvalidLimitPrices(uint256 _limitPrice) public setUpMarkets {
-        vm.assume(_limitPrice > 2500e18);
+        vm.assume(_limitPrice > 2500e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -330,7 +329,7 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingInvalidLimitPricesShort(uint256 _limitPrice) public setUpMarkets {
-        vm.assume(_limitPrice < 2500e18);
+        vm.assume(_limitPrice < 2500e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,
@@ -360,7 +359,7 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingLimitPriceWithinBounds(uint256 _limitPrice) public setUpMarkets {
-        _limitPrice = bound(_limitPrice, 1, 2500e18);
+        _limitPrice = bound(_limitPrice, 1, 2500e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -387,7 +386,7 @@ contract TestRequestCreation is Test {
     }
 
     function testFuzzingLimitPriceWithinBoundsShort(uint256 _limitPrice) public setUpMarkets {
-        vm.assume(_limitPrice > 2500e18);
+        vm.assume(_limitPrice > 2500e30);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: usdc,
@@ -537,7 +536,7 @@ contract TestRequestCreation is Test {
 
     // @fail
     function testFuzzingCollateralDeltaBelowBound(uint256 _collateralDelta) public setUpMarkets {
-        vm.assume(_collateralDelta < 100e30);
+        vm.assume(_collateralDelta < 0.004 ether);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,
@@ -625,7 +624,7 @@ contract TestRequestCreation is Test {
     // @fail
     function testFuzzingCollateralDeltaWithinBounds(uint256 _collateralDelta) public setUpMarkets {
         // Bound the input between 1 and 4 ether
-        _collateralDelta = bound(_collateralDelta, 100e30, 10_000e30);
+        _collateralDelta = bound(_collateralDelta, 0.04 ether, 4 ether);
         Position.Input memory input = Position.Input({
             indexToken: weth,
             collateralToken: weth,

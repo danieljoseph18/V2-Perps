@@ -379,7 +379,6 @@ contract TestRequestExecution is Test {
         console.log("Profit Received: ", balanceAfter - balanceBefore);
     }
 
-    // @fail
     function testAUserAccruesLossesIfClosingAnUnprofitablePosition() public setUpMarkets {
         // Create a request
         Position.Input memory input = Position.Input({
@@ -463,7 +462,6 @@ contract TestRequestExecution is Test {
         console.log("Amount Out: ", balanceAfter - balanceBefore);
     }
 
-    // @fail
     function testMarketStateIsUpdatedForEachPositionExecution() public setUpMarkets {
         // Pass some time
         vm.warp(block.timestamp + 1 days);
@@ -503,7 +501,7 @@ contract TestRequestExecution is Test {
         vm.roll(block.number + 1);
         // check the market parameters
         uint256 longOpenInterest = market.getOpenInterest(weth, true);
-        assertEq(longOpenInterest, 0.4 ether);
+        assertEq(longOpenInterest, 1000e30);
         uint256 longAverageEntryPrice = market.getAverageEntryPrice(weth, true);
         assertNotEq(longAverageEntryPrice, 0);
         // Update the Price
@@ -525,7 +523,7 @@ contract TestRequestExecution is Test {
         processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
         // check the market parameters
         longOpenInterest = market.getOpenInterest(weth, true);
-        assertEq(longOpenInterest, 0.8 ether);
+        assertEq(longOpenInterest, 2000e30);
         uint256 newLongWaep = market.getAverageEntryPrice(weth, true);
         assertNotEq(newLongWaep, longAverageEntryPrice);
         uint256 lastBorrowingUpdate = market.getLastBorrowingUpdate(weth);
@@ -536,7 +534,6 @@ contract TestRequestExecution is Test {
         assertNotEq(longBorrowingRate, 0);
     }
 
-    // @fail
     function testPositionFeesAreCalculatedCorrectly() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({
@@ -563,11 +560,10 @@ contract TestRequestExecution is Test {
         vm.prank(OWNER);
         router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
         // predict the fee owed
-        uint256 sizeInCollateral = Position.convertUsdToCollateral(10_000e30, 1e18, 1e6);
-        assertEq(sizeInCollateral, 1.0002e10);
-        uint256 predictedFee = (sizeInCollateral * 0.001e18) / 1e18;
+        uint256 feeUsd = (10_000e30 * 0.001e18) / 1e18;
+        uint256 predictedFee = Position.convertUsdToCollateral(feeUsd, 2500e30, 1e18);
         // compare it with the fee owed from the contract
-        uint256 fee = Fee.calculateForPosition(tradeStorage, 10_000e30, 0.5 ether, 1e18, 1e6);
+        uint256 fee = Fee.calculateForPosition(tradeStorage, 10_000e30, 0.5 ether, 2500e30, 1e18);
         assertEq(predictedFee, fee);
     }
 }

@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {IVault} from "../markets/interfaces/IVault.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 
 library Pool {
     using SignedMath for int256;
@@ -124,13 +124,13 @@ library Pool {
             : longTokenValue + shortTokenValue - _cumulativePnl.abs();
     }
 
-    function getValues(IVault vault) external view returns (Values memory values) {
+    function getValues(IMarket market) external view returns (Values memory values) {
         (
             values.longTokenBalance,
             values.shortTokenBalance,
             values.marketTokenSupply,
             values.longBaseUnit,
             values.shortBaseUnit
-        ) = vault.getPoolValues();
+        ) = market.getPoolValues();
     }
 }

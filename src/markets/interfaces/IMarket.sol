@@ -85,6 +85,14 @@ interface IMarket is IVault {
     }
 
     /**
+     * ================ Errors ================
+     */
+    error Market_TokenAlreadyExists();
+    error Market_TokenDoesNotExist();
+    error Market_PriceIsZero();
+    error Market_InvalidCumulativeAllocation();
+
+    /**
      * ================ Events ================
      */
     event TokenAdded(address indexed indexToken, Config config);
@@ -105,7 +113,7 @@ interface IMarket is IVault {
     function removeToken(address _indexToken, uint256[] calldata _newAllocations) external;
     function updateConfig(Config memory _config, address _indexToken) external;
     function updateAdlState(address _indexToken, bool _isFlaggedForAdl, bool _isLong) external;
-    function updateFundingRate(address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit) external;
+    function updateFundingRate(address _indexToken, uint256 _indexPrice) external;
     function updateBorrowingRate(
         address _indexToken,
         uint256 _indexPrice,

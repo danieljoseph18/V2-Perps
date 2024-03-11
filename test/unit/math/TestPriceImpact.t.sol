@@ -253,14 +253,15 @@ contract TestPriceImpact is Test {
      * Delta: 0
      */
     // @fail
+    // $50M Long / Short Liquidity
     function testPriceImpactValuesDeepLiquidity(uint256 _sizeDelta, uint256 _longOi, uint256 _shortOi)
         public
         setUpMarketsDeepLiquidity
     {
         // bound the inputs to realistic values
-        _sizeDelta = bound(_sizeDelta, 2500e30, 125000e30);
-        _longOi = bound(_longOi, 0, 10000 ether);
-        _shortOi = bound(_shortOi, 0, 10000 ether);
+        _sizeDelta = bound(_sizeDelta, 2500e30, 125_000e30); // $2500 - $125,000
+        _longOi = bound(_longOi, 0, 175_00030); // $0 - $175,000
+        _shortOi = bound(_shortOi, 0, 175_00030); // $0 - $175,000
 
         Position.Request memory request = Position.Request({
             input: Position.Input({
@@ -329,8 +330,8 @@ contract TestPriceImpact is Test {
     {
         // bound the inputs to realistic values
         _sizeDelta = bound(_sizeDelta, 2500e30, 125000e30);
-        _longOi = bound(_longOi, 0, 10000 ether);
-        _shortOi = bound(_shortOi, 0, 10000 ether);
+        _longOi = bound(_longOi, 0, 175_00030);
+        _shortOi = bound(_shortOi, 0, 175_00030);
 
         Position.Request memory request = Position.Request({
             input: Position.Input({

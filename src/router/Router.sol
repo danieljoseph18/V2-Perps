@@ -54,6 +54,17 @@ contract Router is ReentrancyGuard, RoleValidation {
     // Used to request a secondary price update from the Keeper
     event SecondaryPriceRequested(address indexed token, uint256 indexed blockNumber);
 
+    error Router_InvalidOwner();
+    error Router_InvalidAmountIn();
+    error Router_CantWrapUSDC();
+    error Router_InvalidTokenIn();
+    error Router_InvalidKey();
+    error Router_InvalidTokenOut();
+    error Router_InvalidAsset();
+    error Router_InvalidCollateralToken();
+    error Router_InvalidAmountInForWrap();
+    error Router_ExecutionFeeTransferFailed();
+
     constructor(
         address _tradeStorage,
         address _marketMaker,
@@ -90,15 +101,15 @@ contract Router is ReentrancyGuard, RoleValidation {
     {
         Gas.validateExecutionFee(processor, _input.executionFee, msg.value, Gas.Action.DEPOSIT);
 
-        require(msg.sender == _input.owner, "Router: Invalid Owner");
-        require(_input.amountIn > 0, "Router: Invalid Amount In");
+        if (msg.sender != _input.owner) revert Router_InvalidOwner();
+        if (_input.amountIn == 0) revert Router_InvalidAmountIn();
         if (_input.shouldWrap) {
-            require(_input.amountIn <= msg.value - _input.executionFee, "Router: Invalid Amount In");
-            require(_input.tokenIn == address(WETH), "Router: Can't Wrap USDC");
+            if (_input.amountIn > msg.value - _input.executionFee) revert Router_InvalidAmountIn();
+            if (_input.tokenIn != address(WETH)) revert Router_CantWrapUSDC();
             WETH.deposit{value: _input.amountIn}();
             WETH.safeTransfer(address(processor), _input.amountIn);
         } else {
-            require(_input.tokenIn == address(USDC) || _input.tokenIn == address(WETH), "Router: Invalid Token In");
+            if (_input.tokenIn != address(USDC) && _input.tokenIn != address(WETH)) revert Router_InvalidTokenIn();
             IERC20(_input.tokenIn).safeTransferFrom(_input.owner, address(processor), _input.amountIn);
         }
         _input.executionFee -= _requestOraclePricing(_input.tokenIn, _priceUpdateData);
@@ -107,7 +118,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     function cancelDeposit(IMarket market, bytes32 _key) external nonReentrant {
-        require(_key != bytes32(0));
+        if (_key == bytes32(0)) revert Router_InvalidKey();
         market.cancelDeposit(_key, msg.sender);
     }
 
@@ -117,12 +128,12 @@ contract Router is ReentrancyGuard, RoleValidation {
         nonReentrant
     {
         Gas.validateExecutionFee(processor, _input.executionFee, msg.value, Gas.Action.WITHDRAW);
-        require(msg.sender == _input.owner, "Router: Invalid Owner");
-        require(_input.marketTokenAmountIn > 0, "Router: Invalid Amount In");
+        if (msg.sender != _input.owner) revert Router_InvalidOwner();
+        if (_input.marketTokenAmountIn == 0) revert Router_InvalidAmountIn();
         if (_input.shouldUnwrap) {
-            require(_input.tokenOut == address(WETH), "Router: Invalid Token Out");
+            if (_input.tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         } else {
-            require(_input.tokenOut == address(USDC) || _input.tokenOut == address(WETH), "Router: Invalid Token Out");
+            if (_input.tokenOut != address(USDC) && _input.tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         }
         IERC20(address(market)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
         _input.executionFee -= _requestOraclePricing(_input.tokenOut, _priceUpdateData);
@@ -131,7 +142,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     function cancelWithdrawal(IMarket market, bytes32 _key) external nonReentrant {
-        require(_key != bytes32(0));
+        if (_key == bytes32(0)) revert Router_InvalidKey();
         market.cancelWithdrawal(_key, msg.sender);
     }
 
@@ -191,7 +202,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         returns (uint256 updateFee)
     {
         Oracle.Asset memory asset = priceFeed.getAsset(_token);
-        require(asset.isValid, "Router: Invalid Asset");
+        if (!asset.isValid) revert Router_InvalidAsset();
         updateFee = priceFeed.getPrimaryUpdateFee(_priceUpdateData);
         priceFeed.signPriceData{value: updateFee}(_token, _priceUpdateData);
         if (asset.priceProvider != Oracle.PriceProvider.PYTH) {
@@ -204,8 +215,8 @@ contract Router is ReentrancyGuard, RoleValidation {
     // @audit - decrease requests won't have any transfer in
     function _handleTokenTransfers(Position.Input memory _trade) private {
         if (_trade.shouldWrap) {
-            require(_trade.collateralToken == address(WETH), "Router: Invalid Collateral Token");
-            require(_trade.collateralDelta <= msg.value - _trade.executionFee, "Router: Invalid Amount In");
+            if (_trade.collateralToken != address(WETH)) revert Router_InvalidCollateralToken();
+            if (_trade.collateralDelta > msg.value - _trade.executionFee) revert Router_InvalidAmountInForWrap();
             WETH.deposit{value: _trade.collateralDelta}();
             WETH.safeTransfer(address(processor), _trade.collateralDelta);
         } else {
@@ -216,6 +227,6 @@ contract Router is ReentrancyGuard, RoleValidation {
     // Send Fee to Processor
     function _sendExecutionFee(uint256 _executionFee) private {
         (bool success,) = payable(address(processor)).call{value: _executionFee}("");
-        require(success, "Router: Execution Fee Transfer");
+        if (!success) revert Router_ExecutionFeeTransferFailed();
     }
 }
