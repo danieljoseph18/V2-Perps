@@ -98,12 +98,12 @@ contract Deploy is Script {
          */
         IMarket.Config memory defaultMarketConfig = IMarket.Config({
             maxLeverage: 10000, // 100x
-            feeForSmallerSide: true,
             reserveFactor: 0.3e18,
             // Skew Scale = Skew for Max Velocity
             funding: IMarket.FundingConfig({
-                maxVelocity: 0.0003e18, // 0.03%
-                skewScale: 1_000_000e18 // 1 Mil USD
+                maxVelocity: 0.09e18, // 9% per day
+                skewScale: 1_000_000e30, // 1 Mil USD
+                fundingVelocityClamp: 0.00001e18 // 0.001% per day
             }),
             borrowing: IMarket.BorrowingConfig({
                 factor: 0.000000035e18, // 0.0000035% per second
@@ -112,8 +112,8 @@ contract Deploy is Script {
             // Should never be 0
             impact: IMarket.ImpactConfig({
                 positiveSkewScalar: 1e18,
-                positiveLiquidityScalar: 1e18,
                 negativeSkewScalar: 1e18,
+                positiveLiquidityScalar: 1e18,
                 negativeLiquidityScalar: 1e18
             }),
             adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18, flaggedLong: false, flaggedShort: false})
@@ -122,7 +122,7 @@ contract Deploy is Script {
             defaultMarketConfig, address(contracts.priceFeed), address(contracts.processor)
         );
 
-        contracts.tradeStorage.initialise(5e18, 0.001e18, 180000 gwei, 2e18, 10);
+        contracts.tradeStorage.initialise(5e30, 0.001e18, 180000 gwei, 2e30, 10);
 
         contracts.processor.updateGasLimits(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);
 

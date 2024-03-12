@@ -55,8 +55,8 @@ library Funding {
         fundingFeeUsd = mulDivSigned(_sizeDelta.toInt256(), nextFundingAccrued - _entryFundingAccrued, PRICE_PRECISION);
     }
 
-    /// @dev Calculate the funding rate velocity
-    /// @dev velocity units = % per second (18 dp)
+    //  - proportionalSkew = skew / skewScale
+    //  - velocity         = proportionalSkew * maxFundingVelocity
     function getCurrentVelocity(IMarket market, address _indexToken, int256 _skew)
         external
         view
@@ -65,10 +65,14 @@ library Funding {
         IMarket.FundingConfig memory funding = market.getFundingConfig(_indexToken);
         // Get the proportionalSkew
         int256 proportionalSkew = mulDivSigned(_skew, SIGNED_PRECISION, funding.skewScale);
+        // Check if the absolute value of proportionalSkew is less than the fundingVelocityClamp
+        if (proportionalSkew.abs() < funding.fundingVelocityClamp) {
+            return 0;
+        }
         // Bound between -1e18 and 1e18
-        int256 boundedSkew = SignedMath.min(SignedMath.max(proportionalSkew, -SIGNED_PRECISION), SIGNED_PRECISION);
+        int256 pSkewBounded = SignedMath.min(SignedMath.max(proportionalSkew, -SIGNED_PRECISION), SIGNED_PRECISION);
         // Calculate the velocity
-        velocity = mulDivSigned(boundedSkew, SIGNED_PRECISION, funding.maxVelocity);
+        velocity = mulDivSigned(pSkewBounded, funding.maxVelocity, SIGNED_PRECISION);
     }
 
     function recompute(IMarket market, address _indexToken, uint256 _indexPrice)
@@ -89,8 +93,22 @@ library Funding {
         nextFundingAccrued = market.getFundingAccrued(_indexToken) + unrecordedFunding;
     }
 
-    // Rate to 18 D.P
+    /**
+     * @dev Returns the current funding rate given current market conditions.
+     */
     function getCurrentFundingRate(IMarket market, address _indexToken) public view returns (int256) {
+        // example:
+        //  - fundingRate         = 0
+        //  - velocity            = 0.0025
+        //  - timeDelta           = 29,000s
+        //  - maxFundingVelocity  = 0.025 (2.5%)
+        //  - skew                = 300
+        //  - skewScale           = 10,000
+        //
+        // currentFundingRate = fundingRate + velocity * (timeDelta / secondsInDay)
+        // currentFundingRate = 0 + 0.0025 * (29,000 / 86,400)
+        //                    = 0 + 0.0025 * 0.33564815
+        //                    = 0.00083912
         (int256 fundingRate, int256 fundingRateVelocity) = market.getFundingRates(_indexToken);
         return fundingRate
             + mulDivSigned(fundingRateVelocity, _getProportionalFundingElapsed(market, _indexToken), SIGNED_PRECISION);

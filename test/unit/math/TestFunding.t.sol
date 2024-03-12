@@ -172,640 +172,169 @@ contract TestFunding is Test {
     /**
      * Config:
      * maxVelocity: 0.0003e18, // 0.03%
-     * maxRate: 0.03e18, // 3%
-     * minRate: -0.03e18, // -3%
      * skewScale: 1_000_000e18 // 1 Mil USD
      */
-    // function testVelocityCalculationForDifferentSkews() public setUpMarkets {
-    //     // Different Skews
-    //     int256 heavyLong = 500_000e18;
-    //     int256 heavyShort = -500_000e18;
-    //     int256 balancedLong = 1000e18;
-    //     int256 balancedShort = -1000e18;
-    //     // Calculate Heavy Long Velocity
-    //     int256 heavyLongVelocity = Funding.calculateVelocity(market, weth, heavyLong);
-    //     int256 expectedHeavyLongVelocity = 0.00015e18;
-    //     assertEq(heavyLongVelocity, expectedHeavyLongVelocity);
-    //     // Calculate Heavy Short Velocity
-    //     int256 heavyShortVelocity = Funding.calculateVelocity(market, weth, heavyShort);
-    //     int256 expectedHeavyShortVelocity = -0.00015e18;
-    //     assertEq(heavyShortVelocity, expectedHeavyShortVelocity);
-    //     // Calculate Balanced Long Velocity
-    //     int256 balancedLongVelocity = Funding.calculateVelocity(market, weth, balancedLong);
-    //     int256 expectedBalancedLongVelocity = 0.0000003e18;
-    //     assertEq(balancedLongVelocity, expectedBalancedLongVelocity);
-    //     // Calculate Balanced Short Velocity
-    //     int256 balancedShortVelocity = Funding.calculateVelocity(market, weth, balancedShort);
-    //     int256 expectedBalancedShortVelocity = -0.0000003e18;
-    //     assertEq(balancedShortVelocity, expectedBalancedShortVelocity);
-    // }
+    function testVelocityCalculationForDifferentSkews() public setUpMarkets {
+        // Different Skews
+        int256 heavyLong = 500_000e30;
+        int256 heavyShort = -500_000e30;
+        int256 balancedLong = 1000e30;
+        int256 balancedShort = -1000e30;
+        // Calculate Heavy Long Velocity
+        int256 heavyLongVelocity = Funding.getCurrentVelocity(market, weth, heavyLong);
+        /**
+         * proportional skew = $500,000 / $1,000,000 = 0.5
+         * bounded skew = 0.5
+         * velocity = 0.5 / 0.0003 = 1666.66 (rec)
+         */
+        int256 expectedHeavyLongVelocity = 0.00015e18;
+        assertEq(heavyLongVelocity, expectedHeavyLongVelocity);
+        // Calculate Heavy Short Velocity
+        int256 heavyShortVelocity = Funding.getCurrentVelocity(market, weth, heavyShort);
+        int256 expectedHeavyShortVelocity = -0.00015e18;
+        assertEq(heavyShortVelocity, expectedHeavyShortVelocity);
+        // Calculate Balanced Long Velocity
+        int256 balancedLongVelocity = Funding.getCurrentVelocity(market, weth, balancedLong);
+        int256 expectedBalancedLongVelocity = 0.0000003e18;
+        assertEq(balancedLongVelocity, expectedBalancedLongVelocity);
+        // Calculate Balanced Short Velocity
+        int256 balancedShortVelocity = Funding.getCurrentVelocity(market, weth, balancedShort);
+        int256 expectedBalancedShortVelocity = -0.0000003e18;
+        assertEq(balancedShortVelocity, expectedBalancedShortVelocity);
+    }
 
-    // function testSkewCalculationForDifferentSkews() public setUpMarkets {
-    //     // open and execute a long to skew it long
-    //     Position.Input memory input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: weth,
-    //         collateralDelta: 0.5 ether,
-    //         sizeDelta: 4 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: true,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: true,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.prank(USER);
-    //     router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-    //     // Execute the Position
-    //     bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     Oracle.TradingEnabled memory tradingEnabled =
-    //         Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+    function testSkewCalculationForDifferentSkews() public setUpMarkets {
+        // open and execute a long to skew it long
+        Position.Input memory input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        // Execute the Position
+        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
+        Oracle.TradingEnabled memory tradingEnabled =
+            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
 
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
-    //     int256 skew = Funding.calculateSkewUsd(market, weth, 2500e18, 1e18);
-    //     assertEq(skew, 10_000e18);
+        int256 skew = Funding.calculateSkewUsd(market, weth);
+        assertEq(skew, 10_000e18);
 
-    //     // open and execute a short to skew it short
-    //     input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: usdc,
-    //         collateralDelta: 2000e6,
-    //         sizeDelta: 8 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: false,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: false,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.startPrank(USER);
-    //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-    //     router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-    //     vm.stopPrank();
-    //     // Execute the Position
-    //     orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        // open and execute a short to skew it short
+        input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 2000e6,
+            sizeDelta: 8 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(USER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+        // Execute the Position
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
-    //     skew = Funding.calculateSkewUsd(market, weth, 2500e18, 1e18);
-    //     assertEq(skew, -10_000e18);
+        skew = Funding.calculateSkewUsd(market, weth);
+        assertEq(skew, -10_000e18);
 
-    //     // open and execute a long to balance it
-    //     input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: weth,
-    //         collateralDelta: 0.5 ether,
-    //         sizeDelta: 4 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: true,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: true,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.prank(USER);
-    //     router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-    //     // Execute the Position
-    //     orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        // open and execute a long to balance it
+        input = Position.Input({
+            indexToken: weth,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 4 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        // Execute the Position
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
-    //     skew = Funding.calculateSkewUsd(market, weth, 2500e18, 1e18);
-    //     assertEq(skew, 0);
+        skew = Funding.calculateSkewUsd(market, weth);
+        assertEq(skew, 0);
 
-    //     // open and execute a short to heavily skew
-    //     input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: usdc,
-    //         collateralDelta: 10_000e6,
-    //         sizeDelta: 20 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: false,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: false,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.prank(USER);
-    //     router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-    //     // Execute the Position
-    //     orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        // open and execute a short to heavily skew
+        input = Position.Input({
+            indexToken: weth,
+            collateralToken: usdc,
+            collateralDelta: 10_000e6,
+            sizeDelta: 20 ether,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: false,
+            isLimit: false,
+            isIncrease: true,
+            shouldWrap: false,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        // Execute the Position
+        orderKey = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
 
-    //     skew = Funding.calculateSkewUsd(market, weth, 2500e18, 1e18);
-    //     assertEq(skew, -50_000e18);
-    // }
-
-    // /**
-    //  * Velocity: 3000600000000
-    //  */
-    // function testCalculationOfNonUpdatedFeesWithSkewLong() public setUpMarkets {
-    //     // Open a position to skew the funding long
-
-    //     Position.Input memory input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: weth,
-    //         collateralDelta: 0.5 ether,
-    //         sizeDelta: 4 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: true,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: true,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.prank(USER);
-    //     router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-
-    //     bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     Oracle.TradingEnabled memory tradingEnabled =
-    //         Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     // Pass some time
-
-    //     vm.warp(block.timestamp + 100 seconds);
-    //     vm.roll(block.number + 1);
-    //     // get the fees since update and compare with expected values
-    //     (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, true);
-    //     assertEq(feesEarned, 0);
-    //     assertEq(feesOwed, 14852970000000000);
-    // }
-
-    // /**
-    //  * Velocity: -5998800000000
-    //  */
-    // function testCalculationOfNonUpdatedFeesWithSkewShort() public setUpMarkets {
-    //     // Open a position to skew the funding short
-    //     Position.Input memory input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: usdc,
-    //         collateralDelta: 2000e6,
-    //         sizeDelta: 8 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: false,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: false,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.startPrank(USER);
-    //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-    //     router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-    //     vm.stopPrank();
-    //     bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     Oracle.TradingEnabled memory tradingEnabled =
-    //         Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     // Pass some time
-    //     vm.warp(block.timestamp + 100 seconds);
-    //     vm.roll(block.number + 1);
-    //     // get the fees since update and compare with expected values
-    //     (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
-    //     assertEq(feesEarned, 0);
-    //     assertEq(feesOwed, 29694060000000000);
-    // }
-
-    // /**
-    //  * Velocity: 3000600000000
-    //  * maxRate: 0.03e18, // 3%
-    //  */
-    // function testCalculationOfNonUpdatedFeesWithBoundaryCrossLong() public setUpMarkets {
-    //     // Open a position to skew the funding long
-
-    //     Position.Input memory input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: weth,
-    //         collateralDelta: 0.5 ether,
-    //         sizeDelta: 4 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: true,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: true,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.prank(USER);
-    //     router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-
-    //     bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     Oracle.TradingEnabled memory tradingEnabled =
-    //         Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     // Pass enough time to get to the boundary
-
-    //     vm.warp(block.timestamp + 1 days);
-    //     vm.roll(block.number + 1);
-    //     // get the fees since update and compare with expected values
-    //     (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, true);
-    //     assertEq(feesEarned, 0);
-    //     assertEq(feesOwed, 2.4420149940006e21);
-    // }
-
-    // /**
-    //  * function calculateSeriesSum(n,a,d){
-    //  *         return ((n/2) * ((2*a) + ((n - 1) * d)));
-    //  *     }
-    //  */
-
-    // /**
-    //  * Velocity: -5998800000000
-    //  * minRate: -0.03e18, // 3%
-    //  */
-    // function testCalculationOfNonUpdatedFeesWithBoundaryCrossShort() public setUpMarkets {
-    //     // Open a position to skew the funding short
-    //     Position.Input memory input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: usdc,
-    //         collateralDelta: 2000e6,
-    //         sizeDelta: 8 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: false,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: false,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.startPrank(USER);
-    //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-    //     router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-    //     vm.stopPrank();
-    //     bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     Oracle.TradingEnabled memory tradingEnabled =
-    //         Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     // Pass enough time
-    //     vm.warp(block.timestamp + 1 days);
-    //     vm.roll(block.number + 1);
-    //     // get the fees since update and compare with expected values
-    //     (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
-    //     assertEq(feesEarned, 0);
-    //     assertEq(feesOwed, 2.5169699969988e21);
-    // }
-
-    // function testCalculationOfNonUpdatedFeesWhenAlreadyAtLongBoundary() public setUpMarkets {
-    //     // Open a position to skew the funding long
-
-    //     Position.Input memory input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: weth,
-    //         collateralDelta: 0.5 ether,
-    //         sizeDelta: 4 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: true,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: true,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.prank(USER);
-    //     router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-
-    //     bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     Oracle.TradingEnabled memory tradingEnabled =
-    //         Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     // Pass enough time
-
-    //     vm.warp(block.timestamp + 1 days);
-    //     vm.roll(block.number + 1);
-    //     // Update the market's funding rate
-    //     vm.prank(address(processor));
-    //     market.updateFundingRate(weth, 2500e18, 1e18);
-
-    //     // Pass some time
-    //     vm.warp(block.timestamp + 100 seconds);
-    //     vm.roll(block.number + 1);
-
-    //     // get the fees since update and compare with expected values
-    //     (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, true);
-    //     assertEq(feesEarned, 0);
-    //     assertEq(feesOwed, 3000000000000000000);
-    // }
-
-    // function testCalculationOfNonUpdatedFeesWhenAlreadyAtShortBoundary() public setUpMarkets {
-    //     // Open a position to skew the funding short
-    //     Position.Input memory input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: usdc,
-    //         collateralDelta: 2000e6,
-    //         sizeDelta: 8 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: false,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: false,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-
-    //     });
-    //     vm.startPrank(USER);
-    //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-    //     router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-    //     vm.stopPrank();
-    //     bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     Oracle.TradingEnabled memory tradingEnabled =
-    //         Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     // Pass enough time to reach boundary
-    //     vm.warp(block.timestamp + 1 days);
-    //     vm.roll(block.number + 1);
-
-    //     // Update the market's funding rate
-    //     vm.prank(address(processor));
-    //     market.updateFundingRate(weth, 2500e18, 1e18);
-
-    //     // Pass some time
-    //     vm.warp(block.timestamp + 100 seconds);
-    //     vm.roll(block.number + 1);
-
-    //     // get the fees since update and compare with expected values
-    //     (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
-    //     assertEq(feesEarned, 0);
-    //     assertEq(feesOwed, 3000000000000000000);
-    // }
-
-    // /**
-    //  * Rate: 300060000000000
-    //  * Velocity: -2999400000000
-    //  * Funding Until Flip: 15159090000000000
-    //  * Funding After Flip: -14835150000000000
-    //  */
-    // function testCalculationOfNonUpdatedFeesWithSignFlipLongToShort() public setUpMarkets {
-    //     // Open a position to skew the funding long
-    //     Position.Input memory input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: weth,
-    //         collateralDelta: 0.5 ether,
-    //         sizeDelta: 4 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: true,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: true,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.prank(USER);
-    //     router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-
-    //     bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     Oracle.TradingEnabled memory tradingEnabled =
-    //         Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     // Pass enough time
-
-    //     vm.warp(block.timestamp + 100);
-    //     vm.roll(block.number + 1);
-
-    //     // Open a short position to flip the sign
-    //     input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: usdc,
-    //         collateralDelta: 2000e6,
-    //         sizeDelta: 8 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: false,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: false,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.startPrank(USER);
-    //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-    //     router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-    //     vm.stopPrank();
-    //     orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     // Pass some time
-    //     vm.warp(block.timestamp + 200 seconds);
-    //     vm.roll(block.number + 1);
-
-    //     // get the fees since update and compare with expected values
-    //     (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
-    //     assertEq(feesEarned, 15159090000000000);
-    //     assertEq(feesOwed, 14835150000000000);
-    // }
-
-    // /**
-    //  * Funding Rate: 300060000000000
-    //  * Velocity: -2999400000000
-    //  */
-    // function testCalculationOfNonUpdatedFeesWithSignFlipAndBoundaryCross() public setUpMarkets {
-    //     Position.Input memory input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: weth,
-    //         collateralDelta: 0.5 ether,
-    //         sizeDelta: 4 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: true,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: true,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.prank(USER);
-    //     router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-
-    //     bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     Oracle.TradingEnabled memory tradingEnabled =
-    //         Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     // Pass enough time
-
-    //     vm.warp(block.timestamp + 100);
-    //     vm.roll(block.number + 1);
-
-    //     // Open a short position to flip the sign
-    //     input = Position.Input({
-    //         indexToken: weth,
-    //         collateralToken: usdc,
-    //         collateralDelta: 2000e6,
-    //         sizeDelta: 8 ether,
-    //         limitPrice: 0,
-    //         maxSlippage: 0.4e18,
-    //         executionFee: 0.01 ether,
-    //         isLong: false,
-    //         isLimit: false,
-    //         isIncrease: true,
-    //         shouldWrap: false,
-    //         conditionals: Position.Conditionals({
-    //             stopLossSet: false,
-    //             takeProfitSet: false,
-    //             stopLossPrice: 0,
-    //             takeProfitPrice: 0,
-    //             stopLossPercentage: 0,
-    //             takeProfitPercentage: 0
-    //         })
-    //     });
-    //     vm.startPrank(USER);
-    //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-    //     router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-    //     vm.stopPrank();
-    //     orderKey = tradeStorage.getOrderAtIndex(0, false);
-    //     vm.prank(OWNER);
-    //     processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
-    //     (int256 fundingRate, int256 fundingVelocity) = market.getFundingRates(weth);
-
-    //     console2.log("Funding Rate: ", fundingRate);
-    //     console2.log("Funding Velocity: ", fundingVelocity);
-
-    //     // Pass enough time for boundary cross
-    //     vm.warp(block.timestamp + 1 days);
-    //     vm.roll(block.number + 1);
-
-    //     // get the fees since update and compare with expected values
-    //     (uint256 feesEarned, uint256 feesOwed) = Funding.getFeesSinceLastMarketUpdate(market, weth, false);
-    //     /**
-    //      * fundingUntilFlip: 15159090000000000
-    //      * fundingUntilBoundary: 150043793758200000000
-    //      * fundingAfterBoundary: 2.28891e+21
-    //      */
-    //     assertEq(feesEarned, 15159090000000000);
-    //     assertEq(feesOwed, 2.4389537937582e21);
-    // }
+        skew = Funding.calculateSkewUsd(market, weth);
+        assertEq(skew, -50_000e18);
+    }
 }
