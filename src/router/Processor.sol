@@ -216,6 +216,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             revert Processor_InvalidRequestType();
         }
 
+        // @audit - is affiliate rebate taken care of for decrease / other positions?
         if (request.input.isIncrease) {
             _transferTokensForIncrease(state, request, state.fee, state.affiliateRebate, request.input.isLong);
         }
@@ -324,7 +325,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         if (pnlFactor.abs() > maxPnlFactor && pnlFactor > 0) {
             market.updateAdlState(_indexToken, true, _isLong);
         } else {
-            revert("ADL: PTP ratio not exceeded");
+            revert Processor_PnlToPoolRatioNotExceeded(pnlFactor, maxPnlFactor);
         }
     }
 
@@ -424,21 +425,10 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     ) internal {
         // Transfer Fee Discount to Referral Storage
         if (_affiliateRebate > 0) {
-            // If units need to be converted (not a collateral edit) convert them
-            uint256 rebate;
-            if (
-                _request.requestType != Position.RequestType.COLLATERAL_INCREASE
-                    || _request.requestType != Position.RequestType.COLLATERAL_DECREASE
-            ) {
-                rebate =
-                    Position.convertUsdToCollateral(_affiliateRebate, _state.collateralPrice, _state.collateralBaseUnit);
-            } else {
-                rebate = _affiliateRebate;
-            }
             // Increment Referral Storage Fee Balance
-            referralStorage.accumulateAffiliateRewards(_state.referrer, _isLong, rebate);
+            referralStorage.accumulateAffiliateRewards(_state.referrer, _isLong, _affiliateRebate);
             // Transfer Fee Discount to Referral Storage
-            IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), rebate);
+            IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), _affiliateRebate);
         }
 
         // Transfer Collateral to market
@@ -446,20 +436,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         _state.market.increasePoolBalance(afterFeeAmount, _isLong);
         _state.market.accumulateFees(_fee, _isLong);
         IERC20(_request.input.collateralToken).safeTransfer(address(_state.market), afterFeeAmount + _fee);
-    }
-
-    function _calculateValueUsd(uint256 _tokenAmount, uint256 _tokenPrice, uint256 _tokenBaseUnit, bool _isIncrease)
-        internal
-        pure
-        returns (int256 valueUsd)
-    {
-        // Flip sign if decreasing position
-        uint256 absValueUsd = Position.getTradeValueUsd(_tokenAmount, _tokenPrice, _tokenBaseUnit);
-        if (_isIncrease) {
-            valueUsd = absValueUsd.toInt256();
-        } else {
-            valueUsd = -1 * absValueUsd.toInt256();
-        }
     }
 
     function _updateMarketState(

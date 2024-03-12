@@ -270,7 +270,7 @@ contract TestReferrals is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
         // execute the position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         Oracle.TradingEnabled memory tradingEnabled =

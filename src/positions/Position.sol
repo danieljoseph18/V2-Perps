@@ -25,6 +25,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {Order} from "../positions/Order.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {console} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -205,6 +206,7 @@ library Position {
         external
         view
     {
+        console.log("Collateral USD: ", _collateralUsd);
         uint256 maxLeverage = market.getMaxLeverage(_indexToken);
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSizeLong();
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
@@ -263,15 +265,6 @@ library Position {
         } else {
             pnl = entryValue.toInt256() - currentValue.toInt256();
         }
-    }
-
-    /// @dev Need to adjust for decimals
-    function getTradeValueUsd(uint256 _sizeDelta, uint256 _signedPrice, uint256 _baseUnit)
-        external
-        pure
-        returns (uint256 tradeValueUsd)
-    {
-        tradeValueUsd = mulDiv(_sizeDelta, _signedPrice, _baseUnit);
     }
 
     function isLiquidatable(

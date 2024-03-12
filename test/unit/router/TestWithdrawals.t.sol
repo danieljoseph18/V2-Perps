@@ -18,8 +18,6 @@ import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {Pool} from "../../../src/markets/Pool.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
-import {Fee} from "../../../src/libraries/Fee.sol";
-import {Position} from "../../../src/positions/Position.sol";
 
 contract TestWithdrawals is Test {
     RoleStorage roleStorage;

@@ -153,6 +153,12 @@ contract Router is ReentrancyGuard, RoleValidation {
     {
         Gas.validateExecutionFee(processor, _trade.executionFee, msg.value, Gas.Action.POSITION);
 
+        if (_trade.isLong) {
+            if (_trade.collateralToken != address(WETH)) revert Router_InvalidTokenIn();
+        } else {
+            if (_trade.collateralToken != address(USDC)) revert Router_InvalidTokenIn();
+        }
+
         // Construct the state for Order Creation
         Order.CreationState memory state = Order.validateInitialParameters(marketMaker, tradeStorage, priceFeed, _trade);
 

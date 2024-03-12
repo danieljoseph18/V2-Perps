@@ -38,6 +38,7 @@ library MarketUtils {
         poolBalanceUsd = longPoolUsd + shortPoolUsd;
     }
 
+    // In Index Tokens
     function getPoolBalance(IMarket market, address _indexToken, bool _isLong)
         public
         view

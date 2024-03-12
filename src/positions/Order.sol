@@ -16,6 +16,7 @@ import {Fee} from "../libraries/Fee.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
+import {console} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Order {
@@ -114,9 +115,9 @@ library Order {
 
         // state Variables
         state.market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
-        state.collateralDeltaUsd = _calculateValueUsd(
-            request.input.collateralDelta, state.collateralPrice, state.collateralBaseUnit, request.input.isIncrease
-        );
+        state.collateralDeltaUsd = request.input.isIncrease
+            ? mulDiv(request.input.collateralDelta, state.collateralPrice, state.collateralBaseUnit).toInt256()
+            : -mulDiv(request.input.collateralDelta, state.collateralPrice, state.collateralBaseUnit).toInt256();
 
         if (request.input.sizeDelta != 0) {
             // Execute Price Impact
@@ -218,8 +219,10 @@ library Order {
 
         if (_trade.isLong) {
             state.collateralRefPrice = Oracle.getLongReferencePrice(priceFeed);
+            state.collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
         } else {
             state.collateralRefPrice = Oracle.getShortReferencePrice(priceFeed);
+            state.collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
         }
 
         state.market = marketMaker.tokenToMarkets(_trade.indexToken);
@@ -240,8 +243,10 @@ library Order {
             }
         }
 
-        state.collateralBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.collateralToken);
         state.collateralDeltaUsd = mulDiv(_trade.collateralDelta, state.collateralRefPrice, state.collateralBaseUnit);
+        console.log("Collateral Ref Price: ", state.collateralRefPrice);
+        console.log("Collateral Base Unit: ", state.collateralBaseUnit);
+        console.log("Collateral Delta USD: ", state.collateralDeltaUsd);
         state.minCollateralUsd = tradeStorage.minCollateralUsd();
     }
 
@@ -334,7 +339,7 @@ library Order {
             _state.market,
             _params.request.input.indexToken,
             _position.positionSize,
-            mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
+            mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit) // Collat in USD
         );
         return (_position, _state);
     }
@@ -372,7 +377,6 @@ library Order {
     }
 
     // No Funding Involvement
-    // @audit - need to conver fee from index token to collateral token
     function createNewPosition(
         Position.Execution memory _params,
         ExecutionState memory _state,
@@ -644,15 +648,6 @@ library Order {
         if (borrowFee > _params.request.input.collateralDelta) revert Order_FeeExceedsDelta();
 
         return (_position, borrowFee);
-    }
-
-    function _calculateValueUsd(uint256 _tokenAmount, uint256 _tokenPrice, uint256 _tokenBaseUnit, bool _isIncrease)
-        internal
-        pure
-        returns (int256 valueUsd)
-    {
-        uint256 absValueUsd = Position.getTradeValueUsd(_tokenAmount, _tokenPrice, _tokenBaseUnit);
-        valueUsd = _isIncrease ? absValueUsd.toInt256() : -(absValueUsd).toInt256();
     }
 
     function _convertValueToCollateral(uint256 _valueUsd, uint256 _collateralPrice, uint256 _collateralBaseUnit)

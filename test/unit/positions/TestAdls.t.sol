@@ -173,24 +173,27 @@ contract TestADLs is Test {
         _;
     }
 
-    // @audit - why so many calls to getPnl?
+    // FAILING BECAUSE POOL USD IS ALSO INCREASING IN VALUE - TRY SHORT
     function testPositionsInPoolsWithLargePnlToPoolRatiosCanBeAdled() public setUpMarkets {
         vm.deal(RANDOM1, 1_000_000 ether);
+        MockUSDC(usdc).mint(RANDOM1, 1_000_000_000e6);
         vm.deal(RANDOM2, 1_000_000 ether);
+        MockUSDC(usdc).mint(RANDOM2, 1_000_000_000e6);
         vm.deal(RANDOM3, 1_000_000 ether);
+        MockUSDC(usdc).mint(RANDOM3, 1_000_000_000e6);
         // open several positions on the market
         Position.Input memory input = Position.Input({
             indexToken: weth,
-            collateralToken: weth,
-            collateralDelta: 0.5 ether,
-            sizeDelta: 25_000e30,
+            collateralToken: usdc,
+            collateralDelta: 125_000e6,
+            sizeDelta: 2_500_000e30,
             limitPrice: 0,
             maxSlippage: 0.9999e18,
             executionFee: 0.01 ether,
-            isLong: true,
+            isLong: false,
             isLimit: false,
             isIncrease: true,
-            shouldWrap: true,
+            shouldWrap: false,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -200,16 +203,26 @@ contract TestADLs is Test {
                 takeProfitPercentage: 0
             })
         });
-        vm.prank(OWNER);
-        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
-        vm.prank(USER);
-        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
-        vm.prank(RANDOM1);
-        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
-        vm.prank(RANDOM2);
-        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
-        vm.prank(RANDOM3);
-        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+        vm.startPrank(USER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+        vm.startPrank(RANDOM1);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+        vm.startPrank(RANDOM2);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
+        vm.startPrank(RANDOM3);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        vm.stopPrank();
         // Execute the Position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         Oracle.TradingEnabled memory tradingEnabled =
@@ -229,26 +242,21 @@ contract TestADLs is Test {
         vm.roll(block.number + 1);
         // move the price so that the pnl to pool ratio is large
         bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
-            ethPriceId, 1000000, 50, -2, 1000000, 50, uint64(block.timestamp), uint64(block.timestamp)
+            ethPriceId, 10000, 50, -2, 10000, 50, uint64(block.timestamp), uint64(block.timestamp)
         );
         tokenUpdateData[0] = wethUpdateData;
         vm.prank(OWNER);
         priceFeed.signPriceData{value: 0.01 ether}(weth, tokenUpdateData);
         // adl the positions
         vm.prank(OWNER);
-        processor.flagForAdl(market, weth, true);
+        processor.flagForAdl(market, weth, false);
         // get one of the position keys
-        bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), true);
+        bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), false);
         // adl it
-        /**
-         * @audit - precision loss in size delta - why is it 1999999999999999983 instead of 2 ether?
-         * Precision loss of 17
-         * @audit - impacted price is 0 - if no impact set it to price
-         */
-        processor.executeAdl{value: 0.01 ether}(market, weth, 5000e30, positionKeys[0], true, tokenUpdateData);
+        processor.executeAdl{value: 0.01 ether}(market, weth, 5000e30, positionKeys[0], false, tokenUpdateData);
         // validate their size has been reduced
         Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
-        assertEq(position.positionSize, 20_000e30);
+        assertEq(position.positionSize, 2_495_000e30);
     }
 
     function testAPositionCanOnlyBeAdldIfItHasBeenFlaggedPrior() public setUpMarkets {}

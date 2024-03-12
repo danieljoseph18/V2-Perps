@@ -680,7 +680,7 @@ contract TestPositions is Test {
         uint256 balanceAfterDecrease = OWNER.balance;
         // Will be less after fees
         assertLt(position.collateralAmount, 0.25 ether);
-        assertLt(position.positionSize, 1 ether);
+        assertEq(position.positionSize, 2500e30);
         // Should have received some ETH
         assertGt(balanceAfterDecrease, balanceBeforeDecrease);
     }
