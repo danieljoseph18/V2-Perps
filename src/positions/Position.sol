@@ -52,7 +52,7 @@ library Position {
     // Data for an Open Position
     struct Data {
         IMarket market;
-        address indexToken;
+        bytes32 assetId;
         address user;
         address collateralToken; // WETH long, USDC short
         uint256 collateralAmount;
@@ -88,7 +88,7 @@ library Position {
 
     // Trade Request -> Sent by user
     struct Input {
-        address indexToken;
+        bytes32 assetId; // Hash of the asset ticker, e.g keccak256(abi.encode("ETH"))
         address collateralToken;
         uint256 collateralDelta;
         uint256 sizeDelta; // USD
@@ -174,13 +174,13 @@ library Position {
     }
 
     function generateKey(Request memory _request) external pure returns (bytes32 positionKey) {
-        positionKey = keccak256(abi.encode(_request.input.indexToken, _request.user, _request.input.isLong));
+        positionKey = keccak256(abi.encode(_request.input.assetId, _request.user, _request.input.isLong));
     }
 
     function generateOrderKey(Request memory _request) public pure returns (bytes32 orderKey) {
         orderKey = keccak256(
             abi.encode(
-                _request.input.indexToken,
+                _request.input.assetId,
                 _request.user,
                 _request.input.isLong,
                 _request.input.isIncrease, // Enables separate SL / TP Orders
@@ -202,12 +202,9 @@ library Position {
     }
 
     // 1x = 100
-    function checkLeverage(IMarket market, address _indexToken, uint256 _sizeUsd, uint256 _collateralUsd)
-        external
-        view
-    {
+    function checkLeverage(IMarket market, bytes32 _assetId, uint256 _sizeUsd, uint256 _collateralUsd) external view {
         console.log("Collateral USD: ", _collateralUsd);
-        uint256 maxLeverage = market.getMaxLeverage(_indexToken);
+        uint256 maxLeverage = market.getMaxLeverage(_assetId);
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSizeLong();
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
@@ -234,19 +231,18 @@ library Position {
         returns (Data memory position)
     {
         // Get Entry Funding & Borrowing Values
-        (uint256 longBorrowFee, uint256 shortBorrowFee) =
-            _state.market.getCumulativeBorrowFees(_request.input.indexToken);
+        (uint256 longBorrowFee, uint256 shortBorrowFee) = _state.market.getCumulativeBorrowFees(_request.input.assetId);
         // get Trade Value in USD
         position = Data({
             market: _state.market,
-            indexToken: _request.input.indexToken,
+            assetId: _request.input.assetId,
             collateralToken: _request.input.collateralToken,
             user: _request.user,
             collateralAmount: _request.input.collateralDelta,
             positionSize: _request.input.sizeDelta,
             weightedAvgEntryPrice: _state.impactedPrice,
             lastUpdate: block.timestamp,
-            lastFundingAccrued: _state.market.getFundingAccrued(_request.input.indexToken),
+            lastFundingAccrued: _state.market.getFundingAccrued(_request.input.assetId),
             isLong: _request.input.isLong,
             borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
             stopLossKey: bytes32(0),
@@ -317,7 +313,7 @@ library Position {
 
         Request memory request = Request({
             input: Input({
-                indexToken: _position.indexToken,
+                assetId: _position.assetId,
                 collateralToken: _position.collateralToken,
                 collateralDelta: collateralDelta,
                 sizeDelta: _sizeDelta,
@@ -367,10 +363,6 @@ library Position {
         uint256 borrowingFeeUsd = mulDiv(borrowingFeeOwed, _state.collateralPrice, _state.collateralBaseUnit);
 
         totalFeesOwedUsd = borrowingFeeUsd;
-    }
-
-    function getMarketKey(address _indexToken) external pure returns (bytes32 marketKey) {
-        marketKey = keccak256(abi.encode(_indexToken));
     }
 
     // Sizes must be valid percentages

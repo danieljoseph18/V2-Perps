@@ -29,10 +29,14 @@ When index token == collateral token, the prices used should also be the same bu
 ### Additions Required
 
 - Handle case for Insolvent Liquidations
-- Do we need 30 D.P of precision anywhere? Or is 18 sufficient?
 - Need to make it clear what variables should never change, and which are mutable.
 If each function has it's own state, need to validate each state change for that
 function.
+- Disable trading for commodoties etc. natively on the market instead of through the Keepers
+- Mutation Tests
+- Invariant Tests
+- More Fuzz Tests
+- Formal Verification
 
 ### Functionality Tests
 

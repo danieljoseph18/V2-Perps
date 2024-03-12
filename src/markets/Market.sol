@@ -31,14 +31,14 @@ import {Pool} from "./Pool.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract Market is Vault, IMarket {
-    using EnumerableSet for EnumerableSet.AddressSet;
+    using EnumerableSet for EnumerableSet.Bytes32Set;
     using SafeCast for uint256;
     using SignedMath for int256;
 
-    EnumerableSet.AddressSet private indexTokens;
+    EnumerableSet.Bytes32Set private assetIds;
 
     // Each Asset's storage is tracked through this mapping
-    mapping(address => MarketStorage) public marketStorage;
+    mapping(bytes32 assetId => MarketStorage assetStorage) public marketStorage;
 
     /**
      *  ========================= Constructor  =========================
@@ -46,154 +46,154 @@ contract Market is Vault, IMarket {
     constructor(
         Pool.VaultConfig memory _vaultConfig,
         Config memory _tokenConfig,
-        address _indexToken,
+        bytes32 _assetId,
         address _roleStorage
     ) Vault(_vaultConfig, _roleStorage) {
         uint256[] memory allocations = new uint256[](1);
         allocations[0] = 10000 << 240;
-        _addToken(_tokenConfig, _indexToken, allocations);
+        _addToken(_tokenConfig, _assetId, allocations);
     }
 
-    function addToken(Config memory _config, address _indexToken, uint256[] calldata _newAllocations)
+    function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations)
         external
         onlyMarketMaker
     {
-        _addToken(_config, _indexToken, _newAllocations);
+        _addToken(_config, _assetId, _newAllocations);
     }
 
-    function removeToken(address _indexToken, uint256[] calldata _newAllocations) external onlyAdmin {
-        if (!indexTokens.contains(_indexToken)) revert Market_TokenDoesNotExist();
-        indexTokens.remove(_indexToken);
+    function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external onlyAdmin {
+        if (!assetIds.contains(_assetId)) revert Market_TokenDoesNotExist();
+        assetIds.remove(_assetId);
         _setAllocationsWithBits(_newAllocations);
-        delete marketStorage[_indexToken];
-        emit TokenRemoved(_indexToken);
+        delete marketStorage[_assetId];
+        emit TokenRemoved(_assetId);
     }
 
     /**
      *  ========================= Market State Functions  =========================
      */
-    function updateConfig(Config memory _config, address _indexToken) external onlyConfigurator {
-        marketStorage[_indexToken].config = _config;
-        emit MarketConfigUpdated(_indexToken, _config);
+    function updateConfig(Config memory _config, bytes32 _assetId) external onlyConfigurator {
+        marketStorage[_assetId].config = _config;
+        emit MarketConfigUpdated(_assetId, _config);
     }
 
-    function updateAdlState(address _indexToken, bool _isFlaggedForAdl, bool _isLong) external onlyProcessor {
+    function updateAdlState(bytes32 _assetId, bool _isFlaggedForAdl, bool _isLong) external onlyProcessor {
         if (_isLong) {
-            marketStorage[_indexToken].config.adl.flaggedLong = _isFlaggedForAdl;
+            marketStorage[_assetId].config.adl.flaggedLong = _isFlaggedForAdl;
         } else {
-            marketStorage[_indexToken].config.adl.flaggedShort = _isFlaggedForAdl;
+            marketStorage[_assetId].config.adl.flaggedShort = _isFlaggedForAdl;
         }
-        emit AdlStateUpdated(_indexToken, _isFlaggedForAdl);
+        emit AdlStateUpdated(_assetId, _isFlaggedForAdl);
     }
 
-    function updateFundingRate(address _indexToken, uint256 _indexPrice) external nonReentrant onlyProcessor {
-        FundingValues memory funding = marketStorage[_indexToken].funding;
+    function updateFundingRate(bytes32 _assetId, uint256 _indexPrice) external nonReentrant onlyProcessor {
+        FundingValues memory funding = marketStorage[_assetId].funding;
 
         // Calculate the skew in USD
-        int256 skewUsd = Funding.calculateSkewUsd(this, _indexToken);
+        int256 skewUsd = Funding.calculateSkewUsd(this, _assetId);
 
         // Calculate the current funding velocity
-        funding.fundingRateVelocity = Funding.getCurrentVelocity(this, _indexToken, skewUsd);
+        funding.fundingRateVelocity = Funding.getCurrentVelocity(this, _assetId, skewUsd);
 
         // Calculate the current funding rate
-        (funding.fundingRate, funding.fundingAccruedUsd) = Funding.recompute(this, _indexToken, _indexPrice);
+        (funding.fundingRate, funding.fundingAccruedUsd) = Funding.recompute(this, _assetId, _indexPrice);
 
         // Update storage
         funding.lastFundingUpdate = block.timestamp.toUint48();
 
-        marketStorage[_indexToken].funding = funding;
+        marketStorage[_assetId].funding = funding;
 
         emit FundingUpdated(funding.fundingRate, funding.fundingRateVelocity, funding.fundingAccruedUsd);
     }
 
     function updateBorrowingRate(
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external nonReentrant onlyProcessor {
-        BorrowingValues memory borrowing = marketStorage[_indexToken].borrowing;
+        BorrowingValues memory borrowing = marketStorage[_assetId].borrowing;
 
         if (_isLong) {
             borrowing.longCumulativeBorrowFees +=
                 Borrowing.calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
             borrowing.longBorrowingRate = Borrowing.calculateRate(
-                this, _indexToken, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, true
+                this, _assetId, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, true
             );
         } else {
             borrowing.shortCumulativeBorrowFees +=
                 Borrowing.calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
             borrowing.shortBorrowingRate = Borrowing.calculateRate(
-                this, _indexToken, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, false
+                this, _assetId, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, false
             );
         }
 
         borrowing.lastBorrowUpdate = uint48(block.timestamp);
 
         // Update Storage
-        marketStorage[_indexToken].borrowing = borrowing;
+        marketStorage[_assetId].borrowing = borrowing;
 
-        emit BorrowingRatesUpdated(_indexToken, borrowing.longBorrowingRate, borrowing.shortBorrowingRate);
+        emit BorrowingRatesUpdated(_assetId, borrowing.longBorrowingRate, borrowing.shortBorrowingRate);
     }
 
-    function updateAverageEntryPrice(address _indexToken, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
+    function updateAverageEntryPrice(bytes32 _assetId, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
         external
         onlyProcessor
     {
         if (_priceUsd == 0) revert Market_PriceIsZero();
         if (_sizeDeltaUsd == 0) return; // No Change
 
-        PnlValues memory pnl = marketStorage[_indexToken].pnl;
+        PnlValues memory pnl = marketStorage[_assetId].pnl;
 
         if (_isLong) {
             pnl.longAverageEntryPriceUsd = Pricing.calculateWeightedAverageEntryPrice(
                 pnl.longAverageEntryPriceUsd,
-                marketStorage[_indexToken].openInterest.longOpenInterest,
+                marketStorage[_assetId].openInterest.longOpenInterest,
                 _sizeDeltaUsd,
                 _priceUsd
             );
         } else {
             pnl.shortAverageEntryPriceUsd = Pricing.calculateWeightedAverageEntryPrice(
                 pnl.shortAverageEntryPriceUsd,
-                marketStorage[_indexToken].openInterest.shortOpenInterest,
+                marketStorage[_assetId].openInterest.shortOpenInterest,
                 _sizeDeltaUsd,
                 _priceUsd
             );
         }
 
         // Update Storage
-        marketStorage[_indexToken].pnl = pnl;
+        marketStorage[_assetId].pnl = pnl;
 
-        emit AverageEntryPriceUpdated(_indexToken, pnl.longAverageEntryPriceUsd, pnl.shortAverageEntryPriceUsd);
+        emit AverageEntryPriceUpdated(_assetId, pnl.longAverageEntryPriceUsd, pnl.shortAverageEntryPriceUsd);
     }
 
-    function updateOpenInterest(address _indexToken, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
+    function updateOpenInterest(bytes32 _assetId, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
         external
         onlyProcessor
     {
         // Update the open interest
         if (_shouldAdd) {
             _isLong
-                ? marketStorage[_indexToken].openInterest.longOpenInterest += _sizeDeltaUsd
-                : marketStorage[_indexToken].openInterest.shortOpenInterest += _sizeDeltaUsd;
+                ? marketStorage[_assetId].openInterest.longOpenInterest += _sizeDeltaUsd
+                : marketStorage[_assetId].openInterest.shortOpenInterest += _sizeDeltaUsd;
         } else {
             _isLong
-                ? marketStorage[_indexToken].openInterest.longOpenInterest -= _sizeDeltaUsd
-                : marketStorage[_indexToken].openInterest.shortOpenInterest -= _sizeDeltaUsd;
+                ? marketStorage[_assetId].openInterest.longOpenInterest -= _sizeDeltaUsd
+                : marketStorage[_assetId].openInterest.shortOpenInterest -= _sizeDeltaUsd;
         }
         emit OpenInterestUpdated(
-            _indexToken,
-            marketStorage[_indexToken].openInterest.longOpenInterest,
-            marketStorage[_indexToken].openInterest.shortOpenInterest
+            _assetId,
+            marketStorage[_assetId].openInterest.longOpenInterest,
+            marketStorage[_assetId].openInterest.shortOpenInterest
         );
     }
 
-    function updateImpactPool(address _indexToken, int256 _priceImpactUsd) external onlyProcessor {
+    function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external onlyProcessor {
         _priceImpactUsd > 0
-            ? marketStorage[_indexToken].impactPool += _priceImpactUsd.abs()
-            : marketStorage[_indexToken].impactPool -= _priceImpactUsd.abs();
+            ? marketStorage[_assetId].impactPool += _priceImpactUsd.abs()
+            : marketStorage[_assetId].impactPool -= _priceImpactUsd.abs();
     }
 
     /**
@@ -204,7 +204,7 @@ contract Market is Vault, IMarket {
     }
 
     function _setAllocationsWithBits(uint256[] memory _allocations) internal {
-        address[] memory assets = indexTokens.values();
+        bytes32[] memory assets = assetIds.values();
         uint256 assetLen = assets.length;
 
         uint256 total = 0;
@@ -232,100 +232,101 @@ contract Market is Vault, IMarket {
         if (total != TOTAL_ALLOCATION) revert Market_InvalidCumulativeAllocation();
     }
 
-    function _addToken(Config memory _config, address _indexToken, uint256[] memory _newAllocations) internal {
-        if (indexTokens.contains(_indexToken)) revert Market_TokenAlreadyExists();
-        indexTokens.add(_indexToken);
+    function _addToken(Config memory _config, bytes32 _assetId, uint256[] memory _newAllocations) internal {
+        if (assetIds.contains(_assetId)) revert Market_TokenAlreadyExists();
+        bool success = assetIds.add(_assetId);
+        if (!success) revert Market_FailedToAddAssetId();
         _setAllocationsWithBits(_newAllocations);
-        marketStorage[_indexToken].config = _config;
-        marketStorage[_indexToken].funding.lastFundingUpdate = block.timestamp.toUint48();
-        marketStorage[_indexToken].borrowing.lastBorrowUpdate = block.timestamp.toUint48();
-        emit TokenAdded(_indexToken, _config);
+        marketStorage[_assetId].config = _config;
+        marketStorage[_assetId].funding.lastFundingUpdate = block.timestamp.toUint48();
+        marketStorage[_assetId].borrowing.lastBorrowUpdate = block.timestamp.toUint48();
+        emit TokenAdded(_assetId, _config);
     }
 
     /**
      *  ========================= Getters  =========================
      */
-    function getCumulativeBorrowFees(address _indexToken) external view returns (uint256 longFees, uint256 shortFees) {
-        return (getCumulativeBorrowFee(_indexToken, true), getCumulativeBorrowFee(_indexToken, false));
+    function getCumulativeBorrowFees(bytes32 _assetId) external view returns (uint256 longFees, uint256 shortFees) {
+        return (getCumulativeBorrowFee(_assetId, true), getCumulativeBorrowFee(_assetId, false));
     }
 
-    function getCumulativeBorrowFee(address _indexToken, bool _isLong) public view returns (uint256) {
+    function getCumulativeBorrowFee(bytes32 _assetId, bool _isLong) public view returns (uint256) {
         return _isLong
-            ? marketStorage[_indexToken].borrowing.longCumulativeBorrowFees
-            : marketStorage[_indexToken].borrowing.shortCumulativeBorrowFees;
+            ? marketStorage[_assetId].borrowing.longCumulativeBorrowFees
+            : marketStorage[_assetId].borrowing.shortCumulativeBorrowFees;
     }
 
-    function getLastFundingUpdate(address _indexToken) external view returns (uint48) {
-        return marketStorage[_indexToken].funding.lastFundingUpdate;
+    function getLastFundingUpdate(bytes32 _assetId) external view returns (uint48) {
+        return marketStorage[_assetId].funding.lastFundingUpdate;
     }
 
-    function getFundingRates(address _indexToken) external view returns (int256 rate, int256 velocity) {
-        return (marketStorage[_indexToken].funding.fundingRate, marketStorage[_indexToken].funding.fundingRateVelocity);
+    function getFundingRates(bytes32 _assetId) external view returns (int256 rate, int256 velocity) {
+        return (marketStorage[_assetId].funding.fundingRate, marketStorage[_assetId].funding.fundingRateVelocity);
     }
 
-    function getFundingAccrued(address _indexToken) external view returns (int256) {
-        return marketStorage[_indexToken].funding.fundingAccruedUsd;
+    function getFundingAccrued(bytes32 _assetId) external view returns (int256) {
+        return marketStorage[_assetId].funding.fundingAccruedUsd;
     }
 
-    function getLastBorrowingUpdate(address _indexToken) external view returns (uint48) {
-        return marketStorage[_indexToken].borrowing.lastBorrowUpdate;
+    function getLastBorrowingUpdate(bytes32 _assetId) external view returns (uint48) {
+        return marketStorage[_assetId].borrowing.lastBorrowUpdate;
     }
 
-    function getBorrowingRate(address _indexToken, bool _isLong) external view returns (uint256) {
+    function getBorrowingRate(bytes32 _assetId, bool _isLong) external view returns (uint256) {
         return _isLong
-            ? marketStorage[_indexToken].borrowing.longBorrowingRate
-            : marketStorage[_indexToken].borrowing.shortBorrowingRate;
+            ? marketStorage[_assetId].borrowing.longBorrowingRate
+            : marketStorage[_assetId].borrowing.shortBorrowingRate;
     }
 
-    function getConfig(address _indexToken) external view returns (Config memory) {
-        return marketStorage[_indexToken].config;
+    function getConfig(bytes32 _assetId) external view returns (Config memory) {
+        return marketStorage[_assetId].config;
     }
 
-    function getBorrowingConfig(address _indexToken) external view returns (BorrowingConfig memory) {
-        return marketStorage[_indexToken].config.borrowing;
+    function getBorrowingConfig(bytes32 _assetId) external view returns (BorrowingConfig memory) {
+        return marketStorage[_assetId].config.borrowing;
     }
 
-    function getFundingConfig(address _indexToken) external view returns (FundingConfig memory) {
-        return marketStorage[_indexToken].config.funding;
+    function getFundingConfig(bytes32 _assetId) external view returns (FundingConfig memory) {
+        return marketStorage[_assetId].config.funding;
     }
 
-    function getImpactConfig(address _indexToken) external view returns (ImpactConfig memory) {
-        return marketStorage[_indexToken].config.impact;
+    function getImpactConfig(bytes32 _assetId) external view returns (ImpactConfig memory) {
+        return marketStorage[_assetId].config.impact;
     }
 
-    function getAdlConfig(address _indexToken) external view returns (AdlConfig memory) {
-        return marketStorage[_indexToken].config.adl;
+    function getAdlConfig(bytes32 _assetId) external view returns (AdlConfig memory) {
+        return marketStorage[_assetId].config.adl;
     }
 
-    function getReserveFactor(address _indexToken) external view returns (uint256) {
-        return marketStorage[_indexToken].config.reserveFactor;
+    function getReserveFactor(bytes32 _assetId) external view returns (uint256) {
+        return marketStorage[_assetId].config.reserveFactor;
     }
 
-    function getMaxLeverage(address _indexToken) external view returns (uint32) {
-        return marketStorage[_indexToken].config.maxLeverage;
+    function getMaxLeverage(bytes32 _assetId) external view returns (uint32) {
+        return marketStorage[_assetId].config.maxLeverage;
     }
 
-    function getMaxPnlFactor(address _indexToken) external view returns (uint256) {
-        return marketStorage[_indexToken].config.adl.maxPnlFactor;
+    function getMaxPnlFactor(bytes32 _assetId) external view returns (uint256) {
+        return marketStorage[_assetId].config.adl.maxPnlFactor;
     }
 
-    function getAllocation(address _indexToken) external view returns (uint256) {
-        return marketStorage[_indexToken].allocationPercentage;
+    function getAllocation(bytes32 _assetId) external view returns (uint256) {
+        return marketStorage[_assetId].allocationPercentage;
     }
 
-    function getOpenInterest(address _indexToken, bool _isLong) external view returns (uint256) {
+    function getOpenInterest(bytes32 _assetId, bool _isLong) external view returns (uint256) {
         return _isLong
-            ? marketStorage[_indexToken].openInterest.longOpenInterest
-            : marketStorage[_indexToken].openInterest.shortOpenInterest;
+            ? marketStorage[_assetId].openInterest.longOpenInterest
+            : marketStorage[_assetId].openInterest.shortOpenInterest;
     }
 
-    function getAverageEntryPrice(address _indexToken, bool _isLong) external view returns (uint256) {
+    function getAverageEntryPrice(bytes32 _assetId, bool _isLong) external view returns (uint256) {
         return _isLong
-            ? marketStorage[_indexToken].pnl.longAverageEntryPriceUsd
-            : marketStorage[_indexToken].pnl.shortAverageEntryPriceUsd;
+            ? marketStorage[_assetId].pnl.longAverageEntryPriceUsd
+            : marketStorage[_assetId].pnl.shortAverageEntryPriceUsd;
     }
 
-    function getImpactPool(address _indexToken) external view returns (uint256) {
-        return marketStorage[_indexToken].impactPool;
+    function getImpactPool(bytes32 _assetId) external view returns (uint256) {
+        return marketStorage[_assetId].impactPool;
     }
 }

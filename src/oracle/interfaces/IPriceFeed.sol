@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
-import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {Oracle} from "../Oracle.sol";
 
 interface IPriceFeed {
-    event PriceDataSigned(address token, uint256 block, PythStructs.Price priceData);
+    event PriceDataSigned(bytes32 assetId, uint256 block, bytes priceData);
 
     error PriceFeed_InsufficientFee();
     error PriceFeed_InvalidToken();
+    error PriceFeed_InvalidPrimaryStrategy();
 
-    function supportAsset(address _token, Oracle.Asset memory _asset) external;
-    function unsupportAsset(address _token) external;
-    function signPriceData(address _token, bytes[] calldata _priceUpdateData) external payable;
-    function getPrice(address _token, uint256 _block) external view returns (Oracle.Price memory);
-    function getAsset(address token) external view returns (Oracle.Asset memory);
+    function supportAsset(bytes32 _assetId, Oracle.Asset memory _asset) external;
+    function unsupportAsset(bytes32 _assetId) external;
+    function updateSequenceUptimeFeed(address _sequencerUptimeFeed) external;
+    function signPrimaryPrice(bytes32 _assetId, bytes[] calldata _priceUpdateData) external payable;
+    function getPrice(bytes32 _assetId, uint256 _block) external view returns (Oracle.Price memory);
+    function getAsset(bytes32 _assetId) external view returns (Oracle.Asset memory);
     function lastUpdateBlock() external view returns (uint256);
-    function longToken() external view returns (address);
-    function shortToken() external view returns (address);
-    function secondaryPriceFee() external view returns (uint256);
-    function getPrimaryUpdateFee(bytes[] calldata _priceUpdateData) external view returns (uint256);
+    function longTokenId() external view returns (bytes32);
+    function shortTokenId() external view returns (bytes32);
+    function updateFee() external view returns (uint256);
     function sequencerUptimeFeed() external view returns (address);
     function getPriceUnsafe(Oracle.Asset memory _asset) external view returns (uint256 price, uint256 confidence);
     function createPriceFeedUpdateData(
@@ -33,7 +32,10 @@ interface IPriceFeed {
         uint64 publishTime,
         uint64 prevPublishTime
     ) external pure returns (bytes memory priceFeedData);
-    function setAssetPrice(address _token, uint256 _price, uint256 _block) external;
+    function encodePriceData(uint64 _indexPrice, uint64 _longPrice, uint64 _shortPrice, uint8 _decimals)
+        external
+        pure
+        returns (bytes memory offchainPriceData);
     function getAssetPricesUnsafe()
         external
         view

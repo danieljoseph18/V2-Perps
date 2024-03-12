@@ -33,12 +33,14 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IProcessor} from "./interfaces/IProcessor.sol";
 import {Order} from "../positions/Order.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
 contract Router is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
+    using Address for address payable;
 
     ITradeStorage private tradeStorage;
     IMarketMaker private marketMaker;
@@ -52,7 +54,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
 
     // Used to request a secondary price update from the Keeper
-    event SecondaryPriceRequested(address indexed token, uint256 indexed blockNumber);
+    event Router_PriceRequested(bytes32 indexed assetId, uint256 indexed blockNumber);
 
     error Router_InvalidOwner();
     error Router_InvalidAmountIn();
@@ -94,11 +96,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         priceFeed = _priceFeed;
     }
 
-    function createDeposit(IMarket market, Deposit.Input memory _input, bytes[] memory _priceUpdateData)
-        external
-        payable
-        nonReentrant
-    {
+    function createDeposit(IMarket market, Deposit.Input memory _input) external payable nonReentrant {
         Gas.validateExecutionFee(processor, _input.executionFee, msg.value, Gas.Action.DEPOSIT);
 
         if (msg.sender != _input.owner) revert Router_InvalidOwner();
@@ -112,7 +110,10 @@ contract Router is ReentrancyGuard, RoleValidation {
             if (_input.tokenIn != address(USDC) && _input.tokenIn != address(WETH)) revert Router_InvalidTokenIn();
             IERC20(_input.tokenIn).safeTransferFrom(_input.owner, address(processor), _input.amountIn);
         }
-        _input.executionFee -= _requestOraclePricing(_input.tokenIn, _priceUpdateData);
+
+        _input.executionFee -=
+            _requestOraclePricing(_input.tokenIn == address(WETH) ? priceFeed.longTokenId() : priceFeed.shortTokenId());
+
         market.createDeposit(_input);
         _sendExecutionFee(_input.executionFee);
     }
@@ -122,11 +123,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         market.cancelDeposit(_key, msg.sender);
     }
 
-    function createWithdrawal(IMarket market, Withdrawal.Input memory _input, bytes[] memory _priceUpdateData)
-        external
-        payable
-        nonReentrant
-    {
+    function createWithdrawal(IMarket market, Withdrawal.Input memory _input) external payable nonReentrant {
         Gas.validateExecutionFee(processor, _input.executionFee, msg.value, Gas.Action.WITHDRAW);
         if (msg.sender != _input.owner) revert Router_InvalidOwner();
         if (_input.marketTokenAmountIn == 0) revert Router_InvalidAmountIn();
@@ -136,7 +133,8 @@ contract Router is ReentrancyGuard, RoleValidation {
             if (_input.tokenOut != address(USDC) && _input.tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         }
         IERC20(address(market)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
-        _input.executionFee -= _requestOraclePricing(_input.tokenOut, _priceUpdateData);
+        _input.executionFee -=
+            _requestOraclePricing(_input.tokenOut == address(WETH) ? priceFeed.longTokenId() : priceFeed.shortTokenId());
         market.createWithdrawal(_input);
         _sendExecutionFee(_input.executionFee);
     }
@@ -146,11 +144,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         market.cancelWithdrawal(_key, msg.sender);
     }
 
-    function createPositionRequest(Position.Input memory _trade, bytes[] memory _priceUpdateData)
-        external
-        payable
-        nonReentrant
-    {
+    function createPositionRequest(Position.Input memory _trade) external payable nonReentrant {
         Gas.validateExecutionFee(processor, _trade.executionFee, msg.value, Gas.Action.POSITION);
 
         if (_trade.isLong) {
@@ -178,7 +172,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         Position.Request memory request = Position.createRequest(_trade, state.market, msg.sender, state.requestType);
 
         // Sign Oracle Prices and Subtract Value from Execution Fee
-        request.input.executionFee -= _requestOraclePricing(_trade.indexToken, _priceUpdateData);
+        request.input.executionFee -= _requestOraclePricing(_trade.assetId);
 
         // Store the Order Request
         tradeStorage.createOrderRequest(request);
@@ -203,18 +197,9 @@ contract Router is ReentrancyGuard, RoleValidation {
         _sendExecutionFee(_executionFee);
     }
 
-    function _requestOraclePricing(address _token, bytes[] memory _priceUpdateData)
-        private
-        returns (uint256 updateFee)
-    {
-        Oracle.Asset memory asset = priceFeed.getAsset(_token);
-        if (!asset.isValid) revert Router_InvalidAsset();
-        updateFee = priceFeed.getPrimaryUpdateFee(_priceUpdateData);
-        priceFeed.signPriceData{value: updateFee}(_token, _priceUpdateData);
-        if (asset.priceProvider != Oracle.PriceProvider.PYTH) {
-            updateFee += priceFeed.secondaryPriceFee();
-            emit SecondaryPriceRequested(_token, block.number);
-        }
+    function _requestOraclePricing(bytes32 _assetId) private returns (uint256 updateFee) {
+        updateFee = priceFeed.updateFee();
+        emit Router_PriceRequested(_assetId, block.number);
     }
 
     // @audit - need to update collateral balance wherever collateral is stored
@@ -232,7 +217,6 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     // Send Fee to Processor
     function _sendExecutionFee(uint256 _executionFee) private {
-        (bool success,) = payable(address(processor)).call{value: _executionFee}("");
-        if (!success) revert Router_ExecutionFeeTransferFailed();
+        payable(address(processor)).sendValue(_executionFee);
     }
 }

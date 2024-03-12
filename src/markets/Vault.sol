@@ -174,7 +174,8 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     // Function to create a deposit request
     function createDeposit(Deposit.Input memory _input) external payable onlyRouter {
         Deposit.Data memory deposit = Deposit.create(_input, minTimeToExpiration);
-        depositKeys.add(deposit.key);
+        bool success = depositKeys.add(deposit.key);
+        if (!success) revert Vault_FailedToAddDeposit();
         depositRequests[deposit.key] = deposit;
         emit DepositRequestCreated(deposit.key, _input.owner, _input.tokenIn, _input.amountIn, deposit.blockNumber);
     }
@@ -233,7 +234,8 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     function createWithdrawal(Withdrawal.Input memory _input) external payable onlyRouter {
         Withdrawal.Data memory withdrawal = Withdrawal.create(_input, minTimeToExpiration);
 
-        withdrawalKeys.add(withdrawal.key);
+        bool success = withdrawalKeys.add(withdrawal.key);
+        if (!success) revert Vault_FailedToAddWithdrawal();
         withdrawalRequests[withdrawal.key] = withdrawal;
 
         emit WithdrawalRequestCreated(

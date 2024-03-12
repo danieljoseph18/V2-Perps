@@ -46,6 +46,10 @@ contract HelperConfig is Script {
         bytes32 ethPriceId = keccak256(abi.encode("ETH/USD"));
         bytes32 usdcPriceId = keccak256(abi.encode("USDC/USD"));
         // Create a mock price feed and return
+        /**
+         * [true,0x0000000000000000000000000000000000000000,0xbaf2dfadf73bb5597dae55258a19b57d5117bbb6753b578ae11715c86cfda1ef,1000000000000000000,60,10000000000000000,100000000000000000,0,0,[0x5A86858aA3b595FD6663c2296741eF4cd8BC4d01, 0x93f8dddd876c7dBE3323723500e83E202A7C96CC, 0x0000000000000000000000000000000000000000, 0]]
+         * )
+         */
         Oracle.Asset memory wethAsset = Oracle.Asset({
             isValid: true,
             chainlinkPriceFeed: address(0),
@@ -54,7 +58,8 @@ contract HelperConfig is Script {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             assetType: Oracle.AssetType.CRYPTO,
             pool: Oracle.UniswapPool({
                 token0: address(weth),
@@ -63,6 +68,9 @@ contract HelperConfig is Script {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
+        /**
+         * [true,0x0000000000000000000000000000000000000000,0xcbfe203d5ee402604baaeb548f2857e5556bbaa4ae7c0ccbed0b091f2544dccc,1000000,60,10000000000000000,100000000000000000,0,0,[0x5A86858aA3b595FD6663c2296741eF4cd8BC4d01,0x93f8dddd876c7dBE3323723500e83E202A7C96CC,0x0000000000000000000000000000000000000000,0]]
+         */
         Oracle.Asset memory usdcAsset = Oracle.Asset({
             isValid: true,
             chainlinkPriceFeed: address(0),
@@ -71,7 +79,8 @@ contract HelperConfig is Script {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             assetType: Oracle.AssetType.CRYPTO,
             pool: Oracle.UniswapPool({
                 token0: address(mockUsdc),
@@ -80,7 +89,8 @@ contract HelperConfig is Script {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        MockPriceFeed mockPriceFeed = new MockPriceFeed(10, 1, address(weth), address(mockUsdc), wethAsset, usdcAsset);
+        MockPriceFeed mockPriceFeed =
+            new MockPriceFeed(10, 1, keccak256(abi.encode("ETH")), keccak256(abi.encode("USDC")), wethAsset, usdcAsset);
 
         anvilConfig = NetworkConfig({
             priceFeed: IPriceFeed(address(mockPriceFeed)),

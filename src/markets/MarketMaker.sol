@@ -36,7 +36,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     IProcessor processor;
 
     EnumerableSet.AddressSet private markets;
-    mapping(address indexToken => address market) public tokenToMarkets;
+    mapping(bytes32 assetId => address market) public tokenToMarkets;
     uint256[] private defaultAllocation;
 
     bool private isInitialised;
@@ -72,7 +72,6 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     }
 
     /// @dev Only MarketFactory
-    // q -> Do we want to use indexToken? This will require a new token for each market
     // We need to enable the use of synthetic markets
     // Can use an existing asset vault to attach multiple tokens to it, or
     // create a new asset vault for the token
@@ -81,59 +80,60 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     /// "MARKET"
     function createNewMarket(
         Pool.VaultConfig memory _vaultDetails,
-        address _indexToken, // use a bytes32 asset id instead???
+        bytes32 _assetId, // use a bytes32 asset id instead???
         bytes32 _priceId,
         Oracle.Asset memory _asset
-    ) external onlyAdmin returns (address marketAddress) {
-        if (_indexToken == address(0)) revert MarketMaker_InvalidAddress();
+    ) external nonReentrant onlyAdmin returns (address marketAddress) {
+        if (_assetId == bytes32(0)) revert MarketMaker_InvalidAsset();
         if (_priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
         if (_asset.baseUnit != 1e18 && _asset.baseUnit != 1e8 && _asset.baseUnit != 1e6) {
             revert MarketMaker_InvalidBaseUnit();
         }
-        if (tokenToMarkets[_indexToken] != address(0)) revert MarketMaker_MarketExists();
+        if (tokenToMarkets[_assetId] != address(0)) revert MarketMaker_MarketExists();
         if (_vaultDetails.priceFeed != address(priceFeed)) revert MarketMaker_InvalidPriceFeed();
         if (_vaultDetails.processor != address(processor)) revert MarketMaker_InvalidProcessor();
 
         // Set Up Price Oracle
-        priceFeed.supportAsset(_indexToken, _asset);
+        priceFeed.supportAsset(_assetId, _asset);
         // Create new Market contract
-        Market market = new Market(_vaultDetails, defaultConfig, _indexToken, address(roleStorage));
+        Market market = new Market(_vaultDetails, defaultConfig, _assetId, address(roleStorage));
         // Cache
         marketAddress = address(market);
         // Add to Storage
-        markets.add(marketAddress);
-        tokenToMarkets[_indexToken] = marketAddress;
+        bool success = markets.add(marketAddress);
+        if (!success) revert MarketMaker_FailedToAddMarket();
+        tokenToMarkets[_assetId] = marketAddress;
 
         // Fire Event
-        emit MarketCreated(marketAddress, _indexToken, _priceId);
+        emit MarketCreated(marketAddress, _assetId, _priceId);
     }
 
     function addTokenToMarket(
         IMarket market,
-        address _indexToken,
+        bytes32 _assetId,
         bytes32 _priceId,
         Oracle.Asset memory _asset,
         uint256[] calldata _newAllocations
-    ) external onlyAdmin {
-        if (_indexToken == address(0)) revert MarketMaker_InvalidAddress();
+    ) external onlyAdmin nonReentrant {
+        if (_assetId == bytes32(0)) revert MarketMaker_InvalidAsset();
         if (_priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
         if (_asset.baseUnit != 1e18 && _asset.baseUnit != 1e8 && _asset.baseUnit != 1e6) {
             revert MarketMaker_InvalidBaseUnit();
         }
-        if (tokenToMarkets[_indexToken] != address(0)) revert MarketMaker_MarketExists();
+        if (tokenToMarkets[_assetId] != address(0)) revert MarketMaker_MarketExists();
         if (!markets.contains(address(market))) revert MarketMaker_MarketDoesNotExist();
 
         // Set Up Price Oracle
-        priceFeed.supportAsset(_indexToken, _asset);
+        priceFeed.supportAsset(_assetId, _asset);
         // Cache
         address marketAddress = address(market);
         // Add to Storage
-        tokenToMarkets[_indexToken] = marketAddress;
+        tokenToMarkets[_assetId] = marketAddress;
         // Add to Market
-        market.addToken(defaultConfig, _indexToken, _newAllocations);
+        market.addToken(defaultConfig, _assetId, _newAllocations);
 
         // Fire Event
-        emit TokenAddedToMarket(marketAddress, _indexToken, _priceId);
+        emit TokenAddedToMarket(marketAddress, _assetId, _priceId);
     }
 
     function getMarkets() external view returns (address[] memory) {

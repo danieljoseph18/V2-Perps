@@ -99,12 +99,12 @@ library Order {
         if (request.user == address(0)) revert Order_InvalidRequestKey();
         if (_feeReceiver == address(0)) revert Order_InvalidFeeReceiver();
         // Get the asset and validate trading is enabled
-        Oracle.validateTradingHours(priceFeed, request.input.indexToken, _isTradingEnabled);
+        Oracle.validateTradingHours(priceFeed, request.input.assetId, _isTradingEnabled);
         // Fetch and validate price
         state = retrieveTokenPrices(
             priceFeed,
             state,
-            request.input.indexToken,
+            request.input.assetId,
             request.requestBlock,
             request.input.isLong,
             request.input.isIncrease,
@@ -114,7 +114,7 @@ library Order {
         if (request.input.isLimit) Position.checkLimitPrice(state.indexPrice, request.input);
 
         // state Variables
-        state.market = IMarket(marketMaker.tokenToMarkets(request.input.indexToken));
+        state.market = IMarket(marketMaker.tokenToMarkets(request.input.assetId));
         state.collateralDeltaUsd = request.input.isIncrease
             ? mulDiv(request.input.collateralDelta, state.collateralPrice, state.collateralBaseUnit).toInt256()
             : -mulDiv(request.input.collateralDelta, state.collateralPrice, state.collateralBaseUnit).toInt256();
@@ -126,7 +126,7 @@ library Order {
 
             MarketUtils.validateAllocation(
                 state.market,
-                request.input.indexToken,
+                request.input.assetId,
                 request.input.sizeDelta,
                 state.collateralPrice,
                 state.collateralBaseUnit,
@@ -147,7 +147,7 @@ library Order {
         if (_conditionals.stopLossSet) {
             stopLossOrder = Position.Request({
                 input: Position.Input({
-                    indexToken: _position.indexToken,
+                    assetId: _position.assetId,
                     collateralToken: _position.collateralToken,
                     collateralDelta: mulDiv(_position.collateralAmount, _conditionals.stopLossPercentage, PRECISION),
                     sizeDelta: mulDiv(_position.positionSize, _conditionals.stopLossPercentage, PRECISION),
@@ -177,7 +177,7 @@ library Order {
         if (_conditionals.takeProfitSet) {
             takeProfitOrder = Position.Request({
                 input: Position.Input({
-                    indexToken: _position.indexToken,
+                    assetId: _position.assetId,
                     collateralToken: _position.collateralToken,
                     collateralDelta: mulDiv(_position.collateralAmount, _conditionals.takeProfitPercentage, PRECISION),
                     sizeDelta: mulDiv(_position.positionSize, _conditionals.takeProfitPercentage, PRECISION),
@@ -225,14 +225,14 @@ library Order {
             state.collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
         }
 
-        state.market = marketMaker.tokenToMarkets(_trade.indexToken);
+        state.market = marketMaker.tokenToMarkets(_trade.assetId);
         if (state.market == address(0)) revert Order_MarketDoesNotExist();
 
-        state.positionKey = keccak256(abi.encode(_trade.indexToken, msg.sender, _trade.isLong));
+        state.positionKey = keccak256(abi.encode(_trade.assetId, msg.sender, _trade.isLong));
 
-        state.indexRefPrice = Oracle.getReferencePrice(priceFeed, priceFeed.getAsset(_trade.indexToken));
+        state.indexRefPrice = Oracle.getReferencePrice(priceFeed.getAsset(_trade.assetId));
 
-        state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.indexToken);
+        state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.assetId);
 
         if (_trade.isLimit) {
             if (_trade.limitPrice == 0) revert Order_InvalidLimitPrice();
@@ -262,9 +262,7 @@ library Order {
             checkMinCollateral(
                 _trade.collateralDelta, _state.collateralRefPrice, _state.collateralBaseUnit, _state.minCollateralUsd
             );
-            Position.checkLeverage(
-                IMarket(_state.market), _trade.indexToken, _trade.sizeDelta, _state.collateralDeltaUsd
-            );
+            Position.checkLeverage(IMarket(_state.market), _trade.assetId, _trade.sizeDelta, _state.collateralDeltaUsd);
         } else if (_state.requestType == Position.RequestType.POSITION_INCREASE) {
             // Clear the Conditionals
             _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
@@ -283,7 +281,7 @@ library Order {
             // subtract collateral delta usd
             _state.collateralAmountUsd += _state.collateralDeltaUsd;
             // chcek it doesnt go below min leverage
-            Position.checkLeverage(IMarket(_state.market), _trade.indexToken, _positionSize, _state.collateralAmountUsd);
+            Position.checkLeverage(IMarket(_state.market), _trade.assetId, _positionSize, _state.collateralAmountUsd);
             // Clear the Conditionals
             _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
         } else if (_state.requestType == Position.RequestType.COLLATERAL_DECREASE) {
@@ -298,7 +296,7 @@ library Order {
             // subtract collateral delta usd
             _state.collateralAmountUsd -= _state.collateralDeltaUsd;
             // chcek it doesnt go below min leverage
-            Position.checkLeverage(IMarket(_state.market), _trade.indexToken, _positionSize, _state.collateralAmountUsd);
+            Position.checkLeverage(IMarket(_state.market), _trade.assetId, _positionSize, _state.collateralAmountUsd);
             // Clear the Conditionals
             _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
         } else {
@@ -337,7 +335,7 @@ library Order {
         // Check the Leverage
         Position.checkLeverage(
             _state.market,
-            _params.request.input.indexToken,
+            _params.request.input.assetId,
             _position.positionSize,
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit) // Collat in USD
         );
@@ -368,7 +366,7 @@ library Order {
         // Check the Leverage
         Position.checkLeverage(
             _state.market,
-            _params.request.input.indexToken,
+            _params.request.input.assetId,
             _position.positionSize,
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
@@ -405,7 +403,7 @@ library Order {
         // Check the Position's Leverage is Valid
         Position.checkLeverage(
             _state.market,
-            _params.request.input.indexToken,
+            _params.request.input.assetId,
             _params.request.input.sizeDelta,
             _state.collateralDeltaUsd.abs()
         );
@@ -449,7 +447,7 @@ library Order {
         // Check the Leverage
         Position.checkLeverage(
             _state.market,
-            _params.request.input.indexToken,
+            _params.request.input.assetId,
             _position.positionSize, // @audit - should we use latest price?
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
@@ -544,7 +542,7 @@ library Order {
         // Borrowing Fees
         _position.borrowingParams.feesOwed = Borrowing.getTotalCollateralFeesOwed(_position, _state);
         (_position.borrowingParams.lastLongCumulativeBorrowFee, _position.borrowingParams.lastShortCumulativeBorrowFee)
-        = _position.market.getCumulativeBorrowFees(_position.indexToken);
+        = _position.market.getCumulativeBorrowFees(_position.assetId);
         return _position;
     }
 
@@ -621,7 +619,7 @@ library Order {
         // Calculate and subtract the funding fee
         (int256 fundingFeeUsd, int256 nextFundingAccrued) = Funding.getFeeForPositionChange(
             _state.market,
-            _params.request.input.indexToken,
+            _params.request.input.assetId,
             _state.indexPrice,
             _params.request.input.sizeDelta,
             _position.lastFundingAccrued
@@ -679,7 +677,7 @@ library Order {
     function retrieveTokenPrices(
         IPriceFeed priceFeed,
         ExecutionState memory _state,
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _requestBlock,
         bool _isLong,
         bool _isIncrease,
@@ -691,14 +689,14 @@ library Order {
 
         // Fetch index price based on order type and direction
         _state.indexPrice = _fetchLatest
-            ? Oracle.getLatestPrice(priceFeed, _indexToken, maximizePrice)
+            ? Oracle.getLatestPrice(priceFeed, _assetId, maximizePrice)
             : _isLong
                 ? _isIncrease
-                    ? Oracle.getMaxPrice(priceFeed, _indexToken, priceFetchBlock)
-                    : Oracle.getMinPrice(priceFeed, _indexToken, priceFetchBlock)
+                    ? Oracle.getMaxPrice(priceFeed, _assetId, priceFetchBlock)
+                    : Oracle.getMinPrice(priceFeed, _assetId, priceFetchBlock)
                 : _isIncrease
-                    ? Oracle.getMinPrice(priceFeed, _indexToken, priceFetchBlock)
-                    : Oracle.getMaxPrice(priceFeed, _indexToken, priceFetchBlock);
+                    ? Oracle.getMinPrice(priceFeed, _assetId, priceFetchBlock)
+                    : Oracle.getMaxPrice(priceFeed, _assetId, priceFetchBlock);
 
         if (_state.indexPrice == 0) revert Order_InvalidPriceRetrieval();
 
@@ -710,7 +708,7 @@ library Order {
         _state.collateralPrice = _isLong ? _state.longMarketTokenPrice : _state.shortMarketTokenPrice;
         _state.collateralBaseUnit = _isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
 
-        _state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexToken);
+        _state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _assetId);
 
         return _state;
     }

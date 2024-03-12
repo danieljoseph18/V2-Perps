@@ -95,4 +95,6 @@ interface IVault {
     error Vault_InvalidFeePercentage();
     error Vault_InsufficientAvailableTokens();
     error Vault_InvalidUnwrapToken();
+    error Vault_FailedToAddDeposit();
+    error Vault_FailedToAddWithdrawal();
 }

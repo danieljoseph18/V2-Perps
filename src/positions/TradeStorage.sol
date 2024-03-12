@@ -27,10 +27,11 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {Order} from "./Order.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Invariant} from "../libraries/Invariant.sol";
+import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 
 /// @dev Needs TradeStorage Role & Fee Accumulator
 /// @dev Need to add liquidity reservation for positions
-contract TradeStorage is ITradeStorage, RoleValidation {
+contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SignedMath for int256;
 
@@ -98,7 +99,8 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         // Check if the Order already exists
         if (orderSet.contains(orderKey)) revert TradeStorage_OrderAlreadyExists();
         // Add the Order to the Set
-        orderSet.add(orderKey);
+        bool success = orderSet.add(orderKey);
+        if (!success) revert TradeStorage_OrderAdditionFailed();
         orders[orderKey] = _request;
         // Fire Event
         emit OrderRequestCreated(orderKey, _request);
@@ -153,6 +155,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     function executeCollateralIncrease(Position.Execution memory _params, Order.ExecutionState memory _state)
         external
         onlyProcessor
+        nonReentrant
     {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
@@ -183,6 +186,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     function executeCollateralDecrease(Position.Execution memory _params, Order.ExecutionState memory _state)
         external
         onlyProcessor
+        nonReentrant
     {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
@@ -219,6 +223,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     function createNewPosition(Position.Execution memory _params, Order.ExecutionState memory _state)
         external
         onlyProcessor
+        nonReentrant
     {
         // Check the Position doesn't exist
         bytes32 positionKey = Position.generateKey(_params.request);
@@ -252,7 +257,8 @@ contract TradeStorage is ITradeStorage, RoleValidation {
         );
         // Update Final Storage
         openPositions[positionKey] = position;
-        openPositionKeys[_params.request.market][position.isLong].add(positionKey);
+        bool success = openPositionKeys[_params.request.market][position.isLong].add(positionKey);
+        if (!success) revert TradeStorage_PositionAdditionFailed();
         // Fire Event
         emit PositionCreated(positionKey, position);
     }
@@ -261,6 +267,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     function increaseExistingPosition(Position.Execution memory _params, Order.ExecutionState memory _state)
         external
         onlyProcessor
+        nonReentrant
     {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
@@ -300,6 +307,7 @@ contract TradeStorage is ITradeStorage, RoleValidation {
     function decreaseExistingPosition(Position.Execution calldata _params, Order.ExecutionState memory _state)
         external
         onlyProcessor
+        nonReentrant
     {
         // Check the Position exists
         bytes32 positionKey = Position.generateKey(_params.request);
@@ -400,13 +408,15 @@ contract TradeStorage is ITradeStorage, RoleValidation {
 
     function _createStopLoss(Position.Request memory _stopLoss) internal returns (bytes32 stopLossKey) {
         stopLossKey = Position.generateOrderKey(_stopLoss);
-        limitOrderKeys.add(stopLossKey);
+        bool success = limitOrderKeys.add(stopLossKey);
+        if (!success) revert TradeStorage_KeyAdditionFailed();
         orders[stopLossKey] = _stopLoss;
     }
 
     function _createTakeProfit(Position.Request memory _takeProfit) internal returns (bytes32 takeProfitKey) {
         takeProfitKey = Position.generateOrderKey(_takeProfit);
-        limitOrderKeys.add(takeProfitKey);
+        bool success = limitOrderKeys.add(takeProfitKey);
+        if (!success) revert TradeStorage_KeyAdditionFailed();
         orders[takeProfitKey] = _takeProfit;
     }
 

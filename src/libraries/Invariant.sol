@@ -147,7 +147,7 @@ library Invariant {
             sigBefore = keccak256(
                 abi.encode(
                     _positionBefore.market,
-                    _positionBefore.indexToken,
+                    _positionBefore.assetId,
                     _positionBefore.user,
                     _positionBefore.collateralToken,
                     _positionBefore.isLong,
@@ -161,7 +161,7 @@ library Invariant {
             sigAfter = keccak256(
                 abi.encode(
                     _positionAfter.market,
-                    _positionAfter.indexToken,
+                    _positionAfter.assetId,
                     _positionAfter.user,
                     _positionAfter.collateralToken,
                     _positionAfter.isLong,
@@ -207,7 +207,7 @@ library Invariant {
             sigBefore = keccak256(
                 abi.encode(
                     _positionBefore.market,
-                    _positionBefore.indexToken,
+                    _positionBefore.assetId,
                     _positionBefore.user,
                     _positionBefore.collateralToken,
                     _positionBefore.isLong,
@@ -221,7 +221,7 @@ library Invariant {
             sigAfter = keccak256(
                 abi.encode(
                     _positionAfter.market,
-                    _positionAfter.indexToken,
+                    _positionAfter.assetId,
                     _positionAfter.user,
                     _positionAfter.collateralToken,
                     _positionAfter.isLong,

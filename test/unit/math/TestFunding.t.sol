@@ -23,6 +23,7 @@ import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 
 contract TestFunding is Test {
     RoleStorage roleStorage;
@@ -171,7 +172,7 @@ contract TestFunding is Test {
 
     /**
      * Config:
-     * maxVelocity: 0.0003e18, // 0.03%
+     * maxVelocity: 0.09e18, // 9%
      * skewScale: 1_000_000e18 // 1 Mil USD
      */
     function testVelocityCalculationForDifferentSkews() public setUpMarkets {
@@ -185,156 +186,272 @@ contract TestFunding is Test {
         /**
          * proportional skew = $500,000 / $1,000,000 = 0.5
          * bounded skew = 0.5
-         * velocity = 0.5 / 0.0003 = 1666.66 (rec)
+         * velocity = 0.5 * 0.09 = 0.045
          */
-        int256 expectedHeavyLongVelocity = 0.00015e18;
+        int256 expectedHeavyLongVelocity = 0.045e18;
         assertEq(heavyLongVelocity, expectedHeavyLongVelocity);
         // Calculate Heavy Short Velocity
         int256 heavyShortVelocity = Funding.getCurrentVelocity(market, weth, heavyShort);
-        int256 expectedHeavyShortVelocity = -0.00015e18;
+        /**
+         * proportional skew = -$500,000 / $1,000,000 = -0.5
+         * bounded skew = -0.5
+         * velocity = -0.5 * 0.09 = -0.045
+         */
+        int256 expectedHeavyShortVelocity = -0.045e18;
         assertEq(heavyShortVelocity, expectedHeavyShortVelocity);
         // Calculate Balanced Long Velocity
         int256 balancedLongVelocity = Funding.getCurrentVelocity(market, weth, balancedLong);
-        int256 expectedBalancedLongVelocity = 0.0000003e18;
+        /**
+         * proportional skew = $1,000 / $1,000,000 = 0.001
+         * bounded skew = 0.001
+         * velocity = 0.001 * 0.09 = 0.00009
+         */
+        int256 expectedBalancedLongVelocity = 0.00009e18;
         assertEq(balancedLongVelocity, expectedBalancedLongVelocity);
         // Calculate Balanced Short Velocity
         int256 balancedShortVelocity = Funding.getCurrentVelocity(market, weth, balancedShort);
-        int256 expectedBalancedShortVelocity = -0.0000003e18;
+        /**
+         * proportional skew = -$1,000 / $1,000,000 = -0.001
+         * bounded skew = -0.001
+         * velocity = -0.001 * 0.09 = -0.00009
+         */
+        int256 expectedBalancedShortVelocity = -0.00009e18;
         assertEq(balancedShortVelocity, expectedBalancedShortVelocity);
     }
 
-    function testSkewCalculationForDifferentSkews() public setUpMarkets {
-        // open and execute a long to skew it long
-        Position.Input memory input = Position.Input({
-            indexToken: weth,
-            collateralToken: weth,
-            collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
-            limitPrice: 0,
-            maxSlippage: 0.4e18,
-            executionFee: 0.01 ether,
-            isLong: true,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: true,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-        // Execute the Position
-        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
-
-        vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-
+    function testSkewCalculationForDifferentSkews(uint256 _longOi, uint256 _shortOi) public setUpMarkets {
+        _longOi = bound(_longOi, 1e30, 1_000_000_000_000e30); // Bound between $1 and $1 Trillion
+        _shortOi = bound(_shortOi, 1e30, 1_000_000_000_000e30); // Bound between $1 and $1 Trillion
+        // Mock Fuzz long & short Oi
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(Market.getOpenInterest.selector, weth, true), abi.encode(_longOi)
+        );
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(Market.getOpenInterest.selector, weth, false), abi.encode(_shortOi)
+        );
+        // Skew should be long oi - short oi
         int256 skew = Funding.calculateSkewUsd(market, weth);
-        assertEq(skew, 10_000e18);
+        int256 expectedSkew = int256(_longOi) - int256(_shortOi);
+        assertEq(skew, expectedSkew);
+    }
 
-        // open and execute a short to skew it short
-        input = Position.Input({
-            indexToken: weth,
-            collateralToken: usdc,
-            collateralDelta: 2000e6,
-            sizeDelta: 8 ether,
-            limitPrice: 0,
-            maxSlippage: 0.4e18,
-            executionFee: 0.01 ether,
-            isLong: false,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: false,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.startPrank(USER);
-        MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-        vm.stopPrank();
-        // Execute the Position
-        orderKey = tradeStorage.getOrderAtIndex(0, false);
-        vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+    function testGettingTheCurrentFundingRateChangesOverTimeWithVelocity() public setUpMarkets {
+        // Mock an existing rate and velocity
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(Market.getFundingRates.selector, weth), abi.encode(0, 0.0025e18)
+        );
+        // Mock the lastFundingUpdate to block timestamp
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, weth),
+            abi.encode(block.timestamp)
+        );
+        // get current funding rate
+        int256 currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        /**
+         * currentFundingRate = 0 + 0.0025 * (0 / 86,400)
+         *                    = 0
+         */
+        assertEq(currentFundingRate, 0);
 
-        skew = Funding.calculateSkewUsd(market, weth);
-        assertEq(skew, -10_000e18);
+        // Pass some time
+        vm.warp(block.timestamp + 10_000);
+        vm.roll(block.number + 1);
 
-        // open and execute a long to balance it
-        input = Position.Input({
-            indexToken: weth,
-            collateralToken: weth,
-            collateralDelta: 0.5 ether,
-            sizeDelta: 4 ether,
-            limitPrice: 0,
-            maxSlippage: 0.4e18,
-            executionFee: 0.01 ether,
-            isLong: true,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: true,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
-        // Execute the Position
-        orderKey = tradeStorage.getOrderAtIndex(0, false);
-        vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        // get current funding rate
+        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        /**
+         * currentFundingRate = 0 + 0.0025 * (10,000 / 86,400)
+         *                    = 0 + 0.0025 * 0.11574074
+         *                    = 0.00028935185
+         */
+        assertEq(currentFundingRate, 289351851851851);
 
-        skew = Funding.calculateSkewUsd(market, weth);
-        assertEq(skew, 0);
+        // Pass some time
+        vm.warp(block.timestamp + 10_000);
+        vm.roll(block.number + 1);
 
-        // open and execute a short to heavily skew
-        input = Position.Input({
-            indexToken: weth,
-            collateralToken: usdc,
-            collateralDelta: 10_000e6,
-            sizeDelta: 20 ether,
-            limitPrice: 0,
-            maxSlippage: 0.4e18,
-            executionFee: 0.01 ether,
-            isLong: false,
-            isLimit: false,
-            isIncrease: true,
-            shouldWrap: false,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.prank(USER);
-        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
-        // Execute the Position
-        orderKey = tradeStorage.getOrderAtIndex(0, false);
-        vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        // get current funding rate
+        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        /**
+         * currentFundingRate = 0 + 0.0025 * (20,000 / 86,400)
+         *                    = 0 + 0.0025 * 0.23148148
+         *                    = 0.0005787037
+         */
+        assertEq(currentFundingRate, 578703703703703);
 
-        skew = Funding.calculateSkewUsd(market, weth);
-        assertEq(skew, -50_000e18);
+        // Pass some time
+        vm.warp(block.timestamp + 10_000);
+        vm.roll(block.number + 1);
+
+        // get current funding rate
+        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+
+        /**
+         * currentFundingRate = 0 + 0.0025 * (30,000 / 86,400)
+         *                    = 0 + 0.0025 * 0.34722222
+         *                    = 0.00086805555
+         */
+        assertEq(currentFundingRate, 868055555555555);
+    }
+
+    // Test funding trajectory with sign flip
+    function testGettingTheCurrentFundingRateIsConsistentAfterASignFlip() public setUpMarkets {
+        // Mock an existing negative rate and positive velocity
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getFundingRates.selector, weth),
+            abi.encode(-0.0005e18, 0.0025e18)
+        );
+        // Mock the lastFundingUpdate to block timestamp
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, weth),
+            abi.encode(block.timestamp)
+        );
+        // get current funding rate
+        int256 currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        /**
+         * currentFundingRate = -0.0005 + 0.0025 * (0 / 86,400)
+         *                    = -0.0005
+         */
+        assertEq(currentFundingRate, -0.0005e18);
+
+        // Pass some time
+        vm.warp(block.timestamp + 10_000);
+        vm.roll(block.number + 1);
+
+        // get current funding rate
+        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        /**
+         * currentFundingRate = -0.0005 + 0.0025 * (10,000 / 86,400)
+         *                    = -0.0005 + 0.0025 * 0.11574074
+         *                    = -0.0005 + 0.00028935185
+         *                    = -0.000210648148148
+         */
+        assertEq(currentFundingRate, -210648148148149);
+
+        // Pass some time
+        vm.warp(block.timestamp + 10_000);
+        vm.roll(block.number + 1);
+
+        // get current funding rate
+        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        /**
+         * currentFundingRate = -0.0005 + 0.0025 * (20,000 / 86,400)
+         *                    = -0.0005 + 0.0025 * 0.23148148
+         *                    = -0.0005 + 0.0005787037
+         *                    = 0.0000787037037037
+         */
+        assertEq(currentFundingRate, 78703703703703);
+
+        // Pass some time
+        vm.warp(block.timestamp + 10_000);
+        vm.roll(block.number + 1);
+
+        // get current funding rate
+        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+
+        /**
+         * currentFundingRate = -0.0005 + 0.0025 * (30,000 / 86,400)
+         *                    = -0.0005 + 0.0025 * 0.34722222
+         *                    = -0.0005 + 0.00086805555
+         *                    = 0.0003680555555555
+         */
+        assertEq(currentFundingRate, 368055555555555);
+    }
+
+    struct PositionChange {
+        uint256 sizeDelta;
+        int256 entryFundingAccrued;
+        int256 fundingRate;
+        int256 fundingVelocity;
+        int256 fundingFeeUsd;
+        int256 nextFundingAccrued;
+    }
+
+    function testFuzzGetFeeForPositionChange(
+        uint256 _sizeDelta,
+        int256 _entryFundingAccrued,
+        int256 _fundingRate,
+        int256 _fundingVelocity
+    ) public setUpMarkets {
+        PositionChange memory values;
+
+        // Bound the inputs to reasonable ranges
+        values.sizeDelta = bound(_sizeDelta, 1e30, 1_000_000e30); // $1 - $1M
+        values.entryFundingAccrued = bound(_entryFundingAccrued, -1e30, 1e30); // Between -$1 and $1
+        values.fundingRate = bound(_fundingRate, -1e18, 1e18); // Between -100% and 100%
+        values.fundingVelocity = bound(_fundingVelocity, -1e18, 1e18); // Between -100% and 100%
+
+        // Mock the necessary market functions
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getFundingRates.selector, weth),
+            abi.encode(values.fundingRate, values.fundingVelocity)
+        );
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getFundingAccrued.selector, weth),
+            abi.encode(values.entryFundingAccrued)
+        );
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, weth),
+            abi.encode(block.timestamp)
+        );
+
+        // Pass some time
+        vm.warp(block.timestamp + 10_000);
+        vm.roll(block.number + 1);
+
+        // Call the function with the fuzzed inputs
+        (values.fundingFeeUsd, values.nextFundingAccrued) =
+            Funding.getFeeForPositionChange(market, weth, 2500e30, values.sizeDelta, values.entryFundingAccrued);
+
+        // Assert that the outputs are within expected ranges
+        assertEq(
+            values.fundingFeeUsd,
+            mulDivSigned(int256(values.sizeDelta), values.nextFundingAccrued - values.entryFundingAccrued, 1e30)
+        );
+    }
+
+    function testFuzzRecompute(
+        int256 _fundingRate,
+        int256 _fundingVelocity,
+        int256 _entryFundingAccrued,
+        uint256 _indexPrice
+    ) public setUpMarkets {
+        // Bound inputs
+        _fundingRate = bound(_fundingRate, -1e18, 1e18); // Between -100% and 100%
+        _fundingVelocity = bound(_fundingVelocity, -1e18, 1e18); // Between -100% and 100%
+        _entryFundingAccrued = bound(_entryFundingAccrued, -1e30, 1e30); // Between -$1 and $1
+        _indexPrice = bound(_indexPrice, 100e30, 100_000e30);
+        // Mock the necessary market functions
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getFundingRates.selector, weth),
+            abi.encode(_fundingRate, _fundingVelocity)
+        );
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getFundingAccrued.selector, weth),
+            abi.encode(_entryFundingAccrued)
+        );
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, weth),
+            abi.encode(block.timestamp)
+        );
+
+        vm.warp(block.timestamp + 10_000);
+        vm.roll(block.number + 1);
+
+        // Call the function with the fuzzed input
+        (int256 nextFundingRate, int256 nextFundingAccruedUsd) = Funding.recompute(market, weth, _indexPrice);
+
+        // Check values are as expected
+        console2.log(nextFundingRate);
+        console2.log(nextFundingAccruedUsd);
     }
 }

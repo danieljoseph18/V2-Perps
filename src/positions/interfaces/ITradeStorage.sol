@@ -49,6 +49,9 @@ interface ITradeStorage {
     error TradeStorage_OrderDoesNotExist();
     error TradeStorage_PositionExists();
     error TradeStorage_NotLiquidatable();
+    error TradeStorage_OrderAdditionFailed();
+    error TradeStorage_PositionAdditionFailed();
+    error TradeStorage_KeyAdditionFailed();
 
     function initialise(
         uint256 _liquidationFee,

@@ -51,7 +51,7 @@ library Borrowing {
     // @audit - does the last update time affect this?
     function calculateRate(
         IMarket market,
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _collateralPrice,
@@ -60,16 +60,16 @@ library Borrowing {
     ) external view returns (uint256 rate) {
         BorrowingState memory state;
         // Calculate the new Borrowing Rate
-        state.config = market.getBorrowingConfig(_indexToken);
+        state.config = market.getBorrowingConfig(_assetId);
         state.borrowingFactor = ud(state.config.factor);
         if (_isLong) {
             // get the long open interest
-            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _indexToken, true));
+            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _assetId, true));
             // get the long pending pnl
-            state.pendingPnl = Pricing.getMarketPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
+            state.pendingPnl = Pricing.getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, true);
             // get the long pool balance
             state.poolBalance =
-                ud(MarketUtils.getPoolBalanceUsd(market, _indexToken, _collateralPrice, _collateralBaseUnit, true));
+                ud(MarketUtils.getPoolBalanceUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, true));
             // Adjust the OI by the Pending PNL
             if (state.pendingPnl > 0) {
                 state.openInterestUsd = state.openInterestUsd.add(ud(uint256(state.pendingPnl)));
@@ -81,10 +81,10 @@ library Borrowing {
             rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
         } else {
             // get the short open interest
-            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _indexToken, false));
+            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _assetId, false));
             // get the short pool balance
             state.poolBalance =
-                ud(MarketUtils.getPoolBalanceUsd(market, _indexToken, _collateralPrice, _collateralBaseUnit, false));
+                ud(MarketUtils.getPoolBalanceUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, false));
             // calculate the short rate
             state.adjustedOiExponent = state.openInterestUsd.powu(state.config.exponent);
             rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
@@ -124,11 +124,10 @@ library Borrowing {
     {
         // get cumulative borrowing fees since last update
         uint256 borrowFee = _position.isLong
-            ? market.getCumulativeBorrowFee(_position.indexToken, true)
-                - _position.borrowingParams.lastLongCumulativeBorrowFee
-            : market.getCumulativeBorrowFee(_position.indexToken, false)
+            ? market.getCumulativeBorrowFee(_position.assetId, true) - _position.borrowingParams.lastLongCumulativeBorrowFee
+            : market.getCumulativeBorrowFee(_position.assetId, false)
                 - _position.borrowingParams.lastShortCumulativeBorrowFee;
-        borrowFee += _calculatePendingFees(market, _position.indexToken, _position.isLong);
+        borrowFee += _calculatePendingFees(market, _position.assetId, _position.isLong);
         if (borrowFee == 0) {
             feesUsd = 0;
         } else {
@@ -138,14 +137,14 @@ library Borrowing {
 
     /// @dev Units: Fees as a percentage (e.g 0.03e18 = 3%)
     /// @dev Gets fees since last time the cumulative market rate was updated
-    function _calculatePendingFees(IMarket market, address _indexToken, bool _isLong)
+    function _calculatePendingFees(IMarket market, bytes32 _assetId, bool _isLong)
         internal
         view
         returns (uint256 pendingFees)
     {
-        uint256 borrowRate = market.getBorrowingRate(_indexToken, _isLong);
+        uint256 borrowRate = market.getBorrowingRate(_assetId, _isLong);
         if (borrowRate == 0) return 0;
-        uint256 timeElapsed = block.timestamp - market.getLastBorrowingUpdate(_indexToken);
+        uint256 timeElapsed = block.timestamp - market.getLastBorrowingUpdate(_assetId);
         if (timeElapsed == 0) return 0;
         pendingFees = borrowRate * timeElapsed;
     }

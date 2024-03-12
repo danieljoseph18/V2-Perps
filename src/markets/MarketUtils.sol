@@ -17,35 +17,31 @@ library MarketUtils {
 
     error MarketUtils_MaxOiExceeded();
 
-    function getOpenInterestUsd(IMarket market, address _indexToken, bool _isLong)
+    function getOpenInterestUsd(IMarket market, bytes32 _assetId, bool _isLong)
         public
         view
         returns (uint256 longOiUsd)
     {
-        return _isLong ? market.getOpenInterest(_indexToken, true) : market.getOpenInterest(_indexToken, false);
+        return _isLong ? market.getOpenInterest(_assetId, true) : market.getOpenInterest(_assetId, false);
     }
 
     function getTotalPoolBalanceUsd(
         IMarket market,
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice,
         uint256 _longBaseUnit,
         uint256 _shortBaseUnit
     ) public view returns (uint256 poolBalanceUsd) {
-        uint256 longPoolUsd = getPoolBalanceUsd(market, _indexToken, _longTokenPrice, _longBaseUnit, true);
-        uint256 shortPoolUsd = getPoolBalanceUsd(market, _indexToken, _shortTokenPrice, _shortBaseUnit, false);
+        uint256 longPoolUsd = getPoolBalanceUsd(market, _assetId, _longTokenPrice, _longBaseUnit, true);
+        uint256 shortPoolUsd = getPoolBalanceUsd(market, _assetId, _shortTokenPrice, _shortBaseUnit, false);
         poolBalanceUsd = longPoolUsd + shortPoolUsd;
     }
 
     // In Index Tokens
-    function getPoolBalance(IMarket market, address _indexToken, bool _isLong)
-        public
-        view
-        returns (uint256 poolAmount)
-    {
+    function getPoolBalance(IMarket market, bytes32 _assetId, bool _isLong) public view returns (uint256 poolAmount) {
         // get the allocation percentage
-        uint256 allocationPercentage = market.getAllocation(_indexToken);
+        uint256 allocationPercentage = market.getAllocation(_assetId);
         // get the total liquidity available for that side
         uint256 totalAvailableLiquidity = market.totalAvailableLiquidity(_isLong);
         // calculate liquidity allocated to the market for that side
@@ -54,64 +50,63 @@ library MarketUtils {
 
     function getPoolBalanceUsd(
         IMarket market,
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnits,
         bool _isLong
     ) public view returns (uint256 poolUsd) {
         // get the liquidity allocated to the market for that side
-        uint256 allocationInTokens = getPoolBalance(market, _indexToken, _isLong);
+        uint256 allocationInTokens = getPoolBalance(market, _assetId, _isLong);
         // convert to usd
         poolUsd = mulDiv(allocationInTokens, _collateralTokenPrice, _collateralBaseUnits);
     }
 
     function validateAllocation(
         IMarket market,
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _sizeDeltaUsd,
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external view {
         // Get Max OI for side
-        uint256 availableUsd =
-            getAvailableOiUsd(market, _indexToken, _collateralTokenPrice, _collateralBaseUnit, _isLong);
+        uint256 availableUsd = getAvailableOiUsd(market, _assetId, _collateralTokenPrice, _collateralBaseUnit, _isLong);
         // Check SizeDelta USD won't push the OI over the max
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 
     function getTotalAvailableOiUsd(
         IMarket market,
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice,
         uint256 _longBaseUnit,
         uint256 _shortBaseUnit
     ) external view returns (uint256 totalAvailableOiUsd) {
-        uint256 longOiUsd = getAvailableOiUsd(market, _indexToken, _longTokenPrice, _longBaseUnit, true);
-        uint256 shortOiUsd = getAvailableOiUsd(market, _indexToken, _shortTokenPrice, _shortBaseUnit, false);
+        uint256 longOiUsd = getAvailableOiUsd(market, _assetId, _longTokenPrice, _longBaseUnit, true);
+        uint256 shortOiUsd = getAvailableOiUsd(market, _assetId, _shortTokenPrice, _shortBaseUnit, false);
         totalAvailableOiUsd = longOiUsd + shortOiUsd;
     }
 
     /// @notice returns the available remaining open interest for a side in USD
     function getAvailableOiUsd(
         IMarket market,
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 availableOi) {
         // get the allocation and subtract by the markets reserveFactor
         uint256 remainingAllocationUsd =
-            getPoolBalanceUsd(market, _indexToken, _collateralTokenPrice, _collateralBaseUnit, _isLong);
-        uint256 reserveFactor = market.getReserveFactor(_indexToken);
+            getPoolBalanceUsd(market, _assetId, _collateralTokenPrice, _collateralBaseUnit, _isLong);
+        uint256 reserveFactor = market.getReserveFactor(_assetId);
         availableOi = remainingAllocationUsd - mulDiv(remainingAllocationUsd, reserveFactor, SCALAR);
     }
 
     // The pnl factor is the ratio of the pnl to the pool usd
     function getPnlFactor(
         IMarket market,
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _collateralPrice,
@@ -119,12 +114,12 @@ library MarketUtils {
         bool _isLong
     ) external view returns (int256 pnlFactor) {
         // get pool usd (if 0 return 0)
-        uint256 poolUsd = getPoolBalanceUsd(market, _indexToken, _collateralPrice, _collateralBaseUnit, _isLong);
+        uint256 poolUsd = getPoolBalanceUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, _isLong);
         if (poolUsd == 0) {
             return 0;
         }
         // get pnl
-        int256 pnl = Pricing.getMarketPnl(market, _indexToken, _indexPrice, _indexBaseUnit, _isLong);
+        int256 pnl = Pricing.getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, _isLong);
 
         uint256 factor = mulDiv(pnl.abs(), SCALAR, poolUsd);
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;

@@ -7,8 +7,9 @@ import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Oracle} from "./Oracle.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 
-contract PriceFeed is IPriceFeed, RoleValidation {
+contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
     IPyth pyth;
 
     uint256 public constant PRICE_PRECISION = 1e30;
@@ -26,131 +27,147 @@ contract PriceFeed is IPriceFeed, RoleValidation {
 
     uint256 public constant DEFAULT_SPREAD = 0.001e18; // 0.1%
 
-    address public longToken;
-    address public shortToken;
-    uint256 public secondaryPriceFee; // Fee for updating secondary prices
+    bytes32 public longTokenId;
+    bytes32 public shortTokenId;
+
+    uint256 public updateFee;
+
     uint256 public lastUpdateBlock; // Used to get cached prices
     address public sequencerUptimeFeed;
-
-    mapping(address token => Oracle.Asset asset) private assets;
+    // Asset ID is the Hash of the ticker symbol -> e.g keccak256(abi.encode("ETH"));
+    mapping(bytes32 assetId => Oracle.Asset asset) private assets;
     // To Store Price Data
-    mapping(address token => mapping(uint256 block => Oracle.Price price)) public prices;
-    // Not sure if need - review
-    mapping(address token => uint256 block) public lastSecondaryUpdateBlock;
-
-    // Array of tokens whose pricing comes from external nodes
-    address[] public alternativeAssets;
-    // array of tokenPrecision used in setCompactedPrices, saves L1 calldata gas costs
-    // if the token price will be sent with 3 decimals, then tokenPrecision for that token
-    // should be 10 ** 3
-    uint256 public tokenPrecision;
-
-    modifier validFee(bytes[] calldata _priceUpdateData) {
-        if (msg.value < pyth.getUpdateFee(_priceUpdateData)) revert PriceFeed_InsufficientFee();
-        _;
-    }
+    mapping(bytes32 assetId => mapping(uint256 block => Oracle.Price price)) public prices;
 
     constructor(
         address _pythContract,
-        address _longToken,
-        address _shortToken,
+        bytes32 _longTokenId,
+        bytes32 _shortTokenId,
         Oracle.Asset memory _longAsset,
         Oracle.Asset memory _shortAsset,
         address _sequencerUptimeFeed,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         pyth = IPyth(_pythContract);
-        longToken = _longToken;
-        shortToken = _shortToken;
-        assets[_longToken] = _longAsset;
-        assets[_shortToken] = _shortAsset;
+        longTokenId = _longTokenId;
+        shortTokenId = _shortTokenId;
+        assets[_longTokenId] = _longAsset;
+        assets[_shortTokenId] = _shortAsset;
         sequencerUptimeFeed = _sequencerUptimeFeed;
-        tokenPrecision = 1000;
     }
 
-    function supportAsset(address _token, Oracle.Asset memory _asset) external onlyMarketMaker {
-        assets[_token] = _asset;
+    function supportAsset(bytes32 _assetId, Oracle.Asset memory _asset) external onlyMarketMaker {
+        assets[_assetId] = _asset;
     }
 
-    function unsupportAsset(address _token) external onlyAdmin {
-        delete assets[_token];
+    function unsupportAsset(bytes32 _assetId) external onlyAdmin {
+        delete assets[_assetId];
     }
 
     function updateSequenceUptimeFeed(address _sequencerUptimeFeed) external onlyAdmin {
         sequencerUptimeFeed = _sequencerUptimeFeed;
     }
 
-    // @audit - how do we check the validity of price update data
-    // who can call?
-    // if status is unknown, invalidate
-    // Need to avoid precision loss
-    /// @dev Price update data must always contain long / short token prices
     /**
-     * audit - Need a primary and secondary strategy for each market / token that is listed.
-     * The primary strategy provides the main price to be used. E.g Pyth, Chainlink
-     * The secondary strategy provides a reference price to check the validity of the primary price.
+     * Asset ID = Keccak256(Asset Ticker) -> e.g keccak256(abi.encode("ETH"));
+     * Update Data -> Data to update price for either Pyth strategy or Off-chain strategy
+     * Argument Format:
+     * - Pyth Update Data: [bytes32 id, int64 price, uint64 conf, int32 expo, int64 emaPrice, uint64 emaConf, uint64 publishTime, uint64 prevPublishTime]
+     * - Off-chain Update Data: [uint64 indexPrice, uint64 longPrice, uint64 shortPrice, uint8 decimals]
+     * - Should be in the order (AssetUpdateData, LongTokenUpdateData, ShortTokenUpdateData)
      */
-    function signPriceData(address _token, bytes[] calldata _priceUpdateData)
-        external
-        payable
-        validFee(_priceUpdateData)
-    {
-        // Check if the token is whitelisted
-        Oracle.Asset memory indexAsset = assets[_token];
-        if (!indexAsset.isValid) revert PriceFeed_InvalidToken();
-        // Check Sequencer Uptime
+    // @audit - add gas rebates & payments to keepers
+    function signPrimaryPrice(bytes32 _assetId, bytes[] calldata _priceUpdateData) external payable onlyKeeper {
+        // If already signed, no need to sign again
+        if (prices[_assetId][block.number].price != 0) return;
+
+        // Check if the sequencer is up
         Oracle.isSequencerUp(this);
-        uint256 currentBlock = block.number;
-        // Check if the price has already been signed for _token
-        if (prices[_token][currentBlock].price != 0) {
-            // No need to check for Long / Short Token here
-            // If _token has been signed, it's safe to assume so have the Long/Short Tokens
-            return;
+
+        // Fetch the Asset
+        Oracle.Asset memory asset = assets[_assetId];
+        if (!asset.isValid) revert PriceFeed_InvalidToken();
+
+        // Parse the update data based on the settlement strategy
+        if (asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
+            // Pyth Update Data: [bytes32 id, int64 price, uint64 conf, int32 expo, int64 emaPrice, uint64 emaConf, uint64 publishTime, uint64 prevPublishTime]
+            if (msg.value < pyth.getUpdateFee(_priceUpdateData)) revert PriceFeed_InsufficientFee();
+            pyth.updatePriceFeeds{value: msg.value}(_priceUpdateData);
+
+            // Parse the Update Data
+            PythStructs.Price memory data = pyth.getPrice(asset.priceId);
+            Oracle.Price memory indexPrice = Oracle.parsePythData(data);
+
+            // Validate the parsed data
+            uint256 indexRefPrice = Oracle.getReferencePrice(asset);
+            if (asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+                // Check the Price is within range if it has a reference
+                Oracle.validatePriceRange(asset, indexPrice, indexRefPrice);
+            }
+
+            // Store the signed price in the prices mapping
+            prices[_assetId][block.number] = indexPrice;
+
+            // Sign the Long/Short prices if not already signed
+            if (prices[longTokenId][block.number].price == 0) {
+                Oracle.Asset memory longAsset = assets[longTokenId];
+                PythStructs.Price memory longData = pyth.getPrice(longAsset.priceId);
+                Oracle.Price memory longPrice = Oracle.parsePythData(longData);
+                // Reference price should always exist
+                uint256 longRefPrice = Oracle.getReferencePrice(longAsset);
+                Oracle.validatePriceRange(longAsset, longPrice, longRefPrice);
+                // Get ref price and validate price is within range
+                prices[longTokenId][block.number] = longPrice;
+            }
+
+            if (prices[shortTokenId][block.number].price == 0) {
+                Oracle.Asset memory shortAsset = assets[shortTokenId];
+                PythStructs.Price memory shortData = pyth.getPrice(shortAsset.priceId);
+                Oracle.Price memory shortPrice = Oracle.parsePythData(shortData);
+                // Reference price should always exist
+                uint256 shortRefPrice = Oracle.getReferencePrice(shortAsset);
+                Oracle.validatePriceRange(shortAsset, shortPrice, shortRefPrice);
+                // Get ref price and validate price is within range
+                prices[shortTokenId][block.number] = shortPrice;
+            }
+
+            // Pay the update fee to post the data
+            // TODO: Implement the fee payment logic
+        } else if (asset.primaryStrategy == Oracle.PrimaryStrategy.OFFCHAIN) {
+            // Parse the Update Data
+            (Oracle.Price memory indexPrice, Oracle.Price memory longPrice, Oracle.Price memory shortPrice) =
+                Oracle.parsePriceData(_priceUpdateData[0]);
+
+            // Validate the parsed data
+            if (asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+                uint256 indexRefPrice = Oracle.getReferencePrice(asset);
+                // Check the Price is within range if it has a reference
+                Oracle.validatePriceRange(asset, indexPrice, indexRefPrice);
+            }
+
+            // Store the signed price in the prices mapping
+            prices[_assetId][block.number] = indexPrice; // 100% Confidence
+
+            if (prices[longTokenId][block.number].price == 0) {
+                Oracle.Asset memory longAsset = assets[longTokenId];
+                // Reference price should always exist
+                uint256 longRefPrice = Oracle.getReferencePrice(longAsset);
+                Oracle.validatePriceRange(longAsset, longPrice, longRefPrice);
+                // Get ref price and validate price is within range
+                prices[longTokenId][block.number] = longPrice;
+            }
+
+            if (prices[shortTokenId][block.number].price == 0) {
+                Oracle.Asset memory shortAsset = assets[shortTokenId];
+                // Reference price should always exist
+                uint256 shortRefPrice = Oracle.getReferencePrice(shortAsset);
+                Oracle.validatePriceRange(shortAsset, shortPrice, shortRefPrice);
+                // Get ref price and validate price is within range
+                prices[shortTokenId][block.number] = shortPrice;
+            }
+        } else {
+            revert PriceFeed_InvalidPrimaryStrategy();
         }
-        // Update Storage
-        lastUpdateBlock = currentBlock;
-        // Update the Price Feeds
-        // @audit - need to receieve the fee from processor
-        pyth.updatePriceFeeds{value: msg.value}(_priceUpdateData);
-
-        // Store the price for the current block
-        PythStructs.Price memory data = pyth.getPrice(indexAsset.priceId);
-        Oracle.Price memory indexPrice = Oracle.deconstructPythPrice(data);
-
-        // Validate the Price
-        uint256 indexRefPrice = Oracle.getReferencePrice(this, indexAsset);
-        if (indexRefPrice > 0) {
-            // Check the Price is within range if it has a reference
-            Oracle.validatePriceRange(indexAsset, indexPrice, indexRefPrice);
-        }
-
-        // Store the Price Data in the Price Mapping
-        prices[_token][currentBlock] = indexPrice;
-
-        // Check if the Long/Short Tokens have been signed
-        if (prices[longToken][currentBlock].price == 0) {
-            Oracle.Asset memory longAsset = assets[longToken];
-            PythStructs.Price memory longData = pyth.getPrice(longAsset.priceId);
-            Oracle.Price memory longPrice = Oracle.deconstructPythPrice(longData);
-            // Reference price should always exist
-            uint256 longRefPrice = Oracle.getReferencePrice(this, longAsset);
-            Oracle.validatePriceRange(longAsset, longPrice, longRefPrice);
-            // Get ref price and validate price is within range
-            prices[longToken][currentBlock] = longPrice;
-        }
-
-        if (prices[shortToken][currentBlock].price == 0) {
-            Oracle.Asset memory shortAsset = assets[shortToken];
-            PythStructs.Price memory shortData = pyth.getPrice(shortAsset.priceId);
-            Oracle.Price memory shortPrice = Oracle.deconstructPythPrice(shortData);
-            // Reference price should always exist
-            uint256 shortRefPrice = Oracle.getReferencePrice(this, shortAsset);
-            Oracle.validatePriceRange(shortAsset, shortPrice, shortRefPrice);
-            // Get ref price and validate price is within range
-            prices[shortToken][currentBlock] = shortPrice;
-        }
-
-        emit PriceDataSigned(_token, currentBlock, data);
     }
 
     // Only used as Reference
@@ -164,12 +181,13 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         view
         returns (Oracle.Price memory longPrice, Oracle.Price memory shortPrice)
     {
-        PythStructs.Price memory longData = pyth.getPriceUnsafe(assets[longToken].priceId);
-        PythStructs.Price memory shortData = pyth.getPriceUnsafe(assets[shortToken].priceId);
-        longPrice = Oracle.deconstructPythPrice(longData);
-        shortPrice = Oracle.deconstructPythPrice(shortData);
+        PythStructs.Price memory longData = pyth.getPriceUnsafe(assets[longTokenId].priceId);
+        PythStructs.Price memory shortData = pyth.getPriceUnsafe(assets[shortTokenId].priceId);
+        longPrice = Oracle.parsePythData(longData);
+        shortPrice = Oracle.parsePythData(shortData);
     }
 
+    // For Pyth Settlement Strategy
     function createPriceFeedUpdateData(
         bytes32 id,
         int64 price,
@@ -197,76 +215,20 @@ contract PriceFeed is IPriceFeed, RoleValidation {
         priceFeedData = abi.encode(priceFeed, prevPublishTime);
     }
 
-    function setAlternativeAssets(address[] memory _alternativeAssets) external onlyAdmin {
-        alternativeAssets = _alternativeAssets;
+    // For Off-Chain Settlement Strategy
+    function encodePriceData(uint64 _indexPrice, uint64 _longPrice, uint64 _shortPrice, uint8 _decimals)
+        external
+        pure
+        returns (bytes memory offchainPriceData)
+    {
+        offchainPriceData = abi.encode(_indexPrice, _longPrice, _shortPrice, _decimals);
     }
 
-    function setTokenPrecision(uint256 _tokenPrecision) external onlyAdmin {
-        tokenPrecision = _tokenPrecision;
+    function getPrice(bytes32 _assetId, uint256 _block) external view returns (Oracle.Price memory) {
+        return prices[_assetId][_block];
     }
 
-    // Set the Price for a Single Asset
-    function setAssetPrice(address _token, uint256 _price, uint256 _block) external onlyProcessor {
-        _setPrice(_token, _price, _block);
-    }
-
-    // Set Prices for Alternative Assets - Gas Inefficient
-    function setAssetPrices(uint256[] memory _prices, uint256 _block) external onlyKeeper {
-        address[] memory tokens = alternativeAssets;
-        for (uint256 i = 0; i < tokens.length; ++i) {
-            address token = tokens[i];
-            _setPrice(token, _prices[i], _block);
-        }
-    }
-
-    // @audit - gas
-    function setPricesWithBits(uint256[] calldata _priceBits, uint256 _block) external onlyKeeper {
-        uint256 len = alternativeAssets.length;
-        uint256 loops = Math.ceilDiv(len, 8);
-        for (uint256 i = 0; i < loops; i++) {
-            uint256 start = i * 8;
-            uint256 end = start + 8;
-            if (end > len) {
-                end = len;
-            }
-            address[] memory assetsToSet = new address[](end - start);
-            for (uint256 j = start; j < end; j++) {
-                assetsToSet[j - start] = alternativeAssets[j];
-            }
-            _setPricesWithBits(assetsToSet, _priceBits[i], _block);
-        }
-    }
-
-    function _setPricesWithBits(address[] memory _assets, uint256 _priceBits, uint256 _block) private {
-        for (uint256 i = 0; i < 8; ++i) {
-            uint256 index = i;
-            if (index >= _assets.length) return;
-
-            uint256 startBit = i * 32;
-            uint256 price = (_priceBits >> startBit) & BITMASK_32;
-
-            address token = _assets[index];
-            _setPrice(token, (price * PRICE_PRECISION) / tokenPrecision, _block);
-        }
-    }
-
-    function _setPrice(address _token, uint256 _price, uint256 _block) private {
-        lastSecondaryUpdateBlock[_token] = _block;
-        uint256 spreadForToken = assets[_token].priceSpread;
-        if (spreadForToken == 0) spreadForToken = DEFAULT_SPREAD;
-        Oracle.Price memory price = Oracle.Price({price: _price, confidence: spreadForToken});
-        prices[_token][_block] = price;
-    }
-
-    function getPrice(address _token, uint256 _block) external view returns (Oracle.Price memory) {
-        return prices[_token][_block];
-    }
-
-    function getAsset(address _token) external view returns (Oracle.Asset memory) {
-        return assets[_token];
-    }
-
-    function getPrimaryUpdateFee(bytes[] calldata _priceUpdateData) external view returns (uint256) {
-        return pyth.getUpdateFee(_priceUpdateData);
+    function getAsset(bytes32 _assetId) external view returns (Oracle.Asset memory) {
+        return assets[_assetId];
     }
 }

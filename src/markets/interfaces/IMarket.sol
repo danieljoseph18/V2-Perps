@@ -156,59 +156,60 @@ interface IMarket is IVault {
     error Market_TokenDoesNotExist();
     error Market_PriceIsZero();
     error Market_InvalidCumulativeAllocation();
+    error Market_FailedToAddAssetId();
 
     /**
      * ================ Events ================
      */
-    event TokenAdded(address indexed indexToken, Config config);
-    event TokenRemoved(address indexed indexToken);
-    event MarketConfigUpdated(address indexed indexToken, Config config);
-    event AdlStateUpdated(address indexed indexToken, bool isFlaggedForAdl);
+    event TokenAdded(bytes32 indexed assetId, Config config);
+    event TokenRemoved(bytes32 indexed assetId);
+    event MarketConfigUpdated(bytes32 indexed assetId, Config config);
+    event AdlStateUpdated(bytes32 indexed assetId, bool isFlaggedForAdl);
     event FundingUpdated(int256 fundingRate, int256 fundingRateVelocity, int256 fundingAccruedUsd);
-    event BorrowingRatesUpdated(address indexed indexToken, uint256 longBorrowingRate, uint256 shortBorrowingRate);
+    event BorrowingRatesUpdated(bytes32 indexed assetId, uint256 longBorrowingRate, uint256 shortBorrowingRate);
     event AverageEntryPriceUpdated(
-        address indexed indexToken, uint256 longAverageEntryPriceUsd, uint256 shortAverageEntryPriceUsd
+        bytes32 indexed assetId, uint256 longAverageEntryPriceUsd, uint256 shortAverageEntryPriceUsd
     );
-    event OpenInterestUpdated(address indexed indexToken, uint256 longOpenInterestUsd, uint256 shortOpenInterestUsd);
+    event OpenInterestUpdated(bytes32 indexed assetId, uint256 longOpenInterestUsd, uint256 shortOpenInterestUsd);
 
     /**
      * ================ Functions ================
      */
-    function addToken(Config memory _config, address _indexToken, uint256[] calldata _newAllocations) external;
-    function removeToken(address _indexToken, uint256[] calldata _newAllocations) external;
-    function updateConfig(Config memory _config, address _indexToken) external;
-    function updateAdlState(address _indexToken, bool _isFlaggedForAdl, bool _isLong) external;
-    function updateFundingRate(address _indexToken, uint256 _indexPrice) external;
+    function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations) external;
+    function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external;
+    function updateConfig(Config memory _config, bytes32 _assetId) external;
+    function updateAdlState(bytes32 _assetId, bool _isFlaggedForAdl, bool _isLong) external;
+    function updateFundingRate(bytes32 _assetId, uint256 _indexPrice) external;
     function updateBorrowingRate(
-        address _indexToken,
+        bytes32 _assetId,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external;
-    function updateAverageEntryPrice(address _indexToken, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
+    function updateAverageEntryPrice(bytes32 _assetId, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
         external;
-    function updateOpenInterest(address _indexToken, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd) external;
-    function updateImpactPool(address _indexToken, int256 _priceImpactUsd) external;
+    function updateOpenInterest(bytes32 _assetId, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd) external;
+    function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external;
 
-    function getConfig(address _indexToken) external view returns (Config memory);
-    function getBorrowingConfig(address _indexToken) external view returns (BorrowingConfig memory);
-    function getFundingConfig(address _indexToken) external view returns (FundingConfig memory);
-    function getImpactConfig(address _indexToken) external view returns (ImpactConfig memory);
-    function getAdlConfig(address _indexToken) external view returns (AdlConfig memory);
-    function getReserveFactor(address _indexToken) external view returns (uint256);
-    function getMaxLeverage(address _indexToken) external view returns (uint32);
-    function getMaxPnlFactor(address _indexToken) external view returns (uint256);
-    function getAllocation(address _indexToken) external view returns (uint256);
-    function getOpenInterest(address _indexToken, bool _isLong) external view returns (uint256);
-    function getAverageEntryPrice(address _indexToken, bool _isLong) external view returns (uint256);
-    function getFundingAccrued(address _indexToken) external view returns (int256);
-    function getCumulativeBorrowFees(address _indexToken) external view returns (uint256, uint256);
-    function getCumulativeBorrowFee(address _indexToken, bool _isLong) external view returns (uint256);
-    function getLastFundingUpdate(address _indexToken) external view returns (uint48);
-    function getLastBorrowingUpdate(address _indexToken) external view returns (uint48);
-    function getFundingRates(address _indexToken) external view returns (int256, int256);
-    function getBorrowingRate(address _indexToken, bool _isLong) external view returns (uint256);
-    function getImpactPool(address _indexToken) external view returns (uint256);
+    function getConfig(bytes32 _assetId) external view returns (Config memory);
+    function getBorrowingConfig(bytes32 _assetId) external view returns (BorrowingConfig memory);
+    function getFundingConfig(bytes32 _assetId) external view returns (FundingConfig memory);
+    function getImpactConfig(bytes32 _assetId) external view returns (ImpactConfig memory);
+    function getAdlConfig(bytes32 _assetId) external view returns (AdlConfig memory);
+    function getReserveFactor(bytes32 _assetId) external view returns (uint256);
+    function getMaxLeverage(bytes32 _assetId) external view returns (uint32);
+    function getMaxPnlFactor(bytes32 _assetId) external view returns (uint256);
+    function getAllocation(bytes32 _assetId) external view returns (uint256);
+    function getOpenInterest(bytes32 _assetId, bool _isLong) external view returns (uint256);
+    function getAverageEntryPrice(bytes32 _assetId, bool _isLong) external view returns (uint256);
+    function getFundingAccrued(bytes32 _assetId) external view returns (int256);
+    function getCumulativeBorrowFees(bytes32 _assetId) external view returns (uint256, uint256);
+    function getCumulativeBorrowFee(bytes32 _assetId, bool _isLong) external view returns (uint256);
+    function getLastFundingUpdate(bytes32 _assetId) external view returns (uint48);
+    function getLastBorrowingUpdate(bytes32 _assetId) external view returns (uint48);
+    function getFundingRates(bytes32 _assetId) external view returns (int256, int256);
+    function getBorrowingRate(bytes32 _assetId, bool _isLong) external view returns (uint256);
+    function getImpactPool(bytes32 _assetId) external view returns (uint256);
 }

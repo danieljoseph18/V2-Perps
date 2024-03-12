@@ -68,10 +68,10 @@ library PriceImpact {
     ) external view returns (uint256 impactedPrice, int256 priceImpactUsd) {
         ExecutionState memory state;
 
-        state.impact = market.getImpactConfig(_request.input.indexToken);
+        state.impact = market.getImpactConfig(_request.input.assetId);
         // @audit - these are entry OI values -> do we need current values?
-        state.longOi = MarketUtils.getOpenInterestUsd(market, _request.input.indexToken, true);
-        state.shortOi = MarketUtils.getOpenInterestUsd(market, _request.input.indexToken, false);
+        state.longOi = MarketUtils.getOpenInterestUsd(market, _request.input.assetId, true);
+        state.shortOi = MarketUtils.getOpenInterestUsd(market, _request.input.assetId, false);
 
         if (_request.input.sizeDelta == 0) {
             revert PriceImpact_SizeDeltaIsZero();
@@ -80,7 +80,7 @@ library PriceImpact {
         // Calculate the impact on available liquidity
         uint256 availableOi = MarketUtils.getTotalAvailableOiUsd(
             market,
-            _request.input.indexToken,
+            _request.input.assetId,
             _orderState.longMarketTokenPrice,
             _orderState.shortMarketTokenPrice,
             Oracle.getLongBaseUnit(priceFeed), // @gas cache elsewhere?
@@ -139,7 +139,7 @@ library PriceImpact {
 
         // validate the impact delta on pool
         if (priceImpactUsd > 0) {
-            priceImpactUsd = _validateImpactDelta(market, _request.input.indexToken, priceImpactUsd);
+            priceImpactUsd = _validateImpactDelta(market, _request.input.assetId, priceImpactUsd);
         }
         // calculate the impacted price
         impactedPrice = _calculateImpactedPrice(_request.input.sizeDelta, _orderState.indexPrice, priceImpactUsd);
@@ -290,12 +290,12 @@ library PriceImpact {
         }
     }
 
-    function _validateImpactDelta(IMarket market, address _indexToken, int256 _priceImpactUsd)
+    function _validateImpactDelta(IMarket market, bytes32 _assetId, int256 _priceImpactUsd)
         internal
         view
         returns (int256)
     {
-        int256 impactPoolUsd = market.getImpactPool(_indexToken).toInt256();
+        int256 impactPoolUsd = market.getImpactPool(_assetId).toInt256();
         if (_priceImpactUsd > impactPoolUsd) {
             return impactPoolUsd;
         } else {

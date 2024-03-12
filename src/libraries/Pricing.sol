@@ -79,15 +79,13 @@ library Pricing {
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
-    function getMarketPnl(
-        IMarket market,
-        address _indexToken,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
-        bool _isLong
-    ) public view returns (int256 netPnl) {
-        uint256 openInterest = market.getOpenInterest(_indexToken, _isLong);
-        uint256 averageEntryPrice = market.getAverageEntryPrice(_indexToken, _isLong);
+    function getMarketPnl(IMarket market, bytes32 _assetId, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
+        public
+        view
+        returns (int256 netPnl)
+    {
+        uint256 openInterest = market.getOpenInterest(_assetId, _isLong);
+        uint256 averageEntryPrice = market.getAverageEntryPrice(_assetId, _isLong);
         if (openInterest == 0 || averageEntryPrice == 0) return 0;
         int256 priceDelta = _indexPrice.toInt256() - averageEntryPrice.toInt256();
         uint256 entryIndexAmount = mulDiv(openInterest, _indexBaseUnit, averageEntryPrice);
@@ -98,13 +96,13 @@ library Pricing {
         }
     }
 
-    function getNetMarketPnl(IMarket market, address _indexToken, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function getNetMarketPnl(IMarket market, bytes32 _assetId, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         view
         returns (int256)
     {
-        int256 longPnl = getMarketPnl(market, _indexToken, _indexPrice, _indexBaseUnit, true);
-        int256 shortPnl = getMarketPnl(market, _indexToken, _indexPrice, _indexBaseUnit, false);
+        int256 longPnl = getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, true);
+        int256 shortPnl = getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, false);
         return longPnl + shortPnl;
     }
 

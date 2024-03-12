@@ -79,12 +79,9 @@ contract GlobalMarketConfig is RoleValidation {
     /**
      * ========================= Market Config =========================
      */
-    function setMarketConfig(IMarket market, IMarket.Config memory _config, address _indexToken)
-        external
-        onlyModerator
-    {
+    function setMarketConfig(IMarket market, IMarket.Config memory _config, bytes32 _assetId) external onlyModerator {
         if (address(market) == address(0)) revert GlobalMarketConfig_MarketDoesNotExist();
-        market.updateConfig(_config, _indexToken);
+        market.updateConfig(_config, _assetId);
     }
 
     /**
