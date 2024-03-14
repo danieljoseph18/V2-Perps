@@ -17,11 +17,6 @@ library Oracle {
     using SignedMath for int32;
 
     error Oracle_SequencerDown();
-    error Oracle_ForexTradingDisabled();
-    error Oracle_EquityTradingDisabled();
-    error Oracle_CommodityTradingDisabled();
-    error Oracle_PredictionTradingDisabled();
-    error Oracle_UnrecognisedAssetType();
     error Oracle_InvalidTokenPrices();
     error Oracle_PriceTooHigh();
     error Oracle_PriceTooLow();
@@ -43,7 +38,6 @@ library Oracle {
         uint256 priceSpread; // Spread to Apply to Price if Alternative Asset (e.g $0.1 = 0.1e18)
         PrimaryStrategy primaryStrategy;
         SecondaryStrategy secondaryStrategy;
-        AssetType assetType;
         UniswapPool pool; // Uniswap V3 Pool
     }
 
@@ -70,26 +64,9 @@ library Oracle {
         NONE
     }
 
-    enum AssetType {
-        CRYPTO,
-        FX,
-        EQUITY,
-        COMMODITY,
-        PREDICTION,
-        NFT
-    }
-
     enum PoolType {
         UNISWAP_V3,
         UNISWAP_V2
-    }
-    // @audit - deprecate and move to market
-
-    struct TradingEnabled {
-        bool forex;
-        bool equity;
-        bool commodity;
-        bool prediction;
     }
 
     uint64 private constant MAX_PERCENTAGE = 1e18; // 100%
@@ -125,26 +102,6 @@ library Oracle {
         }
     }
 
-    function validateTradingHours(IPriceFeed priceFeed, bytes32 _assetId, TradingEnabled memory _isEnabled)
-        external
-        view
-    {
-        Asset memory asset = priceFeed.getAsset(_assetId);
-        if (asset.assetType == AssetType.CRYPTO) {
-            return;
-        } else if (asset.assetType == AssetType.FX) {
-            if (!_isEnabled.forex) revert Oracle_ForexTradingDisabled();
-        } else if (asset.assetType == AssetType.EQUITY) {
-            if (!_isEnabled.equity) revert Oracle_EquityTradingDisabled();
-        } else if (asset.assetType == AssetType.COMMODITY) {
-            if (!_isEnabled.commodity) revert Oracle_CommodityTradingDisabled();
-        } else if (asset.assetType == AssetType.PREDICTION) {
-            if (!_isEnabled.prediction) revert Oracle_PredictionTradingDisabled();
-        } else {
-            revert Oracle_UnrecognisedAssetType();
-        }
-    }
-
     function parsePythData(PythStructs.Price memory _priceData) external pure returns (Price memory data) {
         (data.price, data.confidence) = convertPythParams(_priceData);
     }
@@ -177,44 +134,34 @@ library Oracle {
         confidence = _priceData.conf * (10 ** (PRICE_DECIMALS - absExponent));
     }
 
-    function getPrice(IPriceFeed priceFeed, bytes32 _assetId, uint256 _block) public view returns (uint256 price) {
-        return priceFeed.getPrice(_assetId, _block).price;
+    function getPrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 price) {
+        return priceFeed.getPrimaryPrice(_assetId).price;
     }
 
-    function getMaxPrice(IPriceFeed priceFeed, bytes32 _assetId, uint256 _block)
-        public
-        view
-        returns (uint256 maxPrice)
-    {
-        Price memory priceData = priceFeed.getPrice(_assetId, _block);
+    function getMaxPrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 maxPrice) {
+        Price memory priceData = priceFeed.getPrimaryPrice(_assetId);
         maxPrice = priceData.price + priceData.confidence;
     }
 
-    function getMinPrice(IPriceFeed priceFeed, bytes32 _assetId, uint256 _block)
-        public
-        view
-        returns (uint256 minPrice)
-    {
-        Price memory priceData = priceFeed.getPrice(_assetId, _block);
+    function getMinPrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 minPrice) {
+        Price memory priceData = priceFeed.getPrimaryPrice(_assetId);
         minPrice = priceData.price - priceData.confidence;
     }
 
-    // Get the price for the current block
     function getLatestPrice(IPriceFeed priceFeed, bytes32 _assetId, bool _maximise)
         external
         view
         returns (uint256 price)
     {
-        return
-            _maximise ? getMaxPrice(priceFeed, _assetId, block.number) : getMinPrice(priceFeed, _assetId, block.number);
+        return _maximise ? getMaxPrice(priceFeed, _assetId) : getMinPrice(priceFeed, _assetId);
     }
 
-    function getMarketTokenPrices(IPriceFeed priceFeed, uint256 _blockNumber, bool _maximise)
+    function getMarketTokenPrices(IPriceFeed priceFeed, bool _maximise)
         external
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
-        (Price memory longPrices, Price memory shortPrices) = getMarketTokenPrices(priceFeed, _blockNumber);
+        (Price memory longPrices, Price memory shortPrices) = getMarketTokenPrices(priceFeed);
         if (_maximise) {
             longPrice = longPrices.price + longPrices.confidence;
             shortPrice = shortPrices.price + shortPrices.confidence;
@@ -225,13 +172,13 @@ library Oracle {
         if (longPrice == 0 || shortPrice == 0) revert Oracle_InvalidTokenPrices();
     }
 
-    function getMarketTokenPrices(IPriceFeed priceFeed, uint256 _blockNumber)
+    function getMarketTokenPrices(IPriceFeed priceFeed)
         public
         view
         returns (Price memory _longPrices, Price memory _shortPrices)
     {
-        _longPrices = priceFeed.getPrice(priceFeed.longTokenId(), _blockNumber);
-        _shortPrices = priceFeed.getPrice(priceFeed.shortTokenId(), _blockNumber);
+        _longPrices = priceFeed.getPrimaryPrice(priceFeed.longTokenId());
+        _shortPrices = priceFeed.getPrimaryPrice(priceFeed.shortTokenId());
     }
 
     function getLastMarketTokenPrices(IPriceFeed priceFeed)
@@ -290,10 +237,12 @@ library Oracle {
         if (_asset.secondaryStrategy == SecondaryStrategy.CHAINLINK) {
             if (_asset.chainlinkPriceFeed == address(0)) revert Oracle_InvalidChainlinkFeed();
             IChainlinkFeed chainlinkFeed = IChainlinkFeed(_asset.chainlinkPriceFeed);
-            (, int256 _price,, uint256 timestamp,) = chainlinkFeed.latestRoundData();
-            if (_price <= 0) revert Oracle_InvalidChainlinkPrice();
-            if (timestamp <= block.timestamp - _asset.heartbeatDuration) revert Oracle_StaleChainlinkPrice();
-            referencePrice = uint256(_price) * (10 ** (PRICE_DECIMALS - CHAINLINK_PRICE_DECIMALS));
+            (, int256 price,, uint256 timestamp,) = chainlinkFeed.latestRoundData();
+            if (price <= 0) revert Oracle_InvalidChainlinkPrice();
+            if (timestamp <= block.timestamp - _asset.heartbeatDuration && block.timestamp > timestamp) {
+                revert Oracle_StaleChainlinkPrice();
+            }
+            referencePrice = uint256(price) * (10 ** (PRICE_DECIMALS - CHAINLINK_PRICE_DECIMALS));
         } else if (_asset.secondaryStrategy == SecondaryStrategy.AMM) {
             referencePrice = getAmmPrice(_asset.pool);
         } else if (_asset.secondaryStrategy == SecondaryStrategy.NONE) {
@@ -315,10 +264,10 @@ library Oracle {
         return getBaseUnit(priceFeed, priceFeed.shortTokenId());
     }
 
-    function priceWasSigned(IPriceFeed priceFeed, uint256 _block, bool _isLong) external view returns (bool) {
+    function priceWasSigned(IPriceFeed priceFeed, bool _isLong) external view returns (bool) {
         // If long, get the long asset price, else short asset price
         bytes32 assetId = _isLong ? priceFeed.longTokenId() : priceFeed.shortTokenId();
-        return priceFeed.getPrice(assetId, _block).price != 0;
+        return priceFeed.getPrimaryPrice(assetId).price != 0;
     }
 
     /// @dev _baseUnit is the base unit of the token0

@@ -49,6 +49,9 @@ contract TestMarketAllocations is Test {
     bytes32 ethPriceId;
     bytes32 usdcPriceId;
 
+    bytes32 wethAssetId;
+    bytes32 usdcAssetId;
+
     bytes[] tokenUpdateData;
     uint256[] allocations;
 
@@ -82,6 +85,8 @@ contract TestMarketAllocations is Test {
         );
         tokenUpdateData.push(wethUpdateData);
         tokenUpdateData.push(usdcUpdateData);
+        wethAssetId = keccak256(abi.encode("ETH"));
+        usdcAssetId = keccak256(abi.encode("USDC"));
     }
 
     receive() external payable {}
@@ -101,8 +106,8 @@ contract TestMarketAllocations is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
                 token0: weth,
                 token1: usdc,
@@ -125,9 +130,9 @@ contract TestMarketAllocations is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        marketMaker.createNewMarket(wethVaultDetails, wethAssetId, ethPriceId, wethData);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(weth);
+        address wethMarket = marketMaker.tokenToMarkets(wethAssetId);
         market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
@@ -139,10 +144,10 @@ contract TestMarketAllocations is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit(market, depositKey, 0, tokenUpdateData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -154,16 +159,16 @@ contract TestMarketAllocations is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit(market, depositKey, 0, tokenUpdateData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(weth), 10000);
+        assertEq(market.getAllocation(wethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -177,9 +182,6 @@ contract TestMarketAllocations is Test {
      */
     function testCreatingMultipleAssetsUnderTheSameMarket() public {
         // create some assets
-        ERC20Mock randomErc = new ERC20Mock();
-        ERC20Mock randomErcTwo = new ERC20Mock();
-        ERC20Mock randomErcThree = new ERC20Mock();
         Pool.VaultConfig memory wethVaultDetails = Pool.VaultConfig({
             longToken: weth,
             shortToken: usdc,
@@ -203,8 +205,8 @@ contract TestMarketAllocations is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
                 token0: weth,
                 token1: usdc,
@@ -220,8 +222,8 @@ contract TestMarketAllocations is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.01e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)
         });
         Oracle.Asset memory asset2 = Oracle.Asset({
@@ -232,8 +234,8 @@ contract TestMarketAllocations is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.01e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)
         });
         Oracle.Asset memory asset3 = Oracle.Asset({
@@ -244,12 +246,13 @@ contract TestMarketAllocations is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.01e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)
         });
 
-        IMarket marketInterface = IMarket(marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData));
+        IMarket marketInterface =
+            IMarket(marketMaker.createNewMarket(wethVaultDetails, wethAssetId, ethPriceId, wethData));
 
         uint256 firstAllocation = 5000;
         uint256 secondAllocation = 5000;
@@ -262,9 +265,11 @@ contract TestMarketAllocations is Test {
         allocations.push(encodedAllocation);
 
         // split the allocation between the markets
-        marketMaker.addTokenToMarket(marketInterface, address(randomErc), ethPriceId, asset1, allocations);
+        marketMaker.addTokenToMarket(
+            marketInterface, keccak256(abi.encode("RANDOM_ERC")), ethPriceId, asset1, allocations
+        );
 
-        assertEq(marketInterface.getAllocation(address(randomErc)), 5000);
+        assertEq(marketInterface.getAllocation(keccak256(abi.encode("RANDOM_ERC"))), 5000);
 
         firstAllocation = 3334;
         secondAllocation = 3333;
@@ -275,9 +280,11 @@ contract TestMarketAllocations is Test {
 
         delete allocations;
         allocations.push(encodedAllocation);
-        marketMaker.addTokenToMarket(marketInterface, address(randomErcTwo), ethPriceId, asset2, allocations);
+        marketMaker.addTokenToMarket(
+            marketInterface, keccak256(abi.encode("RANDOM_ERC_2")), ethPriceId, asset2, allocations
+        );
 
-        assertEq(marketInterface.getAllocation(address(randomErcTwo)), 3333);
+        assertEq(marketInterface.getAllocation(keccak256(abi.encode("RANDOM_ERC_2"))), 3333);
 
         firstAllocation = 2500;
 
@@ -288,6 +295,8 @@ contract TestMarketAllocations is Test {
 
         delete allocations;
         allocations.push(encodedAllocation);
-        marketMaker.addTokenToMarket(marketInterface, address(randomErcThree), ethPriceId, asset3, allocations);
+        marketMaker.addTokenToMarket(
+            marketInterface, keccak256(abi.encode("RANDOM_ERC_3")), ethPriceId, asset3, allocations
+        );
     }
 }

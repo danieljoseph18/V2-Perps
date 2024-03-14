@@ -14,12 +14,10 @@ interface IPriceFeed {
     function unsupportAsset(bytes32 _assetId) external;
     function updateSequenceUptimeFeed(address _sequencerUptimeFeed) external;
     function signPrimaryPrice(bytes32 _assetId, bytes[] calldata _priceUpdateData) external payable;
-    function getPrice(bytes32 _assetId, uint256 _block) external view returns (Oracle.Price memory);
+    function clearPrimaryPrice(bytes32 _assetId) external;
     function getAsset(bytes32 _assetId) external view returns (Oracle.Asset memory);
-    function lastUpdateBlock() external view returns (uint256);
     function longTokenId() external view returns (bytes32);
     function shortTokenId() external view returns (bytes32);
-    function updateFee() external view returns (uint256);
     function sequencerUptimeFeed() external view returns (address);
     function getPriceUnsafe(Oracle.Asset memory _asset) external view returns (uint256 price, uint256 confidence);
     function createPriceFeedUpdateData(
@@ -40,4 +38,6 @@ interface IPriceFeed {
         external
         view
         returns (Oracle.Price memory longPrice, Oracle.Price memory shortPrice);
+    function getPrimaryPrice(bytes32 _assetId) external view returns (Oracle.Price memory);
+    function updateFee(bytes[] calldata _priceUpdateData) external view returns (uint256);
 }

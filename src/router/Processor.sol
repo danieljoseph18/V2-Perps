@@ -14,7 +14,7 @@
 //   |  __/|  _ < | || |\  | | |  ___) |  _ <
 //   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
 
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -82,6 +82,14 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         _;
     }
 
+    modifier signOraclePrices(bytes32 _assetId, bytes[] memory _priceUpdateData) {
+        uint256 updateFee = priceFeed.updateFee(_priceUpdateData);
+        if (msg.value < updateFee) revert Processor_PriceUpdateFee();
+        priceFeed.signPrimaryPrice{value: msg.value}(_assetId, _priceUpdateData);
+        _;
+        priceFeed.clearPrimaryPrice(_assetId);
+    }
+
     function updateGasLimits(uint256 _base, uint256 _deposit, uint256 _withdrawal, uint256 _position)
         external
         onlyAdmin
@@ -101,10 +109,12 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
     // @audit - what happens if the prices of many markets are stale?
-    function executeDeposit(IMarket market, bytes32 _key, int256 _cumulativeMarketPnl)
+    function executeDeposit(IMarket market, bytes32 _key, int256 _cumulativeMarketPnl, bytes[] memory _priceUpdateData)
         external
+        payable
         nonReentrant
         onlyKeeper
+        signOraclePrices(bytes32(0), _priceUpdateData)
     {
         uint256 initialGas = gasleft();
         if (_key == bytes32(0)) revert Processor_InvalidKey();
@@ -131,11 +141,12 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // Must make sure this value is valid. Get by looping through all current active markets
     // and summing their PNLs
     // @audit - what happens if the prices of many markets are stale?
-    function executeWithdrawal(IMarket market, bytes32 _key, int256 _cumulativeMarketPnl)
-        external
-        nonReentrant
-        onlyKeeper
-    {
+    function executeWithdrawal(
+        IMarket market,
+        bytes32 _key,
+        int256 _cumulativeMarketPnl,
+        bytes[] memory _priceUpdateData
+    ) external payable nonReentrant onlyKeeper signOraclePrices(bytes32(0), _priceUpdateData) {
         uint256 initialGas = gasleft();
         if (_key == bytes32(0)) revert Processor_InvalidKey();
         // Fetch the request
@@ -166,21 +177,16 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     /// @dev Only Keeper
     // @audit - Need a step to validate the trade doesn't put the market over its
     // allocation (_validateAllocation)
-    /// @param _isTradingEnabled: Flag for disabling trading of asset types outside of trading hours
     // @audit - should we charge for a decrease? Or only increase positions
     function executePosition(
         bytes32 _orderKey,
         address _feeReceiver,
-        Oracle.TradingEnabled memory _isTradingEnabled,
         bytes[] memory _priceUpdateData, // @audit - review if needed
-        bytes32 _assetId,
-        uint256 _indexPrice
-    ) external nonReentrant onlyKeeperOrSelf {
+        bytes32 _assetId
+    ) external payable nonReentrant onlyKeeper signOraclePrices(_assetId, _priceUpdateData) {
         uint256 initialGas = gasleft();
-        uint256 priceUpdateFee = _signLatestPrices(_assetId, _priceUpdateData, _indexPrice);
-        (Order.ExecutionState memory state, Position.Request memory request) = Order.constructExecuteParams(
-            tradeStorage, marketMaker, priceFeed, _orderKey, _feeReceiver, _isTradingEnabled
-        );
+        (Order.ExecutionState memory state, Position.Request memory request) =
+            Order.constructExecuteParams(tradeStorage, marketMaker, priceFeed, _orderKey, _feeReceiver);
         _updateImpactPool(state.market, _assetId, state.priceImpactUsd);
         _updateMarketState(state, _assetId, request.input.sizeDelta, request.input.isLong, request.input.isIncrease);
 
@@ -226,19 +232,18 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
         // Send Execution Fee + Rebate
         // Execution Fee reduced to account for value sent to update Pyth prices
-        Gas.payExecutionFee(
-            this, (request.input.executionFee - priceUpdateFee), initialGas, payable(_feeReceiver), payable(msg.sender)
-        );
+        Gas.payExecutionFee(this, request.input.executionFee, initialGas, payable(_feeReceiver), payable(msg.sender));
     }
 
     // need to store who flagged and liquidated
     // let the liquidator claim liquidation rewards from the tradestorage contract
     // Need to update prices for Index Token, Long Token, Short Token
     // @audit - after liquidation - health score should improve of the pool
-    function liquidatePosition(bytes32 _positionKey, bytes[] memory _priceData)
+    function liquidatePosition(bytes32 _positionKey, bytes32 _assetId, bytes[] memory _priceUpdateData)
         external
         payable
         onlyLiquidationKeeper
+        signOraclePrices(_assetId, _priceUpdateData)
     {
         // need to construct ExecutionState
         Order.ExecutionState memory state;
@@ -246,18 +251,13 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         state.market = position.market;
 
-        // fetch prices, base units, calculate sizeDeltaUsd, no fee / discount, no ref, no impact
-        uint256 updateFee = priceFeed.updateFee();
-        priceFeed.signPrimaryPrice{value: updateFee}(position.assetId, _priceData);
-
         if (position.isLong) {
-            state.indexPrice = Oracle.getMaxPrice(priceFeed, position.assetId, block.number);
-            (state.longMarketTokenPrice, state.shortMarketTokenPrice) = Oracle.getLastMarketTokenPrices(priceFeed, true);
+            state.indexPrice = Oracle.getMaxPrice(priceFeed, position.assetId);
+            (state.longMarketTokenPrice, state.shortMarketTokenPrice) = Oracle.getMarketTokenPrices(priceFeed, true);
             state.collateralPrice = state.longMarketTokenPrice;
         } else {
-            state.indexPrice = Oracle.getMinPrice(priceFeed, position.assetId, block.number);
-            (state.longMarketTokenPrice, state.shortMarketTokenPrice) =
-                Oracle.getLastMarketTokenPrices(priceFeed, false);
+            state.indexPrice = Oracle.getMinPrice(priceFeed, position.assetId);
+            (state.longMarketTokenPrice, state.shortMarketTokenPrice) = Oracle.getMarketTokenPrices(priceFeed, false);
             state.collateralPrice = state.shortMarketTokenPrice;
         }
 
@@ -300,26 +300,31 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         payable(msg.sender).sendValue(refundAmount);
     }
 
-    function flagForAdl(IMarket market, bytes32 _assetId, bool _isLong) external onlyAdlKeeper {
+    function flagForAdl(IMarket market, bytes32 _assetId, bool _isLong, bytes[] memory _priceUpdateData)
+        external
+        payable
+        onlyAdlKeeper
+        signOraclePrices(_assetId, _priceUpdateData)
+    {
         if (market == IMarket(address(0))) revert Processor_InvalidMarket();
+        Order.ExecutionState memory state;
         // get current price
-        uint256 indexPrice = Oracle.getReferencePrice(priceFeed, _assetId);
-        uint256 collateralPrice;
-        uint256 collateralBaseUnit;
+        state.indexPrice = Oracle.getPrice(priceFeed, _assetId);
+        state.collateralPrice;
+        state.collateralBaseUnit;
         if (_isLong) {
-            (collateralPrice,) = Oracle.getLastMarketTokenPrices(priceFeed, true);
-            collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
+            (state.collateralPrice,) = Oracle.getMarketTokenPrices(priceFeed, true);
+            state.collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
         } else {
-            (, collateralPrice) = Oracle.getLastMarketTokenPrices(priceFeed, false);
-            collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
+            (, state.collateralPrice) = Oracle.getMarketTokenPrices(priceFeed, false);
+            state.collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
         }
 
-        // fetch pnl to pool ratio
-        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _assetId);
+        state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _assetId);
+        state.market = market;
 
-        int256 pnlFactor = MarketUtils.getPnlFactor(
-            market, _assetId, indexPrice, indexBaseUnit, collateralPrice, collateralBaseUnit, _isLong
-        );
+        // fetch pnl to pool ratio
+        int256 pnlFactor = _getPnlFactor(state, _assetId, _isLong);
         // fetch max pnl to pool ratio
         uint256 maxPnlFactor = market.getMaxPnlFactor(_assetId);
 
@@ -336,8 +341,8 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint256 _sizeDelta,
         bytes32 _positionKey,
         bool _isLong,
-        bytes[] memory _priceData
-    ) external payable onlyAdlKeeper {
+        bytes[] memory _priceUpdateData
+    ) external payable onlyAdlKeeper signOraclePrices(_assetId, _priceUpdateData) {
         Order.ExecutionState memory state;
         IMarket.AdlConfig memory adl = market.getAdlConfig(_assetId);
         // Check ADL is enabled for the market and for the side
@@ -351,39 +356,20 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         if (position.positionSize == 0) revert Processor_PositionNotActive();
         // state the market
         state.market = market;
-        // fetch prices, base units, calculate sizeDeltaUsd, no fee / discount, no ref, no impact
-        priceFeed.signPrimaryPrice{value: msg.value}(position.assetId, _priceData);
         // Get current pricing and token data
-        state =
-            Order.retrieveTokenPrices(priceFeed, state, position.assetId, block.number, position.isLong, false, true);
+        state = Order.cacheTokenPrices(priceFeed, state, position.assetId, position.isLong, false);
 
         // Set the impacted price to the index price => 0 price impact on ADLs
         state.impactedPrice = state.indexPrice;
         state.priceImpactUsd = 0;
         // Get starting PNL Factor
-        int256 startingPnlFactor = MarketUtils.getPnlFactor(
-            market,
-            _assetId,
-            state.indexPrice,
-            state.indexBaseUnit,
-            state.collateralPrice,
-            state.collateralBaseUnit,
-            _isLong
-        );
+        int256 startingPnlFactor = _getPnlFactor(state, _assetId, _isLong);
         // Construct an ADL Order
         Position.Execution memory request = Position.createAdlOrder(position, _sizeDelta);
         // Execute the order
         tradeStorage.decreaseExistingPosition(request, state);
         // Get the new PNL to pool ratio
-        int256 newPnlFactor = MarketUtils.getPnlFactor(
-            market,
-            _assetId,
-            state.indexPrice,
-            state.indexBaseUnit,
-            state.collateralPrice,
-            state.collateralBaseUnit,
-            _isLong
-        );
+        int256 newPnlFactor = _getPnlFactor(state, _assetId, _isLong);
         // PNL to pool has reduced
         if (newPnlFactor >= startingPnlFactor) revert Processor_PNLFactorNotReduced();
         // Check if the new PNL to pool ratio is greater than
@@ -393,21 +379,6 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             market.updateAdlState(_assetId, false, _isLong);
         }
         emit AdlExecuted(market, _positionKey, _sizeDelta, _isLong);
-    }
-
-    // For when Router requests a secondary price update
-    // User prepays the execution fee
-    // This function updates the price on-chain and releases the execution fee
-    // to the keeper
-    // Excess fees are returned to the user
-    // Only needed if price hasn't already been updated in the same block
-    // @audit - review logic
-    function executePriceUpdate(address _token, uint256 _price, uint256 _block) external onlyKeeper {
-        // uint256 initialGas = gasleft();
-        // if (_price == 0) revert Processor_InvalidPrice();
-        // if (priceFeed.getPrice(_token, _block).price != 0) revert Processor_PriceAlreadyUpdated();
-        // priceFeed.setAssetPrice(_token, _price, _block);
-        // Gas.refundPriceUpdateGas(this, initialGas, payable(msg.sender));
     }
 
     // @audit - is this vulnerable?
@@ -470,21 +441,22 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         market.updateImpactPool(_assetId, -_priceImpactUsd);
     }
 
-    // Pyth Price Update Data will always at least contain the 2 market tokens
-    // Index Token can have a Pyth Price, or a Secondary Price
-    // If the Price Provider isn't pyth, use _indexPrice and store it in storage
-    function _signLatestPrices(bytes32 _assetId, bytes[] memory _priceUpdateData, uint256 _indexPrice)
+    /**
+     * Extrapolated into an internal function to prevent STD Errors
+     */
+    function _getPnlFactor(Order.ExecutionState memory _state, bytes32 _assetId, bool _isLong)
         internal
-        returns (uint256 updateFee)
+        view
+        returns (int256 pnlFactor)
     {
-        // Oracle.Asset memory asset = priceFeed.getAsset(_assetId);
-        // updateFee = priceFeed.updateFee();
-        // // Update fee paid to Pyth: needs to be accounted for
-        // priceFeed.signPrimaryPrice{value: updateFee}(_assetId, _priceUpdateData);
-        // if (asset.priceProvider != Oracle.PriceProvider.PYTH) {
-        //     if (_indexPrice == 0) revert Processor_InvalidPrice();
-        //     // fee accounted for in gas costs
-        //     priceFeed.setAssetPrice(_assetId, _indexPrice, block.number);
-        // }
+        pnlFactor = MarketUtils.getPnlFactor(
+            _state.market,
+            _assetId,
+            _state.indexPrice,
+            _state.indexBaseUnit,
+            _state.collateralPrice,
+            _state.collateralBaseUnit,
+            _isLong
+        );
     }
 }

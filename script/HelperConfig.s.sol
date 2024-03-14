@@ -60,7 +60,6 @@ contract HelperConfig is Script {
             priceSpread: 0.1e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            assetType: Oracle.AssetType.CRYPTO,
             pool: Oracle.UniswapPool({
                 token0: address(weth),
                 token1: address(mockUsdc),
@@ -81,7 +80,6 @@ contract HelperConfig is Script {
             priceSpread: 0.1e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            assetType: Oracle.AssetType.CRYPTO,
             pool: Oracle.UniswapPool({
                 token0: address(mockUsdc),
                 token1: address(weth),

@@ -43,6 +43,9 @@ contract TestPositions is Test {
 
     address USER = makeAddr("USER");
 
+    bytes32 ethAssetId = keccak256("ETH");
+    bytes32 usdcAssetId = keccak256("USDC");
+
     function setUp() public {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
@@ -90,8 +93,8 @@ contract TestPositions is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
                 token0: weth,
                 token1: usdc,
@@ -114,9 +117,9 @@ contract TestPositions is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(weth);
+        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
@@ -128,10 +131,10 @@ contract TestPositions is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -143,16 +146,16 @@ contract TestPositions is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(weth), 10000);
+        assertEq(market.getAllocation(ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -175,7 +178,7 @@ contract TestPositions is Test {
      */
     function testCreateNewPositionLong() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
@@ -196,12 +199,12 @@ contract TestPositions is Test {
             })
         });
         vm.prank(OWNER);
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
     }
 
     function testCreateNewPositionShort() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: usdc,
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage
@@ -223,13 +226,13 @@ contract TestPositions is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input);
         vm.stopPrank();
     }
 
     function testExecuteNewPositionLong() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
@@ -250,17 +253,15 @@ contract TestPositions is Test {
             })
         });
         vm.startPrank(OWNER);
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
     }
 
     function testExecuteNewPositionShort() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: usdc,
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
@@ -282,17 +283,15 @@ contract TestPositions is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input);
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
     }
 
     function testExecuteIncreaseExistingPositionLong() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
@@ -313,20 +312,19 @@ contract TestPositions is Test {
             })
         });
         vm.startPrank(OWNER);
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
+
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
     }
 
     function testPositionsAreWipedOnceExecuted() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
@@ -347,11 +345,10 @@ contract TestPositions is Test {
             })
         });
         vm.startPrank(OWNER);
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
+
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
         vm.expectRevert();
         key = tradeStorage.getOrderAtIndex(0, false);
@@ -359,7 +356,7 @@ contract TestPositions is Test {
 
     function testExecuteIncreaseExistingPositionShort() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: usdc,
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
@@ -381,20 +378,19 @@ contract TestPositions is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input);
+
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
     }
 
     function testExecuteCollateralIncreaseShort() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: usdc,
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
@@ -416,13 +412,12 @@ contract TestPositions is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input);
+
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: usdc,
             collateralDelta: 500e6,
             sizeDelta: 0, // 10x leverage -> 2 eth ~ $5000
@@ -442,15 +437,15 @@ contract TestPositions is Test {
                 takeProfitPercentage: 0
             })
         });
-        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
     }
 
     function testExecuteCollateralIncreaseLong() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
@@ -471,13 +466,12 @@ contract TestPositions is Test {
             })
         });
         vm.startPrank(OWNER);
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
+
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 0, // 4x leverage
@@ -497,16 +491,16 @@ contract TestPositions is Test {
                 takeProfitPercentage: 0
             })
         });
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
     }
 
     // @fail
     function testExecuteCollateralDecreaseShort() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: usdc,
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
@@ -528,13 +522,12 @@ contract TestPositions is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input);
+
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: usdc,
             collateralDelta: 50e6,
             sizeDelta: 0, // 10x leverage -> 2 eth ~ $5000
@@ -554,16 +547,16 @@ contract TestPositions is Test {
                 takeProfitPercentage: 0
             })
         });
-        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
     }
 
     // @fail
     function testFullExecuteDecreasePositionLong() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
@@ -584,13 +577,12 @@ contract TestPositions is Test {
             })
         });
         vm.startPrank(OWNER);
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
+
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
@@ -610,12 +602,12 @@ contract TestPositions is Test {
                 takeProfitPercentage: 0
             })
         });
-        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input);
         key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
         // Check the position was removed from storage
-        bytes32 positionKey = keccak256(abi.encode(input.indexToken, OWNER, input.isLong));
+        bytes32 positionKey = keccak256(abi.encode(input.assetId, OWNER, input.isLong));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
         assertEq(position.positionSize, 0);
     }
@@ -623,7 +615,7 @@ contract TestPositions is Test {
     // @fail
     function testPartialExecuteDecreasePositionLong() public setUpMarkets {
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
@@ -644,13 +636,12 @@ contract TestPositions is Test {
             })
         });
         vm.startPrank(OWNER);
-        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input, tokenUpdateData);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+        router.createPositionRequest{value: 0.51 ether + 1 gwei}(input);
+
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.25 ether,
             sizeDelta: 2500e30, // 4x leverage
@@ -670,12 +661,12 @@ contract TestPositions is Test {
                 takeProfitPercentage: 0
             })
         });
-        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether + 1 gwei}(input);
         key = tradeStorage.getOrderAtIndex(0, false);
         uint256 balanceBeforeDecrease = OWNER.balance;
-        processor.executePosition(key, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
         vm.stopPrank();
-        bytes32 positionKey = keccak256(abi.encode(input.indexToken, OWNER, input.isLong));
+        bytes32 positionKey = keccak256(abi.encode(input.assetId, OWNER, input.isLong));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
         uint256 balanceAfterDecrease = OWNER.balance;
         // Will be less after fees

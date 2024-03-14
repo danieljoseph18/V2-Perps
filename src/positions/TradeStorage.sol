@@ -107,13 +107,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     /// @dev Create a SL / TP Order or update an existing one
+    // @audit - REVAMP
     function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external onlyRouter {
         Position.Data memory position = openPositions[_positionKey];
         if (!Position.exists(position)) revert TradeStorage_PositionDoesNotExist();
         // construct the SL / TP orders
         // Uses WAEP as ref price
         (Position.Request memory stopLoss, Position.Request memory takeProfit) =
-            Order.constructConditionalOrders(position, _conditionals, position.weightedAvgEntryPrice);
+            Order.constructConditionalOrders(position, _conditionals);
         // if the position already has a SL / TP, delete them
         // add them to storage
         if (_conditionals.stopLossSet) {
@@ -240,7 +241,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
         // If Request has conditionals, create the SL / TP
         (Position.Request memory stopLoss, Position.Request memory takeProfit) =
-            Order.constructConditionalOrders(position, _params.request.input.conditionals, _state.indexPrice);
+            Order.constructConditionalOrders(position, _params.request.input.conditionals);
         // If stop loss set, create and store the order
         if (_params.request.input.conditionals.stopLossSet) position.stopLossKey = _createStopLoss(stopLoss);
         // If take profit set, create and store the order

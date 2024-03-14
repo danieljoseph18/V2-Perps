@@ -59,6 +59,9 @@ contract TestADLs is Test {
     address RANDOM2 = makeAddr("RANDOM2");
     address RANDOM3 = makeAddr("RANDOM3");
 
+    bytes32 ethAssetId = keccak256("ETH");
+    bytes32 usdcAssetId = keccak256("USDC");
+
     function setUp() public {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
@@ -106,8 +109,8 @@ contract TestADLs is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
                 token0: weth,
                 token1: usdc,
@@ -130,9 +133,9 @@ contract TestADLs is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(weth);
+        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
@@ -144,10 +147,10 @@ contract TestADLs is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 10_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 10_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -159,16 +162,16 @@ contract TestADLs is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(weth), 10000);
+        assertEq(market.getAllocation(ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -183,7 +186,7 @@ contract TestADLs is Test {
         MockUSDC(usdc).mint(RANDOM3, 1_000_000_000e6);
         // open several positions on the market
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: usdc,
             collateralDelta: 125_000e6,
             sizeDelta: 2_500_000e30,
@@ -205,38 +208,36 @@ contract TestADLs is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether}(input);
         vm.stopPrank();
         vm.startPrank(USER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether}(input);
         vm.stopPrank();
         vm.startPrank(RANDOM1);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether}(input);
         vm.stopPrank();
         vm.startPrank(RANDOM2);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether}(input);
         vm.stopPrank();
         vm.startPrank(RANDOM3);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 0.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether}(input);
         vm.stopPrank();
         // Execute the Position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(orderKey, USER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, USER, tokenUpdateData, ethAssetId);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(orderKey, RANDOM1, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM1, tokenUpdateData, ethAssetId);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(orderKey, RANDOM2, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM2, tokenUpdateData, ethAssetId);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition(orderKey, RANDOM3, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM3, tokenUpdateData, ethAssetId);
 
         vm.warp(block.timestamp + 10);
         vm.roll(block.number + 1);
@@ -245,15 +246,14 @@ contract TestADLs is Test {
             ethPriceId, 10000, 50, -2, 10000, 50, uint64(block.timestamp), uint64(block.timestamp)
         );
         tokenUpdateData[0] = wethUpdateData;
-        vm.prank(OWNER);
-        priceFeed.signPriceData{value: 0.01 ether}(weth, tokenUpdateData);
         // adl the positions
         vm.prank(OWNER);
-        processor.flagForAdl(market, weth, false);
+        processor.flagForAdl{value: 0.01 ether}(market, ethAssetId, false, tokenUpdateData);
         // get one of the position keys
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), false);
         // adl it
-        processor.executeAdl{value: 0.01 ether}(market, weth, 5000e30, positionKeys[0], false, tokenUpdateData);
+        vm.prank(OWNER);
+        processor.executeAdl{value: 0.01 ether}(market, ethAssetId, 5000e30, positionKeys[0], false, tokenUpdateData);
         // validate their size has been reduced
         Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
         assertEq(position.positionSize, 2_495_000e30);

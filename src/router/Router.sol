@@ -54,7 +54,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
 
     // Used to request a secondary price update from the Keeper
-    event Router_PriceRequested(bytes32 indexed assetId, uint256 indexed blockNumber);
+    event Router_PriceUpdateRequested(bytes32 indexed assetId, uint256 indexed blockNumber);
 
     error Router_InvalidOwner();
     error Router_InvalidAmountIn();
@@ -111,11 +111,11 @@ contract Router is ReentrancyGuard, RoleValidation {
             IERC20(_input.tokenIn).safeTransferFrom(_input.owner, address(processor), _input.amountIn);
         }
 
-        _input.executionFee -=
-            _requestOraclePricing(_input.tokenIn == address(WETH) ? priceFeed.longTokenId() : priceFeed.shortTokenId());
-
         market.createDeposit(_input);
         _sendExecutionFee(_input.executionFee);
+
+        // Request a Price Update for the Asset
+        emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
     }
 
     function cancelDeposit(IMarket market, bytes32 _key) external nonReentrant {
@@ -133,10 +133,12 @@ contract Router is ReentrancyGuard, RoleValidation {
             if (_input.tokenOut != address(USDC) && _input.tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         }
         IERC20(address(market)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
-        _input.executionFee -=
-            _requestOraclePricing(_input.tokenOut == address(WETH) ? priceFeed.longTokenId() : priceFeed.shortTokenId());
+
         market.createWithdrawal(_input);
         _sendExecutionFee(_input.executionFee);
+
+        // Request a Price Update for the Asset
+        emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
     }
 
     function cancelWithdrawal(IMarket market, bytes32 _key) external nonReentrant {
@@ -153,35 +155,32 @@ contract Router is ReentrancyGuard, RoleValidation {
             if (_trade.collateralToken != address(USDC)) revert Router_InvalidTokenIn();
         }
 
-        // Construct the state for Order Creation
-        Order.CreationState memory state = Order.validateInitialParameters(marketMaker, tradeStorage, priceFeed, _trade);
+        // Handle Token Transfers
+        if (_trade.isIncrease) _handleTokenTransfers(_trade);
 
-        Position.Data memory position = tradeStorage.getPosition(state.positionKey);
+        // Construct the state for Order Creation
+        (address market, bytes32 positionKey) = Order.validateInitialParameters(marketMaker, _trade);
+
+        Position.Data memory position = tradeStorage.getPosition(positionKey);
 
         // Set the Request Type
-        state.requestType = Position.getRequestType(_trade, position);
+        Position.RequestType requestType = Position.getRequestType(_trade, position);
 
-        if (state.requestType == Position.RequestType.POSITION_DECREASE) {
+        if (requestType == Position.RequestType.POSITION_DECREASE) {
             _trade = Position.checkForFullClose(_trade, position);
         }
 
-        // Validate Parameters
-        Order.validateParamsForType(_trade, state, position.collateralAmount, position.positionSize);
-
         // Construct the Request from the user input
-        Position.Request memory request = Position.createRequest(_trade, state.market, msg.sender, state.requestType);
-
-        // Sign Oracle Prices and Subtract Value from Execution Fee
-        request.input.executionFee -= _requestOraclePricing(_trade.assetId);
+        Position.Request memory request = Position.createRequest(_trade, market, msg.sender, requestType);
 
         // Store the Order Request
         tradeStorage.createOrderRequest(request);
 
-        // Handle Token Transfers
-        if (_trade.isIncrease) _handleTokenTransfers(_trade);
-
         // Send Full Execution Fee to Processor to Distribute
         _sendExecutionFee(_trade.executionFee);
+
+        // Request a Price Update for the Asset
+        emit Router_PriceUpdateRequested(_trade.assetId, block.number);
     }
 
     // @audit - need ability to edit a limit order
@@ -195,11 +194,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         tradeStorage.createEditOrder(_conditionals, _positionKey);
 
         _sendExecutionFee(_executionFee);
-    }
-
-    function _requestOraclePricing(bytes32 _assetId) private returns (uint256 updateFee) {
-        updateFee = priceFeed.updateFee();
-        emit Router_PriceRequested(_assetId, block.number);
     }
 
     // @audit - need to update collateral balance wherever collateral is stored

@@ -47,6 +47,9 @@ contract TestPriceImpact is Test {
 
     address USER = makeAddr("USER");
 
+    bytes32 ethAssetId = keccak256("ETH");
+    bytes32 usdcAssetId = keccak256("USDC");
+
     function setUp() public {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
@@ -94,8 +97,8 @@ contract TestPriceImpact is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
                 token0: weth,
                 token1: usdc,
@@ -118,9 +121,9 @@ contract TestPriceImpact is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(weth);
+        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
@@ -132,10 +135,10 @@ contract TestPriceImpact is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.001 ether}(market, depositKey, 0, tokenUpdateData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -147,16 +150,16 @@ contract TestPriceImpact is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.001 ether}(market, depositKey, 0, tokenUpdateData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(weth), 10000);
+        assertEq(market.getAllocation(ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -176,8 +179,8 @@ contract TestPriceImpact is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
                 token0: weth,
                 token1: usdc,
@@ -200,9 +203,9 @@ contract TestPriceImpact is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(weth);
+        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
@@ -214,10 +217,10 @@ contract TestPriceImpact is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 100.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 100.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.001 ether}(market, depositKey, 0, tokenUpdateData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -229,16 +232,16 @@ contract TestPriceImpact is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.001 ether}(market, depositKey, 0, tokenUpdateData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(weth), 10000);
+        assertEq(market.getAllocation(ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -265,7 +268,7 @@ contract TestPriceImpact is Test {
 
         Position.Request memory request = Position.Request({
             input: Position.Input({
-                indexToken: weth,
+                assetId: ethAssetId,
                 collateralToken: weth,
                 collateralDelta: 0.5 ether,
                 sizeDelta: _sizeDelta,
@@ -335,7 +338,7 @@ contract TestPriceImpact is Test {
 
         Position.Request memory request = Position.Request({
             input: Position.Input({
-                indexToken: weth,
+                assetId: ethAssetId,
                 collateralToken: weth,
                 collateralDelta: 0.5 ether,
                 sizeDelta: _sizeDelta,

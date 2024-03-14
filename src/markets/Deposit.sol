@@ -74,9 +74,8 @@ library Deposit {
 
     function execute(ExecuteParams memory _params) external view returns (ExecutionState memory state) {
         // If prices were signed, return for the block, else, return prices
-        if (Oracle.priceWasSigned(_params.priceFeed, _params.data.blockNumber, _params.isLongToken)) {
-            (state.longPrices, state.shortPrices) =
-                Oracle.getMarketTokenPrices(_params.priceFeed, _params.data.blockNumber);
+        if (Oracle.priceWasSigned(_params.priceFeed, _params.isLongToken)) {
+            (state.longPrices, state.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed);
         } else {
             (state.longPrices, state.shortPrices) = Oracle.getLastMarketTokenPrices(_params.priceFeed);
         }

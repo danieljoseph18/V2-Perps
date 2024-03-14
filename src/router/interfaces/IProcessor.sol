@@ -30,6 +30,7 @@ interface IProcessor {
     error Processor_InvalidPrice();
     error Processor_PriceAlreadyUpdated();
     error Processor_PnlToPoolRatioNotExceeded(int256 pnlFactor, uint256 maxPnlFactor);
+    error Processor_PriceUpdateFee();
 
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function transferDepositTokens(address _vault, address _token, uint256 _amount) external;

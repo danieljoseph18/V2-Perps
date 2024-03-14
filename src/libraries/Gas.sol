@@ -14,6 +14,9 @@ library Gas {
         POSITION
     }
 
+    /**
+     * https://github.com/Synthetixio/external-nodes/blob/main/src/TxGasPriceOracle.sol
+     */
     error Gas_InsufficientMsgValue(uint256 valueSent, uint256 executionFee);
     error Gas_InsufficientExecutionFee(uint256 executionFee, uint256 minExecutionFee);
 

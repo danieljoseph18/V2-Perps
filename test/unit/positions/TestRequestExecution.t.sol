@@ -45,6 +45,9 @@ contract TestRequestExecution is Test {
 
     address USER = makeAddr("USER");
 
+    bytes32 ethAssetId = keccak256("ETH");
+    bytes32 usdcAssetId = keccak256("USDC");
+
     function setUp() public {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
@@ -92,8 +95,8 @@ contract TestRequestExecution is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
                 token0: weth,
                 token1: usdc,
@@ -116,9 +119,9 @@ contract TestRequestExecution is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(weth);
+        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
@@ -130,10 +133,10 @@ contract TestRequestExecution is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -145,16 +148,16 @@ contract TestRequestExecution is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(weth), 10000);
+        assertEq(market.getAllocation(ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -162,7 +165,7 @@ contract TestRequestExecution is Test {
     function testWhereTokensEndUp() public setUpMarkets {
         // Create a Position
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -184,17 +187,15 @@ contract TestRequestExecution is Test {
         });
         uint256 processorBalanceBefore = WETH(weth).balanceOf(address(processor));
         vm.prank(OWNER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 4.01 ether}(input);
         // Check that the tokens for the position are stored in the Processor contract
         uint256 processorBalanceAfter = WETH(weth).balanceOf(address(processor));
         assertEq(processorBalanceAfter - processorBalanceBefore, 0.5 ether);
         // Execute the Position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
         uint256 vaultBalance = WETH(weth).balanceOf(address(market));
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
         // Check that the tokens for the position are stored in the Market contract
         uint256 processorBalanceAfterExecution = WETH(weth).balanceOf(address(processor));
         assertEq(processorBalanceAfterExecution, 0);
@@ -205,7 +206,7 @@ contract TestRequestExecution is Test {
     function testImpactPoolIsUpdatedForPriceImpact() public setUpMarkets {
         // Create a Position
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -226,17 +227,16 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(OWNER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 4.01 ether}(input);
         // Execute the Position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+
         // Get the size of the impact pool before the position is executed
-        uint256 impactPoolBefore = IMarket(marketMaker.tokenToMarkets(weth)).getImpactPool(weth);
+        uint256 impactPoolBefore = IMarket(marketMaker.tokenToMarkets(ethAssetId)).getImpactPool(ethAssetId);
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
         // Get the size of the impact pool after the position is executed
-        uint256 impactPoolAfter = IMarket(marketMaker.tokenToMarkets(weth)).getImpactPool(weth);
+        uint256 impactPoolAfter = IMarket(marketMaker.tokenToMarkets(ethAssetId)).getImpactPool(ethAssetId);
         // Check that the impact pool has been updated
         assertGt(impactPoolAfter, impactPoolBefore);
     }
@@ -244,7 +244,7 @@ contract TestRequestExecution is Test {
     function testPnlParamsAreBasedOnPriceAtTheRequestBlock() public setUpMarkets {
         // Create a request
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -265,7 +265,7 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(OWNER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 4.01 ether}(input);
         // Pass some time
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
@@ -280,13 +280,12 @@ contract TestRequestExecution is Test {
         tokenUpdateData[0] = wethUpdateData;
         tokenUpdateData[1] = usdcUpdateData;
         vm.prank(OWNER);
-        priceFeed.signPriceData{value: 2 gwei}(weth, tokenUpdateData);
+
         // Execute the position and check the prices
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
         // Check that the prices are based on the price at the request block
         bytes32 positionKey = keccak256(abi.encode(weth, OWNER, true));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
@@ -300,7 +299,7 @@ contract TestRequestExecution is Test {
     function testAUserReceivesProfitIfClosingAProfitablePosition() public setUpMarkets {
         // Create a request
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -321,13 +320,12 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(OWNER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 4.01 ether}(input);
         // Execute the position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
 
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
@@ -342,11 +340,10 @@ contract TestRequestExecution is Test {
         );
         tokenUpdateData[0] = wethUpdateData;
         tokenUpdateData[1] = usdcUpdateData;
-        vm.prank(OWNER);
-        priceFeed.signPriceData{value: 2 gwei}(weth, tokenUpdateData);
+
         // Create a close position request
         Position.Input memory closeInput = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -367,12 +364,12 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(OWNER);
-        router.createPositionRequest{value: 0.01 ether}(closeInput, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether}(closeInput);
         // Execute the close position request
         bytes32 closeOrderKey = tradeStorage.getOrderAtIndex(0, false);
         uint256 balanceBefore = OWNER.balance;
         vm.prank(OWNER);
-        processor.executePosition(closeOrderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(closeOrderKey, OWNER, tokenUpdateData, ethAssetId);
         uint256 balanceAfter = OWNER.balance;
         // Check that the user receives profit
         assertGt(balanceAfter, balanceBefore);
@@ -382,7 +379,7 @@ contract TestRequestExecution is Test {
     function testAUserAccruesLossesIfClosingAnUnprofitablePosition() public setUpMarkets {
         // Create a request
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -403,13 +400,12 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(OWNER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 4.01 ether}(input);
         // Execute the position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
 
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
@@ -424,11 +420,10 @@ contract TestRequestExecution is Test {
         );
         tokenUpdateData[0] = wethUpdateData;
         tokenUpdateData[1] = usdcUpdateData;
-        vm.prank(OWNER);
-        priceFeed.signPriceData{value: 2 gwei}(weth, tokenUpdateData);
+
         // Create a close position request
         Position.Input memory closeInput = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -449,12 +444,12 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(OWNER);
-        router.createPositionRequest{value: 0.01 ether}(closeInput, tokenUpdateData);
+        router.createPositionRequest{value: 0.01 ether}(closeInput);
         // Execute the close position request
         bytes32 closeOrderKey = tradeStorage.getOrderAtIndex(0, false);
         uint256 balanceBefore = OWNER.balance;
         vm.prank(OWNER);
-        processor.executePosition(closeOrderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(closeOrderKey, OWNER, tokenUpdateData, ethAssetId);
         uint256 balanceAfter = OWNER.balance;
         // Check that the user accrues losses
         uint256 expectedAmountOut = 0.5 ether;
@@ -468,7 +463,7 @@ contract TestRequestExecution is Test {
         vm.roll(block.number + 1);
         // create a request
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.04 ether,
             sizeDelta: 1000e30,
@@ -489,20 +484,19 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 0.09 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.09 ether}(input);
         // execute the request
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-        Oracle.TradingEnabled memory tradingEnabled =
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true});
+
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
         // pass some time
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
         // check the market parameters
-        uint256 longOpenInterest = market.getOpenInterest(weth, true);
+        uint256 longOpenInterest = market.getOpenInterest(ethAssetId, true);
         assertEq(longOpenInterest, 1000e30);
-        uint256 longAverageEntryPrice = market.getAverageEntryPrice(weth, true);
+        uint256 longAverageEntryPrice = market.getAverageEntryPrice(ethAssetId, true);
         assertNotEq(longAverageEntryPrice, 0);
         // Update the Price
         bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
@@ -516,28 +510,28 @@ contract TestRequestExecution is Test {
         tokenUpdateData[1] = usdcUpdateData;
         // create a request
         vm.prank(USER);
-        router.createPositionRequest{value: 0.09 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.09 ether}(input);
         // execute the request
         orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        processor.executePosition(orderKey, OWNER, tradingEnabled, tokenUpdateData, weth, 0);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
         // check the market parameters
-        longOpenInterest = market.getOpenInterest(weth, true);
+        longOpenInterest = market.getOpenInterest(ethAssetId, true);
         assertEq(longOpenInterest, 2000e30);
-        uint256 newLongWaep = market.getAverageEntryPrice(weth, true);
+        uint256 newLongWaep = market.getAverageEntryPrice(ethAssetId, true);
         assertNotEq(newLongWaep, longAverageEntryPrice);
-        uint256 lastBorrowingUpdate = market.getLastBorrowingUpdate(weth);
+        uint256 lastBorrowingUpdate = market.getLastBorrowingUpdate(ethAssetId);
         assertEq(lastBorrowingUpdate, block.timestamp);
-        uint256 lastFundingUpdate = market.getLastFundingUpdate(weth);
+        uint256 lastFundingUpdate = market.getLastFundingUpdate(ethAssetId);
         assertEq(lastFundingUpdate, block.timestamp);
-        uint256 longBorrowingRate = market.getLastBorrowingUpdate(weth);
+        uint256 longBorrowingRate = market.getLastBorrowingUpdate(ethAssetId);
         assertNotEq(longBorrowingRate, 0);
     }
 
     function testPositionFeesAreCalculatedCorrectly() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -558,7 +552,7 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(OWNER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 4.01 ether}(input);
         // predict the fee owed
         uint256 feeUsd = (10_000e30 * 0.001e18) / 1e18;
         uint256 predictedFee = Position.convertUsdToCollateral(feeUsd, 2500e30, 1e18);

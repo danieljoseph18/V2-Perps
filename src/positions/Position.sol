@@ -18,6 +18,7 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv} from "@prb/math/Common.sol";
@@ -36,7 +37,8 @@ library Position {
     error Position_SizeDelta();
     error Position_DeltaExceedsCollateral();
     error Position_LimitPriceExceeded();
-    error Position_CollateralExceedsSizeLong();
+    error Position_MinCollateralThreshold();
+    error Position_CollateralExceedsSize();
     error Position_CollateralExceedsSizeShort();
     error Position_BelowMinLeverage();
     error Position_OverMaxLeverage();
@@ -202,11 +204,14 @@ library Position {
     }
 
     // 1x = 100
-    function checkLeverage(IMarket market, bytes32 _assetId, uint256 _sizeUsd, uint256 _collateralUsd) external view {
+    function checkLeverage(IMarket market, bytes32 _assetId, uint256 _sizeUsd, uint256 _collateralUsd) public view {
         console.log("Collateral USD: ", _collateralUsd);
+        console.log("Size USD: ", _sizeUsd);
+        console.logBytes32(_assetId);
         uint256 maxLeverage = market.getMaxLeverage(_assetId);
-        if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSizeLong();
+        if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
+        console.log("Leverage: ", leverage);
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
         if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
@@ -302,13 +307,6 @@ library Position {
         returns (Execution memory execution)
     {
         // calculate collateral delta from size delta
-
-        /**
-         * Getting precision loss of 2 when calculating collateral delta
-         * Values are: Collateral Amount = 489991996799039744, size Delta = 2 ether, position size = 10 ether
-         * Expected Collateral Delta = 489991996799039744 * 0.2 = 97998399359807948.8
-         * Actual Collateral Delta = 97998399359807948
-         */
         uint256 collateralDelta = mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
 
         Request memory request = Request({
@@ -390,5 +388,34 @@ library Position {
                 if (_conditionals.takeProfitPrice >= _referencePrice) revert Position_InvalidTakeProfitPrice();
             }
         }
+    }
+
+    /**
+     * Need to Check:
+     * - Collateral is > min collateral
+     * - Leverage is valid (1 - X)
+     * - Limit price is valid -> if long, limit price < ref price, if short, limit price > ref price
+     * - Conditional Prices are valid -> if long, stop loss < ref price, if short, stop loss > ref price
+     * if long, take profit > ref price, if short, take profit < ref price
+     */
+    function validateRequest(ITradeStorage tradeStorage, Request memory _request, Order.ExecutionState memory _state)
+        external
+        view
+    {
+        // 1. Check Collateral is > Min Collateral
+        console.log("Collateral Price: ", _state.collateralPrice);
+        uint256 collateralUsd = _state.collateralDeltaUsd.abs();
+        if (collateralUsd < tradeStorage.minCollateralUsd()) {
+            revert Position_MinCollateralThreshold();
+        }
+        // 2. Check Leverage is valid
+        // @audit - what about decrease position / collateral edits?
+        if (
+            _request.requestType == RequestType.POSITION_INCREASE || _request.requestType == RequestType.CREATE_POSITION
+        ) {
+            checkLeverage(_state.market, _request.input.assetId, _request.input.sizeDelta, collateralUsd);
+        }
+        // 3. Check Conditionals are valid
+        validateConditionals(_request.input.conditionals, _state.indexPrice, _request.input.isLong);
     }
 }

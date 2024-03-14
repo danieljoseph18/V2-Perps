@@ -70,18 +70,14 @@ library Order {
         address referrer;
     }
 
-    struct CreationState {
-        uint256 collateralRefPrice;
-        address market;
-        bytes32 positionKey;
-        uint256 indexRefPrice;
-        uint256 indexBaseUnit;
-        uint256 collateralDeltaUsd;
-        uint256 collateralBaseUnit;
-        uint256 minCollateralUsd;
-        uint256 collateralAmountUsd;
-        Position.RequestType requestType;
-    }
+    /**
+     * Need to Check:
+     * - Collateral is > min collateral
+     * - Leverage is valid (1 - X)
+     * - Limit price is valid -> if long, limit price < ref price, if short, limit price > ref price
+     * - Conditional Prices are valid -> if long, stop loss < ref price, if short, stop loss > ref price
+     * if long, take profit > ref price, if short, take profit < ref price
+     */
 
     /**
      * ========================= Construction Functions =========================
@@ -91,33 +87,24 @@ library Order {
         IMarketMaker marketMaker,
         IPriceFeed priceFeed,
         bytes32 _orderKey,
-        address _feeReceiver,
-        Oracle.TradingEnabled memory _isTradingEnabled
+        address _feeReceiver
     ) external view returns (ExecutionState memory state, Position.Request memory request) {
         // Fetch and validate request from key
         request = tradeStorage.getOrder(_orderKey);
         if (request.user == address(0)) revert Order_InvalidRequestKey();
         if (_feeReceiver == address(0)) revert Order_InvalidFeeReceiver();
-        // Get the asset and validate trading is enabled
-        Oracle.validateTradingHours(priceFeed, request.input.assetId, _isTradingEnabled);
         // Fetch and validate price
-        state = retrieveTokenPrices(
-            priceFeed,
-            state,
-            request.input.assetId,
-            request.requestBlock,
-            request.input.isLong,
-            request.input.isIncrease,
-            request.input.isLimit
-        );
-
-        if (request.input.isLimit) Position.checkLimitPrice(state.indexPrice, request.input);
+        state =
+            cacheTokenPrices(priceFeed, state, request.input.assetId, request.input.isLong, request.input.isIncrease);
 
         // state Variables
         state.market = IMarket(marketMaker.tokenToMarkets(request.input.assetId));
         state.collateralDeltaUsd = request.input.isIncrease
             ? mulDiv(request.input.collateralDelta, state.collateralPrice, state.collateralBaseUnit).toInt256()
             : -mulDiv(request.input.collateralDelta, state.collateralPrice, state.collateralBaseUnit).toInt256();
+
+        if (request.input.isLimit) Position.checkLimitPrice(state.indexPrice, request.input);
+        Position.validateRequest(tradeStorage, request, state);
 
         if (request.input.sizeDelta != 0) {
             // Execute Price Impact
@@ -136,13 +123,11 @@ library Order {
     }
 
     // SL / TP are Decrease Orders tied to a Position
-    function constructConditionalOrders(
-        Position.Data memory _position,
-        Position.Conditionals memory _conditionals,
-        uint256 _referencePrice
-    ) external view returns (Position.Request memory stopLossOrder, Position.Request memory takeProfitOrder) {
-        // Validate the Conditionals
-        Position.validateConditionals(_conditionals, _referencePrice, _position.isLong);
+    function constructConditionalOrders(Position.Data memory _position, Position.Conditionals memory _conditionals)
+        external
+        view
+        returns (Position.Request memory stopLossOrder, Position.Request memory takeProfitOrder)
+    {
         // Construct the stop loss based on the values
         if (_conditionals.stopLossSet) {
             stopLossOrder = Position.Request({
@@ -208,101 +193,20 @@ library Order {
     /**
      * ========================= Validation Functions =========================
      */
-    function validateInitialParameters(
-        IMarketMaker marketMaker,
-        ITradeStorage tradeStorage,
-        IPriceFeed priceFeed,
-        Position.Input memory _trade
-    ) external view returns (CreationState memory state) {
+    function validateInitialParameters(IMarketMaker marketMaker, Position.Input memory _trade)
+        external
+        view
+        returns (address market, bytes32 positionKey)
+    {
         if (!(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE)) revert Order_InvalidSlippage();
         if (_trade.collateralDelta == 0) revert Order_InvalidCollateralDelta();
 
-        if (_trade.isLong) {
-            state.collateralRefPrice = Oracle.getLongReferencePrice(priceFeed);
-            state.collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
-        } else {
-            state.collateralRefPrice = Oracle.getShortReferencePrice(priceFeed);
-            state.collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
-        }
+        market = marketMaker.tokenToMarkets(_trade.assetId);
+        if (market == address(0)) revert Order_MarketDoesNotExist();
 
-        state.market = marketMaker.tokenToMarkets(_trade.assetId);
-        if (state.market == address(0)) revert Order_MarketDoesNotExist();
+        positionKey = keccak256(abi.encode(_trade.assetId, msg.sender, _trade.isLong));
 
-        state.positionKey = keccak256(abi.encode(_trade.assetId, msg.sender, _trade.isLong));
-
-        state.indexRefPrice = Oracle.getReferencePrice(priceFeed.getAsset(_trade.assetId));
-
-        state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _trade.assetId);
-
-        if (_trade.isLimit) {
-            if (_trade.limitPrice == 0) revert Order_InvalidLimitPrice();
-            if (_trade.isLong) {
-                if (_trade.limitPrice > state.indexRefPrice) revert Order_RefPriceGreaterThanLimitPrice();
-            } else {
-                if (_trade.limitPrice < state.indexRefPrice) revert Order_RefPriceLessThanLimitPrice();
-            }
-        }
-
-        state.collateralDeltaUsd = mulDiv(_trade.collateralDelta, state.collateralRefPrice, state.collateralBaseUnit);
-        console.log("Collateral Ref Price: ", state.collateralRefPrice);
-        console.log("Collateral Base Unit: ", state.collateralBaseUnit);
-        console.log("Collateral Delta USD: ", state.collateralDeltaUsd);
-        state.minCollateralUsd = tradeStorage.minCollateralUsd();
-    }
-
-    function validateParamsForType(
-        Position.Input memory _trade,
-        CreationState memory _state,
-        uint256 _collateralAmount,
-        uint256 _positionSize
-    ) external view returns (CreationState memory) {
-        // Validate for each request type
-        if (_state.requestType == Position.RequestType.CREATE_POSITION) {
-            Position.validateConditionals(_trade.conditionals, _state.indexRefPrice, _trade.isLong);
-            checkMinCollateral(
-                _trade.collateralDelta, _state.collateralRefPrice, _state.collateralBaseUnit, _state.minCollateralUsd
-            );
-            Position.checkLeverage(IMarket(_state.market), _trade.assetId, _trade.sizeDelta, _state.collateralDeltaUsd);
-        } else if (_state.requestType == Position.RequestType.POSITION_INCREASE) {
-            // Clear the Conditionals
-            _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
-        } else if (_state.requestType == Position.RequestType.POSITION_DECREASE) {
-            checkMinCollateral(
-                _collateralAmount - _trade.collateralDelta,
-                _state.collateralRefPrice,
-                _state.collateralBaseUnit,
-                _state.minCollateralUsd
-            );
-            // Clear the Conditionals
-            _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
-        } else if (_state.requestType == Position.RequestType.COLLATERAL_INCREASE) {
-            // convert existing collateral amount to usd
-            _state.collateralAmountUsd = mulDiv(_collateralAmount, _state.collateralRefPrice, _state.collateralBaseUnit);
-            // subtract collateral delta usd
-            _state.collateralAmountUsd += _state.collateralDeltaUsd;
-            // chcek it doesnt go below min leverage
-            Position.checkLeverage(IMarket(_state.market), _trade.assetId, _positionSize, _state.collateralAmountUsd);
-            // Clear the Conditionals
-            _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
-        } else if (_state.requestType == Position.RequestType.COLLATERAL_DECREASE) {
-            checkMinCollateral(
-                _collateralAmount - _trade.collateralDelta,
-                _state.collateralRefPrice,
-                _state.collateralBaseUnit,
-                _state.minCollateralUsd
-            );
-            // convert existing collateral amount to usd
-            _state.collateralAmountUsd = mulDiv(_collateralAmount, _state.collateralRefPrice, _state.collateralBaseUnit);
-            // subtract collateral delta usd
-            _state.collateralAmountUsd -= _state.collateralDeltaUsd;
-            // chcek it doesnt go below min leverage
-            Position.checkLeverage(IMarket(_state.market), _trade.assetId, _positionSize, _state.collateralAmountUsd);
-            // Clear the Conditionals
-            _trade.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
-        } else {
-            revert Order_InvalidRequestType();
-        }
-        return _state;
+        if (_trade.isLimit && _trade.limitPrice == 0) revert Order_InvalidLimitPrice();
     }
 
     /**
@@ -448,7 +352,7 @@ library Order {
         Position.checkLeverage(
             _state.market,
             _params.request.input.assetId,
-            _position.positionSize, // @audit - should we use latest price?
+            _position.positionSize,
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
 
@@ -656,54 +560,29 @@ library Order {
         collateralAmount = mulDiv(_valueUsd, _collateralBaseUnit, _collateralPrice);
     }
 
-    // @audit - We're giving the position extra size by using max price
     /**
-     * For Index Tokens:
-     *
-     * Long & Increase: Max Price
-     * Long & Decrease: Min Price
-     * Short & Increase: Min Price
-     * Short & Decrease: Max Price
-     *
-     * For Market Tokens:
-     *
-     * Long & Increase: Min Price
-     * Long & Decrease: Max Price
-     * Short & Increase: Max Price
-     * Short & Decrease: Min Price
-     *
-     * If the position is a limit / adl order, don't use the block prices, use the latest signed prices
+     * Cache the signed prices for each token
      */
-    function retrieveTokenPrices(
+    function cacheTokenPrices(
         IPriceFeed priceFeed,
         ExecutionState memory _state,
         bytes32 _assetId,
-        uint256 _requestBlock,
         bool _isLong,
-        bool _isIncrease,
-        bool _fetchLatest
+        bool _isIncrease
     ) public view returns (ExecutionState memory) {
         // Determine price fetch strategy based on whether it's a limit order or not
-        uint256 priceFetchBlock = _fetchLatest ? block.number : _requestBlock;
         bool maximizePrice = _isLong != _isIncrease;
 
         // Fetch index price based on order type and direction
-        _state.indexPrice = _fetchLatest
-            ? Oracle.getLatestPrice(priceFeed, _assetId, maximizePrice)
-            : _isLong
-                ? _isIncrease
-                    ? Oracle.getMaxPrice(priceFeed, _assetId, priceFetchBlock)
-                    : Oracle.getMinPrice(priceFeed, _assetId, priceFetchBlock)
-                : _isIncrease
-                    ? Oracle.getMinPrice(priceFeed, _assetId, priceFetchBlock)
-                    : Oracle.getMaxPrice(priceFeed, _assetId, priceFetchBlock);
+        _state.indexPrice = _isLong
+            ? _isIncrease ? Oracle.getMaxPrice(priceFeed, _assetId) : Oracle.getMinPrice(priceFeed, _assetId)
+            : _isIncrease ? Oracle.getMinPrice(priceFeed, _assetId) : Oracle.getMaxPrice(priceFeed, _assetId);
 
         if (_state.indexPrice == 0) revert Order_InvalidPriceRetrieval();
 
         // Market Token Prices and Base Units
-        (_state.longMarketTokenPrice, _state.shortMarketTokenPrice) = _fetchLatest
-            ? Oracle.getLastMarketTokenPrices(priceFeed, maximizePrice)
-            : Oracle.getMarketTokenPrices(priceFeed, priceFetchBlock, maximizePrice);
+        (_state.longMarketTokenPrice, _state.shortMarketTokenPrice) =
+            Oracle.getMarketTokenPrices(priceFeed, maximizePrice);
 
         _state.collateralPrice = _isLong ? _state.longMarketTokenPrice : _state.shortMarketTokenPrice;
         _state.collateralBaseUnit = _isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);

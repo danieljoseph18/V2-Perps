@@ -14,9 +14,11 @@ library Fee {
 
     uint256 public constant SCALING_FACTOR = 1e18;
 
+    error Fee_TokenAmountTooSmall();
+
     struct Params {
         IMarket market;
-        uint256 sizeDelta;
+        uint256 tokenAmount;
         bool isLongToken;
         Pool.Values values;
         Oracle.Price longPrices;
@@ -26,7 +28,7 @@ library Fee {
 
     struct State {
         uint256 baseFee;
-        uint256 sizeDeltaUsd;
+        uint256 amountUsd;
         uint256 longTokenValue;
         uint256 shortTokenValue;
         bool longSkewBefore;
@@ -41,7 +43,7 @@ library Fee {
 
     function constructFeeParams(
         IMarket market,
-        uint256 _sizeDelta,
+        uint256 _tokenAmount,
         bool _isLongToken,
         Pool.Values memory _values,
         Oracle.Price memory _longPrices,
@@ -50,7 +52,7 @@ library Fee {
     ) external pure returns (Params memory) {
         return Params({
             market: market,
-            sizeDelta: _sizeDelta,
+            tokenAmount: _tokenAmount,
             isLongToken: _isLongToken,
             values: _values,
             longPrices: _longPrices,
@@ -59,23 +61,26 @@ library Fee {
         });
     }
 
+    // @gas
     function calculateForMarketAction(Params memory _params) external view returns (uint256) {
         State memory state;
         // get the base fee
-        state.baseFee = mulDiv(_params.sizeDelta, _params.market.BASE_FEE(), SCALING_FACTOR);
+        state.baseFee = mulDiv(_params.tokenAmount, _params.market.BASE_FEE(), SCALING_FACTOR);
 
-        // Convert skew to USD values and calculate sizeDeltaUsd once
-        state.sizeDeltaUsd = _params.isLongToken
+        // Convert skew to USD values and calculate amountUsd once
+        state.amountUsd = _params.isLongToken
             ? mulDiv(
-                _params.sizeDelta, _params.longPrices.price + _params.longPrices.confidence, _params.values.longBaseUnit
+                _params.tokenAmount, _params.longPrices.price + _params.longPrices.confidence, _params.values.longBaseUnit
             )
             : mulDiv(
-                _params.sizeDelta, _params.shortPrices.price + _params.shortPrices.confidence, _params.values.shortBaseUnit
+                _params.tokenAmount,
+                _params.shortPrices.price + _params.shortPrices.confidence,
+                _params.values.shortBaseUnit
             );
 
         // If Size Delta * Price < Base Unit -> Action has no effect on skew
-        if (state.sizeDeltaUsd == 0) {
-            revert("Fee: Size Delta Too Small");
+        if (state.amountUsd == 0) {
+            revert Fee_TokenAmountTooSmall();
         }
 
         // Calculate pool balances before and minimise value of pool to maximise the effect on the skew
@@ -106,13 +111,11 @@ library Fee {
 
         // Adjust long or short token value based on the operation
         if (_params.isLongToken) {
-            state.longTokenValue = _params.isDeposit
-                ? state.longTokenValue += state.sizeDeltaUsd
-                : state.longTokenValue -= state.sizeDeltaUsd;
+            state.longTokenValue =
+                _params.isDeposit ? state.longTokenValue += state.amountUsd : state.longTokenValue -= state.amountUsd;
         } else {
-            state.shortTokenValue = _params.isDeposit
-                ? state.shortTokenValue += state.sizeDeltaUsd
-                : state.shortTokenValue -= state.sizeDeltaUsd;
+            state.shortTokenValue =
+                _params.isDeposit ? state.shortTokenValue += state.amountUsd : state.shortTokenValue -= state.amountUsd;
         }
 
         if (state.longTokenValue > state.shortTokenValue) {
@@ -128,13 +131,13 @@ library Fee {
         if (state.skewFlip || state.skewAfter > state.skewBefore) {
             // Get the Delta to Charge the Fee on
             // For Skew Flips, the delta is the skew after the flip -> skew before improved market balance
-            state.skewDelta = state.skewFlip ? state.skewAfter : state.sizeDeltaUsd;
+            state.skewDelta = state.skewFlip ? state.skewAfter : state.amountUsd;
             // Calculate the additional fee
             // Uses the original value for LTV + STV so SkewDelta is never > LTV + STV
             state.feeAdditionUsd = mulDiv(
                 state.skewDelta,
                 _params.market.feeScale(),
-                state.longTokenValue + state.shortTokenValue + state.sizeDeltaUsd
+                state.longTokenValue + state.shortTokenValue + state.amountUsd
             );
 
             // Convert the additional fee to index tokens
@@ -160,16 +163,16 @@ library Fee {
 
     function calculateForPosition(
         ITradeStorage tradeStorage,
-        uint256 _sizeDelta,
+        uint256 _tokenAmount,
         uint256 _collateralDelta,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit
     ) external view returns (uint256 fee) {
         uint256 feePercentage = tradeStorage.tradingFee();
         // convert index amount to collateral amount
-        if (_sizeDelta != 0) {
+        if (_tokenAmount != 0) {
             uint256 sizeInCollateral =
-                Position.convertUsdToCollateral(_sizeDelta, _collateralPrice, _collateralBaseUnit);
+                Position.convertUsdToCollateral(_tokenAmount, _collateralPrice, _collateralBaseUnit);
             // calculate fee
             fee = mulDiv(sizeInCollateral, feePercentage, SCALING_FACTOR);
         } else {

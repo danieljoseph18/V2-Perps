@@ -49,6 +49,9 @@ contract TestBorrowing is Test {
     bytes[] tokenUpdateData;
     uint256[] allocations;
 
+    bytes32 ethAssetId = keccak256("ETH");
+    bytes32 usdcAssetId = keccak256("USDC");
+
     address USER = makeAddr("USER");
 
     function setUp() public {
@@ -98,8 +101,8 @@ contract TestBorrowing is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
                 token0: weth,
                 token1: usdc,
@@ -122,9 +125,9 @@ contract TestBorrowing is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(weth);
+        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
@@ -136,10 +139,10 @@ contract TestBorrowing is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.01 ether}(market, depositKey, 0, tokenUpdateData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -151,16 +154,16 @@ contract TestBorrowing is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.01 ether}(market, depositKey, 0, tokenUpdateData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(weth), 10000);
+        assertEq(market.getAllocation(ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -194,10 +197,10 @@ contract TestBorrowing is Test {
         setUpMarkets
     {
         Order.ExecutionState memory state;
-        state.market = IMarket(marketMaker.tokenToMarkets(weth));
+        state.market = IMarket(marketMaker.tokenToMarkets(ethAssetId));
         // Open a position to alter the borrowing rate
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -218,16 +221,11 @@ contract TestBorrowing is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 0.51 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 0.51 ether}(input);
 
         vm.prank(OWNER);
-        processor.executePosition(
-            tradeStorage.getOrderAtIndex(0, false),
-            OWNER,
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true}),
-            tokenUpdateData,
-            weth,
-            0
+        processor.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), OWNER, tokenUpdateData, ethAssetId
         );
         // Get the current rate
 
@@ -241,14 +239,14 @@ contract TestBorrowing is Test {
 
         Position.Data memory position = Position.Data(
             state.market,
-            weth,
+            ethAssetId,
             USER,
             weth,
             _collateral,
             positionSize,
             2500e30,
             block.timestamp,
-            state.market.getFundingAccrued(weth),
+            state.market.getFundingAccrued(ethAssetId),
             true,
             Position.BorrowingParams(0, 0, 0),
             bytes32(0),
@@ -265,7 +263,7 @@ contract TestBorrowing is Test {
         uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, state);
         // Index Tokens == Collateral Tokens
         uint256 expectedFees = mulDiv(
-            ((state.market.getBorrowingRate(weth, true) * 1 days) * positionSize) / 1e18,
+            ((state.market.getBorrowingRate(ethAssetId, true) * 1 days) * positionSize) / 1e18,
             state.collateralBaseUnit,
             state.collateralPrice
         );
@@ -278,7 +276,7 @@ contract TestBorrowing is Test {
         uint256 _leverage
     ) public setUpMarkets {
         Order.ExecutionState memory state;
-        state.market = IMarket(marketMaker.tokenToMarkets(weth));
+        state.market = IMarket(marketMaker.tokenToMarkets(ethAssetId));
 
         // Create an arbitrary position
         _collateral = bound(_collateral, 1, 100_000 ether);
@@ -286,14 +284,14 @@ contract TestBorrowing is Test {
         uint256 positionSize = (_collateral * _leverage) * 2500e30 / 1e18;
         Position.Data memory position = Position.Data(
             state.market,
-            weth,
+            ethAssetId,
             USER,
             weth,
             _collateral,
             positionSize,
             2500e30,
             block.timestamp,
-            state.market.getFundingAccrued(weth),
+            state.market.getFundingAccrued(ethAssetId),
             true,
             Position.BorrowingParams(0, 1e18, 0), // Set entry cumulative to 1e18
             bytes32(0),
@@ -305,7 +303,7 @@ contract TestBorrowing is Test {
 
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getCumulativeBorrowFee.selector, weth, true),
+            abi.encodeWithSelector(Market.getCumulativeBorrowFee.selector, ethAssetId, true),
             abi.encode(uint256(1e18) + bonusCumulative) // Mock return value
         );
 
@@ -327,7 +325,7 @@ contract TestBorrowing is Test {
     function testBorrowingRateCalculationBasic() public setUpMarkets {
         // Open a position to alter the borrowing rate
         Position.Input memory input = Position.Input({
-            indexToken: weth,
+            assetId: ethAssetId,
             collateralToken: weth,
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
@@ -348,20 +346,15 @@ contract TestBorrowing is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input, tokenUpdateData);
+        router.createPositionRequest{value: 4.01 ether}(input);
 
         vm.prank(OWNER);
-        processor.executePosition(
-            tradeStorage.getOrderAtIndex(0, false),
-            OWNER,
-            Oracle.TradingEnabled({forex: true, equity: true, commodity: true, prediction: true}),
-            tokenUpdateData,
-            weth,
-            0
+        processor.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), OWNER, tokenUpdateData, ethAssetId
         );
 
         // Fetch the borrowing rate
-        uint256 borrowingRate = market.getBorrowingRate(weth, true);
+        uint256 borrowingRate = market.getBorrowingRate(ethAssetId, true);
         // Cross check
         assertGt(borrowingRate, 0);
     }

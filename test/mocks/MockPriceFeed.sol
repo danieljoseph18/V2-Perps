@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.23;
 
-import {MockPyth} from "@pythnetwork/pyth-sdk-solidity/MockPyth.sol";
+import {MockPyth, AbstractPyth} from "@pythnetwork/pyth-sdk-solidity/MockPyth.sol";
 import {IPriceFeed} from "../../src/oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../../src/oracle/Oracle.sol";
 import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
@@ -25,13 +25,12 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
 
     bytes32 public longTokenId;
     bytes32 public shortTokenId;
-    uint256 public updateFee;
     uint256 public lastUpdateBlock; // Used to get cached prices
     address public sequencerUptimeFeed;
 
     mapping(bytes32 assetId => Oracle.Asset asset) private assets;
     // To Store Price Data
-    mapping(bytes32 assetId => mapping(uint256 block => Oracle.Price price)) public prices;
+    mapping(bytes32 assetId => Oracle.Price price) public prices;
 
     constructor(
         uint256 _validTimePeriod,
@@ -57,6 +56,8 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
         });
     }
 
+    receive() external payable {}
+
     function supportAsset(bytes32 _assetId, Oracle.Asset memory _asset) external {
         assets[_assetId] = _asset;
         priceFeeds[_asset.priceId] = PythStructs.PriceFeed({
@@ -75,95 +76,89 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
     }
 
     function signPrimaryPrice(bytes32 _assetId, bytes[] calldata _priceUpdateData) external payable {
-        // If already signed, no need to sign again
-        if (prices[_assetId][block.number].price != 0) return;
-
-        // Check if the sequencer is up
+        // Check if the sequencer is up (move this check outside the function if possible)
         Oracle.isSequencerUp(this);
 
-        // Fetch the Asset
-        Oracle.Asset memory asset = assets[_assetId];
-        if (!asset.isValid) revert PriceFeed_InvalidToken();
+        // Check if the asset price has already been signed
+        if (_assetId != bytes32(0) && prices[_assetId].price != 0) return;
 
-        // Parse the update data based on the settlement strategy
-        if (asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
-            // Pyth Update Data: [bytes32 id, int64 price, uint64 conf, int32 expo, int64 emaPrice, uint64 emaConf, uint64 publishTime, uint64 prevPublishTime]
+        // Default to Pyth for Market Tokens
+        if (_assetId == bytes32(0)) {
+            // Update prices for long and short assets
+            uint256 fee = getUpdateFee(_priceUpdateData);
+            if (msg.value < fee) revert PriceFeed_InsufficientFee();
             updatePriceFeeds(_priceUpdateData);
-
-            // Parse the Update Data
-            PythStructs.Price memory data = queryPriceFeed(asset.priceId).price;
-            Oracle.Price memory indexPrice = Oracle.parsePythData(data);
-
-            // Validate the parsed data
-            uint256 indexRefPrice = Oracle.getReferencePrice(asset);
-            if (asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
-                // Check the Price is within range if it has a reference
-                Oracle.validatePriceRange(asset, indexPrice, indexRefPrice);
+            if (prices[longTokenId].price == 0) {
+                _updatePythPrice(longTokenId, assets[longTokenId]);
             }
-
-            // Store the signed price in the prices mapping
-            prices[_assetId][block.number] = indexPrice;
-
-            // Sign the Long/Short prices if not already signed
-            if (prices[longTokenId][block.number].price == 0) {
-                Oracle.Asset memory longAsset = assets[longTokenId];
-                PythStructs.Price memory longData = queryPriceFeed(longAsset.priceId).price;
-                Oracle.Price memory longPrice = Oracle.parsePythData(longData);
-                // Reference price should always exist
-                uint256 longRefPrice = Oracle.getReferencePrice(longAsset);
-                Oracle.validatePriceRange(longAsset, longPrice, longRefPrice);
-                // Get ref price and validate price is within range
-                prices[longTokenId][block.number] = longPrice;
-            }
-
-            if (prices[shortTokenId][block.number].price == 0) {
-                Oracle.Asset memory shortAsset = assets[shortTokenId];
-                PythStructs.Price memory shortData = queryPriceFeed(shortAsset.priceId).price;
-                Oracle.Price memory shortPrice = Oracle.parsePythData(shortData);
-                // Reference price should always exist
-                uint256 shortRefPrice = Oracle.getReferencePrice(shortAsset);
-                Oracle.validatePriceRange(shortAsset, shortPrice, shortRefPrice);
-                // Get ref price and validate price is within range
-                prices[shortTokenId][block.number] = shortPrice;
-            }
-
-            // Pay the update fee to post the data
-            // TODO: Implement the fee payment logic
-        } else if (asset.primaryStrategy == Oracle.PrimaryStrategy.OFFCHAIN) {
-            // Parse the Update Data
-            (Oracle.Price memory indexPrice, Oracle.Price memory longPrice, Oracle.Price memory shortPrice) =
-                Oracle.parsePriceData(_priceUpdateData[0]);
-
-            // Validate the parsed data
-            if (asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
-                uint256 indexRefPrice = Oracle.getReferencePrice(asset);
-                // Check the Price is within range if it has a reference
-                Oracle.validatePriceRange(asset, indexPrice, indexRefPrice);
-            }
-
-            // Store the signed price in the prices mapping
-            prices[_assetId][block.number] = indexPrice; // 100% Confidence
-
-            if (prices[longTokenId][block.number].price == 0) {
-                Oracle.Asset memory longAsset = assets[longTokenId];
-                // Reference price should always exist
-                uint256 longRefPrice = Oracle.getReferencePrice(longAsset);
-                Oracle.validatePriceRange(longAsset, longPrice, longRefPrice);
-                // Get ref price and validate price is within range
-                prices[longTokenId][block.number] = longPrice;
-            }
-
-            if (prices[shortTokenId][block.number].price == 0) {
-                Oracle.Asset memory shortAsset = assets[shortTokenId];
-                // Reference price should always exist
-                uint256 shortRefPrice = Oracle.getReferencePrice(shortAsset);
-                Oracle.validatePriceRange(shortAsset, shortPrice, shortRefPrice);
-                // Get ref price and validate price is within range
-                prices[shortTokenId][block.number] = shortPrice;
+            if (prices[shortTokenId].price == 0) {
+                _updatePythPrice(shortTokenId, assets[shortTokenId]);
             }
         } else {
-            revert PriceFeed_InvalidPrimaryStrategy();
+            // Fetch the asset
+            Oracle.Asset memory asset = assets[_assetId];
+            if (!asset.isValid) revert PriceFeed_InvalidToken();
+
+            // Update price based on the primary strategy
+            if (asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
+                // Check if the fee is sufficient and update price feeds
+                uint256 fee = getUpdateFee(_priceUpdateData);
+                if (msg.value < fee) revert PriceFeed_InsufficientFee();
+                updatePriceFeeds(_priceUpdateData);
+                // Asset
+                _updatePythPrice(_assetId, asset);
+                // Long Token
+                if (prices[longTokenId].price == 0) {
+                    _updatePythPrice(longTokenId, assets[longTokenId]);
+                }
+                // Short Token
+                if (prices[shortTokenId].price == 0) {
+                    _updatePythPrice(shortTokenId, assets[shortTokenId]);
+                }
+            } else if (asset.primaryStrategy == Oracle.PrimaryStrategy.OFFCHAIN) {
+                // Asset
+                _updateOffchainPrice(_assetId, asset, _priceUpdateData[0]);
+                // Long Token
+                if (prices[longTokenId].price == 0) {
+                    _updateOffchainPrice(longTokenId, assets[longTokenId], _priceUpdateData[1]);
+                }
+                // Short Token
+                if (prices[shortTokenId].price == 0) {
+                    _updateOffchainPrice(shortTokenId, assets[shortTokenId], _priceUpdateData[2]);
+                }
+            } else {
+                revert PriceFeed_InvalidPrimaryStrategy();
+            }
         }
+    }
+
+    function clearPrimaryPrice(bytes32 _assetId) external {
+        if (_assetId != bytes32(0)) delete prices[_assetId];
+        delete prices[longTokenId];
+        delete prices[shortTokenId];
+    }
+
+    function _updatePythPrice(bytes32 _assetId, Oracle.Asset memory _asset) internal {
+        PythStructs.Price memory data = queryPriceFeed(_asset.priceId).price;
+        Oracle.Price memory price = Oracle.parsePythData(data);
+
+        if (_asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+            uint256 refPrice = Oracle.getReferencePrice(_asset);
+            Oracle.validatePriceRange(_asset, price, refPrice);
+        }
+
+        prices[_assetId] = price;
+    }
+
+    function _updateOffchainPrice(bytes32 _assetId, Oracle.Asset memory _asset, bytes memory _priceData) internal {
+        (Oracle.Price memory price,,) = Oracle.parsePriceData(_priceData);
+
+        if (_asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+            uint256 refPrice = Oracle.getReferencePrice(_asset);
+            Oracle.validatePriceRange(_asset, price, refPrice);
+        }
+
+        prices[_assetId] = price;
     }
 
     function getPriceUnsafe(Oracle.Asset memory _asset) external view returns (uint256 price, uint256 confidence) {
@@ -222,11 +217,15 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
     // GETTERS //
     /////////////
 
-    function getPrice(bytes32 _assetId, uint256 _block) external view returns (Oracle.Price memory) {
-        return prices[_assetId][_block];
-    }
-
     function getAsset(bytes32 _assetId) external view returns (Oracle.Asset memory) {
         return assets[_assetId];
+    }
+
+    function getPrimaryPrice(bytes32 _assetId) external view override returns (Oracle.Price memory) {
+        return prices[_assetId];
+    }
+
+    function updateFee(bytes[] calldata _priceUpdateData) external view returns (uint256) {
+        return getUpdateFee(_priceUpdateData);
     }
 }

@@ -47,6 +47,9 @@ contract TestFunding is Test {
 
     address USER = makeAddr("USER");
 
+    bytes32 ethAssetId = keccak256("ETH");
+    bytes32 usdcAssetId = keccak256("USDC");
+
     function setUp() public {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
@@ -94,8 +97,8 @@ contract TestFunding is Test {
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
             priceSpread: 0.1e18,
-            priceProvider: Oracle.PriceProvider.PYTH,
-            assetType: Oracle.AssetType.CRYPTO,
+            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
+            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
                 token0: weth,
                 token1: usdc,
@@ -118,9 +121,9 @@ contract TestFunding is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, weth, ethPriceId, wethData);
+        marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(weth);
+        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
@@ -132,10 +135,10 @@ contract TestFunding is Test {
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.01 ether}(market, depositKey, 0, tokenUpdateData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -147,16 +150,16 @@ contract TestFunding is Test {
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input, tokenUpdateData);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(market, depositKey, 0);
+        processor.executeDeposit{value: 0.01 ether}(market, depositKey, 0, tokenUpdateData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(weth), 10000);
+        assertEq(market.getAllocation(ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -182,7 +185,7 @@ contract TestFunding is Test {
         int256 balancedLong = 1000e30;
         int256 balancedShort = -1000e30;
         // Calculate Heavy Long Velocity
-        int256 heavyLongVelocity = Funding.getCurrentVelocity(market, weth, heavyLong);
+        int256 heavyLongVelocity = Funding.getCurrentVelocity(market, ethAssetId, heavyLong);
         /**
          * proportional skew = $500,000 / $1,000,000 = 0.5
          * bounded skew = 0.5
@@ -191,7 +194,7 @@ contract TestFunding is Test {
         int256 expectedHeavyLongVelocity = 0.045e18;
         assertEq(heavyLongVelocity, expectedHeavyLongVelocity);
         // Calculate Heavy Short Velocity
-        int256 heavyShortVelocity = Funding.getCurrentVelocity(market, weth, heavyShort);
+        int256 heavyShortVelocity = Funding.getCurrentVelocity(market, ethAssetId, heavyShort);
         /**
          * proportional skew = -$500,000 / $1,000,000 = -0.5
          * bounded skew = -0.5
@@ -200,7 +203,7 @@ contract TestFunding is Test {
         int256 expectedHeavyShortVelocity = -0.045e18;
         assertEq(heavyShortVelocity, expectedHeavyShortVelocity);
         // Calculate Balanced Long Velocity
-        int256 balancedLongVelocity = Funding.getCurrentVelocity(market, weth, balancedLong);
+        int256 balancedLongVelocity = Funding.getCurrentVelocity(market, ethAssetId, balancedLong);
         /**
          * proportional skew = $1,000 / $1,000,000 = 0.001
          * bounded skew = 0.001
@@ -209,7 +212,7 @@ contract TestFunding is Test {
         int256 expectedBalancedLongVelocity = 0.00009e18;
         assertEq(balancedLongVelocity, expectedBalancedLongVelocity);
         // Calculate Balanced Short Velocity
-        int256 balancedShortVelocity = Funding.getCurrentVelocity(market, weth, balancedShort);
+        int256 balancedShortVelocity = Funding.getCurrentVelocity(market, ethAssetId, balancedShort);
         /**
          * proportional skew = -$1,000 / $1,000,000 = -0.001
          * bounded skew = -0.001
@@ -224,13 +227,17 @@ contract TestFunding is Test {
         _shortOi = bound(_shortOi, 1e30, 1_000_000_000_000e30); // Bound between $1 and $1 Trillion
         // Mock Fuzz long & short Oi
         vm.mockCall(
-            address(market), abi.encodeWithSelector(Market.getOpenInterest.selector, weth, true), abi.encode(_longOi)
+            address(market),
+            abi.encodeWithSelector(Market.getOpenInterest.selector, ethAssetId, true),
+            abi.encode(_longOi)
         );
         vm.mockCall(
-            address(market), abi.encodeWithSelector(Market.getOpenInterest.selector, weth, false), abi.encode(_shortOi)
+            address(market),
+            abi.encodeWithSelector(Market.getOpenInterest.selector, ethAssetId, false),
+            abi.encode(_shortOi)
         );
         // Skew should be long oi - short oi
-        int256 skew = Funding.calculateSkewUsd(market, weth);
+        int256 skew = Funding.calculateSkewUsd(market, ethAssetId);
         int256 expectedSkew = int256(_longOi) - int256(_shortOi);
         assertEq(skew, expectedSkew);
     }
@@ -238,16 +245,18 @@ contract TestFunding is Test {
     function testGettingTheCurrentFundingRateChangesOverTimeWithVelocity() public setUpMarkets {
         // Mock an existing rate and velocity
         vm.mockCall(
-            address(market), abi.encodeWithSelector(Market.getFundingRates.selector, weth), abi.encode(0, 0.0025e18)
+            address(market),
+            abi.encodeWithSelector(Market.getFundingRates.selector, ethAssetId),
+            abi.encode(0, 0.0025e18)
         );
         // Mock the lastFundingUpdate to block timestamp
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, weth),
+            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, ethAssetId),
             abi.encode(block.timestamp)
         );
         // get current funding rate
-        int256 currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
         /**
          * currentFundingRate = 0 + 0.0025 * (0 / 86,400)
          *                    = 0
@@ -259,7 +268,7 @@ contract TestFunding is Test {
         vm.roll(block.number + 1);
 
         // get current funding rate
-        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
         /**
          * currentFundingRate = 0 + 0.0025 * (10,000 / 86,400)
          *                    = 0 + 0.0025 * 0.11574074
@@ -272,7 +281,7 @@ contract TestFunding is Test {
         vm.roll(block.number + 1);
 
         // get current funding rate
-        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
         /**
          * currentFundingRate = 0 + 0.0025 * (20,000 / 86,400)
          *                    = 0 + 0.0025 * 0.23148148
@@ -285,7 +294,7 @@ contract TestFunding is Test {
         vm.roll(block.number + 1);
 
         // get current funding rate
-        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
 
         /**
          * currentFundingRate = 0 + 0.0025 * (30,000 / 86,400)
@@ -300,17 +309,17 @@ contract TestFunding is Test {
         // Mock an existing negative rate and positive velocity
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingRates.selector, weth),
+            abi.encodeWithSelector(Market.getFundingRates.selector, ethAssetId),
             abi.encode(-0.0005e18, 0.0025e18)
         );
         // Mock the lastFundingUpdate to block timestamp
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, weth),
+            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, ethAssetId),
             abi.encode(block.timestamp)
         );
         // get current funding rate
-        int256 currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
         /**
          * currentFundingRate = -0.0005 + 0.0025 * (0 / 86,400)
          *                    = -0.0005
@@ -322,7 +331,7 @@ contract TestFunding is Test {
         vm.roll(block.number + 1);
 
         // get current funding rate
-        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
         /**
          * currentFundingRate = -0.0005 + 0.0025 * (10,000 / 86,400)
          *                    = -0.0005 + 0.0025 * 0.11574074
@@ -336,7 +345,7 @@ contract TestFunding is Test {
         vm.roll(block.number + 1);
 
         // get current funding rate
-        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
         /**
          * currentFundingRate = -0.0005 + 0.0025 * (20,000 / 86,400)
          *                    = -0.0005 + 0.0025 * 0.23148148
@@ -350,7 +359,7 @@ contract TestFunding is Test {
         vm.roll(block.number + 1);
 
         // get current funding rate
-        currentFundingRate = Funding.getCurrentFundingRate(market, weth);
+        currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
 
         /**
          * currentFundingRate = -0.0005 + 0.0025 * (30,000 / 86,400)
@@ -387,17 +396,17 @@ contract TestFunding is Test {
         // Mock the necessary market functions
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingRates.selector, weth),
+            abi.encodeWithSelector(Market.getFundingRates.selector, ethAssetId),
             abi.encode(values.fundingRate, values.fundingVelocity)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingAccrued.selector, weth),
+            abi.encodeWithSelector(Market.getFundingAccrued.selector, ethAssetId),
             abi.encode(values.entryFundingAccrued)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, weth),
+            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, ethAssetId),
             abi.encode(block.timestamp)
         );
 
@@ -407,7 +416,7 @@ contract TestFunding is Test {
 
         // Call the function with the fuzzed inputs
         (values.fundingFeeUsd, values.nextFundingAccrued) =
-            Funding.getFeeForPositionChange(market, weth, 2500e30, values.sizeDelta, values.entryFundingAccrued);
+            Funding.getFeeForPositionChange(market, ethAssetId, 2500e30, values.sizeDelta, values.entryFundingAccrued);
 
         // Assert that the outputs are within expected ranges
         assertEq(
@@ -430,17 +439,17 @@ contract TestFunding is Test {
         // Mock the necessary market functions
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingRates.selector, weth),
+            abi.encodeWithSelector(Market.getFundingRates.selector, ethAssetId),
             abi.encode(_fundingRate, _fundingVelocity)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingAccrued.selector, weth),
+            abi.encodeWithSelector(Market.getFundingAccrued.selector, ethAssetId),
             abi.encode(_entryFundingAccrued)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, weth),
+            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, ethAssetId),
             abi.encode(block.timestamp)
         );
 
@@ -448,7 +457,7 @@ contract TestFunding is Test {
         vm.roll(block.number + 1);
 
         // Call the function with the fuzzed input
-        (int256 nextFundingRate, int256 nextFundingAccruedUsd) = Funding.recompute(market, weth, _indexPrice);
+        (int256 nextFundingRate, int256 nextFundingAccruedUsd) = Funding.recompute(market, ethAssetId, _indexPrice);
 
         // Check values are as expected
         console2.log(nextFundingRate);
