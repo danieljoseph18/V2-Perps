@@ -15,11 +15,10 @@ import {Deposit} from "../../../src/markets/Deposit.sol";
 import {Withdrawal} from "../../../src/markets/Withdrawal.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
-import {Pool} from "../../../src/markets/Pool.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
-import {Market, IMarket} from "../../../src/markets/Market.sol";
+import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
@@ -122,7 +121,7 @@ contract TestFee is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        Pool.VaultConfig memory wethVaultDetails = Pool.VaultConfig({
+        IVault.VaultConfig memory wethVaultDetails = IVault.VaultConfig({
             longToken: weth,
             shortToken: usdc,
             longBaseUnit: 1e18,
@@ -186,10 +185,8 @@ contract TestFee is Test {
      * - Calculate for a position
      */
     function testConstructionOfFeeParameters(uint256 _tokenAmount) public setUpMarkets {
-        Pool.Values memory poolValues = Pool.getValues(market);
         (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) = Oracle.getLastMarketTokenPrices(priceFeed);
-        Fee.Params memory feeParams =
-            Fee.constructFeeParams(market, _tokenAmount, true, poolValues, longPrices, shortPrices, true);
+        Fee.Params memory feeParams = Fee.constructFeeParams(market, _tokenAmount, true, longPrices, shortPrices, true);
         assertEq(feeParams.tokenAmount, _tokenAmount);
     }
 
@@ -206,12 +203,11 @@ contract TestFee is Test {
 
     function testCalculatingFeesForAMarketAction(uint256 _tokenAmount) public setUpMarkets {
         _tokenAmount = bound(_tokenAmount, 1000, 1_000_000_000e18);
-        Pool.Values memory poolValues = Pool.getValues(market);
         (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) = Oracle.getLastMarketTokenPrices(priceFeed);
-        Fee.Params memory feeParams =
-            Fee.constructFeeParams(market, _tokenAmount, true, poolValues, longPrices, shortPrices, true);
+        Fee.Params memory feeParams = Fee.constructFeeParams(market, _tokenAmount, true, longPrices, shortPrices, true);
 
-        uint256 fee = Fee.calculateForMarketAction(feeParams);
+        uint256 fee =
+            Fee.calculateForMarketAction(feeParams, market.longTokenBalance(), 1e18, market.shortTokenBalance(), 1e6);
         console.log("Fee: ", fee);
         require(fee >= 0, "Invalid Fee");
     }

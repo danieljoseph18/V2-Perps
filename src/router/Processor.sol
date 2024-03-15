@@ -133,7 +133,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.isLongToken, true); // Maximize AUM for deposits
         try market.executeDeposit(params) {}
         catch {
-            revert("Processor: Execute Deposit Failed");
+            revert Processor_ExecuteDepositFailed();
         }
         // Send Execution Fee + Rebate
         Gas.payExecutionFee(
@@ -174,7 +174,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         params.shouldUnwrap = params.data.input.shouldUnwrap;
         try market.executeWithdrawal(params) {}
         catch {
-            revert("Processor: Execute Withdrawal Failed");
+            revert Processor_ExecuteWithdrawalFailed();
         }
         // Send Execution Fee + Rebate
         Gas.payExecutionFee(
@@ -307,7 +307,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // liquidate the position
         try tradeStorage.liquidatePosition(state, _positionKey, msg.sender) {}
         catch {
-            revert("Processor: Liquidation Failed");
+            revert Processor_LiquidationFailed();
         }
     }
 

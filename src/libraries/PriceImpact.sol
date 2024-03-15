@@ -185,7 +185,7 @@ library PriceImpact {
             mulDivSigned(skewScalar, skewImpact, SIGNED_PRICE_PRECISION), liquidityImpact, SIGNED_PRICE_PRECISION
         );
         // if the total impact is > 0, flip the sign
-        if (totalImpact > 0) totalImpact = totalImpact * -1;
+        if (totalImpact > 0) totalImpact = -totalImpact;
         // Don't need to check upper boundary of 1e18, as impact should always be negative here
         if (totalImpact < -1e18 || totalImpact > 0) {
             revert PriceImpact_InvalidTotalImpact(totalImpact);

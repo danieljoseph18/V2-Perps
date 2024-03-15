@@ -6,7 +6,23 @@ import {Withdrawal} from "../Withdrawal.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface IVault {
+    struct VaultConfig {
+        address longToken;
+        address shortToken;
+        uint64 longBaseUnit;
+        uint64 shortBaseUnit;
+        uint64 feeScale;
+        uint64 feePercentageToOwner;
+        uint48 minTimeToExpiration;
+        address priceFeed;
+        address processor;
+        address poolOwner;
+        address feeDistributor;
+        string name;
+        string symbol;
+    }
     // Admin functions
+
     function updateFees(address _poolOwner, address _feeDistributor, uint256 _feeScale, uint256 _feePercentageToOwner)
         external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
@@ -99,4 +115,6 @@ interface IVault {
     error Vault_FailedToAddWithdrawal();
     error Vault_FailedToRemoveWithdrawal();
     error Vault_FailedToRemoveDeposit();
+    error Vault_InsufficientLongBalance();
+    error Vault_InsufficientShortBalance();
 }

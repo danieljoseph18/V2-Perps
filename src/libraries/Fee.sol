@@ -6,8 +6,8 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {Position} from "../positions/Position.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {Pool} from "../markets/Pool.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 
 library Fee {
     using SignedMath for int256;
@@ -20,7 +20,6 @@ library Fee {
         IMarket market;
         uint256 tokenAmount;
         bool isLongToken;
-        Pool.Values values;
         Oracle.Price longPrices;
         Oracle.Price shortPrices;
         bool isDeposit;
@@ -45,7 +44,6 @@ library Fee {
         IMarket market,
         uint256 _tokenAmount,
         bool _isLongToken,
-        Pool.Values memory _values,
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
         bool _isDeposit
@@ -54,7 +52,6 @@ library Fee {
             market: market,
             tokenAmount: _tokenAmount,
             isLongToken: _isLongToken,
-            values: _values,
             longPrices: _longPrices,
             shortPrices: _shortPrices,
             isDeposit: _isDeposit
@@ -62,21 +59,21 @@ library Fee {
     }
 
     // @gas
-    function calculateForMarketAction(Params memory _params) external view returns (uint256) {
+    function calculateForMarketAction(
+        Params memory _params,
+        uint256 _longTokenBalance,
+        uint256 _longBaseUnit,
+        uint256 _shortTokenBalance,
+        uint256 _shortBaseUnit
+    ) external view returns (uint256) {
         State memory state;
         // get the base fee
         state.baseFee = mulDiv(_params.tokenAmount, _params.market.BASE_FEE(), SCALING_FACTOR);
 
         // Convert skew to USD values and calculate amountUsd once
         state.amountUsd = _params.isLongToken
-            ? mulDiv(
-                _params.tokenAmount, _params.longPrices.price + _params.longPrices.confidence, _params.values.longBaseUnit
-            )
-            : mulDiv(
-                _params.tokenAmount,
-                _params.shortPrices.price + _params.shortPrices.confidence,
-                _params.values.shortBaseUnit
-            );
+            ? mulDiv(_params.tokenAmount, _params.longPrices.price + _params.longPrices.confidence, _longBaseUnit)
+            : mulDiv(_params.tokenAmount, _params.shortPrices.price + _params.shortPrices.confidence, _shortBaseUnit);
 
         // If Size Delta * Price < Base Unit -> Action has no effect on skew
         if (state.amountUsd == 0) {
@@ -84,16 +81,10 @@ library Fee {
         }
 
         // Calculate pool balances before and minimise value of pool to maximise the effect on the skew
-        state.longTokenValue = mulDiv(
-            _params.values.longTokenBalance,
-            _params.longPrices.price - _params.longPrices.confidence,
-            _params.values.longBaseUnit
-        );
-        state.shortTokenValue = mulDiv(
-            _params.values.shortTokenBalance,
-            _params.shortPrices.price - _params.shortPrices.confidence,
-            _params.values.shortBaseUnit
-        );
+        state.longTokenValue =
+            mulDiv(_longTokenBalance, _params.longPrices.price - _params.longPrices.confidence, _longBaseUnit);
+        state.shortTokenValue =
+            mulDiv(_shortTokenBalance, _params.shortPrices.price - _params.shortPrices.confidence, _shortBaseUnit);
 
         // Don't want to disincentivise deposits on empty pool
         if (state.longTokenValue == 0 && state.shortTokenValue == 0) {
@@ -142,16 +133,8 @@ library Fee {
 
             // Convert the additional fee to index tokens
             state.indexFee = _params.isLongToken
-                ? mulDiv(
-                    state.feeAdditionUsd,
-                    _params.values.longBaseUnit,
-                    _params.longPrices.price + _params.longPrices.confidence
-                )
-                : mulDiv(
-                    state.feeAdditionUsd,
-                    _params.values.shortBaseUnit,
-                    _params.shortPrices.price + _params.shortPrices.confidence
-                );
+                ? mulDiv(state.feeAdditionUsd, _longBaseUnit, _params.longPrices.price + _params.longPrices.confidence)
+                : mulDiv(state.feeAdditionUsd, _shortBaseUnit, _params.shortPrices.price + _params.shortPrices.confidence);
 
             // Return base fee + additional fee
             return state.baseFee + state.indexFee;

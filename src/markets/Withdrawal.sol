@@ -3,7 +3,6 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Fee} from "../libraries/Fee.sol";
-import {Pool} from "./Pool.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IProcessor} from "../router/interfaces/IProcessor.sol";
@@ -33,20 +32,10 @@ library Withdrawal {
         IProcessor processor;
         IPriceFeed priceFeed;
         Data data;
-        Pool.Values values;
         bytes32 key;
         int256 cumulativePnl;
         bool isLongToken;
         bool shouldUnwrap;
-    }
-
-    struct ExecutionState {
-        Oracle.Price longPrices;
-        Oracle.Price shortPrices;
-        Fee.Params feeParams;
-        uint256 fee;
-        uint256 totalTokensOut;
-        uint256 amountOut;
     }
 
     event WithdrawalExecuted(
@@ -76,44 +65,6 @@ library Withdrawal {
             expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration,
             key: _generateKey(_input.owner, _input.tokenOut, _input.marketTokenAmountIn, blockNumber)
         });
-    }
-
-    function execute(ExecuteParams memory _params) external view returns (ExecutionState memory state) {
-        // get price signed to the block number of the request
-        (state.longPrices, state.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed);
-        if (state.longPrices.price == 0 || state.shortPrices.price == 0) {
-            revert Withdrawal_InvalidPrices();
-        }
-        // Calculate amountOut
-        state.totalTokensOut = Pool.withdrawMarketTokensToTokens(
-            _params.values,
-            state.longPrices,
-            state.shortPrices,
-            _params.data.input.marketTokenAmountIn,
-            _params.cumulativePnl,
-            _params.isLongToken
-        );
-
-        if (_params.isLongToken) {
-            if (state.totalTokensOut > _params.values.longTokenBalance) revert Withdrawal_InsufficientLongBalance();
-        } else {
-            if (state.totalTokensOut > _params.values.shortTokenBalance) revert Withdrawal_InsufficientShortBalance();
-        }
-
-        // Calculate Fee
-        state.feeParams = Fee.constructFeeParams(
-            _params.market,
-            state.totalTokensOut,
-            _params.isLongToken,
-            _params.values,
-            state.longPrices,
-            state.shortPrices,
-            false
-        );
-        state.fee = Fee.calculateForMarketAction(state.feeParams);
-
-        // calculate amount remaining after fee and price impact
-        state.amountOut = state.totalTokensOut - state.fee;
     }
 
     function _generateKey(address owner, address tokenOut, uint256 marketTokenAmountIn, uint256 blockNumber)

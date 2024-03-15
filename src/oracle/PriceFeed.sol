@@ -206,11 +206,35 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
         priceFeedData = abi.encode(priceFeed, prevPublishTime);
     }
 
-    function packPriceData(uint8[] calldata _indexes, uint256[] calldata _prices, uint256[] calldata _decimals)
+    function packPriceData(uint8[] calldata _indexes, uint256[] calldata _prices, uint8[] calldata _decimals)
         external
         pure
         returns (uint256[] memory packedPrices)
-    {}
+    {
+        require(_indexes.length == _prices.length && _indexes.length == _decimals.length, "Array lengths must match");
+
+        uint256 maxIndex = 0;
+        for (uint256 i = 0; i < _indexes.length; i++) {
+            require(_indexes[i] < 4, "Index must be less than 4");
+            require(_prices[i] < (1 << 56), "Price exceeds maximum value (2^56 - 1)");
+            require(_decimals[i] < (1 << 8), "Decimal exceeds maximum value (2^8 - 1)");
+            maxIndex = _indexes[i] > maxIndex ? _indexes[i] : maxIndex;
+        }
+
+        packedPrices = new uint256[]((maxIndex + 1 + 3) / 4);
+
+        for (uint256 i = 0; i < _indexes.length; i++) {
+            uint256 index = _indexes[i];
+            uint256 price = _prices[i];
+            uint256 decimal = _decimals[i];
+
+            uint256 arrayIndex = index / 4;
+            uint256 bitOffset = (index % 4) * 64;
+
+            uint256 packedValue = (price << bitOffset) | (decimal << (bitOffset + 56));
+            packedPrices[arrayIndex] |= packedValue;
+        }
+    }
 
     function getAsset(bytes32 _assetId) external view returns (Oracle.Asset memory) {
         return assets[_assetId];

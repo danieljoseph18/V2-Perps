@@ -15,11 +15,10 @@ import {Deposit} from "../../../src/markets/Deposit.sol";
 import {Withdrawal} from "../../../src/markets/Withdrawal.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
-import {Pool} from "../../../src/markets/Pool.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
-import {Market, IMarket} from "../../../src/markets/Market.sol";
+import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
@@ -119,7 +118,7 @@ contract TestBorrowing is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        Pool.VaultConfig memory wethVaultDetails = Pool.VaultConfig({
+        IVault.VaultConfig memory wethVaultDetails = IVault.VaultConfig({
             longToken: weth,
             shortToken: usdc,
             longBaseUnit: 1e18,

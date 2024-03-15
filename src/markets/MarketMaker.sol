@@ -20,13 +20,12 @@ pragma solidity 0.8.23;
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {Market, IMarket} from "./Market.sol";
+import {Market, IMarket, IVault} from "./Market.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IProcessor} from "../router/interfaces/IProcessor.sol";
 import {Roles} from "../access/Roles.sol";
-import {Pool} from "./Pool.sol";
 
 /// @dev Needs MarketMaker Role
 contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
@@ -80,7 +79,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     /// @dev Once a Market is created, for it to be functional, must grant role
     /// "MARKET"
     function createNewMarket(
-        Pool.VaultConfig memory _vaultDetails,
+        IVault.VaultConfig memory _vaultDetails,
         bytes32 _assetId, // use a bytes32 asset id instead???
         bytes32 _priceId,
         Oracle.Asset memory _asset

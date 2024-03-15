@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {IMarket} from "./interfaces/IMarket.sol";
+import {IMarket, IVault} from "./interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
@@ -27,7 +27,6 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Vault} from "./Vault.sol";
-import {Pool} from "./Pool.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract Market is Vault, IMarket {
@@ -44,7 +43,7 @@ contract Market is Vault, IMarket {
      *  ========================= Constructor  =========================
      */
     constructor(
-        Pool.VaultConfig memory _vaultConfig,
+        IVault.VaultConfig memory _vaultConfig,
         Config memory _tokenConfig,
         bytes32 _assetId,
         address _roleStorage

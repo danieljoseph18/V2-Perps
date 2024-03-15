@@ -2,13 +2,13 @@
 pragma solidity 0.8.23;
 
 import {Fee} from "../libraries/Fee.sol";
-import {Pool} from "./Pool.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IProcessor} from "../router/interfaces/IProcessor.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 
 library Deposit {
     using SignedMath for int256;
@@ -43,19 +43,9 @@ library Deposit {
         IProcessor processor;
         IPriceFeed priceFeed;
         Data data;
-        Pool.Values values;
         bytes32 key;
         int256 cumulativePnl;
         bool isLongToken;
-    }
-
-    struct ExecutionState {
-        Oracle.Price longPrices;
-        Oracle.Price shortPrices;
-        Fee.Params feeParams;
-        uint256 fee;
-        uint256 afterFeeAmount;
-        uint256 mintAmount;
     }
 
     function validateCancellation(Data memory _data, address _caller) internal view {
@@ -71,40 +61,6 @@ library Deposit {
             expirationTimestamp: uint48(block.timestamp) + _minTimeToExpiration,
             key: _generateKey(_input.owner, _input.tokenIn, _input.amountIn, blockNumber)
         });
-    }
-
-    function execute(ExecuteParams memory _params) external view returns (ExecutionState memory state) {
-        // If prices were signed, return for the block, else, return prices
-        (state.longPrices, state.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed);
-        if (state.longPrices.price == 0 || state.shortPrices.price == 0) {
-            revert Deposit_InvalidPrices();
-        }
-
-        // Calculate Fee
-        state.feeParams = Fee.constructFeeParams(
-            _params.market,
-            _params.data.input.amountIn,
-            _params.isLongToken,
-            _params.values,
-            state.longPrices,
-            state.shortPrices,
-            true
-        );
-        state.fee = Fee.calculateForMarketAction(state.feeParams);
-        if (state.fee == 0) revert Deposit_ZeroFee();
-
-        // Calculate remaining after fee
-        state.afterFeeAmount = _params.data.input.amountIn - state.fee;
-
-        // Calculate Mint amount with the remaining amount
-        state.mintAmount = Pool.depositTokensToMarketTokens(
-            _params.values,
-            state.longPrices,
-            state.shortPrices,
-            state.afterFeeAmount,
-            _params.cumulativePnl,
-            _params.isLongToken
-        );
     }
 
     function _generateKey(address owner, address tokenIn, uint256 amountIn, uint256 blockNumber)

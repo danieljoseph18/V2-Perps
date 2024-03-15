@@ -105,7 +105,7 @@ contract Router is ReentrancyGuard, RoleValidation {
             WETH.safeTransfer(address(processor), _input.amountIn);
         } else {
             if (_input.tokenIn != address(USDC) && _input.tokenIn != address(WETH)) revert Router_InvalidTokenIn();
-            IERC20(_input.tokenIn).safeTransferFrom(_input.owner, address(processor), _input.amountIn);
+            IERC20(_input.tokenIn).safeTransferFrom(msg.sender, address(processor), _input.amountIn);
         }
 
         market.createDeposit(_input);
@@ -124,7 +124,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         } else {
             if (_input.tokenOut != address(USDC) && _input.tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         }
-        IERC20(address(market)).safeTransferFrom(_input.owner, address(processor), _input.marketTokenAmountIn);
+        IERC20(address(market)).safeTransferFrom(msg.sender, address(processor), _input.marketTokenAmountIn);
 
         market.createWithdrawal(_input);
         _sendExecutionFee(_input.executionFee);
