@@ -25,7 +25,6 @@ import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 import {Pricing} from "../../../src/libraries/Pricing.sol";
-import {Order} from "../../../src/positions/Order.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
@@ -59,8 +58,13 @@ contract TestADLs is Test {
     address RANDOM2 = makeAddr("RANDOM2");
     address RANDOM3 = makeAddr("RANDOM3");
 
-    bytes32 ethAssetId = keccak256("ETH");
-    bytes32 usdcAssetId = keccak256("USDC");
+    bytes32[] assetIds;
+    uint256[] compactedPrices;
+
+    Oracle.PriceUpdateData ethPriceData;
+
+    bytes32 ethAssetId = keccak256(abi.encode("ETH"));
+    bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -90,6 +94,11 @@ contract TestADLs is Test {
         );
         tokenUpdateData.push(wethUpdateData);
         tokenUpdateData.push(usdcUpdateData);
+        assetIds.push(ethAssetId);
+        assetIds.push(usdcAssetId);
+
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
     }
 
     receive() external payable {}
@@ -143,14 +152,14 @@ contract TestADLs is Test {
             tokenIn: weth,
             amountIn: 10_000 ether,
             executionFee: 0.01 ether,
-            shouldWrap: true
+            reverseWrap: true
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 10_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -158,13 +167,13 @@ contract TestADLs is Test {
             tokenIn: usdc,
             amountIn: 25_000_000e6,
             executionFee: 0.01 ether,
-            shouldWrap: false
+            reverseWrap: false
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -176,7 +185,6 @@ contract TestADLs is Test {
         _;
     }
 
-    // FAILING BECAUSE POOL USD IS ALSO INCREASING IN VALUE - TRY SHORT
     function testPositionsInPoolsWithLargePnlToPoolRatiosCanBeAdled() public setUpMarkets {
         vm.deal(RANDOM1, 1_000_000 ether);
         MockUSDC(usdc).mint(RANDOM1, 1_000_000_000e6);
@@ -196,7 +204,7 @@ contract TestADLs is Test {
             isLong: false,
             isLimit: false,
             isIncrease: true,
-            shouldWrap: false,
+            reverseWrap: false,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -229,15 +237,15 @@ contract TestADLs is Test {
         // Execute the Position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition{value: 0.0001 ether}(orderKey, USER, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(orderKey, USER, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM1, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM1, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM2, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM2, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM3, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM3, ethPriceData);
 
         vm.warp(block.timestamp + 10);
         vm.roll(block.number + 1);
@@ -246,14 +254,15 @@ contract TestADLs is Test {
             ethPriceId, 10000, 50, -2, 10000, 50, uint64(block.timestamp), uint64(block.timestamp)
         );
         tokenUpdateData[0] = wethUpdateData;
+        ethPriceData.pythData = tokenUpdateData;
         // adl the positions
         vm.prank(OWNER);
-        processor.flagForAdl{value: 0.01 ether}(market, ethAssetId, false, tokenUpdateData);
+        processor.flagForAdl{value: 0.01 ether}(market, ethAssetId, false, ethPriceData);
         // get one of the position keys
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), false);
         // adl it
         vm.prank(OWNER);
-        processor.executeAdl{value: 0.01 ether}(market, ethAssetId, 5000e30, positionKeys[0], false, tokenUpdateData);
+        processor.executeAdl{value: 0.01 ether}(market, ethAssetId, 5000e30, positionKeys[0], false, ethPriceData);
         // validate their size has been reduced
         Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
         assertEq(position.positionSize, 2_495_000e30);

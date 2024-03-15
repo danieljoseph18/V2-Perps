@@ -36,6 +36,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     IProcessor processor;
 
     EnumerableSet.AddressSet private markets;
+    // switch to enumerable set? what if a token has 2+ markets?
     mapping(bytes32 assetId => address market) public tokenToMarkets;
     uint256[] private defaultAllocation;
 

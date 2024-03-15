@@ -25,7 +25,6 @@ import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 import {Pricing} from "../../../src/libraries/Pricing.sol";
-import {Order} from "../../../src/positions/Order.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Fee} from "../../../src/libraries/Fee.sol";
@@ -52,11 +51,15 @@ contract TestAlternativeOrders is Test {
 
     bytes[] tokenUpdateData;
     uint256[] allocations;
+    bytes32[] assetIds;
+    uint256[] compactedPrices;
+
+    Oracle.PriceUpdateData ethPriceData;
 
     address USER = makeAddr("USER");
 
-    bytes32 ethAssetId = keccak256("ETH");
-    bytes32 usdcAssetId = keccak256("USDC");
+    bytes32 ethAssetId = keccak256(abi.encode("ETH"));
+    bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -86,6 +89,11 @@ contract TestAlternativeOrders is Test {
         );
         tokenUpdateData.push(wethUpdateData);
         tokenUpdateData.push(usdcUpdateData);
+        assetIds.push(ethAssetId);
+        assetIds.push(usdcAssetId);
+
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
     }
 
     receive() external payable {}
@@ -139,14 +147,14 @@ contract TestAlternativeOrders is Test {
             tokenIn: weth,
             amountIn: 20_000 ether,
             executionFee: 0.01 ether,
-            shouldWrap: true
+            reverseWrap: true
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -154,13 +162,13 @@ contract TestAlternativeOrders is Test {
             tokenIn: usdc,
             amountIn: 50_000_000e6,
             executionFee: 0.01 ether,
-            shouldWrap: false
+            reverseWrap: false
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -190,7 +198,7 @@ contract TestAlternativeOrders is Test {
             isLong: true,
             isLimit: false,
             isIncrease: true,
-            shouldWrap: true,
+            reverseWrap: true,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -201,7 +209,7 @@ contract TestAlternativeOrders is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input);
+        router.createPositionRequest{value: 0.51 ether}(input);
 
         // get key
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
@@ -224,7 +232,7 @@ contract TestAlternativeOrders is Test {
             isLong: true,
             isLimit: false,
             isIncrease: true,
-            shouldWrap: true,
+            reverseWrap: true,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -235,7 +243,7 @@ contract TestAlternativeOrders is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input);
+        router.createPositionRequest{value: 0.51 ether}(input);
 
         // get key
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
@@ -261,7 +269,7 @@ contract TestAlternativeOrders is Test {
             isLong: true,
             isLimit: false,
             isIncrease: true,
-            shouldWrap: true,
+            reverseWrap: true,
             conditionals: Position.Conditionals({
                 stopLossSet: true,
                 takeProfitSet: true,
@@ -272,13 +280,13 @@ contract TestAlternativeOrders is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input);
+        router.createPositionRequest{value: 0.51 ether}(input);
 
         // get key
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
         // execute the order
         vm.prank(OWNER);
-        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, ethPriceData);
 
         // the position
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), true);
@@ -309,7 +317,7 @@ contract TestAlternativeOrders is Test {
             isLong: true,
             isLimit: false,
             isIncrease: true,
-            shouldWrap: true,
+            reverseWrap: true,
             conditionals: Position.Conditionals({
                 stopLossSet: true,
                 takeProfitSet: true,
@@ -320,13 +328,13 @@ contract TestAlternativeOrders is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input);
+        router.createPositionRequest{value: 0.51 ether}(input);
 
         // get key
         bytes32 key = tradeStorage.getOrderAtIndex(0, false);
         // execute the order
         vm.prank(OWNER);
-        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, ethPriceData);
 
         // the position
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), true);
@@ -377,7 +385,7 @@ contract TestAlternativeOrders is Test {
             isLong: true,
             isLimit: true,
             isIncrease: true,
-            shouldWrap: true,
+            reverseWrap: true,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -388,7 +396,7 @@ contract TestAlternativeOrders is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input);
+        router.createPositionRequest{value: 0.51 ether}(input);
 
         vm.roll(block.number + 11);
 
@@ -418,7 +426,7 @@ contract TestAlternativeOrders is Test {
             isLong: false,
             isLimit: true,
             isIncrease: true,
-            shouldWrap: false,
+            reverseWrap: false,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -430,13 +438,13 @@ contract TestAlternativeOrders is Test {
         });
         vm.startPrank(USER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 4.01 ether}(input);
+        router.createPositionRequest{value: 0.51 ether}(input);
         vm.stopPrank();
         // try to execute and expect revert
         bytes32 key = tradeStorage.getOrderAtIndex(0, true);
         vm.prank(OWNER);
         vm.expectRevert();
-        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, ethPriceData);
     }
 
     function testLimitOrdersCanBeExecutedAtValidPrices() public setUpMarkets {
@@ -452,7 +460,7 @@ contract TestAlternativeOrders is Test {
             isLong: false,
             isLimit: true,
             isIncrease: true,
-            shouldWrap: false,
+            reverseWrap: false,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -464,7 +472,7 @@ contract TestAlternativeOrders is Test {
         });
         vm.startPrank(USER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createPositionRequest{value: 4.01 ether}(input);
+        router.createPositionRequest{value: 0.01 ether}(input);
         vm.stopPrank();
 
         vm.warp(block.timestamp + 1);
@@ -480,7 +488,8 @@ contract TestAlternativeOrders is Test {
         );
         tokenUpdateData[0] = wethUpdateData;
         tokenUpdateData[1] = usdcUpdateData;
+        ethPriceData.pythData = tokenUpdateData;
         vm.prank(OWNER);
-        processor.executePosition{value: 0.0001 ether}(key, OWNER, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(key, OWNER, ethPriceData);
     }
 }

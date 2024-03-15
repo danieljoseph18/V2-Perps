@@ -22,6 +22,8 @@ import {Position} from "../positions/Position.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 /*
     weightedAverageEntryPrice = x(indexSizeUSD * entryPrice) / sigmaIndexSizesUSD
@@ -93,6 +95,35 @@ library Pricing {
             netPnl = mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
             netPnl = -mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
+        }
+    }
+
+    function calculateCumulativeMarketPnl(IMarket market, IPriceFeed priceFeed, bool _isLong, bool _maximise)
+        external
+        view
+        returns (int256 cumulativePnl)
+    {
+        // Get an array of Asset Ids within the market
+        /**
+         * For each token:
+         * 1. Get the current price of the token
+         * 2. Get the current open interest of the token
+         * 3. Get the average entry price of the token
+         * 4. Calculate the PNL of the token
+         * 5. Add the PNL to the cumulative PNL
+         */
+        bytes32[] memory assetIds = market.getAssetIds();
+        // Max 10,000 Loops, so uint16 sufficient
+        for (uint16 i = 0; i < assetIds.length;) {
+            bytes32 assetId = assetIds[i];
+            uint256 indexPrice =
+                _maximise ? Oracle.getMaxPrice(priceFeed, assetId) : Oracle.getMinPrice(priceFeed, assetId);
+            uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, assetId);
+            int256 pnl = getMarketPnl(market, assetId, indexPrice, indexBaseUnit, _isLong);
+            cumulativePnl += pnl;
+            unchecked {
+                ++i;
+            }
         }
     }
 

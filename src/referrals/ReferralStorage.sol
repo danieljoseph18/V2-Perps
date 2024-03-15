@@ -6,9 +6,10 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 
-contract ReferralStorage is RoleValidation, IReferralStorage {
+contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IWETH weth;
@@ -81,22 +82,16 @@ contract ReferralStorage is RoleValidation, IReferralStorage {
         affiliateRewards[_account][_isLongToken] += _amount;
     }
 
-    function claimAffiliateRewards() external {
+    function claimAffiliateRewards() external nonReentrant {
         uint256 longTokenAmount = affiliateRewards[msg.sender][true];
         uint256 shortTokenAmount = affiliateRewards[msg.sender][false];
         if (longTokenAmount > 0) {
-            if (IERC20(longToken).balanceOf(address(this)) < longTokenAmount) {
-                revert ReferralStorage_InsufficientBalance();
-            }
-            IERC20(longToken).safeTransfer(msg.sender, longTokenAmount);
             affiliateRewards[msg.sender][true] = 0;
+            IERC20(longToken).safeTransfer(msg.sender, longTokenAmount);
         }
         if (shortTokenAmount > 0) {
-            if (IERC20(shortToken).balanceOf(address(this)) < shortTokenAmount) {
-                revert ReferralStorage_InsufficientBalance();
-            }
-            IERC20(shortToken).safeTransfer(msg.sender, shortTokenAmount);
             affiliateRewards[msg.sender][false] = 0;
+            IERC20(shortToken).safeTransfer(msg.sender, shortTokenAmount);
         }
         emit AffiliateRewardsClaimed(msg.sender, longTokenAmount, shortTokenAmount);
     }

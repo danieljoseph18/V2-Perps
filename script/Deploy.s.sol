@@ -62,9 +62,9 @@ contract Deploy is Script {
 
         contracts.marketMaker = new MarketMaker(address(contracts.roleStorage));
 
-        contracts.tradeStorage = new TradeStorage(address(contracts.roleStorage));
-
         contracts.referralStorage = new ReferralStorage(weth, usdc, weth, address(contracts.roleStorage));
+
+        contracts.tradeStorage = new TradeStorage(contracts.referralStorage, address(contracts.roleStorage));
 
         contracts.processor = new Processor(
             address(contracts.marketMaker),

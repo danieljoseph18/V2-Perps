@@ -2,13 +2,13 @@
 pragma solidity 0.8.23;
 
 import {Position} from "../../positions/Position.sol";
-import {Order} from "../Order.sol";
+import {Execution} from "../Execution.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface ITradeStorage {
     event OrderRequestCreated(bytes32 indexed _orderKey, Position.Request indexed _request);
     event OrderRequestCancelled(bytes32 indexed _orderKey);
-    event TradeExecuted(Position.Execution indexed _executionParams);
+    event TradeExecuted(Position.Settlement indexed _executionParams);
     event DecreaseTokenTransfer(address indexed _user, uint256 indexed _principle, int256 indexed _pnl);
     event LiquidatePosition(
         bytes32 indexed _positionKey, address indexed _liquidator, uint256 indexed _amountLiquidated, bool _isLong
@@ -63,15 +63,12 @@ interface ITradeStorage {
     function createOrderRequest(Position.Request calldata _request) external;
     function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
-    function executeCollateralIncrease(Position.Execution memory _params, Order.ExecutionState memory _state)
-        external;
-    function executeCollateralDecrease(Position.Execution memory _params, Order.ExecutionState memory _state)
-        external;
-    function createNewPosition(Position.Execution memory _params, Order.ExecutionState memory _state) external;
-    function increaseExistingPosition(Position.Execution memory _params, Order.ExecutionState memory _state) external;
-    function decreaseExistingPosition(Position.Execution memory _params, Order.ExecutionState memory _state) external;
-    function liquidatePosition(Order.ExecutionState memory _state, bytes32 _positionKey, address _liquidator)
-        external;
+    function executeCollateralIncrease(Position.Settlement memory _params, Execution.State memory _state) external;
+    function executeCollateralDecrease(Position.Settlement memory _params, Execution.State memory _state) external;
+    function createNewPosition(Position.Settlement memory _params, Execution.State memory _state) external;
+    function increaseExistingPosition(Position.Settlement memory _params, Execution.State memory _state) external;
+    function decreaseExistingPosition(Position.Settlement memory _params, Execution.State memory _state) external;
+    function liquidatePosition(Execution.State memory _state, bytes32 _positionKey, address _liquidator) external;
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external;
     function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory);
     function getOrderKeys(bool _isLimit) external view returns (bytes32[] memory orderKeys);

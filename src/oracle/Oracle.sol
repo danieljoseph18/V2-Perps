@@ -10,12 +10,13 @@ import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
 import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC20, IERC20, IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 library Oracle {
     using SignedMath for int64;
     using SignedMath for int32;
 
+    error Oracle_PriceNotSet();
     error Oracle_SequencerDown();
     error Oracle_InvalidTokenPrices();
     error Oracle_PriceTooHigh();
@@ -26,6 +27,13 @@ library Oracle {
     error Oracle_InvalidIndexPrice();
     error Oracle_InvalidPoolType();
     error Oracle_InvalidChainlinkFeed();
+    error Oracle_InvalidAmmDecimals();
+
+    struct PriceUpdateData {
+        bytes32[] assetIds;
+        bytes[] pythData;
+        uint256[] compactedPrices;
+    }
 
     // @gas - use smaller data types
     struct Asset {
@@ -70,7 +78,6 @@ library Oracle {
     }
 
     uint64 private constant MAX_PERCENTAGE = 1e18; // 100%
-    uint64 private constant SCALING_FACTOR = 1e18;
     uint8 private constant PRICE_DECIMALS = 30;
     uint8 private constant CHAINLINK_PRICE_DECIMALS = 8;
 
@@ -106,6 +113,20 @@ library Oracle {
         (data.price, data.confidence) = convertPythParams(_priceData);
     }
 
+    function unpackAndReturnPrice(uint256 _compactedPriceData, uint256 _startingBit)
+        external
+        pure
+        returns (Price memory)
+    {
+        // Use bit manipulation to extract the price and decimals
+        uint256 compactedPrice = (_compactedPriceData >> (_startingBit % 256)) & ((1 << 56) - 1);
+        uint256 decimals = (_compactedPriceData >> ((_startingBit % 256) + 56)) & ((1 << 8) - 1);
+        // Calculte the Price from the Extracted Data
+        uint256 price = compactedPrice * (10 ** (PRICE_DECIMALS - decimals));
+        // Return the Price with 100% Confidence
+        return Price(price, 0);
+    }
+
     // Data passed in as 32 bytes - uint64, uint64, uint64, uint8
     // Deconstruct the data and return the values
     // Prices should have 30 decimals
@@ -135,25 +156,20 @@ library Oracle {
     }
 
     function getPrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 price) {
-        return priceFeed.getPrimaryPrice(_assetId).price;
+        price = priceFeed.getPrimaryPrice(_assetId).price;
+        if (price == 0) revert Oracle_PriceNotSet();
     }
 
     function getMaxPrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 maxPrice) {
         Price memory priceData = priceFeed.getPrimaryPrice(_assetId);
         maxPrice = priceData.price + priceData.confidence;
+        if (maxPrice == 0) revert Oracle_PriceNotSet();
     }
 
     function getMinPrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 minPrice) {
         Price memory priceData = priceFeed.getPrimaryPrice(_assetId);
         minPrice = priceData.price - priceData.confidence;
-    }
-
-    function getLatestPrice(IPriceFeed priceFeed, bytes32 _assetId, bool _maximise)
-        external
-        view
-        returns (uint256 price)
-    {
-        return _maximise ? getMaxPrice(priceFeed, _assetId) : getMinPrice(priceFeed, _assetId);
+        if (minPrice == 0) revert Oracle_PriceNotSet();
     }
 
     function getMarketTokenPrices(IPriceFeed priceFeed, bool _maximise)
@@ -177,8 +193,8 @@ library Oracle {
         view
         returns (Price memory _longPrices, Price memory _shortPrices)
     {
-        _longPrices = priceFeed.getPrimaryPrice(priceFeed.longTokenId());
-        _shortPrices = priceFeed.getPrimaryPrice(priceFeed.shortTokenId());
+        _longPrices = priceFeed.getPrimaryPrice(priceFeed.longAssetId());
+        _shortPrices = priceFeed.getPrimaryPrice(priceFeed.shortAssetId());
     }
 
     function getLastMarketTokenPrices(IPriceFeed priceFeed)
@@ -195,8 +211,8 @@ library Oracle {
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
-        Asset memory longToken = priceFeed.getAsset(priceFeed.longTokenId());
-        Asset memory shortToken = priceFeed.getAsset(priceFeed.shortTokenId());
+        Asset memory longToken = priceFeed.getAsset(priceFeed.longAssetId());
+        Asset memory shortToken = priceFeed.getAsset(priceFeed.shortAssetId());
         (uint256 longBasePrice, uint256 longConfidence) = priceFeed.getPriceUnsafe(longToken);
         (uint256 shortBasePrice, uint256 shortConfidence) = priceFeed.getPriceUnsafe(shortToken);
         if (_maximise) {
@@ -210,6 +226,7 @@ library Oracle {
     }
 
     function validatePriceRange(Asset memory _asset, Price memory _priceData, uint256 _refPrice) external pure {
+        if (_priceData.price == 0) revert Oracle_PriceNotSet();
         // check the price is within the range
         uint256 maxPriceDeviation = mulDiv(_refPrice, _asset.maxPriceDeviation, MAX_PERCENTAGE);
         if (_priceData.price + _priceData.confidence > _refPrice + maxPriceDeviation) revert Oracle_PriceTooHigh();
@@ -222,11 +239,11 @@ library Oracle {
     }
 
     function getLongReferencePrice(IPriceFeed priceFeed) external view returns (uint256 referencePrice) {
-        return getReferencePrice(priceFeed, priceFeed.longTokenId());
+        return getReferencePrice(priceFeed, priceFeed.longAssetId());
     }
 
     function getShortReferencePrice(IPriceFeed priceFeed) external view returns (uint256 referencePrice) {
-        return getReferencePrice(priceFeed, priceFeed.shortTokenId());
+        return getReferencePrice(priceFeed, priceFeed.shortAssetId());
     }
 
     // Use chainlink price feed if available
@@ -257,16 +274,16 @@ library Oracle {
     }
 
     function getLongBaseUnit(IPriceFeed priceFeed) external view returns (uint256) {
-        return getBaseUnit(priceFeed, priceFeed.longTokenId());
+        return getBaseUnit(priceFeed, priceFeed.longAssetId());
     }
 
     function getShortBaseUnit(IPriceFeed priceFeed) external view returns (uint256) {
-        return getBaseUnit(priceFeed, priceFeed.shortTokenId());
+        return getBaseUnit(priceFeed, priceFeed.shortAssetId());
     }
 
     function priceWasSigned(IPriceFeed priceFeed, bool _isLong) external view returns (bool) {
         // If long, get the long asset price, else short asset price
-        bytes32 assetId = _isLong ? priceFeed.longTokenId() : priceFeed.shortTokenId();
+        bytes32 assetId = _isLong ? priceFeed.longAssetId() : priceFeed.shortAssetId();
         return priceFeed.getPrimaryPrice(assetId).price != 0;
     }
 
@@ -276,7 +293,9 @@ library Oracle {
         if (_pool.poolType == PoolType.UNISWAP_V3) {
             IUniswapV3Pool pool = IUniswapV3Pool(_pool.poolAddress);
             (uint160 sqrtPriceX96,,,,,,) = pool.slot0();
-            uint256 baseUnit = 10 ** ERC20(_pool.token0).decimals();
+            (bool success, uint256 token0Decimals) = _tryGetAssetDecimals(IERC20(_pool.token0));
+            if (!success) revert Oracle_InvalidAmmDecimals();
+            uint256 baseUnit = 10 ** token0Decimals;
             UD60x18 numerator = ud(uint256(sqrtPriceX96)).powu(2).mul(ud(baseUnit));
             UD60x18 denominator = ud(2).powu(192);
             price = unwrap(numerator.div(denominator));
@@ -285,17 +304,31 @@ library Oracle {
             IUniswapV2Pair pair = IUniswapV2Pair(_pool.poolAddress);
             (uint112 reserve0, uint112 reserve1,) = pair.getReserves();
             address pairToken0 = pair.token0();
-
+            (bool success0, uint256 token0Decimals) = _tryGetAssetDecimals(IERC20(_pool.token0));
+            (bool success1, uint256 token1Decimals) = _tryGetAssetDecimals(IERC20(_pool.token1));
+            if (!success0 || !success1) revert Oracle_InvalidAmmDecimals();
             if (_pool.token0 == pairToken0) {
-                uint256 baseUnit = 10 ** ERC20(_pool.token0).decimals();
+                uint256 baseUnit = 10 ** token0Decimals;
                 price = mulDiv(uint256(reserve1), baseUnit, uint256(reserve0));
             } else {
-                uint256 baseUnit = 10 ** ERC20(_pool.token1).decimals();
+                uint256 baseUnit = 10 ** token1Decimals;
                 price = mulDiv(uint256(reserve0), baseUnit, uint256(reserve1));
             }
             return price;
         } else {
             revert Oracle_InvalidPoolType();
         }
+    }
+
+    function _tryGetAssetDecimals(IERC20 _asset) private view returns (bool, uint256) {
+        (bool success, bytes memory encodedDecimals) =
+            address(_asset).staticcall(abi.encodeCall(IERC20Metadata.decimals, ()));
+        if (success && encodedDecimals.length >= 32) {
+            uint256 returnedDecimals = abi.decode(encodedDecimals, (uint256));
+            if (returnedDecimals <= type(uint8).max) {
+                return (true, uint8(returnedDecimals));
+            }
+        }
+        return (false, 0);
     }
 }

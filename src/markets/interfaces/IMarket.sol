@@ -157,6 +157,7 @@ interface IMarket is IVault {
     error Market_PriceIsZero();
     error Market_InvalidCumulativeAllocation();
     error Market_FailedToAddAssetId();
+    error Market_FailedToRemoveAssetId();
 
     /**
      * ================ Events ================
@@ -193,6 +194,8 @@ interface IMarket is IVault {
     function updateOpenInterest(bytes32 _assetId, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd) external;
     function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external;
 
+    function getAssetIds() external view returns (bytes32[] memory);
+    function getStorage(bytes32 _assetId) external view returns (MarketStorage memory);
     function getConfig(bytes32 _assetId) external view returns (Config memory);
     function getBorrowingConfig(bytes32 _assetId) external view returns (BorrowingConfig memory);
     function getFundingConfig(bytes32 _assetId) external view returns (FundingConfig memory);

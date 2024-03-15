@@ -38,11 +38,15 @@ contract TestWithdrawals is Test {
 
     bytes[] tokenUpdateData;
     uint256[] allocations;
+    bytes32[] assetIds;
+    uint256[] compactedPrices;
+
+    Oracle.PriceUpdateData ethPriceData;
 
     address USER = makeAddr("USER");
 
-    bytes32 ethAssetId = keccak256("ETH");
-    bytes32 usdcAssetId = keccak256("USDC");
+    bytes32 ethAssetId = keccak256(abi.encode("ETH"));
+    bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -72,6 +76,11 @@ contract TestWithdrawals is Test {
         );
         tokenUpdateData.push(wethUpdateData);
         tokenUpdateData.push(usdcUpdateData);
+        assetIds.push(ethAssetId);
+        assetIds.push(usdcAssetId);
+
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
     }
 
     receive() external payable {}
@@ -125,14 +134,14 @@ contract TestWithdrawals is Test {
             tokenIn: weth,
             amountIn: 20_000 ether,
             executionFee: 0.01 ether,
-            shouldWrap: true
+            reverseWrap: true
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -140,13 +149,13 @@ contract TestWithdrawals is Test {
             tokenIn: usdc,
             amountIn: 50_000_000e6,
             executionFee: 0.01 ether,
-            shouldWrap: false
+            reverseWrap: false
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -190,7 +199,7 @@ contract TestWithdrawals is Test {
         market.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: 0.01 ether + 1 gwei}(market, input);
         bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
-        processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, 0, tokenUpdateData);
+        processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
     }
 
@@ -209,7 +218,7 @@ contract TestWithdrawals is Test {
         router.createWithdrawal{value: 0.01 ether + 1 gwei}(market, input);
         bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
         vm.expectRevert();
-        processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, 0, tokenUpdateData);
+        processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
     }
 
@@ -229,7 +238,7 @@ contract TestWithdrawals is Test {
         router.createWithdrawal{value: 0.01 ether + 1 gwei}(market, input);
         bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
         vm.expectRevert();
-        processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, 0, tokenUpdateData);
+        processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
     }
 
@@ -248,7 +257,7 @@ contract TestWithdrawals is Test {
         market.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: 0.01 ether + 1 gwei}(market, input);
         bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
-        processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, 0, tokenUpdateData);
+        processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
     }
 }

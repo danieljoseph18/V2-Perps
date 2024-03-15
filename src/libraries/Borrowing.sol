@@ -24,7 +24,7 @@ import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Pricing} from "./Pricing.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {Order} from "../positions/Order.sol";
+import {Execution} from "../positions/Execution.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
@@ -96,7 +96,7 @@ library Borrowing {
         fee = _rate * timeElapsed;
     }
 
-    function getTotalCollateralFeesOwed(Position.Data calldata _position, Order.ExecutionState memory _state)
+    function getTotalCollateralFeesOwed(Position.Data calldata _position, Execution.State memory _state)
         public
         view
         returns (uint256 collateralFeesOwed)

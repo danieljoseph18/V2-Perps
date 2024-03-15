@@ -20,6 +20,7 @@ library Gas {
     error Gas_InsufficientMsgValue(uint256 valueSent, uint256 executionFee);
     error Gas_InsufficientExecutionFee(uint256 executionFee, uint256 minExecutionFee);
 
+    // @add -> If stop loss and take profit, add gas price for each that exists
     function validateExecutionFee(IProcessor processor, uint256 _executionFee, uint256 _msgValue, Action _action)
         external
         view
@@ -36,7 +37,7 @@ library Gas {
 
     // @audit - is this vulnerable?
     function payExecutionFee(
-        IProcessor processor,
+        IProcessor self,
         uint256 _executionFee,
         uint256 _initialGas,
         address payable _executor,
@@ -46,7 +47,7 @@ library Gas {
         _initialGas -= gasleft() / 63;
         uint256 gasUsed = _initialGas - gasleft();
 
-        uint256 baseGasLimit = processor.baseGasLimit();
+        uint256 baseGasLimit = self.baseGasLimit();
         uint256 feeForExecutor = (baseGasLimit + gasUsed) * tx.gasprice;
 
         // Ensure we do not send more than the execution fee provided
@@ -55,12 +56,12 @@ library Gas {
         }
 
         // Send the execution fee to the executor
-        if (feeForExecutor > 0) processor.sendExecutionFee(_executor, feeForExecutor);
+        if (feeForExecutor > 0) self.sendExecutionFee(_executor, feeForExecutor);
 
         // Calculate the amount to refund to the refund receiver
         uint256 feeToRefund = _executionFee - feeForExecutor;
         if (feeToRefund > 0) {
-            processor.sendExecutionFee(_refundReceiver, feeToRefund);
+            self.sendExecutionFee(_refundReceiver, feeToRefund);
         }
     }
 

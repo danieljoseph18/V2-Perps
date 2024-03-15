@@ -8,54 +8,58 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {Oracle} from "./Oracle.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
+    using EnumerableSet for EnumerableSet.Bytes32Set;
+
     IPyth pyth;
 
     uint256 public constant PRICE_PRECISION = 1e30;
-
-    // shift the 1s by (256 - 32) to get (256 - 32) 0s followed by 32 1s
-    uint256 public constant BITMASK_32 = type(uint256).max >> (256 - 32);
-
-    uint256 public constant BASIS_POINTS_DIVISOR = 10000;
-
-    uint256 public constant MAX_PRICE_DURATION = 30 minutes;
-
-    uint256 public constant MAX_PRICE_PER_WORD = 10;
 
     uint256 public constant PRICE_DECIMALS = 30;
 
     uint256 public constant DEFAULT_SPREAD = 0.001e18; // 0.1%
 
-    bytes32 public longTokenId;
-    bytes32 public shortTokenId;
+    bytes32 public longAssetId;
+    bytes32 public shortAssetId;
 
     address public sequencerUptimeFeed;
     // Asset ID is the Hash of the ticker symbol -> e.g keccak256(abi.encode("ETH"));
     mapping(bytes32 assetId => Oracle.Asset asset) private assets;
     // To Store Price Data
     mapping(bytes32 assetId => Oracle.Price price) public prices;
+    // Keep track of assets with prices set to clear them post-execution
+    EnumerableSet.Bytes32Set private assetsWithPrices;
 
     constructor(
         address _pythContract,
-        bytes32 _longTokenId,
-        bytes32 _shortTokenId,
+        bytes32 _longAssetId,
+        bytes32 _shortAssetId,
         Oracle.Asset memory _longAsset,
         Oracle.Asset memory _shortAsset,
         address _sequencerUptimeFeed,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         pyth = IPyth(_pythContract);
-        longTokenId = _longTokenId;
-        shortTokenId = _shortTokenId;
-        assets[_longTokenId] = _longAsset;
-        assets[_shortTokenId] = _shortAsset;
         sequencerUptimeFeed = _sequencerUptimeFeed;
+        // Set up Long Asset
+        longAssetId = _longAssetId;
+        assets[_longAssetId] = _longAsset;
+        // Set up Short Asset
+        shortAssetId = _shortAssetId;
+        assets[_shortAssetId] = _shortAsset;
     }
 
     receive() external payable {}
 
+    modifier sequencerUp() {
+        Oracle.isSequencerUp(this);
+        _;
+    }
+
     function supportAsset(bytes32 _assetId, Oracle.Asset memory _asset) external onlyMarketMaker {
+        if (assets[_assetId].isValid) return; // Return if already supported
         assets[_assetId] = _asset;
     }
 
@@ -63,85 +67,98 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
         delete assets[_assetId];
     }
 
-    function updateSequenceUptimeFeed(address _sequencerUptimeFeed) external onlyAdmin {
+    function updateSequencerUptimeFeed(address _sequencerUptimeFeed) external onlyAdmin {
         sequencerUptimeFeed = _sequencerUptimeFeed;
     }
 
     /**
-     * Asset ID = Keccak256(Asset Ticker) -> e.g keccak256(abi.encode("ETH"));
-     * Update Data -> Data to update price for either Pyth strategy or Off-chain strategy
-     * Argument Format:
-     * - Pyth Update Data: [bytes32 id, int64 price, uint64 conf, int32 expo, int64 emaPrice, uint64 emaConf, uint64 publishTime, uint64 prevPublishTime]
-     * - Off-chain Update Data: [uint64 indexPrice, uint64 longPrice, uint64 shortPrice, uint8 decimals]
-     * - Should be in the order (AssetUpdateData, LongTokenUpdateData, ShortTokenUpdateData)
+     * @param _compactedPriceData - Array of uint256 containing the compacted price data
+     * Data is stored in uint64 slots inside each uint256. Each uint64 contains the price data for an asset
+     * Data should be stored in the same order as the asset array.
+     * As some assets will inevitably be priced using Pyth, there will be empty gaps in the
+     * compacted price data array where this is the case.
+     *
+     * Example:
+     * - Asset ID's = [ETH, BTC, SOL, TIA]
+     * - Pyth Price Data = [ETH, BTC]
+     * - Compacted Price Data = [uint64(0), uint64(0), uint64(SOL PRICE + DECIMALS), uint64(TIA PRICE + DECIMALS)]
+     *
+     * Pyth prices are updated together through the call to updatePriceFeeds.
+     *
+     * Compacted prices are fetched by mutliplying the asset id's index by 64, and extracting
+     * , then unpacking the subsequent 64 bits.
+     *
+     * E.g SOL = 2 * 64 = 128 - 191
+     * E.g TIA = 3 * 64 = 192 - 255
      */
     // @audit - add gas rebates & payments to keepers
-    function signPrimaryPrice(bytes32 _assetId, bytes[] calldata _priceUpdateData)
-        external
-        payable
-        onlyKeeper
-        nonReentrant
-    {
-        // Check if the sequencer is up (move this check outside the function if possible)
-        Oracle.isSequencerUp(this);
-
-        // Check if the asset price has already been signed
-        if (_assetId != bytes32(0) && prices[_assetId].price != 0) return;
-
-        // Default to Pyth for Market Tokens
-        if (_assetId == bytes32(0)) {
-            // Update prices for long and short assets
-            uint256 fee = pyth.getUpdateFee(_priceUpdateData);
-            if (msg.value < fee) revert PriceFeed_InsufficientFee();
-            pyth.updatePriceFeeds{value: fee}(_priceUpdateData);
-            if (prices[longTokenId].price == 0) {
-                _updatePythPrice(longTokenId, assets[longTokenId]);
-            }
-            if (prices[shortTokenId].price == 0) {
-                _updatePythPrice(shortTokenId, assets[shortTokenId]);
-            }
-        } else {
-            // Fetch the asset
-            Oracle.Asset memory asset = assets[_assetId];
-            if (!asset.isValid) revert PriceFeed_InvalidToken();
-
-            // Update price based on the primary strategy
+    function setPrimaryPrices(
+        bytes32[] calldata _assetIds,
+        bytes[] calldata _pythPriceData,
+        uint256[] calldata _compactedPriceData
+    ) external payable onlyKeeper nonReentrant sequencerUp {
+        // If any Pyth price array contains data
+        if (_pythPriceData.length != 0) {
+            // Get the Update Fee
+            uint256 pythFee = pyth.getUpdateFee(_pythPriceData);
+            if (msg.value < pythFee) revert PriceFeed_InsufficientFee();
+            // Update the Price Fees with the Data
+            pyth.updatePriceFeeds{value: pythFee}(_pythPriceData);
+        }
+        // Loop through assets and set prices
+        uint256 assetLen = _assetIds.length;
+        // Use Uint16, as max is 10,000 assets
+        for (uint16 index = 0; index < assetLen;) {
+            bytes32 assetId = _assetIds[index];
+            Oracle.Asset memory asset = assets[assetId];
+            if (!asset.isValid) revert PriceFeed_InvalidToken(assetId);
             if (asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
-                // Check if the fee is sufficient and update price feeds
-                uint256 fee = pyth.getUpdateFee(_priceUpdateData);
-                if (msg.value < fee) revert PriceFeed_InsufficientFee();
-                pyth.updatePriceFeeds{value: fee}(_priceUpdateData);
-                // Asset
-                _updatePythPrice(_assetId, asset);
-                // Long Token
-                if (prices[longTokenId].price == 0) {
-                    _updatePythPrice(longTokenId, assets[longTokenId]);
+                // Get the Pyth Price Data
+                PythStructs.Price memory data = pyth.getPrice(asset.priceId);
+                // Parse the Data
+                Oracle.Price memory price = Oracle.parsePythData(data);
+                // Validate the Price
+                if (asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+                    uint256 refPrice = Oracle.getReferencePrice(asset);
+                    Oracle.validatePriceRange(asset, price, refPrice);
                 }
-                // Short Token
-                if (prices[shortTokenId].price == 0) {
-                    _updatePythPrice(shortTokenId, assets[shortTokenId]);
-                }
+                // Set the Price
+                prices[assetId] = price;
             } else if (asset.primaryStrategy == Oracle.PrimaryStrategy.OFFCHAIN) {
-                // Asset
-                _updateOffchainPrice(_assetId, asset, _priceUpdateData[0]);
-                // Long Token
-                if (prices[longTokenId].price == 0) {
-                    _updateOffchainPrice(longTokenId, assets[longTokenId], _priceUpdateData[1]);
+                // Get the starting bit index
+                uint256 startingBit = index * 64;
+                // Get the uint256 containing the compacted price
+                uint256 priceData = _compactedPriceData[startingBit / 256];
+                // Unpack and get the price
+                Oracle.Price memory price = Oracle.unpackAndReturnPrice(priceData, startingBit);
+                // Validate and Set the Price
+                if (asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+                    uint256 refPrice = Oracle.getReferencePrice(asset);
+                    Oracle.validatePriceRange(asset, price, refPrice);
                 }
-                // Short Token
-                if (prices[shortTokenId].price == 0) {
-                    _updateOffchainPrice(shortTokenId, assets[shortTokenId], _priceUpdateData[2]);
-                }
+                // Set the Price
+                prices[assetId] = price;
             } else {
                 revert PriceFeed_InvalidPrimaryStrategy();
             }
+            // Add the Price to the Set
+            assetsWithPrices.add(assetId);
+            // Increment the Loop Counter
+            unchecked {
+                ++index;
+            }
         }
+        emit PrimaryPricesSet(_assetIds);
     }
 
-    function clearPrimaryPrice(bytes32 _assetId) external onlyKeeper {
-        if (_assetId != bytes32(0)) delete prices[_assetId];
-        delete prices[longTokenId];
-        delete prices[shortTokenId];
+    function clearPrimaryPrices() external onlyKeeper {
+        bytes32[] memory keys = assetsWithPrices.values();
+        uint256 len = keys.length;
+        for (uint256 i = 0; i < len; i++) {
+            assetsWithPrices.remove(keys[i]);
+        }
+        if (assetsWithPrices.length() != 0) revert PriceFeed_FailedToClearPrices();
+        emit PriceFeed_PricesCleared();
     }
 
     // Only used as Reference
@@ -155,8 +172,8 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
         view
         returns (Oracle.Price memory longPrice, Oracle.Price memory shortPrice)
     {
-        PythStructs.Price memory longData = pyth.getPriceUnsafe(assets[longTokenId].priceId);
-        PythStructs.Price memory shortData = pyth.getPriceUnsafe(assets[shortTokenId].priceId);
+        PythStructs.Price memory longData = pyth.getPriceUnsafe(assets[longAssetId].priceId);
+        PythStructs.Price memory shortData = pyth.getPriceUnsafe(assets[shortAssetId].priceId);
         longPrice = Oracle.parsePythData(longData);
         shortPrice = Oracle.parsePythData(shortData);
     }
@@ -189,37 +206,11 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
         priceFeedData = abi.encode(priceFeed, prevPublishTime);
     }
 
-    // For Off-Chain Settlement Strategy
-    function encodePriceData(uint64 _indexPrice, uint64 _longPrice, uint64 _shortPrice, uint8 _decimals)
+    function packPriceData(uint8[] calldata _indexes, uint256[] calldata _prices, uint256[] calldata _decimals)
         external
         pure
-        returns (bytes memory offchainPriceData)
-    {
-        offchainPriceData = abi.encode(_indexPrice, _longPrice, _shortPrice, _decimals);
-    }
-
-    function _updatePythPrice(bytes32 _assetId, Oracle.Asset memory _asset) internal {
-        PythStructs.Price memory data = pyth.getPrice(_asset.priceId);
-        Oracle.Price memory price = Oracle.parsePythData(data);
-
-        if (_asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
-            uint256 refPrice = Oracle.getReferencePrice(_asset);
-            Oracle.validatePriceRange(_asset, price, refPrice);
-        }
-
-        prices[_assetId] = price;
-    }
-
-    function _updateOffchainPrice(bytes32 _assetId, Oracle.Asset memory _asset, bytes memory _priceData) internal {
-        (Oracle.Price memory price,,) = Oracle.parsePriceData(_priceData);
-
-        if (_asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
-            uint256 refPrice = Oracle.getReferencePrice(_asset);
-            Oracle.validatePriceRange(_asset, price, refPrice);
-        }
-
-        prices[_assetId] = price;
-    }
+        returns (uint256[] memory packedPrices)
+    {}
 
     function getAsset(bytes32 _assetId) external view returns (Oracle.Asset memory) {
         return assets[_assetId];

@@ -25,7 +25,7 @@ import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 import {Pricing} from "../../../src/libraries/Pricing.sol";
-import {Order} from "../../../src/positions/Order.sol";
+import {Execution} from "../../../src/positions/Execution.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
@@ -49,11 +49,15 @@ contract TestMarketAllocations is Test {
     bytes32 ethPriceId;
     bytes32 usdcPriceId;
 
-    bytes32 wethAssetId;
-    bytes32 usdcAssetId;
+    bytes32 ethAssetId = keccak256(abi.encode("ETH"));
+    bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
 
     bytes[] tokenUpdateData;
     uint256[] allocations;
+    bytes32[] assetIds;
+    uint256[] compactedPrices;
+
+    Oracle.PriceUpdateData ethPriceData;
 
     address USER = makeAddr("USER");
 
@@ -85,8 +89,11 @@ contract TestMarketAllocations is Test {
         );
         tokenUpdateData.push(wethUpdateData);
         tokenUpdateData.push(usdcUpdateData);
-        wethAssetId = keccak256(abi.encode("ETH"));
-        usdcAssetId = keccak256(abi.encode("USDC"));
+        assetIds.push(ethAssetId);
+        assetIds.push(usdcAssetId);
+
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
     }
 
     receive() external payable {}
@@ -130,9 +137,9 @@ contract TestMarketAllocations is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, wethAssetId, ethPriceId, wethData);
+        marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(wethAssetId);
+        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
         // Construct the deposit input
         Deposit.Input memory input = Deposit.Input({
@@ -140,14 +147,14 @@ contract TestMarketAllocations is Test {
             tokenIn: weth,
             amountIn: 20_000 ether,
             executionFee: 0.01 ether,
-            shouldWrap: true
+            reverseWrap: true
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit(market, depositKey, ethPriceData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -155,20 +162,20 @@ contract TestMarketAllocations is Test {
             tokenIn: usdc,
             amountIn: 50_000_000e6,
             executionFee: 0.01 ether,
-            shouldWrap: false
+            reverseWrap: false
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(wethAssetId), 10000);
+        assertEq(market.getAllocation(ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -252,7 +259,7 @@ contract TestMarketAllocations is Test {
         });
 
         IMarket marketInterface =
-            IMarket(marketMaker.createNewMarket(wethVaultDetails, wethAssetId, ethPriceId, wethData));
+            IMarket(marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData));
 
         uint256 firstAllocation = 5000;
         uint256 secondAllocation = 5000;

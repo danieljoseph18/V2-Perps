@@ -54,3 +54,4 @@ function.
 - Rounding Errors (Math)
 - Oracle Exploits (manipulation)
 - Front-running attacks
+- Vault errors - review ERC 4337 Vaults

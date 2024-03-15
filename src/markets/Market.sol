@@ -63,7 +63,8 @@ contract Market is Vault, IMarket {
 
     function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external onlyAdmin {
         if (!assetIds.contains(_assetId)) revert Market_TokenDoesNotExist();
-        assetIds.remove(_assetId);
+        bool success = assetIds.remove(_assetId);
+        if (!success) revert Market_FailedToRemoveAssetId();
         _setAllocationsWithBits(_newAllocations);
         delete marketStorage[_assetId];
         emit TokenRemoved(_assetId);
@@ -246,6 +247,10 @@ contract Market is Vault, IMarket {
     /**
      *  ========================= Getters  =========================
      */
+    function getAssetIds() external view returns (bytes32[] memory) {
+        return assetIds.values();
+    }
+
     function getCumulativeBorrowFees(bytes32 _assetId) external view returns (uint256 longFees, uint256 shortFees) {
         return (getCumulativeBorrowFee(_assetId, true), getCumulativeBorrowFee(_assetId, false));
     }
@@ -276,6 +281,10 @@ contract Market is Vault, IMarket {
         return _isLong
             ? marketStorage[_assetId].borrowing.longBorrowingRate
             : marketStorage[_assetId].borrowing.shortBorrowingRate;
+    }
+
+    function getStorage(bytes32 _assetId) external view returns (MarketStorage memory) {
+        return marketStorage[_assetId];
     }
 
     function getConfig(bytes32 _assetId) external view returns (Config memory) {

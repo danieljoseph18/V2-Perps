@@ -21,13 +21,14 @@ library Deposit {
     error Deposit_InvalidOwner();
     error Deposit_DepositNotExpired();
     error Deposit_ZeroFee();
+    error Deposit_InvalidPrices();
 
     struct Input {
         address owner;
         address tokenIn;
         uint256 amountIn;
         uint256 executionFee;
-        bool shouldWrap;
+        bool reverseWrap;
     }
 
     struct Data {
@@ -74,10 +75,9 @@ library Deposit {
 
     function execute(ExecuteParams memory _params) external view returns (ExecutionState memory state) {
         // If prices were signed, return for the block, else, return prices
-        if (Oracle.priceWasSigned(_params.priceFeed, _params.isLongToken)) {
-            (state.longPrices, state.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed);
-        } else {
-            (state.longPrices, state.shortPrices) = Oracle.getLastMarketTokenPrices(_params.priceFeed);
+        (state.longPrices, state.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed);
+        if (state.longPrices.price == 0 || state.shortPrices.price == 0) {
+            revert Deposit_InvalidPrices();
         }
 
         // Calculate Fee

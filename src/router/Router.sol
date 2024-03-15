@@ -32,7 +32,6 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IProcessor} from "./interfaces/IProcessor.sol";
-import {Order} from "../positions/Order.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
 /// @dev Needs Router role
@@ -49,10 +48,6 @@ contract Router is ReentrancyGuard, RoleValidation {
     IWETH private immutable WETH;
     IProcessor private processor;
 
-    uint256 private constant PRECISION = 1e18;
-    uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
-    uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
-
     // Used to request a secondary price update from the Keeper
     event Router_PriceUpdateRequested(bytes32 indexed assetId, uint256 indexed blockNumber);
 
@@ -66,6 +61,8 @@ contract Router is ReentrancyGuard, RoleValidation {
     error Router_InvalidCollateralToken();
     error Router_InvalidAmountInForWrap();
     error Router_ExecutionFeeTransferFailed();
+    error Router_InvalidCollateralDelta();
+    error Router_InvalidSizeDelta();
 
     constructor(
         address _tradeStorage,
@@ -101,7 +98,7 @@ contract Router is ReentrancyGuard, RoleValidation {
 
         if (msg.sender != _input.owner) revert Router_InvalidOwner();
         if (_input.amountIn == 0) revert Router_InvalidAmountIn();
-        if (_input.shouldWrap) {
+        if (_input.reverseWrap) {
             if (_input.amountIn > msg.value - _input.executionFee) revert Router_InvalidAmountIn();
             if (_input.tokenIn != address(WETH)) revert Router_CantWrapUSDC();
             WETH.deposit{value: _input.amountIn}();
@@ -116,11 +113,6 @@ contract Router is ReentrancyGuard, RoleValidation {
 
         // Request a Price Update for the Asset
         emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
-    }
-
-    function cancelDeposit(IMarket market, bytes32 _key) external nonReentrant {
-        if (_key == bytes32(0)) revert Router_InvalidKey();
-        market.cancelDeposit(_key, msg.sender);
     }
 
     function createWithdrawal(IMarket market, Withdrawal.Input memory _input) external payable nonReentrant {
@@ -141,11 +133,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
     }
 
-    function cancelWithdrawal(IMarket market, bytes32 _key) external nonReentrant {
-        if (_key == bytes32(0)) revert Router_InvalidKey();
-        market.cancelWithdrawal(_key, msg.sender);
-    }
-
     function createPositionRequest(Position.Input memory _trade) external payable nonReentrant {
         Gas.validateExecutionFee(processor, _trade.executionFee, msg.value, Gas.Action.POSITION);
 
@@ -159,16 +146,12 @@ contract Router is ReentrancyGuard, RoleValidation {
         if (_trade.isIncrease) _handleTokenTransfers(_trade);
 
         // Construct the state for Order Creation
-        (address market, bytes32 positionKey) = Order.validateInitialParameters(marketMaker, _trade);
+        (address market, bytes32 positionKey) = Position.validateInputParameters(marketMaker, _trade);
 
         Position.Data memory position = tradeStorage.getPosition(positionKey);
 
         // Set the Request Type
         Position.RequestType requestType = Position.getRequestType(_trade, position);
-
-        if (requestType == Position.RequestType.POSITION_DECREASE) {
-            _trade = Position.checkForFullClose(_trade, position);
-        }
 
         // Construct the Request from the user input
         Position.Request memory request = Position.createRequest(_trade, market, msg.sender, requestType);
@@ -184,6 +167,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     // @audit - need ability to edit a limit order
+    // @audit - might be vulnerable
     function createEditOrder(Position.Conditionals memory _conditionals, uint256 _executionFee, bytes32 _positionKey)
         external
         payable
@@ -199,12 +183,15 @@ contract Router is ReentrancyGuard, RoleValidation {
     // @audit - need to update collateral balance wherever collateral is stored
     // @audit - decrease requests won't have any transfer in
     function _handleTokenTransfers(Position.Input memory _trade) private {
-        if (_trade.shouldWrap) {
+        if (_trade.reverseWrap) {
             if (_trade.collateralToken != address(WETH)) revert Router_InvalidCollateralToken();
-            if (_trade.collateralDelta > msg.value - _trade.executionFee) revert Router_InvalidAmountInForWrap();
+            // Collateral Delta should always == msg.value - executionFee
+            if (_trade.collateralDelta != msg.value - _trade.executionFee) revert Router_InvalidAmountInForWrap();
             WETH.deposit{value: _trade.collateralDelta}();
             WETH.safeTransfer(address(processor), _trade.collateralDelta);
         } else {
+            // Attemps to transfer full collateralDelta -> Should always Revert if Transfer Fails
+            // Router needs approval for Collateral Token, of amount >= Collateral Delta
             IERC20(_trade.collateralToken).safeTransferFrom(msg.sender, address(processor), _trade.collateralDelta);
         }
     }

@@ -18,15 +18,15 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
-import {Order} from "../positions/Order.sol";
+import {Execution} from "../positions/Execution.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {console} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -46,10 +46,22 @@ library Position {
     error Position_InvalidStopLossPrice();
     error Position_InvalidTakeProfitPercentage();
     error Position_InvalidTakeProfitPrice();
+    error Position_InvalidSlippage();
+    error Position_InvalidCollateralDelta();
+    error Position_MarketDoesNotExist();
+    error Position_InvalidLimitPrice();
+    error Position_InvalidAssetId();
+    error Position_InvalidConditionalPercentage();
+    error Position_InvalidSizeDelta();
+    error Position_UnmatchedMarkets();
+    error Position_ZeroAddress();
+    error Position_InvalidRequestBlock();
 
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant LEVERAGE_PRECISION = 100;
     uint256 public constant PRECISION = 1e18;
+    uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
+    uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
 
     // Data for an Open Position
     struct Data {
@@ -61,8 +73,8 @@ library Position {
         uint256 positionSize; // USD
         uint256 weightedAvgEntryPrice;
         uint256 lastUpdate;
-        int256 lastFundingAccrued;
         bool isLong;
+        FundingParams fundingParams;
         BorrowingParams borrowingParams;
         /**
          * While SL / TPs are separate entities (decrease orders), tieing them to a position lets
@@ -71,6 +83,11 @@ library Position {
          */
         bytes32 stopLossKey;
         bytes32 takeProfitKey;
+    }
+
+    struct FundingParams {
+        int256 lastFundingAccrued;
+        int256 fundingOwed; // in Collateral Tokens
     }
 
     struct BorrowingParams {
@@ -100,7 +117,7 @@ library Position {
         bool isLong;
         bool isLimit;
         bool isIncrease;
-        bool shouldWrap;
+        bool reverseWrap;
         Conditionals conditionals;
     }
 
@@ -113,8 +130,8 @@ library Position {
         RequestType requestType;
     }
 
-    // Executed Request
-    struct Execution {
+    // Bundled Request for Execution
+    struct Settlement {
         Request request;
         bytes32 orderKey;
         address feeReceiver;
@@ -156,23 +173,34 @@ library Position {
             if (_trade.isIncrease) {
                 requestType = RequestType.POSITION_INCREASE;
             } else {
-                /**
-                 * Possible Size Delta & Collateral Delta can be > Size / Collateral Amount.
-                 * In this case, it's a full close.
-                 * Set Size Delta to = Position Size & Collateral Delta to = Collateral Amount
-                 */
+                if (_trade.collateralDelta > _position.collateralAmount) revert Position_InvalidCollateralDelta();
+                if (_trade.sizeDelta > _position.positionSize) revert Position_InvalidSizeDelta();
                 requestType = RequestType.POSITION_DECREASE;
             }
         }
     }
 
-    /// @dev Handle case where size/collateral delta > position size/collateral amount
-    function checkForFullClose(Input memory _trade, Data calldata _position) external pure returns (Input memory) {
-        if (_trade.sizeDelta >= _position.positionSize || _trade.collateralDelta >= _position.collateralAmount) {
-            _trade.sizeDelta = _position.positionSize;
-            _trade.collateralDelta = _position.collateralAmount;
+    function validateInputParameters(IMarketMaker marketMaker, Position.Input memory _trade)
+        public
+        view
+        returns (address market, bytes32 positionKey)
+    {
+        if (!(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE)) {
+            revert Position_InvalidSlippage();
         }
-        return _trade;
+        if (_trade.collateralDelta == 0) revert Position_InvalidCollateralDelta();
+        if (_trade.assetId == bytes32(0)) revert Position_InvalidAssetId();
+
+        market = marketMaker.tokenToMarkets(_trade.assetId);
+        if (market == address(0)) revert Position_MarketDoesNotExist();
+
+        positionKey = keccak256(abi.encode(_trade.assetId, msg.sender, _trade.isLong));
+
+        if (_trade.isLimit && _trade.limitPrice == 0) revert Position_InvalidLimitPrice();
+        else if (!_trade.isLimit && _trade.limitPrice != 0) revert Position_InvalidLimitPrice();
+
+        if (_trade.conditionals.stopLossPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
+        if (_trade.conditionals.takeProfitPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
     }
 
     function generateKey(Request memory _request) external pure returns (bytes32 positionKey) {
@@ -205,13 +233,9 @@ library Position {
 
     // 1x = 100
     function checkLeverage(IMarket market, bytes32 _assetId, uint256 _sizeUsd, uint256 _collateralUsd) public view {
-        console.log("Collateral USD: ", _collateralUsd);
-        console.log("Size USD: ", _sizeUsd);
-        console.logBytes32(_assetId);
         uint256 maxLeverage = market.getMaxLeverage(_assetId);
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
-        console.log("Leverage: ", leverage);
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
         if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
@@ -230,7 +254,7 @@ library Position {
         });
     }
 
-    function generateNewPosition(Request memory _request, Order.ExecutionState memory _state)
+    function generateNewPosition(Request memory _request, Execution.State memory _state)
         external
         view
         returns (Data memory position)
@@ -247,12 +271,80 @@ library Position {
             positionSize: _request.input.sizeDelta,
             weightedAvgEntryPrice: _state.impactedPrice,
             lastUpdate: block.timestamp,
-            lastFundingAccrued: _state.market.getFundingAccrued(_request.input.assetId),
             isLong: _request.input.isLong,
+            fundingParams: FundingParams(_state.market.getFundingAccrued(_request.input.assetId), 0),
             borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
             stopLossKey: bytes32(0),
             takeProfitKey: bytes32(0)
         });
+    }
+
+    // SL / TP are Decrease Orders tied to a Position
+    function constructConditionalOrders(Position.Data memory _position, Position.Conditionals memory _conditionals)
+        external
+        view
+        returns (Position.Request memory stopLossOrder, Position.Request memory takeProfitOrder)
+    {
+        // Construct the stop loss based on the values
+        if (_conditionals.stopLossSet) {
+            stopLossOrder = Position.Request({
+                input: Position.Input({
+                    assetId: _position.assetId,
+                    collateralToken: _position.collateralToken,
+                    collateralDelta: mulDiv(_position.collateralAmount, _conditionals.stopLossPercentage, PRECISION),
+                    sizeDelta: mulDiv(_position.positionSize, _conditionals.stopLossPercentage, PRECISION),
+                    limitPrice: _conditionals.stopLossPrice,
+                    maxSlippage: MAX_SLIPPAGE,
+                    executionFee: 0, // @audit - how do we get user to pay for execution?
+                    isLong: !_position.isLong,
+                    isLimit: true,
+                    isIncrease: false,
+                    reverseWrap: true,
+                    conditionals: Position.Conditionals({
+                        stopLossSet: false,
+                        stopLossPrice: 0,
+                        stopLossPercentage: 0,
+                        takeProfitSet: false,
+                        takeProfitPrice: 0,
+                        takeProfitPercentage: 0
+                    })
+                }),
+                market: address(_position.market),
+                user: _position.user,
+                requestBlock: block.number,
+                requestType: Position.RequestType.STOP_LOSS
+            });
+        }
+        // Construct the Take profit based on the values
+        if (_conditionals.takeProfitSet) {
+            takeProfitOrder = Position.Request({
+                input: Position.Input({
+                    assetId: _position.assetId,
+                    collateralToken: _position.collateralToken,
+                    collateralDelta: mulDiv(_position.collateralAmount, _conditionals.takeProfitPercentage, PRECISION),
+                    sizeDelta: mulDiv(_position.positionSize, _conditionals.takeProfitPercentage, PRECISION),
+                    limitPrice: _conditionals.takeProfitPrice,
+                    maxSlippage: MAX_SLIPPAGE,
+                    executionFee: 0, // @audit - how do we get user to pay for execution?
+                    isLong: !_position.isLong,
+                    isLimit: true,
+                    isIncrease: false,
+                    reverseWrap: true,
+                    conditionals: Position.Conditionals({
+                        stopLossSet: false,
+                        stopLossPrice: 0,
+                        stopLossPercentage: 0,
+                        takeProfitSet: false,
+                        takeProfitPrice: 0,
+                        takeProfitPercentage: 0
+                    })
+                }),
+                market: address(_position.market),
+                user: _position.user,
+                requestBlock: block.number,
+                requestType: Position.RequestType.TAKE_PROFIT
+            });
+        }
     }
 
     function getPnl(Data memory _position, uint256 _price, uint256 _baseUnit) external pure returns (int256 pnl) {
@@ -268,11 +360,11 @@ library Position {
         }
     }
 
-    function isLiquidatable(
-        Position.Data memory _position,
-        Order.ExecutionState memory _state,
-        uint256 liquidationFeeUsd
-    ) external view returns (bool) {
+    function isLiquidatable(Position.Data memory _position, Execution.State memory _state, uint256 liquidationFeeUsd)
+        external
+        view
+        returns (bool)
+    {
         uint256 collateralValueUsd = mulDiv(_position.collateralAmount, _state.collateralPrice, PRECISION);
 
         uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _state);
@@ -304,7 +396,7 @@ library Position {
     function createAdlOrder(Data memory _position, uint256 _sizeDelta)
         external
         view
-        returns (Execution memory execution)
+        returns (Settlement memory settlement)
     {
         // calculate collateral delta from size delta
         uint256 collateralDelta = mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
@@ -321,7 +413,7 @@ library Position {
                 isLong: _position.isLong,
                 isLimit: false,
                 isIncrease: false,
-                shouldWrap: false,
+                reverseWrap: false,
                 conditionals: Conditionals(false, false, 0, 0, 0, 0)
             }),
             market: address(_position.market),
@@ -329,8 +421,8 @@ library Position {
             requestBlock: block.number,
             requestType: RequestType.POSITION_DECREASE
         });
-        execution =
-            Execution({request: request, orderKey: generateOrderKey(request), feeReceiver: address(0), isAdl: true});
+        settlement =
+            Settlement({request: request, orderKey: generateOrderKey(request), feeReceiver: address(0), isAdl: true});
     }
 
     function convertIndexAmountToCollateral(
@@ -352,7 +444,7 @@ library Position {
         collateralAmount = mulDiv(_usdAmount, _collateralBaseUnit, _collateralPrice);
     }
 
-    function getTotalFeesOwedUsd(Data memory _position, Order.ExecutionState memory _state)
+    function getTotalFeesOwedUsd(Data memory _position, Execution.State memory _state)
         public
         view
         returns (uint256 totalFeesOwedUsd)
@@ -367,27 +459,45 @@ library Position {
     function validateConditionals(Conditionals memory _conditionals, uint256 _referencePrice, bool _isLong)
         public
         pure
+        returns (Conditionals memory)
     {
+        // Check the Validity of the Stop Loss / Take Profit
+        bool stopLossValid = true;
+        bool takeProfitValid = true;
         if (_conditionals.stopLossSet) {
-            if (_conditionals.stopLossPercentage == 0 || _conditionals.stopLossPercentage > 1e18) {
-                revert Position_InvalidStopLossPercentage();
+            if (_conditionals.stopLossPercentage == 0 || _conditionals.stopLossPercentage > PRECISION) {
+                stopLossValid = false;
             }
             if (_isLong) {
-                if (_conditionals.stopLossPrice >= _referencePrice) revert Position_InvalidStopLossPrice();
+                if (_conditionals.stopLossPrice >= _referencePrice) stopLossValid = false;
             } else {
-                if (_conditionals.stopLossPrice <= _referencePrice) revert Position_InvalidStopLossPrice();
+                if (_conditionals.stopLossPrice <= _referencePrice) stopLossValid = false;
             }
         }
         if (_conditionals.takeProfitSet) {
-            if (_conditionals.takeProfitPercentage == 0 || _conditionals.takeProfitPercentage > 1e18) {
-                revert Position_InvalidTakeProfitPercentage();
+            if (_conditionals.takeProfitPercentage == 0 || _conditionals.takeProfitPercentage > PRECISION) {
+                takeProfitValid = false;
             }
             if (_isLong) {
-                if (_conditionals.takeProfitPrice <= _referencePrice) revert Position_InvalidTakeProfitPrice();
+                if (_conditionals.takeProfitPrice <= _referencePrice) takeProfitValid = false;
             } else {
-                if (_conditionals.takeProfitPrice >= _referencePrice) revert Position_InvalidTakeProfitPrice();
+                if (_conditionals.takeProfitPrice >= _referencePrice) takeProfitValid = false;
             }
         }
+
+        // If Stop Loss / Take Profit are not valid set them to 0
+        if (!stopLossValid) {
+            _conditionals.stopLossSet = false;
+            _conditionals.stopLossPrice = 0;
+            _conditionals.stopLossPercentage = 0;
+        }
+        if (!takeProfitValid) {
+            _conditionals.takeProfitSet = false;
+            _conditionals.takeProfitPrice = 0;
+            _conditionals.takeProfitPercentage = 0;
+        }
+        // Return the Validated Conditionals
+        return _conditionals;
     }
 
     /**
@@ -398,24 +508,74 @@ library Position {
      * - Conditional Prices are valid -> if long, stop loss < ref price, if short, stop loss > ref price
      * if long, take profit > ref price, if short, take profit < ref price
      */
-    function validateRequest(ITradeStorage tradeStorage, Request memory _request, Order.ExecutionState memory _state)
+    /**
+     * struct Request {
+     *     Input input;
+     *     address market;
+     *     address user;
+     *     uint256 requestBlock;
+     *     RequestType requestType;
+     * }
+     * struct Input {
+     *     bytes32 assetId; // Hash of the asset ticker, e.g keccak256(abi.encode("ETH"))
+     *     address collateralToken;
+     *     uint256 collateralDelta;
+     *     uint256 sizeDelta; // USD
+     *     uint256 limitPrice;
+     *     uint256 maxSlippage;
+     *     uint256 executionFee;
+     *     bool isLong;
+     *     bool isLimit;
+     *     bool isIncrease;
+     *     bool reverseWrap;
+     *     Conditionals conditionals;
+     * }
+     */
+    function validateRequest(IMarketMaker marketMaker, Request memory _request, Execution.State memory _state)
         external
         view
+        returns (Request memory)
     {
-        // 1. Check Collateral is > Min Collateral
-        console.log("Collateral Price: ", _state.collateralPrice);
-        uint256 collateralUsd = _state.collateralDeltaUsd.abs();
-        if (collateralUsd < tradeStorage.minCollateralUsd()) {
-            revert Position_MinCollateralThreshold();
-        }
-        // 2. Check Leverage is valid
-        // @audit - what about decrease position / collateral edits?
-        if (
-            _request.requestType == RequestType.POSITION_INCREASE || _request.requestType == RequestType.CREATE_POSITION
-        ) {
-            checkLeverage(_state.market, _request.input.assetId, _request.input.sizeDelta, collateralUsd);
-        }
-        // 3. Check Conditionals are valid
-        validateConditionals(_request.input.conditionals, _state.indexPrice, _request.input.isLong);
+        // Re-Validate the Input
+        (address inputMarket,) = validateInputParameters(marketMaker, _request.input);
+        if (inputMarket != _request.market) revert Position_UnmatchedMarkets();
+        if (_request.user == address(0)) revert Position_ZeroAddress();
+        if (_request.requestBlock > block.number) revert Position_InvalidRequestBlock();
+        _request.input.conditionals =
+            validateConditionals(_request.input.conditionals, _state.indexPrice, _request.input.isLong);
+
+        return _request;
     }
+
+    /**
+     * Need to Validate the Collateral Delta and Size Delta for each Request Type.
+     *
+     * 1. Create Position
+     * - Shouldn't put OI > max OI (validate allocation)
+     * - Collateral must meet minimum requirements for protocol (minCollateralUsd)
+     * - Leverage should be between min and max
+     *
+     * 2. Increase Position
+     * - Shouldn't put OI > max OI (validate allocation)
+     * - Collateral must be enough to pay off outstanding fees for the position
+     * - Leverage should be between min and max
+     *
+     * 3. Decrease Position
+     * - Collateral must be enough to pay off outstanding fees for the position
+     * - Decrease amount must be <= position size / collateral
+     * - Unless a full decrease, collateral shouldn't fall below min requirements
+     *
+     * 4. Collateral Increase
+     * - Size Delta Should be 0
+     * - Collateral should be enough to pay off oustanding fees?
+     * - Leverage should be between min and max after increase
+     *
+     * 5. Collateral Decrease
+     * - Size Delta Should be 0
+     * - Collateral should be enough to pay off oustanding fees
+     * - Collateral Delta should be <= collateral
+     * - Collateral shouldn't fall below min requirements (even after fees paid)
+     * - Leverage should be between min and max after decrease
+     *
+     */
 }

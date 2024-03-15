@@ -30,7 +30,6 @@ library Funding {
     using SafeCast for int256;
     using SignedMath for int256;
 
-    uint256 constant PRECISION = 1e18;
     int256 constant SIGNED_PRECISION = 1e18;
     int256 constant PRICE_PRECISION = 1e30;
     int256 constant SECONDS_IN_DAY = 86400;

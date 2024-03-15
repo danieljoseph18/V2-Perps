@@ -101,8 +101,8 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     {
         if (_poolOwner == address(0)) revert Vault_InvalidPoolOwner();
         if (_feeDistributor == address(0)) revert Vault_InvalidFeeDistributor();
-        if (_feeScale < 0 || _feeScale > 1e18) revert Vault_InvalidFeeScale();
-        if (_feePercentageToOwner < 0 || _feePercentageToOwner > 1e18) revert Vault_InvalidFeePercentage();
+        if (_feeScale > 1e18) revert Vault_InvalidFeeScale();
+        if (_feePercentageToOwner > 1e18) revert Vault_InvalidFeePercentage();
         poolOwner = _poolOwner;
         feeDistributor = _feeDistributor;
         feeScale = _feeScale;
@@ -117,7 +117,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
-    function batchWithdrawFees() external onlyAdmin {
+    function batchWithdrawFees() external onlyAdmin nonReentrant {
         uint256 longFees = longAccumulatedFees;
         uint256 shortFees = shortAccumulatedFees;
         longAccumulatedFees = 0;
@@ -140,6 +140,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
         onlyTradeStorage
+        nonReentrant
     {
         _transferOutTokens(_to, _amount, _isLongToken, _shouldUnwrap);
     }
@@ -180,18 +181,8 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         emit DepositRequestCreated(deposit.key, _input.owner, _input.tokenIn, _input.amountIn, deposit.blockNumber);
     }
 
-    // Request must be expired for a user to cancel it
-    function cancelDeposit(bytes32 _key, address _caller) external onlyRouter orderExists(_key, true) {
-        Deposit.Data memory deposit = depositRequests[_key];
-
-        Deposit.validateCancellation(deposit, _caller);
-
+    function deleteDeposit(bytes32 _key) external onlyProcessor {
         _deleteDeposit(_key);
-
-        // Transfer tokens back to user
-        IERC20(deposit.input.tokenIn).safeTransfer(msg.sender, deposit.input.amountIn);
-
-        emit DepositRequestCancelled(_key, deposit.input.owner, deposit.input.tokenIn, deposit.input.amountIn);
     }
 
     // @audit - ETH should always be wrapped when sent in
@@ -199,13 +190,16 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         external
         onlyProcessor
         orderExists(_params.key, true)
+        nonReentrant
     {
         // Delete Deposit Request
         _deleteDeposit(_params.key);
         // Get Pool Values
         _params.values = Pool.Values({
             longTokenBalance: longTokenBalance,
+            longTokensReserved: longTokensReserved,
             shortTokenBalance: shortTokenBalance,
+            shortTokensReserved: shortTokensReserved,
             marketTokenSupply: totalSupply(),
             longBaseUnit: LONG_BASE_UNIT,
             shortBaseUnit: SHORT_BASE_UNIT
@@ -243,16 +237,8 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         );
     }
 
-    function cancelWithdrawal(bytes32 _key, address _caller) external onlyRouter orderExists(_key, false) {
-        Withdrawal.Data memory withdrawal = withdrawalRequests[_key];
-
-        Withdrawal.validateCancellation(withdrawal, _caller);
-
+    function deleteWithdrawal(bytes32 _key) external onlyProcessor {
         _deleteWithdrawal(_key);
-
-        emit WithdrawalRequestCancelled(
-            _key, withdrawal.input.owner, withdrawal.input.tokenOut, withdrawal.input.marketTokenAmountIn
-        );
     }
 
     // @audit - review
@@ -260,13 +246,16 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         external
         onlyProcessor
         orderExists(_params.key, false)
+        nonReentrant
     {
         // Transfer in Market Tokens
         _params.processor.transferDepositTokens(address(this), address(this), _params.data.input.marketTokenAmountIn);
         // Get Pool Values
         _params.values = Pool.Values({
             longTokenBalance: longTokenBalance,
+            longTokensReserved: longTokensReserved,
             shortTokenBalance: shortTokenBalance,
+            shortTokensReserved: shortTokensReserved,
             marketTokenSupply: totalSupply(), // Before Burn
             longBaseUnit: LONG_BASE_UNIT,
             shortBaseUnit: SHORT_BASE_UNIT
@@ -295,12 +284,14 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     }
 
     function _deleteWithdrawal(bytes32 _key) internal {
-        withdrawalKeys.remove(_key);
+        bool success = withdrawalKeys.remove(_key);
+        if (!success) revert Vault_FailedToRemoveWithdrawal();
         delete withdrawalRequests[_key];
     }
 
     function _deleteDeposit(bytes32 _key) internal {
-        depositKeys.remove(_key);
+        bool success = depositKeys.remove(_key);
+        if (!success) revert Vault_FailedToRemoveDeposit();
         delete depositRequests[_key];
     }
 

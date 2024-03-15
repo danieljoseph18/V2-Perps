@@ -27,11 +27,11 @@ interface IVault {
 
     // Deposit creation
     function createDeposit(Deposit.Input memory _params) external payable;
-    function cancelDeposit(bytes32 _key, address _caller) external;
+    function deleteDeposit(bytes32 _key) external;
 
     // Withdrawal creation
     function createWithdrawal(Withdrawal.Input memory _params) external payable;
-    function cancelWithdrawal(bytes32 _key, address _caller) external;
+    function deleteWithdrawal(bytes32 _key) external;
 
     // Getter
     function feeScale() external view returns (uint256);
@@ -97,4 +97,6 @@ interface IVault {
     error Vault_InvalidUnwrapToken();
     error Vault_FailedToAddDeposit();
     error Vault_FailedToAddWithdrawal();
+    error Vault_FailedToRemoveWithdrawal();
+    error Vault_FailedToRemoveDeposit();
 }

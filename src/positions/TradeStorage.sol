@@ -24,16 +24,19 @@ import {Funding} from "../libraries/Funding.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {Position} from "../positions/Position.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {Order} from "./Order.sol";
+import {Execution} from "./Execution.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Invariant} from "../libraries/Invariant.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 
 /// @dev Needs TradeStorage Role & Fee Accumulator
 /// @dev Need to add liquidity reservation for positions
 contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SignedMath for int256;
+
+    IReferralStorage referralStorage;
 
     uint256 constant PRECISION = 1e18;
     uint256 constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
@@ -55,7 +58,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint256 public executionFee;
     uint256 public minBlockDelay;
 
-    constructor(address _roleStorage) RoleValidation(_roleStorage) {}
+    constructor(IReferralStorage _referralStorage, address _roleStorage) RoleValidation(_roleStorage) {
+        referralStorage = _referralStorage;
+    }
 
     function initialise(
         uint256 _liquidationFee, // 5e18 = 5 USD
@@ -114,7 +119,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // construct the SL / TP orders
         // Uses WAEP as ref price
         (Position.Request memory stopLoss, Position.Request memory takeProfit) =
-            Order.constructConditionalOrders(position, _conditionals);
+            Position.constructConditionalOrders(position, _conditionals);
         // if the position already has a SL / TP, delete them
         // add them to storage
         if (_conditionals.stopLossSet) {
@@ -153,7 +158,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - No funding
-    function executeCollateralIncrease(Position.Execution memory _params, Order.ExecutionState memory _state)
+    function executeCollateralIncrease(Position.Settlement memory _params, Execution.State memory _state)
         external
         onlyProcessor
         nonReentrant
@@ -166,7 +171,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in Library
         Position.Data memory positionAfter;
-        (positionAfter, _state) = Order.executeCollateralIncrease(positionBefore, _params, _state);
+        (positionAfter, _state) = Execution.increaseCollateral(positionBefore, _params, _state);
         // Validate the Position Change
         Invariant.validateCollateralIncrease(
             positionBefore,
@@ -184,7 +189,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - No funding
-    function executeCollateralDecrease(Position.Execution memory _params, Order.ExecutionState memory _state)
+    function executeCollateralDecrease(Position.Settlement memory _params, Execution.State memory _state)
         external
         onlyProcessor
         nonReentrant
@@ -198,7 +203,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Perform Execution in Library
         Position.Data memory positionAfter;
         (positionAfter, _state) =
-            Order.executeCollateralDecrease(positionBefore, _params, _state, minCollateralUsd, liquidationFeeUsd);
+            Execution.decreaseCollateral(positionBefore, _params, _state, minCollateralUsd, liquidationFeeUsd);
         // Transfer Tokens to User
         uint256 amountOut =
             _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee;
@@ -210,18 +215,28 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
         // Update Final Storage
         openPositions[positionKey] = positionAfter;
+        // Transfer Tokens to User
         _state.market.transferOutTokens(
-            _params.request.user,
-            amountOut,
-            _params.request.input.isLong,
-            _params.request.input.shouldWrap // @audit - should unwrap
+            _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.reverseWrap
         );
+        // Transfer Rebate to Referrer
+        if (_state.affiliateRebate > 0) {
+            referralStorage.accumulateAffiliateRewards(
+                _state.referrer, _params.request.input.isLong, _state.affiliateRebate
+            );
+            _state.market.transferOutTokens(
+                _state.referrer,
+                _state.affiliateRebate,
+                _params.request.input.isLong,
+                false // Leave unwrapped by default
+            );
+        }
         // Fire Event
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
     // @audit - Set funding entry values
-    function createNewPosition(Position.Execution memory _params, Order.ExecutionState memory _state)
+    function createNewPosition(Position.Settlement memory _params, Execution.State memory _state)
         external
         onlyProcessor
         nonReentrant
@@ -234,14 +249,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Perform Execution in the Library
         // @audit - logic?
         Position.Data memory position;
-        (position, _state) = Order.createNewPosition(_params, _state, minCollateralUsd);
+        (position, _state) = Execution.createNewPosition(_params, _state, minCollateralUsd);
         // Validate the New Position
         Invariant.validateNewPosition(
             _params.request.input.collateralDelta, position.collateralAmount, _state.fee, _state.affiliateRebate
         );
         // If Request has conditionals, create the SL / TP
         (Position.Request memory stopLoss, Position.Request memory takeProfit) =
-            Order.constructConditionalOrders(position, _params.request.input.conditionals);
+            Position.constructConditionalOrders(position, _params.request.input.conditionals);
         // If stop loss set, create and store the order
         if (_params.request.input.conditionals.stopLossSet) position.stopLossKey = _createStopLoss(stopLoss);
         // If take profit set, create and store the order
@@ -265,7 +280,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - SETTLE ALL PREVIOUS FUNDING AND START ACCUMULATING AT NEW RATE
-    function increaseExistingPosition(Position.Execution memory _params, Order.ExecutionState memory _state)
+    function increaseExistingPosition(Position.Settlement memory _params, Execution.State memory _state)
         external
         onlyProcessor
         nonReentrant
@@ -278,7 +293,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Perform Execution in the Library
         Position.Data memory positionAfter;
-        (positionAfter, _state) = Order.increaseExistingPosition(positionBefore, _params, _state);
+        (positionAfter, _state) = Execution.increasePosition(positionBefore, _params, _state);
         // Validate the Position Change
         Invariant.validateIncreasePosition(
             positionBefore,
@@ -286,7 +301,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.collateralDelta,
             _state.fee,
             _state.affiliateRebate,
-            _state.fundingFee,
             _state.borrowFee,
             _params.request.input.sizeDelta
         );
@@ -305,7 +319,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - SETTLE ALL PREVIOUS FUNDING AND START ACCUMULATING AT NEW RATE OR CLOSE
-    function decreaseExistingPosition(Position.Execution calldata _params, Order.ExecutionState memory _state)
+    function decreaseExistingPosition(Position.Settlement calldata _params, Execution.State memory _state)
         external
         onlyProcessor
         nonReentrant
@@ -324,9 +338,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         }
         // Perform Execution in the Library
         Position.Data memory positionAfter;
-        Order.DecreaseState memory decreaseState;
+        Execution.DecreaseState memory decreaseState;
         (positionAfter, decreaseState, _state) =
-            Order.decreaseExistingPosition(positionBefore, _params, _state, minCollateralUsd, liquidationFeeUsd);
+            Execution.decreasePosition(positionBefore, _params, _state, minCollateralUsd, liquidationFeeUsd);
         // Validate the Position Change
         Invariant.validateDecreasePosition(
             positionBefore,
@@ -359,18 +373,31 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Transfer Tokens to User
         uint256 amountOut = decreaseState.decreasePnl > 0
             ? decreaseState.afterFeeAmount + decreaseState.decreasePnl.abs() // Profit Case
-            : decreaseState.afterFeeAmount; // Loss / Break Even Case
+            : decreaseState.afterFeeAmount; // Loss / Break Even Case -> Losses already deducted in Execution if any
 
+        // Transfer Tokens to User
         _state.market.transferOutTokens(
-            _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.shouldWrap
+            _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.reverseWrap
         );
+        // Transfer Rebate to Referrer
+        if (_state.affiliateRebate > 0) {
+            referralStorage.accumulateAffiliateRewards(
+                _state.referrer, _params.request.input.isLong, _state.affiliateRebate
+            );
+            _state.market.transferOutTokens(
+                _state.referrer,
+                _state.affiliateRebate,
+                _params.request.input.isLong,
+                false // Leave unwrapped by default
+            );
+        }
         // Fire Event
         emit DecreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
     /// @dev - Borrowing Fees ignored as all liquidated collateral goes to LPs
     // @audit - need to calculate funding fees
-    function liquidatePosition(Order.ExecutionState memory _state, bytes32 _positionKey, address _liquidator)
+    function liquidatePosition(Execution.State memory _state, bytes32 _positionKey, address _liquidator)
         external
         onlyProcessor
     {

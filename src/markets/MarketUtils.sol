@@ -13,7 +13,6 @@ library MarketUtils {
 
     uint256 public constant SCALAR = 1e18;
     uint256 public constant MAX_ALLOCATION = 10000;
-    uint256 constant PRICE_PRECISION = 1e30;
 
     error MarketUtils_MaxOiExceeded();
 

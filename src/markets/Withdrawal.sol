@@ -61,6 +61,7 @@ library Withdrawal {
     error Withdrawal_DepositNotExpired();
     error Withdrawal_InsufficientLongBalance();
     error Withdrawal_InsufficientShortBalance();
+    error Withdrawal_InvalidPrices();
 
     function validateCancellation(Data memory _data, address _caller) internal view {
         if (_data.input.owner != _caller) revert Withdrawal_InvalidOwner();
@@ -79,10 +80,9 @@ library Withdrawal {
 
     function execute(ExecuteParams memory _params) external view returns (ExecutionState memory state) {
         // get price signed to the block number of the request
-        if (Oracle.priceWasSigned(_params.priceFeed, _params.isLongToken)) {
-            (state.longPrices, state.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed);
-        } else {
-            (state.longPrices, state.shortPrices) = Oracle.getLastMarketTokenPrices(_params.priceFeed);
+        (state.longPrices, state.shortPrices) = Oracle.getMarketTokenPrices(_params.priceFeed);
+        if (state.longPrices.price == 0 || state.shortPrices.price == 0) {
+            revert Withdrawal_InvalidPrices();
         }
         // Calculate amountOut
         state.totalTokensOut = Pool.withdrawMarketTokensToTokens(

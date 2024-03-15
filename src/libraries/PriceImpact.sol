@@ -23,7 +23,7 @@ import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {Order} from "../positions/Order.sol";
+import {Execution} from "../positions/Execution.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 
@@ -42,7 +42,7 @@ library PriceImpact {
     uint256 private constant PRICE_PRECISION = 1e30;
     int256 private constant SIGNED_PRICE_PRECISION = 1e30;
 
-    struct ExecutionState {
+    struct ImpactState {
         IMarket.ImpactConfig impact;
         uint256 longOi;
         uint256 shortOi;
@@ -64,9 +64,9 @@ library PriceImpact {
         IMarket market,
         IPriceFeed priceFeed,
         Position.Request memory _request,
-        Order.ExecutionState memory _orderState
+        Execution.State memory _orderState
     ) external view returns (uint256 impactedPrice, int256 priceImpactUsd) {
-        ExecutionState memory state;
+        ImpactState memory state;
 
         state.impact = market.getImpactConfig(_request.input.assetId);
         // @audit - these are entry OI values -> do we need current values?
@@ -161,7 +161,7 @@ library PriceImpact {
      * If total oi after is 0, return 0 to avoid incentivizing this case. Otherwise users would receive a positive impact
      * for full-closing the open interest, as 0 skew = is technically a perfect balance.
      */
-    function _calculateImpactOnEmptyPool(ExecutionState memory _state, uint256 _sizeDelta)
+    function _calculateImpactOnEmptyPool(ImpactState memory _state, uint256 _sizeDelta)
         internal
         pure
         returns (int256 priceImpact)

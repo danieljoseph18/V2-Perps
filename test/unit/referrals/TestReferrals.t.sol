@@ -25,7 +25,6 @@ import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 import {Pricing} from "../../../src/libraries/Pricing.sol";
-import {Order} from "../../../src/positions/Order.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
@@ -52,11 +51,15 @@ contract TestReferrals is Test {
 
     bytes[] tokenUpdateData;
     uint256[] allocations;
+    bytes32[] assetIds;
+    uint256[] compactedPrices;
+
+    Oracle.PriceUpdateData ethPriceData;
 
     address USER = makeAddr("USER");
 
-    bytes32 ethAssetId = keccak256("ETH");
-    bytes32 usdcAssetId = keccak256("USDC");
+    bytes32 ethAssetId = keccak256(abi.encode("ETH"));
+    bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -86,6 +89,11 @@ contract TestReferrals is Test {
         );
         tokenUpdateData.push(wethUpdateData);
         tokenUpdateData.push(usdcUpdateData);
+        assetIds.push(ethAssetId);
+        assetIds.push(usdcAssetId);
+
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
     }
 
     receive() external payable {}
@@ -139,14 +147,14 @@ contract TestReferrals is Test {
             tokenIn: weth,
             amountIn: 20_000 ether,
             executionFee: 0.01 ether,
-            shouldWrap: true
+            reverseWrap: true
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -154,13 +162,13 @@ contract TestReferrals is Test {
             tokenIn: usdc,
             amountIn: 50_000_000e6,
             executionFee: 0.01 ether,
-            shouldWrap: false
+            reverseWrap: false
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -213,7 +221,7 @@ contract TestReferrals is Test {
             isLong: true,
             isLimit: false,
             isIncrease: true,
-            shouldWrap: true,
+            reverseWrap: true,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -262,7 +270,7 @@ contract TestReferrals is Test {
             isLong: true,
             isLimit: false,
             isIncrease: true,
-            shouldWrap: true,
+            reverseWrap: true,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -277,7 +285,7 @@ contract TestReferrals is Test {
         // execute the position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, tokenUpdateData, ethAssetId);
+        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
         // check and claim the affiliate rewards from the owner
         assertGt(referralStorage.getClaimableAffiliateRewards(OWNER, true), 0);
         vm.prank(OWNER);
@@ -305,7 +313,7 @@ contract TestReferrals is Test {
             isLong: true,
             isLimit: false,
             isIncrease: true,
-            shouldWrap: true,
+            reverseWrap: true,
             conditionals: Position.Conditionals({
                 stopLossSet: false,
                 takeProfitSet: false,
@@ -316,7 +324,7 @@ contract TestReferrals is Test {
             })
         });
         vm.prank(USER);
-        router.createPositionRequest{value: 4.01 ether}(input);
+        router.createPositionRequest{value: 0.51 ether}(input);
         // execute the position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         // check and claim the affiliate rewards from the owner

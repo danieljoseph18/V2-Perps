@@ -29,7 +29,9 @@ library Pool {
 
     struct Values {
         uint256 longTokenBalance;
+        uint256 longTokensReserved;
         uint256 shortTokenBalance;
+        uint256 shortTokensReserved;
         uint256 marketTokenSupply;
         uint256 longBaseUnit;
         uint256 shortBaseUnit;
@@ -114,9 +116,11 @@ library Pool {
         pure
         returns (uint256 aum)
     {
-        // Get Values in USD
-        uint256 longTokenValue = mulDiv(_values.longTokenBalance, _longTokenPrice, _values.longBaseUnit);
-        uint256 shortTokenValue = mulDiv(_values.shortTokenBalance, _shortTokenPrice, _values.shortBaseUnit);
+        // Get Values in USD -> Subtract reserved amounts from AUM
+        uint256 longTokenValue =
+            mulDiv(_values.longTokenBalance - _values.longTokensReserved, _longTokenPrice, _values.longBaseUnit);
+        uint256 shortTokenValue =
+            mulDiv(_values.shortTokenBalance - _values.shortTokensReserved, _shortTokenPrice, _values.shortBaseUnit);
 
         // Calculate AUM
         aum = _cumulativePnl >= 0

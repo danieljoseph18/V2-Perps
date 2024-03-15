@@ -23,7 +23,7 @@ import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
-import {Order} from "../../../src/positions/Order.sol";
+import {Execution} from "../../../src/positions/Execution.sol";
 
 contract TestPriceImpact is Test {
     RoleStorage roleStorage;
@@ -45,10 +45,15 @@ contract TestPriceImpact is Test {
     bytes[] tokenUpdateData;
     uint256[] allocations;
 
+    bytes32[] assetIds;
+    uint256[] compactedPrices;
+
+    Oracle.PriceUpdateData ethPriceData;
+
     address USER = makeAddr("USER");
 
-    bytes32 ethAssetId = keccak256("ETH");
-    bytes32 usdcAssetId = keccak256("USDC");
+    bytes32 ethAssetId = keccak256(abi.encode("ETH"));
+    bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -78,6 +83,11 @@ contract TestPriceImpact is Test {
         );
         tokenUpdateData.push(wethUpdateData);
         tokenUpdateData.push(usdcUpdateData);
+        assetIds.push(ethAssetId);
+        assetIds.push(usdcAssetId);
+
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
     }
 
     receive() external payable {}
@@ -131,14 +141,14 @@ contract TestPriceImpact is Test {
             tokenIn: weth,
             amountIn: 20_000 ether,
             executionFee: 0.01 ether,
-            shouldWrap: true
+            reverseWrap: true
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit{value: 0.001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.001 ether}(market, depositKey, ethPriceData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -146,13 +156,13 @@ contract TestPriceImpact is Test {
             tokenIn: usdc,
             amountIn: 50_000_000e6,
             executionFee: 0.01 ether,
-            shouldWrap: false
+            reverseWrap: false
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit{value: 0.001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -213,14 +223,14 @@ contract TestPriceImpact is Test {
             tokenIn: weth,
             amountIn: 100 ether,
             executionFee: 0.01 ether,
-            shouldWrap: true
+            reverseWrap: true
         });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 100.01 ether + 1 gwei}(market, input);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit{value: 0.001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.001 ether}(market, depositKey, ethPriceData);
 
         // Construct the deposit input
         input = Deposit.Input({
@@ -228,13 +238,13 @@ contract TestPriceImpact is Test {
             tokenIn: usdc,
             amountIn: 250_000e6,
             executionFee: 0.01 ether,
-            shouldWrap: false
+            reverseWrap: false
         });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit{value: 0.001 ether}(market, depositKey, 0, tokenUpdateData);
+        processor.executeDeposit{value: 0.001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -278,7 +288,7 @@ contract TestPriceImpact is Test {
                 isLong: true,
                 isLimit: false,
                 isIncrease: true,
-                shouldWrap: true,
+                reverseWrap: true,
                 conditionals: Position.Conditionals({
                     stopLossSet: false,
                     takeProfitSet: false,
@@ -295,7 +305,7 @@ contract TestPriceImpact is Test {
         });
         // Test negative price impact values
 
-        Order.ExecutionState memory orderState = Order.ExecutionState({
+        Execution.State memory orderState = Execution.State({
             market: market,
             indexPrice: 2500e18,
             indexBaseUnit: 1e18,
@@ -306,7 +316,6 @@ contract TestPriceImpact is Test {
             priceImpactUsd: 0,
             collateralPrice: 1e18,
             collateralBaseUnit: 1e6,
-            fundingFee: 0,
             borrowFee: 0,
             fee: 0,
             affiliateRebate: 0,
@@ -348,7 +357,7 @@ contract TestPriceImpact is Test {
                 isLong: true,
                 isLimit: false,
                 isIncrease: true,
-                shouldWrap: true,
+                reverseWrap: true,
                 conditionals: Position.Conditionals({
                     stopLossSet: false,
                     takeProfitSet: false,
@@ -365,7 +374,7 @@ contract TestPriceImpact is Test {
         });
         // Test negative price impact values
 
-        Order.ExecutionState memory orderState = Order.ExecutionState({
+        Execution.State memory orderState = Execution.State({
             market: market,
             indexPrice: 2500e18,
             indexBaseUnit: 1e18,
@@ -376,7 +385,6 @@ contract TestPriceImpact is Test {
             priceImpactUsd: 0,
             collateralPrice: 1e18,
             collateralBaseUnit: 1e6,
-            fundingFee: 0,
             borrowFee: 0,
             fee: 0,
             affiliateRebate: 0,
