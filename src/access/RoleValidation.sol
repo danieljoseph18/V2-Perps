@@ -39,6 +39,14 @@ contract RoleValidation {
         _;
     }
 
+    modifier onlyProcessorOrTradeStorage() {
+        if (!roleStorage.hasRole(Roles.PROCESSOR, msg.sender) && !roleStorage.hasRole(Roles.TRADE_STORAGE, msg.sender))
+        {
+            revert RoleValidation_AccessDenied();
+        }
+        _;
+    }
+
     modifier onlyKeeper() {
         if (!roleStorage.hasRole(Roles.KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
         _;

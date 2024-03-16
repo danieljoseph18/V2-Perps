@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.23;
 
-import {Deposit} from "../Deposit.sol";
-import {Withdrawal} from "../Withdrawal.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
+import {IMarket} from "./IMarket.sol";
+import {IProcessor} from "../../router/interfaces/IProcessor.sol";
 
 interface IVault {
     struct VaultConfig {
@@ -21,6 +21,49 @@ interface IVault {
         string name;
         string symbol;
     }
+
+    struct Deposit {
+        address owner;
+        address tokenIn;
+        uint256 amountIn;
+        uint256 executionFee;
+        bool shouldWrap;
+        uint256 blockNumber;
+        uint48 expirationTimestamp;
+        bytes32 key;
+    }
+
+    struct Withdrawal {
+        address owner;
+        address tokenOut;
+        uint256 marketTokenAmountIn;
+        uint256 executionFee;
+        bool shouldUnwrap;
+        uint256 blockNumber;
+        uint48 expirationTimestamp;
+        bytes32 key;
+    }
+
+    struct ExecuteDeposit {
+        IMarket market;
+        IProcessor processor;
+        IPriceFeed priceFeed;
+        Deposit deposit;
+        bytes32 key;
+        int256 cumulativePnl;
+        bool isLongToken;
+    }
+
+    struct ExecuteWithdrawal {
+        IMarket market;
+        IProcessor processor;
+        IPriceFeed priceFeed;
+        Withdrawal withdrawal;
+        bytes32 key;
+        int256 cumulativePnl;
+        bool isLongToken;
+        bool shouldUnwrap;
+    }
     // Admin functions
 
     function updateFees(address _poolOwner, address _feeDistributor, uint256 _feeScale, uint256 _feePercentageToOwner)
@@ -34,26 +77,36 @@ interface IVault {
     function decreasePoolBalance(uint256 _amount, bool _isLong) external;
     function increasePoolBalance(uint256 _amount, bool _isLong) external;
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) external;
+    function increaseCollateralAmount(uint256 _amount, address _user, bool _islong) external;
+    function decreaseCollateralAmount(uint256 _amount, address _user, bool _islong) external;
 
     // Deposit execution
-    function executeDeposit(Deposit.ExecuteParams memory _params) external;
+    function executeDeposit(ExecuteDeposit memory _params) external;
 
     // Withdrawal execution
-    function executeWithdrawal(Withdrawal.ExecuteParams memory _params) external;
+    function executeWithdrawal(ExecuteWithdrawal memory _params) external;
 
     // Deposit creation
-    function createDeposit(Deposit.Input memory _params) external payable;
+    function createDeposit(address owner, address tokenIn, uint256 amountIn, uint256 executionFee, bool shouldWrap)
+        external
+        payable;
     function deleteDeposit(bytes32 _key) external;
 
     // Withdrawal creation
-    function createWithdrawal(Withdrawal.Input memory _params) external payable;
+    function createWithdrawal(
+        address _owner,
+        address _tokenOut,
+        uint256 _marketTokenAmountIn,
+        uint256 _executionFee,
+        bool _shouldUnwrap
+    ) external payable;
     function deleteWithdrawal(bytes32 _key) external;
 
     // Getter
     function feeScale() external view returns (uint256);
     function BASE_FEE() external view returns (uint256);
-    function getDepositRequest(bytes32 _key) external view returns (Deposit.Data memory);
-    function getWithdrawalRequest(bytes32 _key) external view returns (Withdrawal.Data memory);
+    function getDepositRequest(bytes32 _key) external view returns (Deposit memory);
+    function getWithdrawalRequest(bytes32 _key) external view returns (Withdrawal memory);
     function longTokenBalance() external view returns (uint256);
     function shortTokenBalance() external view returns (uint256);
     function longAccumulatedFees() external view returns (uint256);
@@ -63,8 +116,8 @@ interface IVault {
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total);
     function LONG_TOKEN() external view returns (address);
     function SHORT_TOKEN() external view returns (address);
-    function getDepositRequestAtIndex(uint256 _index) external view returns (Deposit.Data memory);
-    function getWithdrawalRequestAtIndex(uint256 _index) external view returns (Withdrawal.Data memory);
+    function getDepositRequestAtIndex(uint256 _index) external view returns (Deposit memory);
+    function getWithdrawalRequestAtIndex(uint256 _index) external view returns (Withdrawal memory);
     function getPoolValues() external view returns (uint256, uint256, uint256, uint256, uint256);
 
     event DepositRequestCreated(
@@ -117,4 +170,5 @@ interface IVault {
     error Vault_FailedToRemoveDeposit();
     error Vault_InsufficientLongBalance();
     error Vault_InsufficientShortBalance();
+    error Vault_InsufficientCollateral();
 }

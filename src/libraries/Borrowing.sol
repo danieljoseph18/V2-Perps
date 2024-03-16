@@ -105,6 +105,14 @@ library Borrowing {
         collateralFeesOwed = mulDiv(feesUsd, _state.collateralBaseUnit, _state.collateralPrice);
     }
 
+    function getTotalFeesOwedUsd(Position.Data calldata _position, Execution.State memory _state)
+        external
+        view
+        returns (uint256 totalFeesOwedUsd)
+    {
+        totalFeesOwedUsd = _getTotalPositionFeesOwed(_state.market, _position);
+    }
+
     /// @dev Gets Total Fees Owed By a Position in Tokens
     function _getTotalPositionFeesOwed(IMarket market, Position.Data calldata _position)
         internal

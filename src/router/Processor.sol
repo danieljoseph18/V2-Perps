@@ -17,7 +17,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IMarket, IVault} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
@@ -35,8 +35,6 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Gas} from "../libraries/Gas.sol";
-import {Deposit} from "../markets/Deposit.sol";
-import {Withdrawal} from "../markets/Withdrawal.sol";
 import {IProcessor} from "./interfaces/IProcessor.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
@@ -123,13 +121,13 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint256 initialGas = gasleft();
         if (_key == bytes32(0)) revert Processor_InvalidKey();
         // Fetch the request
-        Deposit.ExecuteParams memory params;
+        IVault.ExecuteDeposit memory params;
         params.market = market;
         params.processor = this;
         params.priceFeed = priceFeed;
-        params.data = market.getDepositRequest(_key);
+        params.deposit = market.getDepositRequest(_key);
         params.key = _key;
-        params.isLongToken = params.data.input.tokenIn == market.LONG_TOKEN();
+        params.isLongToken = params.deposit.tokenIn == market.LONG_TOKEN();
         params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.isLongToken, true); // Maximize AUM for deposits
         try market.executeDeposit(params) {}
         catch {
@@ -137,16 +135,17 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         }
         // Send Execution Fee + Rebate
         Gas.payExecutionFee(
-            this, params.data.input.executionFee, initialGas, payable(params.data.input.owner), payable(msg.sender)
+            this, params.deposit.executionFee, initialGas, payable(params.deposit.owner), payable(msg.sender)
         );
     }
 
     function cancelDeposit(IMarket market, bytes32 _depositKey) external nonReentrant {
-        Deposit.Data memory deposit = market.getDepositRequest(_depositKey);
-        Deposit.validateCancellation(deposit, msg.sender);
+        IVault.Deposit memory deposit = market.getDepositRequest(_depositKey);
+        if (deposit.owner != msg.sender) revert Processor_InvalidDepositOwner();
+        if (deposit.expirationTimestamp >= block.timestamp) revert Processor_DepositNotExpired();
         market.deleteDeposit(_depositKey);
-        IERC20(deposit.input.tokenIn).safeTransfer(msg.sender, deposit.input.amountIn);
-        emit DepositRequestCancelled(_depositKey, deposit.input.owner, deposit.input.tokenIn, deposit.input.amountIn);
+        IERC20(deposit.tokenIn).safeTransfer(msg.sender, deposit.amountIn);
+        emit DepositRequestCancelled(_depositKey, deposit.owner, deposit.tokenIn, deposit.amountIn);
     }
 
     // @audit - keeper needs to pass in cumulative net pnl
@@ -163,32 +162,33 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         uint256 initialGas = gasleft();
         if (_key == bytes32(0)) revert Processor_InvalidKey();
         // Fetch the request
-        Withdrawal.ExecuteParams memory params;
+        IVault.ExecuteWithdrawal memory params;
         params.market = market;
         params.processor = this;
         params.priceFeed = priceFeed;
-        params.data = market.getWithdrawalRequest(_key);
+        params.withdrawal = market.getWithdrawalRequest(_key);
         params.key = _key;
-        params.isLongToken = params.data.input.tokenOut == market.LONG_TOKEN();
+        params.isLongToken = params.withdrawal.tokenOut == market.LONG_TOKEN();
         params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.isLongToken, false); // Minimize AUM for withdrawals
-        params.shouldUnwrap = params.data.input.shouldUnwrap;
+        params.shouldUnwrap = params.withdrawal.shouldUnwrap;
         try market.executeWithdrawal(params) {}
         catch {
             revert Processor_ExecuteWithdrawalFailed();
         }
         // Send Execution Fee + Rebate
         Gas.payExecutionFee(
-            this, params.data.input.executionFee, initialGas, payable(params.data.input.owner), payable(msg.sender)
+            this, params.withdrawal.executionFee, initialGas, payable(params.withdrawal.owner), payable(msg.sender)
         );
     }
 
     function cancelWithdrawal(IMarket market, bytes32 _withdrawalKey) external nonReentrant {
-        Withdrawal.Data memory withdrawal = market.getWithdrawalRequest(_withdrawalKey);
-        Withdrawal.validateCancellation(withdrawal, msg.sender);
+        IVault.Withdrawal memory withdrawal = market.getWithdrawalRequest(_withdrawalKey);
+        if (withdrawal.owner != msg.sender) revert Processor_InvalidWithdrawalOwner();
+        if (withdrawal.expirationTimestamp >= block.timestamp) revert Processor_WithdrawalNotExpired();
         market.deleteWithdrawal(_withdrawalKey);
-        IERC20(market.LONG_TOKEN()).safeTransfer(msg.sender, withdrawal.input.marketTokenAmountIn);
+        IERC20(market.LONG_TOKEN()).safeTransfer(msg.sender, withdrawal.marketTokenAmountIn);
         emit WithdrawalRequestCancelled(
-            _withdrawalKey, withdrawal.input.owner, withdrawal.input.tokenOut, withdrawal.input.marketTokenAmountIn
+            _withdrawalKey, withdrawal.owner, withdrawal.tokenOut, withdrawal.marketTokenAmountIn
         );
     }
 
@@ -280,29 +280,32 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         onlyLiquidationKeeper
         signOraclePrices(_priceUpdateData)
     {
-        // need to construct ExecutionState
+        // Construct ExecutionState
         Execution.State memory state;
         // fetch position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         state.market = position.market;
 
         if (position.isLong) {
-            state.indexPrice = Oracle.getMaxPrice(priceFeed, position.assetId);
-            (state.longMarketTokenPrice, state.shortMarketTokenPrice) = Oracle.getMarketTokenPrices(priceFeed, true);
-            state.collateralPrice = state.longMarketTokenPrice;
-        } else {
+            // Min Price -> rounds in favour of the protocol
             state.indexPrice = Oracle.getMinPrice(priceFeed, position.assetId);
             (state.longMarketTokenPrice, state.shortMarketTokenPrice) = Oracle.getMarketTokenPrices(priceFeed, false);
+            state.collateralPrice = state.longMarketTokenPrice;
+        } else {
+            // Max Price -> rounds in favour of the protocol
+            state.indexPrice = Oracle.getMaxPrice(priceFeed, position.assetId);
+            (state.longMarketTokenPrice, state.shortMarketTokenPrice) = Oracle.getMarketTokenPrices(priceFeed, true);
             state.collateralPrice = state.shortMarketTokenPrice;
         }
 
         state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, position.assetId);
+        // No price impact on Liquidations
         state.impactedPrice = state.indexPrice;
 
         state.collateralBaseUnit =
             position.isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
 
-        // call _updateMarketState
+        // Update the state of the market
         _updateMarketState(state, position.assetId, position.positionSize, position.isLong, false);
         // liquidate the position
         try tradeStorage.liquidatePosition(state, _positionKey, msg.sender) {}
@@ -445,6 +448,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         IERC20(_request.input.collateralToken).safeTransfer(address(_state.market), afterFeeAmount + _fee);
     }
 
+    // @audit - Feels iffy -> need to determine which updates to do before tradestorage call and which are for after
     function _updateMarketState(
         Execution.State memory _state,
         bytes32 _assetId,

@@ -56,6 +56,7 @@ library Position {
     error Position_UnmatchedMarkets();
     error Position_ZeroAddress();
     error Position_InvalidRequestBlock();
+    error Position_NotLiquidatable();
 
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant LEVERAGE_PRECISION = 100;
@@ -360,26 +361,37 @@ library Position {
         }
     }
 
-    function isLiquidatable(Position.Data memory _position, Execution.State memory _state, uint256 liquidationFeeUsd)
+    // @audit - check math -> should never revert unless position is not liquidatable
+    // should handle insolvent liqs etc.
+    function liquidate(Position.Data memory _position, Execution.State memory _state, uint256 liquidationFeeUsd)
         external
         view
-        returns (bool)
+        returns (uint256 feesOwedToUser, uint256 feesToAccumulate, uint256 liqFeeInCollateral)
     {
-        uint256 collateralValueUsd = mulDiv(_position.collateralAmount, _state.collateralPrice, PRECISION);
-
-        uint256 totalFeesOwedUsd = getTotalFeesOwedUsd(_position, _state);
-
+        // Get the value of all collateral remaining in the position
+        uint256 collateralValueUsd =
+            mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
+        // Get the PNL for the position
         int256 pnl = Pricing.getPositionPnl(_position, _state.indexPrice, _state.indexBaseUnit);
-
-        uint256 losses = liquidationFeeUsd + totalFeesOwedUsd;
-
-        if (pnl < 0) {
-            losses += pnl.abs();
-        }
-        if (collateralValueUsd <= losses) {
-            return true;
+        // Get the Borrow Fees Owed in USD
+        uint256 borrowingFeesUsd = Borrowing.getTotalFeesOwedUsd(_position, _state);
+        // Get the Funding Fees Owed in USD
+        int256 fundingFeesUsd = Funding.getTotalFeesOwedUsd(_position, _state.indexPrice);
+        // Calculate the total losses
+        int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd + liquidationFeeUsd.toInt256();
+        // Check if the position is liquidatable
+        if (losses < 0 && collateralValueUsd <= losses.abs()) {
+            uint256 feesOwedToUserUsd = fundingFeesUsd > 0 ? fundingFeesUsd.abs() : 0;
+            if (pnl > 0) feesOwedToUserUsd += pnl.abs();
+            feesOwedToUser =
+                convertUsdToCollateral(feesOwedToUserUsd, _state.collateralPrice, _state.collateralBaseUnit);
+            // Convert borrowing fees owed to collateral
+            feesToAccumulate =
+                convertUsdToCollateral(borrowingFeesUsd, _state.collateralPrice, _state.collateralBaseUnit);
+            liqFeeInCollateral =
+                convertUsdToCollateral(liquidationFeeUsd, _state.collateralPrice, _state.collateralBaseUnit);
         } else {
-            return false;
+            revert Position_NotLiquidatable();
         }
     }
 
@@ -437,7 +449,7 @@ library Position {
     }
 
     function convertUsdToCollateral(uint256 _usdAmount, uint256 _collateralPrice, uint256 _collateralBaseUnit)
-        external
+        public
         pure
         returns (uint256 collateralAmount)
     {

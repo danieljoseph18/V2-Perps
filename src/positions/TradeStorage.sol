@@ -181,6 +181,12 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _state.borrowFee,
             _state.affiliateRebate
         );
+        // Add Value to Stored Collateral Amount in Market
+        _state.market.increaseCollateralAmount(
+            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee, // @audit - correct?
+            _params.request.user,
+            _params.request.input.isLong
+        );
         // Pay Fees -> @audit - units? @audit - accounting
         _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
         // Update Final Storage
@@ -210,6 +216,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Validate the Position Change
         Invariant.validateCollateralDecrease(
             positionBefore, positionAfter, amountOut, _state.fee, _state.borrowFee, _state.affiliateRebate
+        );
+        // Check Market has enough available liquidity for payout
+        if (_state.market.totalAvailableLiquidity(_params.request.input.isLong) < amountOut + _state.affiliateRebate) {
+            revert TradeStorage_InsufficientFreeLiquidity();
+        }
+        // Decrease the Collateral Amount in the Market by the full delta
+        _state.market.decreaseCollateralAmount(
+            _params.request.input.collateralDelta, _params.request.user, _params.request.input.isLong
         );
         // Pay Fees
         _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
@@ -267,8 +281,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         _reserveLiquidity(
             _state.market,
             _params.request.input.sizeDelta,
+            position.collateralAmount,
             _state.collateralPrice,
             _state.collateralBaseUnit,
+            position.user,
             _params.request.input.isLong
         );
         // Update Final Storage
@@ -310,8 +326,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         _reserveLiquidity(
             _state.market,
             _params.request.input.sizeDelta,
+            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee, // @audit - verify
             _state.collateralPrice,
             _state.collateralBaseUnit,
+            positionBefore.user,
             _params.request.input.isLong
         );
         // Update Final Storage
@@ -360,8 +378,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         _unreserveLiquidity(
             _state.market,
             _params.request.input.sizeDelta,
+            _params.request.input.collateralDelta, // Full Amount
             _state.collateralPrice,
             _state.collateralBaseUnit,
+            positionBefore.user,
             _params.request.input.isLong
         );
         // Update Final Storage
@@ -375,6 +395,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             ? decreaseState.afterFeeAmount + decreaseState.decreasePnl.abs() // Profit Case
             : decreaseState.afterFeeAmount; // Loss / Break Even Case -> Losses already deducted in Execution if any
 
+        // Check Market has enough available liquidity for payout
+        if (_state.market.totalAvailableLiquidity(_params.request.input.isLong) < amountOut + _state.affiliateRebate) {
+            revert TradeStorage_InsufficientFreeLiquidity();
+        }
         // Transfer Tokens to User
         _state.market.transferOutTokens(
             _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.reverseWrap
@@ -404,33 +428,53 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         /* Update Initial Storage */
         Position.Data memory position = openPositions[_positionKey];
         if (!Position.exists(position)) revert TradeStorage_PositionDoesNotExist();
-        if (!Position.isLiquidatable(position, _state, liquidationFeeUsd)) revert TradeStorage_NotLiquidatable();
 
         uint256 remainingCollateral = position.collateralAmount;
-
-        // Calculate the Funding Fee and Pay off all Outstanding
-        // @here
-
-        // stated to prevent double conversion
+        // cached to prevent double conversion
         address market = address(_state.market);
-
         // delete the position from storage
         delete openPositions[_positionKey];
         openPositionKeys[market][position.isLong].remove(_positionKey);
 
-        // unreserve all of the position liquidity
+        // Calculate the Funding Fee and Pay off all Outstanding
+        // @here
+        // @audit - need to pay all of users fees, positive or negative
+        // need to prioritize the liquidation fee to the liquidator
+        // handle case for insolvent liquidations
+        // Use Position.liquidate
+        (uint256 feesOwedToUser, uint256 feesToAccumulate, uint256 liqFeeInCollateral) =
+            Position.liquidate(position, _state, liquidationFeeUsd);
+
+        // unreserve all of the position's liquidity
         _unreserveLiquidity(
-            _state.market, position.positionSize, _state.collateralPrice, _state.collateralBaseUnit, position.isLong
+            _state.market,
+            position.positionSize,
+            remainingCollateral,
+            _state.collateralPrice,
+            _state.collateralBaseUnit,
+            position.user,
+            position.isLong
+        );
+        // Remanining collateral after fees is added to the relevant pool
+        _state.market.increasePoolBalance(remainingCollateral, position.isLong);
+        // Accumulate the fees to accumulate
+        _state.market.accumulateFees(feesToAccumulate, position.isLong);
+
+        // Pay the liquidator
+        _state.market.transferOutTokens(
+            _liquidator,
+            liqFeeInCollateral,
+            position.isLong,
+            true // Unwrap by default
+        );
+        // Pay the fees owed to the user
+        _state.market.transferOutTokens(
+            position.user,
+            feesOwedToUser,
+            position.isLong,
+            true // Unwrap by default
         );
 
-        // calculate the liquidation fee to send to the liquidator
-        uint256 liqFee =
-            Position.calculateLiquidationFee(_state.collateralPrice, _state.collateralBaseUnit, liquidationFeeUsd);
-        remainingCollateral -= liqFee;
-        // accumulate the rest of the position size as fees
-        _state.market.accumulateFees(remainingCollateral, position.isLong);
-        // transfer the liquidation fee to the liquidator
-        _state.market.transferOutTokens(_liquidator, liqFee, position.isLong, false);
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }
 
@@ -461,25 +505,35 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     function _reserveLiquidity(
         IMarket market,
         uint256 _sizeDeltaUsd,
+        uint256 _collateralDelta,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
+        address _user,
         bool _isLong
     ) internal {
         // Convert Size Delta USD to Collateral Tokens
         uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice));
+        // Reserve an Amount of Liquidity Equal to the Position Size
         market.reserveLiquidity(reserveDelta, _isLong);
+        // Register the Collateral in
+        market.increaseCollateralAmount(_collateralDelta, _user, _isLong);
     }
 
     function _unreserveLiquidity(
         IMarket market,
         uint256 _sizeDeltaUsd,
+        uint256 _collateralDelta,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
+        address _user,
         bool _isLong
     ) internal {
         // Convert Size Delta USD to Collateral Tokens
         uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice));
+        // Unreserve an Amount of Liquidity Equal to the Position Size
         market.unreserveLiquidity(reserveDelta, _isLong);
+        // Register the Collateral out
+        market.decreaseCollateralAmount(_collateralDelta, _user, _isLong);
     }
 
     // funding and borrow amounts should be in collateral tokens

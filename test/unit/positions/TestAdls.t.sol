@@ -12,8 +12,6 @@ import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {Processor} from "../../../src/router/Processor.sol";
 import {Router} from "../../../src/router/Router.sol";
-import {Deposit} from "../../../src/markets/Deposit.sol";
-import {Withdrawal} from "../../../src/markets/Withdrawal.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
@@ -145,32 +143,16 @@ contract TestADLs is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
-        // Construct the deposit input
-        Deposit.Input memory input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: weth,
-            amountIn: 10_000 ether,
-            executionFee: 0.01 ether,
-            reverseWrap: true
-        });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 10_000.01 ether + 1 gwei}(market, input);
+        router.createDeposit{value: 10_000.01 ether + 1 gwei}(market, OWNER, weth, 10_000 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
-        // Construct the deposit input
-        input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: usdc,
-            amountIn: 25_000_000e6,
-            executionFee: 0.01 ether,
-            reverseWrap: false
-        });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 25_000_000e6, 0.01 ether, false);
         depositKey = market.getDepositRequestAtIndex(0).key;
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();

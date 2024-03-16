@@ -12,8 +12,6 @@ import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {Processor} from "../../../src/router/Processor.sol";
 import {Router} from "../../../src/router/Router.sol";
-import {Deposit} from "../../../src/markets/Deposit.sol";
-import {Withdrawal} from "../../../src/markets/Withdrawal.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
@@ -128,32 +126,17 @@ contract TestDeposits is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
-        // Construct the deposit input
-        Deposit.Input memory input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: weth,
-            amountIn: 20_000 ether,
-            executionFee: 0.01 ether,
-            reverseWrap: true
-        });
+
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether}(market, input);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
-        // Construct the deposit input
-        input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: usdc,
-            amountIn: 50_000_000e6,
-            executionFee: 0.01 ether,
-            reverseWrap: false
-        });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether}(market, input);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
         depositKey = market.getDepositRequestAtIndex(0).key;
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
@@ -168,81 +151,78 @@ contract TestDeposits is Test {
     }
 
     function testCreatingADepositRequest() public setUpMarkets {
-        // Construct the deposit input
-        Deposit.Input memory input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: weth,
-            amountIn: 0.5 ether,
-            executionFee: 0.01 ether,
-            reverseWrap: true
-        });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 0.51 ether}(market, input);
+        router.createDeposit{value: 0.51 ether}(market, OWNER, weth, 0.5 ether, 0.01 ether, true);
     }
 
     function testExecutingADepositRequest() public setUpMarkets {
-        // Construct the deposit input
-        Deposit.Input memory input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: weth,
-            amountIn: 0.5 ether,
-            executionFee: 0.01 ether,
-            reverseWrap: true
-        });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 0.51 ether}(market, input);
+        router.createDeposit{value: 0.51 ether}(market, OWNER, weth, 0.5 ether, 0.01 ether, true);
         // Call the execute deposit function with sufficient gas
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
     }
 
-    function testDepositWithTinyAmountIn() public setUpMarkets {
-        // Construct the deposit input
-        Deposit.Input memory input =
-            Deposit.Input({owner: OWNER, tokenIn: weth, amountIn: 1 wei, executionFee: 0.01 ether, reverseWrap: true});
+    function testFuzzingDepositAmountInEther(uint256 _amountIn) public setUpMarkets {
+        // Add Buffer of 0.1 ether to cover execution fees and gas
+        _amountIn = bound(_amountIn, 1, address(OWNER).balance - 0.1 ether);
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 0.01 ether}(market, input);
+        router.createDeposit{value: _amountIn + 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        uint256 marketTokenBalanceBefore = market.balanceOf(OWNER);
+        vm.prank(OWNER);
+        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
+        uint256 marketTokenBalanceAfter = market.balanceOf(OWNER);
+        assertGt(marketTokenBalanceAfter, marketTokenBalanceBefore);
+    }
+
+    function testFuzzingInvalidEtherAmountInsFails(uint256 _amountIn) public setUpMarkets {
+        vm.assume(_amountIn > address(OWNER).balance);
+        // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         vm.expectRevert();
+        router.createDeposit{value: _amountIn + 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, true);
+    }
+
+    function testFuzzingValuesWhereValueIsLessThanAmount(uint256 _amountIn, uint256 _value) public setUpMarkets {
+        vm.assume(_value < _amountIn);
+        // Call the deposit function with sufficient gas
+        vm.prank(OWNER);
+        vm.expectRevert();
+        router.createDeposit{value: _value + 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, true);
+    }
+
+    function testFuzzingDepositAmountInWrappedEther(uint256 _amountIn) public setUpMarkets {
+        _amountIn = bound(_amountIn, 1, WETH(weth).balanceOf(OWNER));
+        // Call the deposit function with sufficient gas
+        vm.prank(OWNER);
+        WETH(weth).approve(address(router), type(uint256).max);
+        router.createDeposit{value: 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, false);
+        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
     }
 
-    function testDepositWithTheMinimumAmountIn() public setUpMarkets {
-        // Construct the deposit input
-        Deposit.Input memory input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: weth,
-            amountIn: 1000 wei,
-            executionFee: 0.01 ether,
-            reverseWrap: true
-        });
+    function testFuzzingDepositAmountInUsdc(uint256 _amountIn) public setUpMarkets {
+        _amountIn = bound(_amountIn, 1, MockUSDC(usdc).balanceOf(OWNER));
         // Call the deposit function with sufficient gas
-        vm.prank(OWNER);
-        router.createDeposit{value: 0.01 ether}(market, input);
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createDeposit{value: 0.01 ether}(market, OWNER, usdc, _amountIn, 0.01 ether, false);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
-        vm.prank(OWNER);
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
+        vm.stopPrank();
     }
 
     // Expected Amount = 2.4970005e+25 (base fee + price spread)
     // Received Amount = 2.4970005e+25
     function testDepositWithHugeAmount() public setUpMarkets {
-        // Construct the deposit input
-        Deposit.Input memory input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: weth,
-            amountIn: 10_000 ether,
-            executionFee: 0.01 ether,
-            reverseWrap: true
-        });
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 10_000.01 ether + 1 wei}(market, input);
+        router.createDeposit{value: 10_000.01 ether}(market, OWNER, weth, 10_000 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         uint256 balanceBefore = market.balanceOf(OWNER);
         vm.prank(OWNER);
@@ -253,12 +233,9 @@ contract TestDeposits is Test {
 
     // @audit - Fee values correct?
     function testDynamicFeesOnImbalancedDeposits() public setUpMarkets {
-        // Construct the deposit input
-        Deposit.Input memory input =
-            Deposit.Input({owner: OWNER, tokenIn: weth, amountIn: 1 ether, executionFee: 0.01 ether, reverseWrap: true});
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 1.01 ether}(market, input);
+        router.createDeposit{value: 1.01 ether}(market, OWNER, weth, 1 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
@@ -278,17 +255,9 @@ contract TestDeposits is Test {
         uint256 amountMinusFee = 50_000e6 - expectedFee;
         console.log("Amount Minus Fee: ", amountMinusFee);
 
-        // Construct the deposit input
-        input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: usdc,
-            amountIn: 50_000e6,
-            executionFee: 0.01 ether,
-            reverseWrap: false
-        });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether}(market, input);
+        router.createDeposit{value: 0.01 ether}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
         depositKey = market.getDepositRequestAtIndex(0).key;
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
@@ -298,12 +267,9 @@ contract TestDeposits is Test {
 
     // Bonus Fee = 0.0003995201959207653 (0.04%)
     function testDynamicFeesOnGiganticImbalancedDeposits() public setUpMarkets {
-        // Construct the deposit input
-        Deposit.Input memory input =
-            Deposit.Input({owner: OWNER, tokenIn: weth, amountIn: 1 ether, executionFee: 0.01 ether, reverseWrap: true});
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 1.01 ether}(market, input);
+        router.createDeposit{value: 1.01 ether}(market, OWNER, weth, 1 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
@@ -311,17 +277,9 @@ contract TestDeposits is Test {
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
 
-        // Construct the deposit input
-        input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: usdc,
-            amountIn: 50_000_000e6,
-            executionFee: 0.01 ether,
-            reverseWrap: false
-        });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether}(market, input);
+        router.createDeposit{value: 0.01 ether}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
         depositKey = market.getDepositRequestAtIndex(0).key;
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
@@ -330,18 +288,10 @@ contract TestDeposits is Test {
     }
 
     function testCreateDepositWithWethNoWrap() public setUpMarkets {
-        // Construct the deposit input
-        Deposit.Input memory input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: weth,
-            amountIn: 1 ether,
-            executionFee: 0.01 ether,
-            reverseWrap: false
-        });
         // Call the deposit function with sufficient gas
         vm.startPrank(OWNER);
         WETH(weth).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 1.01 ether}(market, input);
+        router.createDeposit{value: 1.01 ether}(market, OWNER, weth, 1 ether, 0.01 ether, false);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();

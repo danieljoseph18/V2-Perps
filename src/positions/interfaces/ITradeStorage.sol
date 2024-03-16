@@ -52,6 +52,7 @@ interface ITradeStorage {
     error TradeStorage_OrderAdditionFailed();
     error TradeStorage_PositionAdditionFailed();
     error TradeStorage_KeyAdditionFailed();
+    error TradeStorage_InsufficientFreeLiquidity();
 
     function initialise(
         uint256 _liquidationFee,

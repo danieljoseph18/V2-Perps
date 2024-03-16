@@ -20,12 +20,10 @@ pragma solidity 0.8.23;
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IMarket, IVault} from "../markets/interfaces/IMarket.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
-import {Deposit} from "../markets/Deposit.sol";
-import {Withdrawal} from "../markets/Withdrawal.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -93,41 +91,55 @@ contract Router is ReentrancyGuard, RoleValidation {
         priceFeed = _priceFeed;
     }
 
-    function createDeposit(IMarket market, Deposit.Input memory _input) external payable nonReentrant {
-        Gas.validateExecutionFee(processor, _input.executionFee, msg.value, Gas.Action.DEPOSIT);
+    function createDeposit(
+        IMarket market,
+        address _owner,
+        address _tokenIn,
+        uint256 _amountIn,
+        uint256 _executionFee,
+        bool _shouldWrap
+    ) external payable nonReentrant {
+        Gas.validateExecutionFee(processor, _executionFee, msg.value, Gas.Action.DEPOSIT);
 
-        if (msg.sender != _input.owner) revert Router_InvalidOwner();
-        if (_input.amountIn == 0) revert Router_InvalidAmountIn();
-        if (_input.reverseWrap) {
-            if (_input.amountIn > msg.value - _input.executionFee) revert Router_InvalidAmountIn();
-            if (_input.tokenIn != address(WETH)) revert Router_CantWrapUSDC();
-            WETH.deposit{value: _input.amountIn}();
-            WETH.safeTransfer(address(processor), _input.amountIn);
+        if (msg.sender != _owner) revert Router_InvalidOwner();
+        if (_amountIn == 0) revert Router_InvalidAmountIn();
+        if (_shouldWrap) {
+            if (_amountIn > msg.value - _executionFee) revert Router_InvalidAmountIn();
+            if (_tokenIn != address(WETH)) revert Router_CantWrapUSDC();
+            WETH.deposit{value: _amountIn}();
+            WETH.safeTransfer(address(processor), _amountIn);
         } else {
-            if (_input.tokenIn != address(USDC) && _input.tokenIn != address(WETH)) revert Router_InvalidTokenIn();
-            IERC20(_input.tokenIn).safeTransferFrom(msg.sender, address(processor), _input.amountIn);
+            if (_tokenIn != address(USDC) && _tokenIn != address(WETH)) revert Router_InvalidTokenIn();
+            IERC20(_tokenIn).safeTransferFrom(msg.sender, address(processor), _amountIn);
         }
 
-        market.createDeposit(_input);
-        _sendExecutionFee(_input.executionFee);
+        market.createDeposit(_owner, _tokenIn, _amountIn, _executionFee, _shouldWrap);
+        _sendExecutionFee(_executionFee);
 
         // Request a Price Update for the Asset
         emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
     }
 
-    function createWithdrawal(IMarket market, Withdrawal.Input memory _input) external payable nonReentrant {
-        Gas.validateExecutionFee(processor, _input.executionFee, msg.value, Gas.Action.WITHDRAW);
-        if (msg.sender != _input.owner) revert Router_InvalidOwner();
-        if (_input.marketTokenAmountIn == 0) revert Router_InvalidAmountIn();
-        if (_input.shouldUnwrap) {
-            if (_input.tokenOut != address(WETH)) revert Router_InvalidTokenOut();
+    function createWithdrawal(
+        IMarket market,
+        address _owner,
+        address _tokenOut,
+        uint256 _marketTokenAmountIn,
+        uint256 _executionFee,
+        bool _shouldUnwrap
+    ) external payable nonReentrant {
+        Gas.validateExecutionFee(processor, _executionFee, msg.value, Gas.Action.WITHDRAW);
+        if (msg.sender != _owner) revert Router_InvalidOwner();
+        if (_marketTokenAmountIn == 0) revert Router_InvalidAmountIn();
+        if (_shouldUnwrap) {
+            if (_tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         } else {
-            if (_input.tokenOut != address(USDC) && _input.tokenOut != address(WETH)) revert Router_InvalidTokenOut();
+            if (_tokenOut != address(USDC) && _tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         }
-        IERC20(address(market)).safeTransferFrom(msg.sender, address(processor), _input.marketTokenAmountIn);
+        IERC20(address(market)).safeTransferFrom(msg.sender, address(processor), _marketTokenAmountIn);
 
-        market.createWithdrawal(_input);
-        _sendExecutionFee(_input.executionFee);
+        market.createWithdrawal(_owner, _tokenOut, _marketTokenAmountIn, _executionFee, _shouldUnwrap);
+        _sendExecutionFee(_executionFee);
 
         // Request a Price Update for the Asset
         emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens

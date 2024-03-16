@@ -367,12 +367,23 @@ library Execution {
         view
         returns (bool isLiquidatable)
     {
+        // Get the value of all collateral remaining in the position
         uint256 collateralValueUsd =
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
-        uint256 totalFeesOwedUsd = Position.getTotalFeesOwedUsd(_position, _state);
+        // Get the PNL for the position
         int256 pnl = Pricing.getPositionPnl(_position, _state.indexPrice, _state.indexBaseUnit);
-        uint256 losses = _liquidationFeeUsd + totalFeesOwedUsd + (pnl < 0 ? pnl.abs() : 0);
-        isLiquidatable = collateralValueUsd <= losses;
+        // Get the Borrow Fees Owed in USD
+        uint256 borrowingFeesUsd = Borrowing.getTotalFeesOwedUsd(_position, _state);
+        // Get the Funding Fees Owed in USD
+        int256 fundingFeesUsd = Funding.getTotalFeesOwedUsd(_position, _state.indexPrice);
+        // Calculate the total losses
+        int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd + _liquidationFeeUsd.toInt256();
+        // Check if the losses exceed the collateral value
+        if (losses < 0 && losses.abs() > collateralValueUsd) {
+            isLiquidatable = true;
+        } else {
+            isLiquidatable = false;
+        }
     }
 
     function _calculatePnl(State memory _state, Position.Data memory _position, uint256 _sizeDelta)

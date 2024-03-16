@@ -12,8 +12,6 @@ import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {Processor} from "../../../src/router/Processor.sol";
 import {Router} from "../../../src/router/Router.sol";
-import {Deposit} from "../../../src/markets/Deposit.sol";
-import {Withdrawal} from "../../../src/markets/Withdrawal.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
@@ -127,32 +125,17 @@ contract TestWithdrawals is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
-        // Construct the deposit input
-        Deposit.Input memory input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: weth,
-            amountIn: 20_000 ether,
-            executionFee: 0.01 ether,
-            reverseWrap: true
-        });
+
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, input);
+        router.createDeposit{value: 20_000.01 ether}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
-        // Construct the deposit input
-        input = Deposit.Input({
-            owner: OWNER,
-            tokenIn: usdc,
-            amountIn: 50_000_000e6,
-            executionFee: 0.01 ether,
-            reverseWrap: false
-        });
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, input);
+        router.createDeposit{value: 0.01 ether}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
         depositKey = market.getDepositRequestAtIndex(0).key;
         processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
@@ -169,52 +152,31 @@ contract TestWithdrawals is Test {
     function testCreatingAWithdrawalRequest() public setUpMarkets {
         // Construct the withdrawal input
         uint256 marketTokenBalance = market.balanceOf(OWNER);
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: marketTokenBalance / 1000,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
         market.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(market, input);
+        router.createWithdrawal{value: 0.01 ether}(market, OWNER, weth, marketTokenBalance / 1000, 0.01 ether, true);
         vm.stopPrank();
     }
 
     function testExecutingAWithdrawalRequest() public setUpMarkets {
         // Construct the withdrawal input
         uint256 marketTokenBalance = market.balanceOf(OWNER);
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: marketTokenBalance / 1000,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
+
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
         market.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(market, input);
+        router.createWithdrawal{value: 0.01 ether}(market, OWNER, weth, marketTokenBalance / 1000, 0.01 ether, true);
         bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
         processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
     }
 
     function testWithdrawalRequestWithTinyAmountOut() public setUpMarkets {
-        // Construct the withdrawal input
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: 1,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
         market.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(market, input);
+        router.createWithdrawal{value: 0.01 ether}(market, OWNER, weth, 1, 0.01 ether, true);
         bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
         vm.expectRevert();
         processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
@@ -223,18 +185,11 @@ contract TestWithdrawals is Test {
 
     function testWithdrawalRequestForGreaterThanPoolBalance() public setUpMarkets {
         uint256 marketTokenBalance = market.balanceOf(OWNER);
-        // Construct the withdrawal input
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: marketTokenBalance,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
+
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
         market.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(market, input);
+        router.createWithdrawal{value: 0.01 ether}(market, OWNER, weth, marketTokenBalance, 0.01 ether, true);
         bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
         vm.expectRevert();
         processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
@@ -243,18 +198,18 @@ contract TestWithdrawals is Test {
 
     function testLargeWithdrawalRequest() public setUpMarkets {
         uint256 marketTokenBalance = market.balanceOf(OWNER);
-        // Construct the withdrawal input
-        Withdrawal.Input memory input = Withdrawal.Input({
-            owner: OWNER,
-            tokenOut: weth,
-            marketTokenAmountIn: marketTokenBalance / 4,
-            executionFee: 0.01 ether,
-            shouldUnwrap: true
-        });
+
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
         market.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether + 1 gwei}(market, input);
+        router.createWithdrawal{value: 0.01 ether}(
+            market,
+            OWNER,
+            weth,
+            marketTokenBalance / 4,
+            0.01 ether,
+            true // Quarter of balance
+        );
         bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
         processor.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
