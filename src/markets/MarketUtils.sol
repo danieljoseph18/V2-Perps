@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
 import {IMarket} from "./interfaces/IMarket.sol";
@@ -6,6 +6,7 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {console} from "forge-std/Test.sol";
 
 library MarketUtils {
     using SignedMath for int256;
@@ -71,6 +72,8 @@ library MarketUtils {
         // Get Max OI for side
         uint256 availableUsd = getAvailableOiUsd(market, _assetId, _collateralTokenPrice, _collateralBaseUnit, _isLong);
         // Check SizeDelta USD won't push the OI over the max
+        console.log("Available USD: ", availableUsd);
+        console.log("SizeDelta USD: ", _sizeDeltaUsd);
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 

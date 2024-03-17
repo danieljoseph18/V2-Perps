@@ -1,19 +1,3 @@
-//  ,----,------------------------------,------.
-//   | ## |                              |    - |
-//   | ## |                              |    - |
-//   |    |------------------------------|    - |
-//   |    ||............................||      |
-//   |    ||,-                        -.||      |
-//   |    ||___                      ___||    ##|
-//   |    ||---`--------------------'---||      |
-//   `--mb'|_|______________________==__|`------'
-
-//    ____  ____  ___ _   _ _____ _____ ____
-//   |  _ \|  _ \|_ _| \ | |_   _|___ /|  _ \
-//   | |_) | |_) || ||  \| | | |   |_ \| |_) |
-//   |  __/|  _ < | || |\  | | |  ___) |  _ <
-//   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
-
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
@@ -259,7 +243,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
         // @audit - is affiliate rebate taken care of for decrease / other positions?
         if (request.input.isIncrease) {
-            _transferTokensForIncrease(state, request, state.fee, state.affiliateRebate, request.input.isLong);
+            _transferTokensForIncrease(state.market, request.input.collateralToken, request.input.collateralDelta, state.affiliateRebate);
         }
 
         // Emit Trade Executed Event
@@ -427,25 +411,21 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // 50% goes to the referrer, 50% goes to the user
 
     function _transferTokensForIncrease(
-        Execution.State memory _state,
-        Position.Request memory _request,
-        uint256 _fee,
-        uint256 _affiliateRebate,
-        bool _isLong
+        IMarket market,
+        address _collateralToken,
+        uint256 _collateralDelta,
+        uint256 _affiliateRebate
     ) internal {
         // Transfer Fee Discount to Referral Storage
+        uint256 tokensPlusFee = _collateralDelta;
         if (_affiliateRebate > 0) {
-            // Increment Referral Storage Fee Balance
-            referralStorage.accumulateAffiliateRewards(_state.referrer, _isLong, _affiliateRebate);
             // Transfer Fee Discount to Referral Storage
-            IERC20(_request.input.collateralToken).safeTransfer(address(referralStorage), _affiliateRebate);
+            tokensPlusFee -= _affiliateRebate;
+            IERC20(_collateralToken).safeTransfer(address(referralStorage), _affiliateRebate);
         }
-
-        // Transfer Collateral to market
-        uint256 afterFeeAmount = _request.input.collateralDelta - _affiliateRebate - _fee;
-        _state.market.increasePoolBalance(afterFeeAmount, _isLong);
-        _state.market.accumulateFees(_fee, _isLong);
-        IERC20(_request.input.collateralToken).safeTransfer(address(_state.market), afterFeeAmount + _fee);
+        // Send Tokens + Fee to the Market (Will be Accounted for Separately)
+        // Subtract Affiliate Rebate -> will go to Referral Storage
+        IERC20(_collateralToken).safeTransfer(address(market), tokensPlusFee);
     }
 
     // @audit - Feels iffy -> need to determine which updates to do before tradestorage call and which are for after

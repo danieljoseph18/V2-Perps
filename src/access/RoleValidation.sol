@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
 import {RoleStorage} from "./RoleStorage.sol";
@@ -36,14 +36,6 @@ contract RoleValidation {
 
     modifier onlyTradeStorage() {
         if (!roleStorage.hasRole(Roles.TRADE_STORAGE, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
-    modifier onlyProcessorOrTradeStorage() {
-        if (!roleStorage.hasRole(Roles.PROCESSOR, msg.sender) && !roleStorage.hasRole(Roles.TRADE_STORAGE, msg.sender))
-        {
-            revert RoleValidation_AccessDenied();
-        }
         _;
     }
 

@@ -1,5 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
-
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
 import {IVault} from "./interfaces/IVault.sol";
@@ -63,7 +62,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     uint256 public shortTokensReserved;
 
     // Store the Collateral Amount for each User
-    mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) collateralAmounts;
+    mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
     mapping(bytes32 => Deposit) private depositRequests;
     EnumerableSet.Bytes32Set private depositKeys;
@@ -167,11 +166,11 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function increasePoolBalance(uint256 _amount, bool _isLong) external onlyProcessorOrTradeStorage {
+    function increasePoolBalance(uint256 _amount, bool _isLong) external onlyTradeStorage {
         _increasePoolBalance(_amount, _isLong);
     }
 
-    function decreasePoolBalance(uint256 _amount, bool _isLong) external onlyProcessorOrTradeStorage {
+    function decreasePoolBalance(uint256 _amount, bool _isLong) external onlyTradeStorage {
         _decreasePoolBalance(_amount, _isLong);
     }
 

@@ -1,20 +1,4 @@
-//  ,----,------------------------------,------.
-//   | ## |                              |    - |
-//   | ## |                              |    - |
-//   |    |------------------------------|    - |
-//   |    ||............................||      |
-//   |    ||,-                        -.||      |
-//   |    ||___                      ___||    ##|
-//   |    ||---`--------------------'---||      |
-//   `--mb'|_|______________________==__|`------'
-
-//    ____  ____  ___ _   _ _____ _____ ____
-//   |  _ \|  _ \|_ _| \ | |_   _|___ /|  _ \
-//   | |_) | |_) || ||  \| | | |   |_ \| |_) |
-//   |  __/|  _ < | || |\  | | |  ___) |  _ <
-//   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
-
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -27,6 +11,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {Execution} from "../positions/Execution.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {console} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -238,6 +223,10 @@ library Position {
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
+        console.log("Size USD: ", _sizeUsd);
+        console.log("Collateral USD: ", _collateralUsd);
+        console.log("Leverage: ", leverage);
+
         if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
 

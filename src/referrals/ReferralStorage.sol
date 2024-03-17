@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-
 pragma solidity 0.8.23;
 
 import {RoleValidation} from "../access/RoleValidation.sol";
@@ -78,7 +77,10 @@ contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
         emit RegisterCode(msg.sender, _code);
     }
 
-    function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount) external onlyProcessor {
+    function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount)
+        external
+        onlyTradeStorage
+    {
         affiliateRewards[_account][_isLongToken] += _amount;
     }
 

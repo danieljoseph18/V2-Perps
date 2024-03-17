@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
 import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
@@ -154,8 +154,11 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
     function clearPrimaryPrices() external onlyKeeper {
         bytes32[] memory keys = assetsWithPrices.values();
         uint256 len = keys.length;
-        for (uint256 i = 0; i < len; i++) {
+        for (uint256 i = 0; i < len;) {
             assetsWithPrices.remove(keys[i]);
+            unchecked {
+                ++i;
+            }
         }
         if (assetsWithPrices.length() != 0) revert PriceFeed_FailedToClearPrices();
         emit PriceFeed_PricesCleared();

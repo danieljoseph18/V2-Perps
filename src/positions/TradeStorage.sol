@@ -1,20 +1,4 @@
-//  ,----,------------------------------,------.
-//   | ## |                              |    - |
-//   | ## |                              |    - |
-//   |    |------------------------------|    - |
-//   |    ||............................||      |
-//   |    ||,-                        -.||      |
-//   |    ||___                      ___||    ##|
-//   |    ||---`--------------------'---||      |
-//   `--mb'|_|______________________==__|`------'
-
-//    ____  ____  ___ _   _ _____ _____ ____
-//   |  _ \|  _ \|_ _| \ | |_   _|___ /|  _ \
-//   | |_) | |_) || ||  \| | | |   |_ \| |_) |
-//   |  __/|  _ < | || |\  | | |  ___) |  _ <
-//   |_|   |_| \_\___|_| \_| |_| |____/|_| \_\
-
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
@@ -157,7 +141,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit OrderRequestCancelled(_orderKey);
     }
 
-    // @audit - No funding
+
     function executeCollateralIncrease(Position.Settlement memory _params, Execution.State memory _state)
         external
         onlyProcessor
@@ -183,18 +167,25 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
         // Add Value to Stored Collateral Amount in Market
         _state.market.increaseCollateralAmount(
-            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee, // @audit - correct?
+            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee, // @audit - correct? I think affiliate rebate needs to be removed.
             _params.request.user,
             _params.request.input.isLong
         );
         // Pay Fees -> @audit - units? @audit - accounting
-        _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
+        _payFees(
+            _state.market,
+            _state.borrowFee,
+            _state.fee,
+            _state.affiliateRebate,
+            _state.referrer,
+            _params.request.input.isLong
+        );
         // Update Final Storage
         openPositions[positionKey] = positionAfter;
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    // @audit - No funding
+
     function executeCollateralDecrease(Position.Settlement memory _params, Execution.State memory _state)
         external
         onlyProcessor
@@ -226,7 +217,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.collateralDelta, _params.request.user, _params.request.input.isLong
         );
         // Pay Fees
-        _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
+        _payFees(
+            _state.market,
+            _state.borrowFee,
+            _state.fee,
+            _state.affiliateRebate,
+            _state.referrer,
+            _params.request.input.isLong
+        );
         // Update Final Storage
         openPositions[positionKey] = positionAfter;
         // Transfer Tokens to User
@@ -276,7 +274,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // If take profit set, create and store the order
         if (_params.request.input.conditionals.takeProfitSet) position.takeProfitKey = _createTakeProfit(takeProfit);
         // Pay fees
-        _payFees(_state.market, 0, _state.fee, _params.request.input.isLong);
+        _payFees(_state.market, 0, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(
             _state.market,
@@ -321,7 +319,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.sizeDelta
         );
         // Pay Fees
-        _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
+        _payFees(
+            _state.market,
+            _state.borrowFee,
+            _state.fee,
+            _state.affiliateRebate,
+            _state.referrer,
+            _params.request.input.isLong
+        );
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(
             _state.market,
@@ -371,7 +376,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.sizeDelta
         );
         // Pay Fees
-        _payFees(_state.market, _state.borrowFee, _state.fee, _params.request.input.isLong);
+        _payFees(
+            _state.market,
+            _state.borrowFee,
+            _state.fee,
+            _state.affiliateRebate,
+            _state.referrer,
+            _params.request.input.isLong
+        );
         // stated to prevent multi conversion
         address market = address(positionBefore.market);
         // Unreserve Liquidity Equal to the Position Size
@@ -512,7 +524,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         bool _isLong
     ) internal {
         // Convert Size Delta USD to Collateral Tokens
-        uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice));
+        uint256 reserveDelta = mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice);
         // Reserve an Amount of Liquidity Equal to the Position Size
         market.reserveLiquidity(reserveDelta, _isLong);
         // Register the Collateral in
@@ -529,7 +541,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         bool _isLong
     ) internal {
         // Convert Size Delta USD to Collateral Tokens
-        uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice));
+        uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice)); // Could use collateral delta * leverage for gas savings?
         // Unreserve an Amount of Liquidity Equal to the Position Size
         market.unreserveLiquidity(reserveDelta, _isLong);
         // Register the Collateral out
@@ -538,11 +550,18 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     // funding and borrow amounts should be in collateral tokens
     // @audit - should funding fees be accounted for or go directly through LPs?
-    function _payFees(IMarket market, uint256 _borrowAmount, uint256 _positionFee, bool _isLong) internal {
-        // decrease the user's reserved amount // @audit???
-        // market.unreserveLiquidity(_borrowAmount, _isLong);
-        // Pay borrowing fees to LPs
+    function _payFees(
+        IMarket market,
+        uint256 _borrowAmount,
+        uint256 _positionFee,
+        uint256 _affiliateRebate,
+        address _referrer,
+        bool _isLong
+    ) internal {
+        // Pay Fees to LPs for Side (Position + Borrow)
         market.accumulateFees(_borrowAmount + _positionFee, _isLong);
+        // Pay Affiliate Rebate to Referrer
+        referralStorage.accumulateAffiliateRewards(_referrer, _isLong, _affiliateRebate);
     }
 
     function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory) {

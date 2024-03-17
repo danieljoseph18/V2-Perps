@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
@@ -103,6 +103,7 @@ interface IVault {
     function deleteWithdrawal(bytes32 _key) external;
 
     // Getter
+    function collateralAmounts(address _user, bool _isLong) external view returns (uint256);
     function feeScale() external view returns (uint256);
     function BASE_FEE() external view returns (uint256);
     function getDepositRequest(bytes32 _key) external view returns (Deposit memory);
