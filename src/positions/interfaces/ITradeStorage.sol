@@ -40,6 +40,7 @@ interface ITradeStorage {
     event StopLossSet(
         bytes32 indexed _positionKey, uint256 indexed _stopLossPrice, uint256 indexed _stopLossPercentage
     );
+    event OrderAdjusted(bytes32 _orderKey, Position.Request _request);
 
     error TradeStorage_AlreadyInitialised();
     error TradeStorage_InvalidLiquidationFee();
@@ -53,6 +54,13 @@ interface ITradeStorage {
     error TradeStorage_PositionAdditionFailed();
     error TradeStorage_KeyAdditionFailed();
     error TradeStorage_InsufficientFreeLiquidity();
+    error TradeStorage_CallerIsNotOwner();
+    error TradeStorage_OrderIsNotLimit();
+    error TradeStorage_InsufficientCollateralProvided();
+    error TradeStorage_InvalidStopLossPercentage();
+    error TradeStorage_InvalidTakeProfitPercentage();
+    error TradeStorage_CollateralDeltaTooLarge();
+    error TradeStorage_InvalidTransferIn();
 
     function initialise(
         uint256 _liquidationFee,
@@ -62,7 +70,6 @@ interface ITradeStorage {
         uint256 _minCancellationTime
     ) external;
     function createOrderRequest(Position.Request calldata _request) external;
-    function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
     function executeCollateralIncrease(Position.Settlement memory _params, Execution.State memory _state) external;
     function executeCollateralDecrease(Position.Settlement memory _params, Execution.State memory _state) external;
@@ -84,4 +91,14 @@ interface ITradeStorage {
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory);
     function getOrderAtIndex(uint256 _index, bool _isLimit) external view returns (bytes32);
     function minBlockDelay() external view returns (uint256);
+    function adjustLimitOrder(
+        bytes32 _orderKey,
+        address _caller,
+        Position.Conditionals calldata _conditionals,
+        uint256 _sizeDelta,
+        uint256 _collateralDelta,
+        uint256 _collateralProvided,
+        uint256 _maxSlippage,
+        bool _isLong
+    ) external returns (uint256 refundAmount, uint256 fee, address market);
 }

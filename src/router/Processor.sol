@@ -25,14 +25,19 @@ import {mulDiv} from "@prb/math/Common.sol";
 import {Roles} from "../access/Roles.sol";
 import {Invariant} from "../libraries/Invariant.sol";
 import {Pricing} from "../libraries/Pricing.sol";
+import {IWETH} from "../tokens/interfaces/IWETH.sol";
 
 /// @dev Needs Processor Role
 // All keeper interactions should come through this contract
 contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using SafeERC20 for IWETH;
     using SafeCast for uint256;
     using Address for address payable;
     using SignedMath for int256;
+
+    IWETH immutable WETH;
+    IERC20 immutable USDC;
 
     ITradeStorage public tradeStorage;
     IMarketMaker public marketMaker;
@@ -51,12 +56,16 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         address _tradeStorage,
         address _referralStorage,
         address _priceFeed,
+        address _weth,
+        address _usdc,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         marketMaker = IMarketMaker(_marketMaker);
         tradeStorage = ITradeStorage(_tradeStorage);
         referralStorage = IReferralStorage(_referralStorage);
         priceFeed = IPriceFeed(_priceFeed);
+        WETH = IWETH(_weth);
+        USDC = IERC20(_usdc);
     }
 
     receive() external payable {}
@@ -243,7 +252,9 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
 
         // @audit - is affiliate rebate taken care of for decrease / other positions?
         if (request.input.isIncrease) {
-            _transferTokensForIncrease(state.market, request.input.collateralToken, request.input.collateralDelta, state.affiliateRebate);
+            _transferTokensForIncrease(
+                state.market, request.input.collateralToken, request.input.collateralDelta, state.affiliateRebate
+            );
         }
 
         // Emit Trade Executed Event
@@ -320,6 +331,64 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Refund the Execution Fee
         uint256 refundAmount = Gas.getRefundForCancellation(request.input.executionFee);
         payable(msg.sender).sendValue(refundAmount);
+    }
+
+    // @audit - any accounting changes needed?
+    function adjustLimitOrder(
+        bytes32 _orderKey,
+        Position.Conditionals calldata _conditionals,
+        uint256 _sizeDelta,
+        uint256 _collateralDelta,
+        uint256 _collateralIn,
+        uint256 _maxSlippage,
+        bool _isLongToken,
+        bool _reverseWrap
+    ) external payable nonReentrant {
+        // Transfer Tokens In If Necessary
+        if (_collateralIn > 0) {
+            if (_isLongToken) {
+                if (_reverseWrap) {
+                    if (msg.value != _collateralIn) revert Processor_InvalidTransferIn();
+                } else {
+                    WETH.safeTransferFrom(msg.sender, address(this), _collateralIn);
+                }
+            } else {
+                USDC.safeTransferFrom(msg.sender, address(this), _collateralIn);
+            }
+        }
+
+        (uint256 refundAmount, uint256 fee, address market) = tradeStorage.adjustLimitOrder(
+            _orderKey,
+            msg.sender,
+            _conditionals,
+            _sizeDelta,
+            _collateralDelta,
+            _collateralIn,
+            _maxSlippage,
+            _isLongToken
+        );
+        // Need to transfer out funds and adjust the necesssary state if any refund is required
+        // Send the Refund Fee to the Market
+        if (refundAmount > 0) {
+            if (_isLongToken) {
+                if (_reverseWrap) {
+                    // Send the Refund to the User
+                    payable(msg.sender).sendValue(refundAmount);
+                    // Send the Refund Fee to the Market
+                    WETH.safeTransfer(market, fee);
+                } else {
+                    // Send the Refund to the User
+                    WETH.safeTransfer(msg.sender, refundAmount);
+                    // Send the Refund Fee to the Market
+                    WETH.safeTransfer(market, fee);
+                }
+            } else {
+                // Send the Refund to the User
+                USDC.safeTransfer(msg.sender, refundAmount);
+                // Send the Refund Fee to the Market
+                USDC.safeTransfer(market, fee);
+            }
+        }
     }
 
     function flagForAdl(

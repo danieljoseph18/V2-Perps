@@ -71,6 +71,8 @@ contract Deploy is Script {
             address(contracts.tradeStorage),
             address(contracts.referralStorage),
             address(contracts.priceFeed),
+            weth,
+            usdc,
             address(contracts.roleStorage)
         );
 

@@ -162,20 +162,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit Router_PriceUpdateRequested(_trade.assetId, block.number);
     }
 
-    // @audit - need ability to edit a limit order
-    // @audit - might be vulnerable
-    function createEditOrder(Position.Conditionals memory _conditionals, uint256 _executionFee, bytes32 _positionKey)
-        external
-        payable
-        nonReentrant
-    {
-        Gas.validateExecutionFee(processor, _executionFee, msg.value, Gas.Action.POSITION);
-
-        tradeStorage.createEditOrder(_conditionals, _positionKey);
-
-        _sendExecutionFee(_executionFee);
-    }
-
     // @audit - need to update collateral balance wherever collateral is stored
     // @audit - decrease requests won't have any transfer in
     function _handleTokenTransfers(Position.Input memory _trade) private {

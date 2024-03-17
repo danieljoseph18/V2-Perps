@@ -41,6 +41,7 @@ interface IProcessor {
     error Processor_DepositNotExpired();
     error Processor_InvalidWithdrawalOwner();
     error Processor_WithdrawalNotExpired();
+    error Processor_InvalidTransferIn();
 
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function transferDepositTokens(address _vault, address _token, uint256 _amount) external;

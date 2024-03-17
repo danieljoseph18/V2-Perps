@@ -26,6 +26,8 @@ totalFee -> fee - (discountPercentage / 2)
 - There is an issue of inconsistent prices being used in some places (specifically testAdl test case).
 When index token == collateral token, the prices used should also be the same but they are not.
 
+- There are inconsistencies with the way funds are being stored. May need to wrap ETH to WETH etc.
+
 ### Additions Required
 
 - Add invariant checks to Vault actions (deposits / withdrawals)

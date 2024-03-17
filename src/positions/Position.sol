@@ -171,9 +171,7 @@ library Position {
         view
         returns (address market, bytes32 positionKey)
     {
-        if (!(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE)) {
-            revert Position_InvalidSlippage();
-        }
+        checkSlippage(_trade.maxSlippage);
         if (_trade.collateralDelta == 0) revert Position_InvalidCollateralDelta();
         if (_trade.assetId == bytes32(0)) revert Position_InvalidAssetId();
 
@@ -187,6 +185,12 @@ library Position {
 
         if (_trade.conditionals.stopLossPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
         if (_trade.conditionals.takeProfitPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
+    }
+
+    function checkSlippage(uint256 _maxSlippage) public pure {
+        if (!(_maxSlippage >= MIN_SLIPPAGE && _maxSlippage <= MAX_SLIPPAGE)) {
+            revert Position_InvalidSlippage();
+        }
     }
 
     function generateKey(Request memory _request) external pure returns (bytes32 positionKey) {
@@ -501,37 +505,6 @@ library Position {
         return _conditionals;
     }
 
-    /**
-     * Need to Check:
-     * - Collateral is > min collateral
-     * - Leverage is valid (1 - X)
-     * - Limit price is valid -> if long, limit price < ref price, if short, limit price > ref price
-     * - Conditional Prices are valid -> if long, stop loss < ref price, if short, stop loss > ref price
-     * if long, take profit > ref price, if short, take profit < ref price
-     */
-    /**
-     * struct Request {
-     *     Input input;
-     *     address market;
-     *     address user;
-     *     uint256 requestBlock;
-     *     RequestType requestType;
-     * }
-     * struct Input {
-     *     bytes32 assetId; // Hash of the asset ticker, e.g keccak256(abi.encode("ETH"))
-     *     address collateralToken;
-     *     uint256 collateralDelta;
-     *     uint256 sizeDelta; // USD
-     *     uint256 limitPrice;
-     *     uint256 maxSlippage;
-     *     uint256 executionFee;
-     *     bool isLong;
-     *     bool isLimit;
-     *     bool isIncrease;
-     *     bool reverseWrap;
-     *     Conditionals conditionals;
-     * }
-     */
     function validateRequest(IMarketMaker marketMaker, Request memory _request, Execution.State memory _state)
         external
         view

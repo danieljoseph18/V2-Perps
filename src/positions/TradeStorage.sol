@@ -25,6 +25,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint256 constant PRECISION = 1e18;
     uint256 constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
     uint256 constant MAX_TRADING_FEE = 0.01e18; // 1%
+    uint256 constant ADJUSTMENT_FEE = 0.001e18; // 0.1%
 
     mapping(bytes32 _key => Position.Request _order) private orders;
     EnumerableSet.Bytes32Set private marketOrderKeys;
@@ -95,38 +96,127 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit OrderRequestCreated(orderKey, _request);
     }
 
-    /// @dev Create a SL / TP Order or update an existing one
-    // @audit - REVAMP
-    function createEditOrder(Position.Conditionals memory _conditionals, bytes32 _positionKey) external onlyRouter {
-        Position.Data memory position = openPositions[_positionKey];
-        if (!Position.exists(position)) revert TradeStorage_PositionDoesNotExist();
-        // construct the SL / TP orders
-        // Uses WAEP as ref price
-        (Position.Request memory stopLoss, Position.Request memory takeProfit) =
-            Position.constructConditionalOrders(position, _conditionals);
-        // if the position already has a SL / TP, delete them
-        // add them to storage
-        if (_conditionals.stopLossSet) {
-            // If Setting a SL, delete the existing SL
-            if (position.stopLossKey != bytes32(0)) {
-                _deleteOrder(position.stopLossKey, true);
-            }
-            // Create and Set SL
-            openPositions[_positionKey].stopLossKey = _createStopLoss(stopLoss);
-
-            emit StopLossSet(_positionKey, _conditionals.stopLossPrice, _conditionals.stopLossPercentage);
+    /**
+     * Function to let users adjust existing limit order requests
+     *
+     * struct Input {
+     *     bytes32 assetId; // Hash of the asset ticker, e.g keccak256(abi.encode("ETH"))
+     *     address collateralToken;
+     *     uint256 collateralDelta;
+     *     uint256 sizeDelta; // USD
+     *     uint256 limitPrice;
+     *     uint256 maxSlippage;
+     *     uint256 executionFee;
+     *     bool isLong;
+     *     bool isLimit;
+     *     bool isIncrease;
+     *     bool reverseWrap;
+     *     Conditionals conditionals;
+     * }
+     *
+     * // Request -> Constructed by Router based on User Input
+     * struct Request {
+     *     Input input;
+     *     address market;
+     *     address user;
+     *     uint256 requestBlock;
+     *     RequestType requestType;
+     * }
+     *
+     * What they can adjust:
+     * 1. Size Delta -> User's can adjust this for both increase and decrease. Leverage must stay valid.
+     * 2. Limit Price -> User's can adjust this for both increase and decrease. Leverage must stay valid.
+     * 3. Max Slippage -> User's can adjust this for both increase and decrease.
+     * 4. Collateral Delta -> Can only change for decrease positions and SL / TP orders. If it's an increase, the user has to provide
+     * the additional collateral on top of the adjusted collateral delta.
+     * 5. Conditionals -> Can only change for SL / TP orders. Can only adjust existing orders. Not set new ones.
+     * E.g if stop loss not set, can't create one using this function. Can only adjust the parameters of the existing.
+     */
+    function adjustLimitOrder(
+        bytes32 _orderKey,
+        address _caller,
+        Position.Conditionals calldata _conditionals,
+        uint256 _sizeDelta,
+        uint256 _collateralDelta,
+        uint256 _collateralProvided,
+        uint256 _maxSlippage,
+        bool _isLong // Used to validate the token in
+    ) external onlyProcessor nonReentrant returns (uint256 refundAmount, uint256 fee, address market) {
+        // Fetch the Position Request
+        Position.Request memory order = orders[_orderKey];
+        // Check it Exists
+        if (order.input.assetId == bytes32(0)) revert TradeStorage_OrderDoesNotExist();
+        // Check the Caller is the Owner
+        if (order.user != _caller) revert TradeStorage_CallerIsNotOwner();
+        // Check the Order is a Limit Order
+        if (!order.input.isLimit) revert TradeStorage_OrderIsNotLimit();
+        // Check the Token in Matches the Expected
+        if (order.input.isLong != _isLong) revert TradeStorage_InvalidTransferIn();
+        // No Checks Needed -> Validated in Execution
+        if (_sizeDelta != 0) {
+            order.input.sizeDelta = _sizeDelta;
         }
 
-        if (_conditionals.takeProfitSet) {
-            // If Setting a TP, delete the existing TP
-            if (position.takeProfitKey != bytes32(0)) {
-                _deleteOrder(position.takeProfitKey, true);
-            }
-            // Create and Set TP
-            openPositions[_positionKey].takeProfitKey = _createTakeProfit(takeProfit);
+        market = order.market;
 
-            emit TakeProfitSet(_positionKey, _conditionals.takeProfitPrice, _conditionals.takeProfitPercentage);
+        if (_collateralDelta != 0) {
+            if (order.input.isIncrease) {
+                // If the new collateral delta is greater than the original, validate the user has provided the additional collateral
+                if (_collateralDelta > order.input.collateralDelta) {
+                    if (_collateralProvided < _collateralDelta - order.input.collateralDelta) {
+                        revert TradeStorage_InsufficientCollateralProvided();
+                    }
+                    // Update the Collateral Delta
+                    order.input.collateralDelta = _collateralDelta;
+                } else if (_collateralDelta < order.input.collateralDelta) {
+                    // If new collateral delta is less than the original, handle a refund of the difference
+                    // Charge an Adjustment Fee
+                    fee = mulDiv(_collateralDelta, ADJUSTMENT_FEE, PRECISION);
+                    // Calculate the Amount to refund
+                    refundAmount = order.input.collateralDelta - _collateralDelta - fee;
+                    // Refund the Difference directly from the user's stored collateral
+                    order.input.collateralDelta = _collateralDelta;
+                    // Accumulate the Fee in the Market's Storage
+                    IMarket(order.market).accumulateFees(fee, order.input.isLong);
+                }
+            } else {
+                // @audit - Any other checks needed here? Min Collateral etc?
+                // Get the position the order is tied to
+                bytes32 positionKey = Position.generateKey(order);
+                // Validate the new collateral delta is within the range of the position
+                if (openPositions[positionKey].collateralAmount < _collateralDelta) {
+                    revert TradeStorage_CollateralDeltaTooLarge();
+                }
+                // Update the Collateral Delta
+                order.input.collateralDelta = _collateralDelta;
+            }
         }
+
+        if (_maxSlippage != 0) {
+            Position.checkSlippage(_maxSlippage);
+            order.input.maxSlippage = _maxSlippage;
+        }
+
+        if (_conditionals.takeProfitSet && order.input.conditionals.takeProfitSet) {
+            if (_conditionals.takeProfitPercentage == 0 || _conditionals.takeProfitPercentage > PRECISION) {
+                revert TradeStorage_InvalidTakeProfitPercentage();
+            }
+            order.input.conditionals.takeProfitPercentage = _conditionals.takeProfitPercentage;
+            order.input.conditionals.takeProfitPrice = _conditionals.takeProfitPrice;
+        }
+
+        if (_conditionals.stopLossSet && order.input.conditionals.stopLossSet) {
+            if (_conditionals.stopLossPercentage == 0 || _conditionals.stopLossPercentage > PRECISION) {
+                revert TradeStorage_InvalidStopLossPercentage();
+            }
+            order.input.conditionals.stopLossPercentage = _conditionals.stopLossPercentage;
+            order.input.conditionals.stopLossPrice = _conditionals.stopLossPrice;
+        }
+
+        // Update the Order in Storage
+        orders[_orderKey] = order;
+        // Fire Event
+        emit OrderAdjusted(_orderKey, order);
     }
 
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyRouterOrProcessor {
@@ -140,7 +230,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Fire Event
         emit OrderRequestCancelled(_orderKey);
     }
-
 
     function executeCollateralIncrease(Position.Settlement memory _params, Execution.State memory _state)
         external
@@ -184,7 +273,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         openPositions[positionKey] = positionAfter;
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
-
 
     function executeCollateralDecrease(Position.Settlement memory _params, Execution.State memory _state)
         external
