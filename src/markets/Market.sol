@@ -61,7 +61,7 @@ contract Market is Vault, IMarket {
         emit MarketConfigUpdated(_assetId, _config);
     }
 
-    function updateAdlState(bytes32 _assetId, bool _isFlaggedForAdl, bool _isLong) external onlyProcessor {
+    function updateAdlState(bytes32 _assetId, bool _isFlaggedForAdl, bool _isLong) external onlyPositionManager {
         if (_isLong) {
             marketStorage[_assetId].config.adl.flaggedLong = _isFlaggedForAdl;
         } else {
@@ -70,7 +70,7 @@ contract Market is Vault, IMarket {
         emit AdlStateUpdated(_assetId, _isFlaggedForAdl);
     }
 
-    function updateFundingRate(bytes32 _assetId, uint256 _indexPrice) external nonReentrant onlyProcessor {
+    function updateFundingRate(bytes32 _assetId, uint256 _indexPrice) external nonReentrant onlyPositionManager {
         FundingValues memory funding = marketStorage[_assetId].funding;
 
         // Calculate the skew in USD
@@ -97,7 +97,7 @@ contract Market is Vault, IMarket {
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) external nonReentrant onlyProcessor {
+    ) external nonReentrant onlyPositionManager {
         BorrowingValues memory borrowing = marketStorage[_assetId].borrowing;
 
         if (_isLong) {
@@ -124,7 +124,7 @@ contract Market is Vault, IMarket {
 
     function updateAverageEntryPrice(bytes32 _assetId, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
         external
-        onlyProcessor
+        onlyPositionManager
     {
         if (_priceUsd == 0) revert Market_PriceIsZero();
         if (_sizeDeltaUsd == 0) return; // No Change
@@ -155,7 +155,7 @@ contract Market is Vault, IMarket {
 
     function updateOpenInterest(bytes32 _assetId, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
         external
-        onlyProcessor
+        onlyPositionManager
     {
         // Update the open interest
         if (_shouldAdd) {
@@ -174,7 +174,7 @@ contract Market is Vault, IMarket {
         );
     }
 
-    function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external onlyProcessor {
+    function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external onlyPositionManager {
         _priceImpactUsd > 0
             ? marketStorage[_assetId].impactPool += _priceImpactUsd.abs()
             : marketStorage[_assetId].impactPool -= _priceImpactUsd.abs();
@@ -232,6 +232,10 @@ contract Market is Vault, IMarket {
      */
     function getAssetIds() external view returns (bytes32[] memory) {
         return assetIds.values();
+    }
+
+    function getAssetsInMarket() external view returns (uint256) {
+        return assetIds.length();
     }
 
     function getCumulativeBorrowFees(bytes32 _assetId) external view returns (uint256 longFees, uint256 shortFees) {

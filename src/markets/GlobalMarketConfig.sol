@@ -5,7 +5,7 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
-import {IProcessor} from "../router/interfaces/IProcessor.sol";
+import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {Router} from "../router/Router.sol";
 
@@ -13,7 +13,7 @@ import {Router} from "../router/Router.sol";
 contract GlobalMarketConfig is RoleValidation {
     ITradeStorage public tradeStorage;
     IMarketMaker public marketMaker;
-    IProcessor public processor;
+    IPositionManager public positionManager;
     Router public router;
     IPriceFeed public priceFeed;
 
@@ -23,14 +23,14 @@ contract GlobalMarketConfig is RoleValidation {
     constructor(
         address _tradeStorage,
         address _marketMaker,
-        address payable _processor,
+        address payable _positionManager,
         address payable _priceFeed,
         address payable _router,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         tradeStorage = ITradeStorage(_tradeStorage);
         marketMaker = IMarketMaker(_marketMaker);
-        processor = IProcessor(_processor);
+        positionManager = IPositionManager(_positionManager);
         router = Router(_router);
         priceFeed = IPriceFeed(_priceFeed);
     }
@@ -38,13 +38,13 @@ contract GlobalMarketConfig is RoleValidation {
     function setTargetContracts(
         address _tradeStorage,
         address _marketMaker,
-        address payable _processor,
+        address payable _positionManager,
         address payable _router,
         address _priceFeed
     ) external onlyModerator {
         tradeStorage = ITradeStorage(_tradeStorage);
         marketMaker = IMarketMaker(_marketMaker);
-        processor = IProcessor(_processor);
+        positionManager = IPositionManager(_positionManager);
         router = Router(_router);
         priceFeed = IPriceFeed(_priceFeed);
     }
@@ -56,7 +56,7 @@ contract GlobalMarketConfig is RoleValidation {
         if (address(priceFeed) == address(0)) revert GlobalMarketConfig_PriceFeedNotSet();
         market.updatePriceFeed(priceFeed);
         marketMaker.updatePriceFeed(priceFeed);
-        processor.updatePriceFeed(priceFeed);
+        positionManager.updatePriceFeed(priceFeed);
         router.updatePriceFeed(priceFeed);
     }
 

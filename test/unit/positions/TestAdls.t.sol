@@ -10,7 +10,7 @@ import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-import {Processor} from "../../../src/router/Processor.sol";
+import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
@@ -37,7 +37,7 @@ contract TestADLs is Test {
     IPriceFeed priceFeed; // Deployed in Helper Config
     TradeStorage tradeStorage;
     ReferralStorage referralStorage;
-    Processor processor;
+    PositionManager positionManager;
     Router router;
     address OWNER;
     Market market;
@@ -72,7 +72,7 @@ contract TestADLs is Test {
         priceFeed = contracts.priceFeed;
         tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
-        processor = contracts.processor;
+        positionManager = contracts.positionManager;
         router = contracts.router;
         OWNER = contracts.owner;
         ethPriceId = deploy.ethPriceId();
@@ -133,7 +133,7 @@ contract TestADLs is Test {
             feePercentageToOwner: 0.2e18,
             minTimeToExpiration: 1 minutes,
             priceFeed: address(priceFeed),
-            processor: address(processor),
+            positionManager: address(positionManager),
             poolOwner: OWNER,
             feeDistributor: OWNER,
             name: "WETH/USDC",
@@ -148,13 +148,13 @@ contract TestADLs is Test {
         router.createDeposit{value: 10_000.01 ether + 1 gwei}(market, OWNER, weth, 10_000 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 25_000_000e6, 0.01 ether, false);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -218,15 +218,15 @@ contract TestADLs is Test {
         // Execute the Position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition{value: 0.0001 ether}(orderKey, USER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(orderKey, USER, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM1, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(orderKey, RANDOM1, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM2, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(orderKey, RANDOM2, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        processor.executePosition{value: 0.0001 ether}(orderKey, RANDOM3, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(orderKey, RANDOM3, ethPriceData);
 
         vm.warp(block.timestamp + 10);
         vm.roll(block.number + 1);
@@ -238,12 +238,12 @@ contract TestADLs is Test {
         ethPriceData.pythData = tokenUpdateData;
         // adl the positions
         vm.prank(OWNER);
-        processor.flagForAdl{value: 0.01 ether}(market, ethAssetId, false, ethPriceData);
+        positionManager.flagForAdl{value: 0.01 ether}(market, ethAssetId, false, ethPriceData);
         // get one of the position keys
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), false);
         // adl it
         vm.prank(OWNER);
-        processor.executeAdl{value: 0.01 ether}(market, ethAssetId, 5000e30, positionKeys[0], false, ethPriceData);
+        positionManager.executeAdl{value: 0.01 ether}(market, ethAssetId, 5000e30, positionKeys[0], false, ethPriceData);
         // validate their size has been reduced
         Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
         assertEq(position.positionSize, 2_495_000e30);

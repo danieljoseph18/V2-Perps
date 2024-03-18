@@ -18,11 +18,11 @@ interface IMarketMaker {
     error MarketMaker_InvalidBaseUnit();
     error MarketMaker_MarketExists();
     error MarketMaker_InvalidPriceFeed();
-    error MarketMaker_InvalidProcessor();
+    error MarketMaker_InvalidPositionManager();
     error MarketMaker_MarketDoesNotExist();
     error MarketMaker_FailedToAddMarket();
 
-    function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _processor) external;
+    function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _positionManager) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function createNewMarket(

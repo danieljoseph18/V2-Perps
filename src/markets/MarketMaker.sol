@@ -8,7 +8,7 @@ import {Market, IMarket, IVault} from "./Market.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {IProcessor} from "../router/interfaces/IProcessor.sol";
+import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {Roles} from "../access/Roles.sol";
 
 /// @dev Needs MarketMaker Role
@@ -16,7 +16,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     IPriceFeed priceFeed;
-    IProcessor processor;
+    IPositionManager positionManager;
 
     EnumerableSet.AddressSet private markets;
     // switch to enumerable set? what if a token has 2+ markets?
@@ -30,13 +30,13 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         defaultAllocation.push(10000 << 240);
     }
 
-    function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _processor)
+    function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _positionManager)
         external
         onlyAdmin
     {
         if (isInitialised) revert MarketMaker_AlreadyInitialised();
         priceFeed = IPriceFeed(_priceFeed);
-        processor = IProcessor(_processor);
+        positionManager = IPositionManager(_positionManager);
         defaultConfig = _defaultConfig;
         isInitialised = true;
         emit MarketMakerInitialised(_priceFeed);
@@ -51,8 +51,8 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
-    function updateProcessor(IProcessor _processor) external onlyConfigurator {
-        processor = _processor;
+    function updatepositionManager(IPositionManager _positionManager) external onlyConfigurator {
+        positionManager = _positionManager;
     }
 
     /// @dev Only MarketFactory
@@ -75,7 +75,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         }
         if (tokenToMarkets[_assetId] != address(0)) revert MarketMaker_MarketExists();
         if (_vaultDetails.priceFeed != address(priceFeed)) revert MarketMaker_InvalidPriceFeed();
-        if (_vaultDetails.processor != address(processor)) revert MarketMaker_InvalidProcessor();
+        if (_vaultDetails.positionManager != address(positionManager)) revert MarketMaker_InvalidPositionManager();
 
         // Set Up Price Oracle
         priceFeed.supportAsset(_assetId, _asset);

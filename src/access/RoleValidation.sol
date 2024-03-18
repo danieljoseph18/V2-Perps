@@ -24,8 +24,8 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyProcessor() {
-        if (!roleStorage.hasRole(Roles.PROCESSOR, msg.sender)) revert RoleValidation_AccessDenied();
+    modifier onlyPositionManager() {
+        if (!roleStorage.hasRole(Roles.POSITION_MANAGER, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
@@ -51,25 +51,6 @@ contract RoleValidation {
 
     modifier onlyStateKeeper() {
         if (!roleStorage.hasRole(Roles.STATE_KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
-    modifier onlyFeeAccumulator() {
-        if (!roleStorage.hasRole(Roles.FEE_ACCUMULATOR, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
-    modifier onlyKeeperOrSelf() {
-        if (!roleStorage.hasRole(Roles.KEEPER, msg.sender) && !(msg.sender == address(this))) {
-            revert RoleValidation_AccessDenied();
-        }
-        _;
-    }
-
-    modifier onlyRouterOrProcessor() {
-        if (!roleStorage.hasRole(Roles.ROUTER, msg.sender) && !roleStorage.hasRole(Roles.PROCESSOR, msg.sender)) {
-            revert RoleValidation_AccessDenied();
-        }
         _;
     }
 

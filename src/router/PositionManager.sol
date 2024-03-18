@@ -19,7 +19,7 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Gas} from "../libraries/Gas.sol";
-import {IProcessor} from "./interfaces/IProcessor.sol";
+import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Roles} from "../access/Roles.sol";
@@ -27,9 +27,10 @@ import {Invariant} from "../libraries/Invariant.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 
-/// @dev Needs Processor Role
+/// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
-contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
+// Contract picks up and executes all requests, as well as holds intermediary funds.
+contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
     using SafeCast for uint256;
@@ -47,9 +48,9 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     // Base Gas for a TX
     uint256 public baseGasLimit;
     // Upper Bounds to account for fluctuations
-    uint256 public depositGasLimit;
-    uint256 public withdrawalGasLimit;
-    uint256 public positionGasLimit; // Accounts for Price Updates
+    uint256 public averageDepositCost;
+    uint256 public averageWithdrawalCost;
+    uint256 public averagePositionCost;
 
     constructor(
         address _marketMaker,
@@ -71,28 +72,18 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     receive() external payable {}
 
     modifier onlyMarket() {
-        if (!marketMaker.isMarket(msg.sender)) revert Processor_AccessDenied();
+        if (!marketMaker.isMarket(msg.sender)) revert PositionManager_AccessDenied();
         _;
     }
 
-    modifier signOraclePrices(Oracle.PriceUpdateData calldata _priceUpdateData) {
-        uint256 updateFee = priceFeed.updateFee(_priceUpdateData.pythData);
-        if (msg.value < updateFee) revert Processor_PriceUpdateFee();
-        priceFeed.setPrimaryPrices{value: msg.value}(
-            _priceUpdateData.assetIds, _priceUpdateData.pythData, _priceUpdateData.compactedPrices
-        );
-        _;
-        priceFeed.clearPrimaryPrices();
-    }
-
-    function updateGasLimits(uint256 _base, uint256 _deposit, uint256 _withdrawal, uint256 _position)
+    function updateGasEstimates(uint256 _base, uint256 _deposit, uint256 _withdrawal, uint256 _position)
         external
         onlyAdmin
     {
         baseGasLimit = _base;
-        depositGasLimit = _deposit;
-        withdrawalGasLimit = _withdrawal;
-        positionGasLimit = _position;
+        averageDepositCost = _deposit;
+        averageWithdrawalCost = _withdrawal;
+        averagePositionCost = _position;
         emit GasLimitsUpdated(_deposit, _withdrawal, _position);
     }
 
@@ -109,14 +100,18 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         payable
         nonReentrant
         onlyKeeper
-        signOraclePrices(_priceUpdateData)
     {
+        // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
-        if (_key == bytes32(0)) revert Processor_InvalidKey();
+
+        // Sign the Latest Oracle Prices
+        _signOraclePrices(_priceUpdateData);
+
+        if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
         IVault.ExecuteDeposit memory params;
         params.market = market;
-        params.processor = this;
+        params.positionManager = this;
         params.priceFeed = priceFeed;
         params.deposit = market.getDepositRequest(_key);
         params.key = _key;
@@ -124,18 +119,28 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.isLongToken, true); // Maximize AUM for deposits
         try market.executeDeposit(params) {}
         catch {
-            revert Processor_ExecuteDepositFailed();
+            revert PositionManager_ExecuteDepositFailed();
         }
+
+        // Clear all previously signed prices
+        _clearOraclePrices();
+
         // Send Execution Fee + Rebate
-        Gas.payExecutionFee(
-            this, params.deposit.executionFee, initialGas, payable(params.deposit.owner), payable(msg.sender)
-        );
+        uint256 feeForExecutor = (initialGas - gasleft()) * tx.gasprice;
+        // @audit - what about gas used here & in sending? How do we account for it?
+        uint256 feeToRefund = params.deposit.executionFee - feeForExecutor;
+
+        payable(params.deposit.owner).sendValue(feeForExecutor);
+
+        if (feeToRefund > 0) {
+            payable(msg.sender).sendValue(feeToRefund);
+        }
     }
 
     function cancelDeposit(IMarket market, bytes32 _depositKey) external nonReentrant {
         IVault.Deposit memory deposit = market.getDepositRequest(_depositKey);
-        if (deposit.owner != msg.sender) revert Processor_InvalidDepositOwner();
-        if (deposit.expirationTimestamp >= block.timestamp) revert Processor_DepositNotExpired();
+        if (deposit.owner != msg.sender) revert PositionManager_InvalidDepositOwner();
+        if (deposit.expirationTimestamp >= block.timestamp) revert PositionManager_DepositNotExpired();
         market.deleteDeposit(_depositKey);
         IERC20(deposit.tokenIn).safeTransfer(msg.sender, deposit.amountIn);
         emit DepositRequestCancelled(_depositKey, deposit.owner, deposit.tokenIn, deposit.amountIn);
@@ -150,14 +155,18 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         payable
         nonReentrant
         onlyKeeper
-        signOraclePrices(_priceUpdateData)
     {
+        // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
-        if (_key == bytes32(0)) revert Processor_InvalidKey();
+
+        // Sign the Latest Oracle Prices
+        _signOraclePrices(_priceUpdateData);
+
+        if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
         IVault.ExecuteWithdrawal memory params;
         params.market = market;
-        params.processor = this;
+        params.positionManager = this;
         params.priceFeed = priceFeed;
         params.withdrawal = market.getWithdrawalRequest(_key);
         params.key = _key;
@@ -166,18 +175,28 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         params.shouldUnwrap = params.withdrawal.shouldUnwrap;
         try market.executeWithdrawal(params) {}
         catch {
-            revert Processor_ExecuteWithdrawalFailed();
+            revert PositionManager_ExecuteWithdrawalFailed();
         }
+
+        // Clear all previously signed prices
+        _clearOraclePrices();
+
         // Send Execution Fee + Rebate
-        Gas.payExecutionFee(
-            this, params.withdrawal.executionFee, initialGas, payable(params.withdrawal.owner), payable(msg.sender)
-        );
+        uint256 feeForExecutor = (initialGas - gasleft()) * tx.gasprice;
+
+        uint256 feeToRefund = params.withdrawal.executionFee - feeForExecutor;
+
+        payable(params.withdrawal.owner).sendValue(feeForExecutor);
+
+        if (feeToRefund > 0) {
+            payable(msg.sender).sendValue(feeToRefund);
+        }
     }
 
     function cancelWithdrawal(IMarket market, bytes32 _withdrawalKey) external nonReentrant {
         IVault.Withdrawal memory withdrawal = market.getWithdrawalRequest(_withdrawalKey);
-        if (withdrawal.owner != msg.sender) revert Processor_InvalidWithdrawalOwner();
-        if (withdrawal.expirationTimestamp >= block.timestamp) revert Processor_WithdrawalNotExpired();
+        if (withdrawal.owner != msg.sender) revert PositionManager_InvalidWithdrawalOwner();
+        if (withdrawal.expirationTimestamp >= block.timestamp) revert PositionManager_WithdrawalNotExpired();
         market.deleteWithdrawal(_withdrawalKey);
         IERC20(market.LONG_TOKEN()).safeTransfer(msg.sender, withdrawal.marketTokenAmountIn);
         emit WithdrawalRequestCancelled(
@@ -191,17 +210,19 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     }
 
     /// @dev Only Keeper
-    // @audit - Need a step to validate the trade doesn't put the market over its
-    // allocation (_validateAllocation)
     // @audit - don't think we're handling the stop loss / take profit case correctly
     function executePosition(bytes32 _orderKey, address _feeReceiver, Oracle.PriceUpdateData calldata _priceUpdateData)
         external
         payable
         nonReentrant
         onlyKeeper
-        signOraclePrices(_priceUpdateData)
     {
+        // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
+
+        // Sign the Latest Oracle Prices
+        _signOraclePrices(_priceUpdateData);
+
         (Execution.State memory state, Position.Request memory request) =
             Execution.constructParams(tradeStorage, marketMaker, priceFeed, _orderKey, _feeReceiver);
         // Fetch the State of the Market Before the Position
@@ -241,7 +262,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         } else if (request.requestType == Position.RequestType.STOP_LOSS) {
             tradeStorage.decreaseExistingPosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
         } else {
-            revert Processor_InvalidRequestType();
+            revert PositionManager_InvalidRequestType();
         }
 
         // Fetch the State of the Market After the Position
@@ -260,9 +281,18 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Emit Trade Executed Event
         emit ExecutePosition(_orderKey, request, state.fee, state.affiliateRebate);
 
+        // Clear all previously signed prices
+        _clearOraclePrices();
+
         // Send Execution Fee + Rebate
         // Execution Fee reduced to account for value sent to update Pyth prices
-        Gas.payExecutionFee(this, request.input.executionFee, initialGas, payable(_feeReceiver), payable(msg.sender));
+        uint256 executionCost = (initialGas - gasleft()) * tx.gasprice;
+
+        uint256 feeToRefund = request.input.executionFee - executionCost;
+        payable(msg.sender).sendValue(executionCost);
+        if (feeToRefund > 0) {
+            payable(request.user).sendValue(feeToRefund);
+        }
     }
 
     // need to store who flagged and liquidated
@@ -273,8 +303,9 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         external
         payable
         onlyLiquidationKeeper
-        signOraclePrices(_priceUpdateData)
     {
+        // Sign the Latest Oracle Prices
+        _signOraclePrices(_priceUpdateData);
         // Construct ExecutionState
         Execution.State memory state;
         // fetch position
@@ -305,8 +336,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // liquidate the position
         try tradeStorage.liquidatePosition(state, _positionKey, msg.sender) {}
         catch {
-            revert Processor_LiquidationFailed();
+            revert PositionManager_LiquidationFailed();
         }
+
+        // Clear all previously signed prices
+        _clearOraclePrices();
     }
 
     // @audit - is this vulnerable?
@@ -314,14 +348,14 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Fetch the Request
         Position.Request memory request = tradeStorage.getOrder(_key);
         // Check it exists
-        if (request.user == address(0)) revert Processor_RequestDoesNotExist();
+        if (request.user == address(0)) revert PositionManager_RequestDoesNotExist();
         // Check if the caller's permissions
         if (!roleStorage.hasRole(Roles.KEEPER, msg.sender)) {
             // Check the caller is the position owner
-            if (msg.sender != request.user) revert Processor_NotPositionOwner();
+            if (msg.sender != request.user) revert PositionManager_NotPositionOwner();
             // Check sufficient time has passed
             if (block.number < request.requestBlock + tradeStorage.minBlockDelay()) {
-                revert Processor_InsufficientDelay();
+                revert PositionManager_InsufficientDelay();
             }
         }
         // Cancel the Request
@@ -334,45 +368,38 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - any accounting changes needed?
-    function adjustLimitOrder(
-        bytes32 _orderKey,
-        Position.Conditionals calldata _conditionals,
-        uint256 _sizeDelta,
-        uint256 _collateralDelta,
-        uint256 _collateralIn,
-        uint256 _maxSlippage,
-        bool _isLongToken,
-        bool _reverseWrap
-    ) external payable nonReentrant {
+    function adjustLimitOrder(Position.Adjustment calldata _params) external payable nonReentrant {
         // Transfer Tokens In If Necessary
-        if (_collateralIn > 0) {
-            if (_isLongToken) {
-                if (_reverseWrap) {
-                    if (msg.value != _collateralIn) revert Processor_InvalidTransferIn();
+        if (_params.collateralIn > 0) {
+            if (_params.isLongToken) {
+                if (_params.reverseWrap) {
+                    if (msg.value != _params.collateralIn) revert PositionManager_InvalidTransferIn();
                 } else {
-                    WETH.safeTransferFrom(msg.sender, address(this), _collateralIn);
+                    WETH.safeTransferFrom(msg.sender, address(this), _params.collateralIn);
                 }
             } else {
-                USDC.safeTransferFrom(msg.sender, address(this), _collateralIn);
+                USDC.safeTransferFrom(msg.sender, address(this), _params.collateralIn);
             }
         }
 
         (uint256 refundAmount, uint256 fee, address market) = tradeStorage.adjustLimitOrder(
-            _orderKey,
+            _params.orderKey,
             msg.sender,
-            _conditionals,
-            _sizeDelta,
-            _collateralDelta,
-            _collateralIn,
-            _maxSlippage,
-            _isLongToken
+            _params.conditionals,
+            _params.sizeDelta,
+            _params.collateralDelta,
+            _params.collateralIn,
+            _params.limitPrice,
+            _params.maxSlippage,
+            _params.isLongToken
         );
         // Need to transfer out funds and adjust the necesssary state if any refund is required
         // Send the Refund Fee to the Market
         if (refundAmount > 0) {
-            if (_isLongToken) {
-                if (_reverseWrap) {
+            if (_params.isLongToken) {
+                if (_params.reverseWrap) {
                     // Send the Refund to the User
+                    WETH.withdraw(refundAmount);
                     payable(msg.sender).sendValue(refundAmount);
                     // Send the Refund Fee to the Market
                     WETH.safeTransfer(market, fee);
@@ -396,8 +423,10 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         bytes32 _assetId,
         bool _isLong,
         Oracle.PriceUpdateData calldata _priceUpdateData
-    ) external payable onlyAdlKeeper signOraclePrices(_priceUpdateData) {
-        if (market == IMarket(address(0))) revert Processor_InvalidMarket();
+    ) external payable onlyAdlKeeper {
+        // Sign the Latest Oracle Prices
+        _signOraclePrices(_priceUpdateData);
+        if (market == IMarket(address(0))) revert PositionManager_InvalidMarket();
         Execution.State memory state;
         // get current price
         state.indexPrice = Oracle.getPrice(priceFeed, _assetId);
@@ -422,8 +451,11 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         if (pnlFactor.abs() > maxPnlFactor && pnlFactor > 0) {
             market.updateAdlState(_assetId, true, _isLong);
         } else {
-            revert Processor_PnlToPoolRatioNotExceeded(pnlFactor, maxPnlFactor);
+            revert PositionManager_PnlToPoolRatioNotExceeded(pnlFactor, maxPnlFactor);
         }
+
+        // Clear all previously signed prices
+        _clearOraclePrices();
     }
 
     function executeAdl(
@@ -433,18 +465,20 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         bytes32 _positionKey,
         bool _isLong,
         Oracle.PriceUpdateData calldata _priceUpdateData
-    ) external payable onlyAdlKeeper signOraclePrices(_priceUpdateData) {
+    ) external payable onlyAdlKeeper {
+        // Sign the Latest Oracle Prices
+        _signOraclePrices(_priceUpdateData);
         Execution.State memory state;
         IMarket.AdlConfig memory adl = market.getAdlConfig(_assetId);
         // Check ADL is enabled for the market and for the side
         if (_isLong) {
-            if (!adl.flaggedLong) revert Processor_LongSideNotFlagged();
+            if (!adl.flaggedLong) revert PositionManager_LongSideNotFlagged();
         } else {
-            if (!adl.flaggedShort) revert Processor_ShortSideNotFlagged();
+            if (!adl.flaggedShort) revert PositionManager_ShortSideNotFlagged();
         }
         // Check the position in question is active
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
-        if (position.positionSize == 0) revert Processor_PositionNotActive();
+        if (position.positionSize == 0) revert PositionManager_PositionNotActive();
         // state the market
         state.market = market;
         // Get current pricing and token data
@@ -462,7 +496,7 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
         // Get the new PNL to pool ratio
         int256 newPnlFactor = _getPnlFactor(state, _assetId, _isLong);
         // PNL to pool has reduced
-        if (newPnlFactor >= startingPnlFactor) revert Processor_PNLFactorNotReduced();
+        if (newPnlFactor >= startingPnlFactor) revert PositionManager_PNLFactorNotReduced();
         // Check if the new PNL to pool ratio is greater than
         // the min PNL factor after ADL (~20%)
         // If not, unflag for ADL
@@ -470,14 +504,27 @@ contract Processor is IProcessor, RoleValidation, ReentrancyGuard {
             market.updateAdlState(_assetId, false, _isLong);
         }
         emit AdlExecuted(market, _positionKey, _sizeDelta, _isLong);
+
+        // Clear all previously signed prices
+        _clearOraclePrices();
     }
 
     // @audit - is this vulnerable?
-    function sendExecutionFee(address payable _to, uint256 _amount) external onlyProcessor {
+    function sendExecutionFee(address payable _to, uint256 _amount) external onlyPositionManager {
         _to.sendValue(_amount);
     }
-    // @audit - discount needs to be halved
-    // 50% goes to the referrer, 50% goes to the user
+
+    function _signOraclePrices(Oracle.PriceUpdateData calldata _priceUpdateData) internal {
+        uint256 updateFee = priceFeed.updateFee(_priceUpdateData.pythData);
+        if (msg.value < updateFee) revert PositionManager_PriceUpdateFee();
+        priceFeed.setPrimaryPrices{value: msg.value}(
+            _priceUpdateData.assetIds, _priceUpdateData.pythData, _priceUpdateData.compactedPrices
+        );
+    }
+
+    function _clearOraclePrices() internal {
+        priceFeed.clearPrimaryPrices();
+    }
 
     function _transferTokensForIncrease(
         IMarket market,

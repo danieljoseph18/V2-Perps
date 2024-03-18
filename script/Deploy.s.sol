@@ -10,7 +10,7 @@ import {MarketMaker} from "../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../src/referrals/ReferralStorage.sol";
-import {Processor} from "../src/router/Processor.sol";
+import {PositionManager} from "../src/router/PositionManager.sol";
 import {Router} from "../src/router/Router.sol";
 import {IMarket} from "../src/markets/interfaces/IMarket.sol";
 import {Roles} from "../src/access/Roles.sol";
@@ -26,7 +26,7 @@ contract Deploy is Script {
         IPriceFeed priceFeed; // Deployed in Helper Config
         TradeStorage tradeStorage;
         ReferralStorage referralStorage;
-        Processor processor;
+        PositionManager positionManager;
         Router router;
         address owner;
     }
@@ -50,7 +50,7 @@ contract Deploy is Script {
             priceFeed,
             TradeStorage(address(0)),
             ReferralStorage(payable(address(0))),
-            Processor(payable(address(0))),
+            PositionManager(payable(address(0))),
             Router(payable(address(0))),
             msg.sender
         );
@@ -66,7 +66,7 @@ contract Deploy is Script {
 
         contracts.tradeStorage = new TradeStorage(contracts.referralStorage, address(contracts.roleStorage));
 
-        contracts.processor = new Processor(
+        contracts.positionManager = new PositionManager(
             address(contracts.marketMaker),
             address(contracts.tradeStorage),
             address(contracts.referralStorage),
@@ -82,14 +82,14 @@ contract Deploy is Script {
             address(contracts.priceFeed),
             usdc,
             weth,
-            address(contracts.processor),
+            address(contracts.positionManager),
             address(contracts.roleStorage)
         );
 
         contracts.globalMarketConfig = new GlobalMarketConfig(
             address(contracts.tradeStorage),
             address(contracts.marketMaker),
-            payable(address(contracts.processor)),
+            payable(address(contracts.positionManager)),
             payable(address(contracts.router)),
             payable(address(contracts.priceFeed)),
             address(contracts.roleStorage)
@@ -121,12 +121,12 @@ contract Deploy is Script {
             adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18, flaggedLong: false, flaggedShort: false})
         });
         contracts.marketMaker.initialise(
-            defaultMarketConfig, address(contracts.priceFeed), address(contracts.processor)
+            defaultMarketConfig, address(contracts.priceFeed), address(contracts.positionManager)
         );
 
         contracts.tradeStorage.initialise(5e30, 0.001e18, 180000 gwei, 2e30, 10);
 
-        contracts.processor.updateGasLimits(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);
+        contracts.positionManager.updateGasEstimates(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);
 
         contracts.referralStorage.setTier(0, 0.05e18);
         contracts.referralStorage.setTier(1, 0.1e18);
@@ -135,7 +135,7 @@ contract Deploy is Script {
         // Set Up Roles
         contracts.roleStorage.grantRole(Roles.CONFIGURATOR, address(contracts.globalMarketConfig));
         contracts.roleStorage.grantRole(Roles.MARKET_MAKER, address(contracts.marketMaker));
-        contracts.roleStorage.grantRole(Roles.PROCESSOR, address(contracts.processor));
+        contracts.roleStorage.grantRole(Roles.POSITION_MANAGER, address(contracts.positionManager));
         contracts.roleStorage.grantRole(Roles.TRADE_STORAGE, address(contracts.tradeStorage));
         contracts.roleStorage.grantRole(Roles.ROUTER, address(contracts.router));
         contracts.roleStorage.grantRole(Roles.DEFAULT_ADMIN_ROLE, contracts.owner);
@@ -144,7 +144,7 @@ contract Deploy is Script {
         contracts.roleStorage.grantRole(Roles.KEEPER, contracts.owner);
         contracts.roleStorage.grantRole(Roles.LIQUIDATOR, contracts.owner);
         contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.tradeStorage));
-        contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.processor));
+        contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.positionManager));
 
         vm.stopBroadcast();
 

@@ -5,7 +5,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {Fee} from "../libraries/Fee.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {IProcessor} from "../router/interfaces/IProcessor.sol";
+import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 
 library Withdrawal {
     uint256 public constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
@@ -29,7 +29,7 @@ library Withdrawal {
 
     struct ExecuteParams {
         IMarket market;
-        IProcessor processor;
+        IPositionManager positionManager;
         IPriceFeed priceFeed;
         Data data;
         bytes32 key;

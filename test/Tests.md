@@ -33,8 +33,6 @@ When index token == collateral token, the prices used should also be the same bu
 - Add invariant checks to Vault actions (deposits / withdrawals)
 - Handle case for Insolvent Liquidations
 - Need to make it clear what variables should never change, and which are mutable.
-If each function has it's own state, need to validate each state change for that
-function.
 - Can use Chainlink Functions to enable anyone to run a keeper/liquidator -> once supported on Base
 - Mutation Tests
 - Invariant Tests

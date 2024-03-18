@@ -10,7 +10,7 @@ import {MarketMaker} from "../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../src/referrals/ReferralStorage.sol";
-import {Processor} from "../../src/router/Processor.sol";
+import {PositionManager} from "../../src/router/PositionManager.sol";
 import {Router} from "../../src/router/Router.sol";
 
 contract TestDeployment is Test {
@@ -20,7 +20,7 @@ contract TestDeployment is Test {
     IPriceFeed priceFeed; // Deployed in Helper Config
     TradeStorage tradeStorage;
     ReferralStorage referralStorage;
-    Processor processor;
+    PositionManager positionManager;
     Router router;
     address owner;
 
@@ -33,7 +33,7 @@ contract TestDeployment is Test {
         priceFeed = contracts.priceFeed;
         tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
-        processor = contracts.processor;
+        positionManager = contracts.positionManager;
         router = contracts.router;
         owner = contracts.owner;
     }
@@ -45,7 +45,7 @@ contract TestDeployment is Test {
         assertNotEq(address(priceFeed), address(0));
         assertNotEq(address(tradeStorage), address(0));
         assertNotEq(address(referralStorage), address(0));
-        assertNotEq(address(processor), address(0));
+        assertNotEq(address(positionManager), address(0));
         assertNotEq(address(router), address(0));
     }
 }

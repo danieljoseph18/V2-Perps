@@ -8,7 +8,7 @@ library Roles {
 
     bytes32 public constant MARKET_MAKER = keccak256("MARKET_MAKER");
 
-    bytes32 public constant PROCESSOR = keccak256("PROCESSOR");
+    bytes32 public constant POSITION_MANAGER = keccak256("POSITION_MANAGER");
 
     bytes32 public constant CONFIGURATOR = keccak256("CONFIGURATOR");
 

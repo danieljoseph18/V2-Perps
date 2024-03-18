@@ -19,7 +19,8 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
 
     bytes32 public longAssetId;
     bytes32 public shortAssetId;
-
+    uint256 public averagePriceUpdateCost;
+    uint256 public additionalCostPerAsset;
     address public sequencerUptimeFeed;
     // Asset ID is the Hash of the ticker symbol -> e.g keccak256(abi.encode("ETH"));
     mapping(bytes32 assetId => Oracle.Asset asset) private assets;
@@ -53,6 +54,12 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
     }
 
     receive() external payable {}
+
+    function setAverageGasParameters(uint256 _averagePriceUpdateCost, uint256 _additionalCostPerAsset) external {
+        if (_averagePriceUpdateCost == 0 || _additionalCostPerAsset == 0) revert PriceFeed_InvalidGasParams();
+        averagePriceUpdateCost = _averagePriceUpdateCost;
+        additionalCostPerAsset = _additionalCostPerAsset;
+    }
 
     function supportAsset(bytes32 _assetId, Oracle.Asset memory _asset) external {
         assets[_assetId] = _asset;

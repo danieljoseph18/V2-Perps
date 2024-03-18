@@ -61,6 +61,7 @@ interface ITradeStorage {
     error TradeStorage_InvalidTakeProfitPercentage();
     error TradeStorage_CollateralDeltaTooLarge();
     error TradeStorage_InvalidTransferIn();
+    error TradeStorage_InvalidCollateralDelta();
 
     function initialise(
         uint256 _liquidationFee,
@@ -98,6 +99,7 @@ interface ITradeStorage {
         uint256 _sizeDelta,
         uint256 _collateralDelta,
         uint256 _collateralProvided,
+        uint256 _limitPrice,
         uint256 _maxSlippage,
         bool _isLong
     ) external returns (uint256 refundAmount, uint256 fee, address market);

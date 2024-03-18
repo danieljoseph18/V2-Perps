@@ -10,7 +10,7 @@ import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-import {Processor} from "../../../src/router/Processor.sol";
+import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
@@ -36,7 +36,7 @@ contract TestLiquidations is Test {
     IPriceFeed priceFeed; // Deployed in Helper Config
     TradeStorage tradeStorage;
     ReferralStorage referralStorage;
-    Processor processor;
+    PositionManager positionManager;
     Router router;
     address OWNER;
     Market market;
@@ -67,7 +67,7 @@ contract TestLiquidations is Test {
         priceFeed = contracts.priceFeed;
         tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
-        processor = contracts.processor;
+        positionManager = contracts.positionManager;
         router = contracts.router;
         OWNER = contracts.owner;
         ethPriceId = deploy.ethPriceId();
@@ -128,7 +128,7 @@ contract TestLiquidations is Test {
             feePercentageToOwner: 0.2e18,
             minTimeToExpiration: 1 minutes,
             priceFeed: address(priceFeed),
-            processor: address(processor),
+            positionManager: address(positionManager),
             poolOwner: OWNER,
             feeDistributor: OWNER,
             name: "WETH/USDC",
@@ -144,13 +144,13 @@ contract TestLiquidations is Test {
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -191,7 +191,7 @@ contract TestLiquidations is Test {
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
 
         vm.prank(OWNER);
-        processor.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
 
         vm.warp(block.timestamp + 10);
         vm.roll(block.number + 10);
@@ -206,6 +206,6 @@ contract TestLiquidations is Test {
         // liquidate it
         bytes32 positionKey = tradeStorage.getOpenPositionKeys(address(market), true)[0];
         vm.prank(OWNER);
-        processor.liquidatePosition{value: 0.0001 ether}(positionKey, ethPriceData);
+        positionManager.liquidatePosition{value: 0.0001 ether}(positionKey, ethPriceData);
     }
 }

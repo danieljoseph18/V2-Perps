@@ -12,9 +12,11 @@ interface IPriceFeed {
     error PriceFeed_InvalidToken(bytes32 assetId);
     error PriceFeed_InvalidPrimaryStrategy();
     error PriceFeed_FailedToClearPrices();
+    error PriceFeed_InvalidGasParams();
 
     function supportAsset(bytes32 _assetId, Oracle.Asset memory _asset) external;
     function unsupportAsset(bytes32 _assetId) external;
+    function setAverageGasParameters(uint256 _averagePriceUpdateCost, uint256 _additionalCostPerAsset) external;
     function updateSequencerUptimeFeed(address _sequencerUptimeFeed) external;
     function setPrimaryPrices(
         bytes32[] calldata _assetIds,
@@ -43,4 +45,6 @@ interface IPriceFeed {
         returns (Oracle.Price memory longPrice, Oracle.Price memory shortPrice);
     function getPrimaryPrice(bytes32 _assetId) external view returns (Oracle.Price memory);
     function updateFee(bytes[] calldata _priceUpdateData) external view returns (uint256);
+    function averagePriceUpdateCost() external view returns (uint256);
+    function additionalCostPerAsset() external view returns (uint256);
 }

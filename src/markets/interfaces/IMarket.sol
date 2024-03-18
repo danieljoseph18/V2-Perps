@@ -195,6 +195,7 @@ interface IMarket is IVault {
     function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external;
 
     function getAssetIds() external view returns (bytes32[] memory);
+    function getAssetsInMarket() external view returns (uint256);
     function getStorage(bytes32 _assetId) external view returns (MarketStorage memory);
     function getConfig(bytes32 _assetId) external view returns (Config memory);
     function getBorrowingConfig(bytes32 _assetId) external view returns (BorrowingConfig memory);

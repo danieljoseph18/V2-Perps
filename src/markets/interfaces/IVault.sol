@@ -3,7 +3,7 @@ pragma solidity 0.8.23;
 
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {IMarket} from "./IMarket.sol";
-import {IProcessor} from "../../router/interfaces/IProcessor.sol";
+import {IPositionManager} from "../../router/interfaces/IPositionManager.sol";
 
 interface IVault {
     struct VaultConfig {
@@ -15,7 +15,7 @@ interface IVault {
         uint64 feePercentageToOwner;
         uint48 minTimeToExpiration;
         address priceFeed;
-        address processor;
+        address positionManager;
         address poolOwner;
         address feeDistributor;
         string name;
@@ -46,7 +46,7 @@ interface IVault {
 
     struct ExecuteDeposit {
         IMarket market;
-        IProcessor processor;
+        IPositionManager positionManager;
         IPriceFeed priceFeed;
         Deposit deposit;
         bytes32 key;
@@ -56,7 +56,7 @@ interface IVault {
 
     struct ExecuteWithdrawal {
         IMarket market;
-        IProcessor processor;
+        IPositionManager positionManager;
         IPriceFeed priceFeed;
         Withdrawal withdrawal;
         bytes32 key;

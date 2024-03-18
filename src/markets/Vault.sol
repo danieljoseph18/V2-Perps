@@ -10,7 +10,7 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
-import {IProcessor} from "../router/interfaces/IProcessor.sol";
+import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
@@ -40,7 +40,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     uint256 private immutable SHORT_BASE_UNIT;
 
     IPriceFeed priceFeed;
-    IProcessor processor;
+    IPositionManager positionManager;
 
     uint48 minTimeToExpiration;
 
@@ -87,7 +87,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         LONG_BASE_UNIT = _config.longBaseUnit;
         SHORT_BASE_UNIT = _config.shortBaseUnit;
         priceFeed = IPriceFeed(_config.priceFeed);
-        processor = IProcessor(_config.processor);
+        positionManager = IPositionManager(_config.positionManager);
         poolOwner = _config.poolOwner;
         feeDistributor = _config.feeDistributor;
         minTimeToExpiration = _config.minTimeToExpiration;
@@ -111,8 +111,8 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         feePercentageToOwner = _feePercentageToOwner;
     }
 
-    function updateProcessor(IProcessor _processor) external onlyConfigurator {
-        processor = _processor;
+    function updatepositionManager(IPositionManager _positionManager) external onlyConfigurator {
+        positionManager = _positionManager;
     }
 
     function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
@@ -147,7 +147,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         _transferOutTokens(_to, _amount, _isLongToken, _shouldUnwrap);
     }
 
-    function accumulateFees(uint256 _amount, bool _isLong) external onlyFeeAccumulator {
+    function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorage {
         _accumulateFees(_amount, _isLong);
         emit FeesAccumulated(_amount, _isLong);
     }
@@ -205,14 +205,14 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         emit DepositRequestCreated(deposit.key, _owner, _tokenIn, _amountIn, deposit.blockNumber);
     }
 
-    function deleteDeposit(bytes32 _key) external onlyProcessor {
+    function deleteDeposit(bytes32 _key) external onlyPositionManager {
         _deleteDeposit(_key);
     }
 
     // @audit - ETH should always be wrapped when sent in
     function executeDeposit(ExecuteDeposit memory _params)
         external
-        onlyProcessor
+        onlyPositionManager
         orderExists(_params.key, true)
         nonReentrant
     {
@@ -242,7 +242,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         _accumulateFees(fee, _params.isLongToken);
         _increasePoolBalance(afterFeeAmount, _params.isLongToken);
         // Transfer tokens into the market
-        processor.transferDepositTokens(address(this), _params.deposit.tokenIn, _params.deposit.amountIn);
+        positionManager.transferDepositTokens(address(this), _params.deposit.tokenIn, _params.deposit.amountIn);
         // Invariant checks
         // @audit - what invariants checks do we need here?
         emit DepositExecuted(
@@ -278,19 +278,21 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         emit WithdrawalRequestCreated(withdrawal.key, _owner, _tokenOut, _marketTokenAmountIn, withdrawal.blockNumber);
     }
 
-    function deleteWithdrawal(bytes32 _key) external onlyProcessor {
+    function deleteWithdrawal(bytes32 _key) external onlyPositionManager {
         _deleteWithdrawal(_key);
     }
 
     // @audit - review
     function executeWithdrawal(ExecuteWithdrawal memory _params)
         external
-        onlyProcessor
+        onlyPositionManager
         orderExists(_params.key, false)
         nonReentrant
     {
         // Transfer in Market Tokens
-        _params.processor.transferDepositTokens(address(this), address(this), _params.withdrawal.marketTokenAmountIn);
+        _params.positionManager.transferDepositTokens(
+            address(this), address(this), _params.withdrawal.marketTokenAmountIn
+        );
         // Burn Market Tokens
         _burn(address(this), _params.withdrawal.marketTokenAmountIn);
         // Delete the WIthdrawal from Storage

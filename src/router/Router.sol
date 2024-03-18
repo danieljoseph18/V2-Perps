@@ -13,7 +13,7 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
-import {IProcessor} from "./interfaces/IProcessor.sol";
+import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
 /// @dev Needs Router role
@@ -28,7 +28,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     IPriceFeed private priceFeed;
     IERC20 private immutable USDC;
     IWETH private immutable WETH;
-    IProcessor private processor;
+    IPositionManager private positionManager;
 
     // Used to request a secondary price update from the Keeper
     event Router_PriceUpdateRequested(bytes32 indexed assetId, uint256 indexed blockNumber);
@@ -52,7 +52,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         address _priceFeed,
         address _usdc,
         address _weth,
-        address _processor,
+        address _positionManager,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         tradeStorage = ITradeStorage(_tradeStorage);
@@ -60,15 +60,15 @@ contract Router is ReentrancyGuard, RoleValidation {
         priceFeed = IPriceFeed(_priceFeed);
         USDC = IERC20(_usdc);
         WETH = IWETH(_weth);
-        processor = IProcessor(_processor);
+        positionManager = IPositionManager(_positionManager);
     }
 
     receive() external payable {}
 
-    function updateConfig(address _tradeStorage, address _marketMaker, address _processor) external onlyAdmin {
+    function updateConfig(address _tradeStorage, address _marketMaker, address _positionManager) external onlyAdmin {
         tradeStorage = ITradeStorage(_tradeStorage);
         marketMaker = IMarketMaker(_marketMaker);
-        processor = IProcessor(_processor);
+        positionManager = IPositionManager(_positionManager);
     }
 
     function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
@@ -83,7 +83,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         uint256 _executionFee,
         bool _shouldWrap
     ) external payable nonReentrant {
-        Gas.validateExecutionFee(processor, _executionFee, msg.value, Gas.Action.DEPOSIT);
+        Gas.validateExecutionFee(priceFeed, positionManager, market, _executionFee, msg.value, Gas.Action.DEPOSIT);
 
         if (msg.sender != _owner) revert Router_InvalidOwner();
         if (_amountIn == 0) revert Router_InvalidAmountIn();
@@ -91,10 +91,10 @@ contract Router is ReentrancyGuard, RoleValidation {
             if (_amountIn > msg.value - _executionFee) revert Router_InvalidAmountIn();
             if (_tokenIn != address(WETH)) revert Router_CantWrapUSDC();
             WETH.deposit{value: _amountIn}();
-            WETH.safeTransfer(address(processor), _amountIn);
+            WETH.safeTransfer(address(positionManager), _amountIn);
         } else {
             if (_tokenIn != address(USDC) && _tokenIn != address(WETH)) revert Router_InvalidTokenIn();
-            IERC20(_tokenIn).safeTransferFrom(msg.sender, address(processor), _amountIn);
+            IERC20(_tokenIn).safeTransferFrom(msg.sender, address(positionManager), _amountIn);
         }
 
         market.createDeposit(_owner, _tokenIn, _amountIn, _executionFee, _shouldWrap);
@@ -112,7 +112,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         uint256 _executionFee,
         bool _shouldUnwrap
     ) external payable nonReentrant {
-        Gas.validateExecutionFee(processor, _executionFee, msg.value, Gas.Action.WITHDRAW);
+        Gas.validateExecutionFee(priceFeed, positionManager, market, _executionFee, msg.value, Gas.Action.WITHDRAW);
         if (msg.sender != _owner) revert Router_InvalidOwner();
         if (_marketTokenAmountIn == 0) revert Router_InvalidAmountIn();
         if (_shouldUnwrap) {
@@ -120,7 +120,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         } else {
             if (_tokenOut != address(USDC) && _tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         }
-        IERC20(address(market)).safeTransferFrom(msg.sender, address(processor), _marketTokenAmountIn);
+        IERC20(address(market)).safeTransferFrom(msg.sender, address(positionManager), _marketTokenAmountIn);
 
         market.createWithdrawal(_owner, _tokenOut, _marketTokenAmountIn, _executionFee, _shouldUnwrap);
         _sendExecutionFee(_executionFee);
@@ -129,8 +129,21 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
     }
 
+    /**
+     * function validateExecutionFee(
+     *     IPriceFeed priceFeed,
+     *     IPositionManager positionManager,
+     *     IMarket market,
+     *     uint256 _executionFee,
+     *     uint256 _msgValue,
+     *     Action _action
+     * )
+     */
     function createPositionRequest(Position.Input memory _trade) external payable nonReentrant {
-        Gas.validateExecutionFee(processor, _trade.executionFee, msg.value, Gas.Action.POSITION);
+        address market = marketMaker.tokenToMarkets(_trade.assetId);
+        Gas.validateExecutionFee(
+            priceFeed, positionManager, IMarket(market), _trade.executionFee, msg.value, Gas.Action.POSITION
+        );
 
         if (_trade.isLong) {
             if (_trade.collateralToken != address(WETH)) revert Router_InvalidTokenIn();
@@ -142,7 +155,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         if (_trade.isIncrease) _handleTokenTransfers(_trade);
 
         // Construct the state for Order Creation
-        (address market, bytes32 positionKey) = Position.validateInputParameters(marketMaker, _trade);
+        bytes32 positionKey = Position.validateInputParameters(_trade, market);
 
         Position.Data memory position = tradeStorage.getPosition(positionKey);
 
@@ -155,7 +168,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Store the Order Request
         tradeStorage.createOrderRequest(request);
 
-        // Send Full Execution Fee to Processor to Distribute
+        // Send Full Execution Fee to positionManager to Distribute
         _sendExecutionFee(_trade.executionFee);
 
         // Request a Price Update for the Asset
@@ -170,16 +183,18 @@ contract Router is ReentrancyGuard, RoleValidation {
             // Collateral Delta should always == msg.value - executionFee
             if (_trade.collateralDelta != msg.value - _trade.executionFee) revert Router_InvalidAmountInForWrap();
             WETH.deposit{value: _trade.collateralDelta}();
-            WETH.safeTransfer(address(processor), _trade.collateralDelta);
+            WETH.safeTransfer(address(positionManager), _trade.collateralDelta);
         } else {
             // Attemps to transfer full collateralDelta -> Should always Revert if Transfer Fails
             // Router needs approval for Collateral Token, of amount >= Collateral Delta
-            IERC20(_trade.collateralToken).safeTransferFrom(msg.sender, address(processor), _trade.collateralDelta);
+            IERC20(_trade.collateralToken).safeTransferFrom(
+                msg.sender, address(positionManager), _trade.collateralDelta
+            );
         }
     }
 
-    // Send Fee to Processor
+    // Send Fee to positionManager
     function _sendExecutionFee(uint256 _executionFee) private {
-        payable(address(processor)).sendValue(_executionFee);
+        payable(address(positionManager)).sendValue(_executionFee);
     }
 }

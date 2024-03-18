@@ -48,6 +48,7 @@ library Position {
     uint256 public constant PRECISION = 1e18;
     uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
+    uint256 private constant MIN_COLLATERAL = 1000;
 
     // Data for an Open Position
     struct Data {
@@ -124,6 +125,18 @@ library Position {
         bool isAdl;
     }
 
+    struct Adjustment {
+        bytes32 orderKey;
+        Conditionals conditionals;
+        uint256 sizeDelta;
+        uint256 collateralDelta;
+        uint256 collateralIn;
+        uint256 limitPrice;
+        uint256 maxSlippage;
+        bool isLongToken;
+        bool reverseWrap;
+    }
+
     // Request Type Classification
     enum RequestType {
         COLLATERAL_INCREASE,
@@ -166,17 +179,15 @@ library Position {
         }
     }
 
-    function validateInputParameters(IMarketMaker marketMaker, Position.Input memory _trade)
+    function validateInputParameters(Position.Input memory _trade, address _market)
         public
         view
-        returns (address market, bytes32 positionKey)
+        returns (bytes32 positionKey)
     {
         checkSlippage(_trade.maxSlippage);
-        if (_trade.collateralDelta == 0) revert Position_InvalidCollateralDelta();
+        if (_trade.collateralDelta < MIN_COLLATERAL) revert Position_InvalidCollateralDelta();
         if (_trade.assetId == bytes32(0)) revert Position_InvalidAssetId();
-
-        market = marketMaker.tokenToMarkets(_trade.assetId);
-        if (market == address(0)) revert Position_MarketDoesNotExist();
+        if (_market == address(0)) revert Position_MarketDoesNotExist();
 
         positionKey = keccak256(abi.encode(_trade.assetId, msg.sender, _trade.isLong));
 
@@ -510,8 +521,10 @@ library Position {
         view
         returns (Request memory)
     {
+        // Get the Market from the Market Maker
+        address inputMarket = marketMaker.tokenToMarkets(_request.input.assetId);
         // Re-Validate the Input
-        (address inputMarket,) = validateInputParameters(marketMaker, _request.input);
+        validateInputParameters(_request.input, inputMarket);
         if (inputMarket != _request.market) revert Position_UnmatchedMarkets();
         if (_request.user == address(0)) revert Position_ZeroAddress();
         if (_request.requestBlock > block.number) revert Position_InvalidRequestBlock();
@@ -520,36 +533,4 @@ library Position {
 
         return _request;
     }
-
-    /**
-     * Need to Validate the Collateral Delta and Size Delta for each Request Type.
-     *
-     * 1. Create Position
-     * - Shouldn't put OI > max OI (validate allocation)
-     * - Collateral must meet minimum requirements for protocol (minCollateralUsd)
-     * - Leverage should be between min and max
-     *
-     * 2. Increase Position
-     * - Shouldn't put OI > max OI (validate allocation)
-     * - Collateral must be enough to pay off outstanding fees for the position
-     * - Leverage should be between min and max
-     *
-     * 3. Decrease Position
-     * - Collateral must be enough to pay off outstanding fees for the position
-     * - Decrease amount must be <= position size / collateral
-     * - Unless a full decrease, collateral shouldn't fall below min requirements
-     *
-     * 4. Collateral Increase
-     * - Size Delta Should be 0
-     * - Collateral should be enough to pay off oustanding fees?
-     * - Leverage should be between min and max after increase
-     *
-     * 5. Collateral Decrease
-     * - Size Delta Should be 0
-     * - Collateral should be enough to pay off oustanding fees
-     * - Collateral Delta should be <= collateral
-     * - Collateral shouldn't fall below min requirements (even after fees paid)
-     * - Leverage should be between min and max after decrease
-     *
-     */
 }

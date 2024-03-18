@@ -26,6 +26,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint256 constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
     uint256 constant MAX_TRADING_FEE = 0.01e18; // 1%
     uint256 constant ADJUSTMENT_FEE = 0.001e18; // 0.1%
+    uint256 private constant MIN_COLLATERAL = 1000;
 
     mapping(bytes32 _key => Position.Request _order) private orders;
     EnumerableSet.Bytes32Set private marketOrderKeys;
@@ -96,52 +97,17 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit OrderRequestCreated(orderKey, _request);
     }
 
-    /**
-     * Function to let users adjust existing limit order requests
-     *
-     * struct Input {
-     *     bytes32 assetId; // Hash of the asset ticker, e.g keccak256(abi.encode("ETH"))
-     *     address collateralToken;
-     *     uint256 collateralDelta;
-     *     uint256 sizeDelta; // USD
-     *     uint256 limitPrice;
-     *     uint256 maxSlippage;
-     *     uint256 executionFee;
-     *     bool isLong;
-     *     bool isLimit;
-     *     bool isIncrease;
-     *     bool reverseWrap;
-     *     Conditionals conditionals;
-     * }
-     *
-     * // Request -> Constructed by Router based on User Input
-     * struct Request {
-     *     Input input;
-     *     address market;
-     *     address user;
-     *     uint256 requestBlock;
-     *     RequestType requestType;
-     * }
-     *
-     * What they can adjust:
-     * 1. Size Delta -> User's can adjust this for both increase and decrease. Leverage must stay valid.
-     * 2. Limit Price -> User's can adjust this for both increase and decrease. Leverage must stay valid.
-     * 3. Max Slippage -> User's can adjust this for both increase and decrease.
-     * 4. Collateral Delta -> Can only change for decrease positions and SL / TP orders. If it's an increase, the user has to provide
-     * the additional collateral on top of the adjusted collateral delta.
-     * 5. Conditionals -> Can only change for SL / TP orders. Can only adjust existing orders. Not set new ones.
-     * E.g if stop loss not set, can't create one using this function. Can only adjust the parameters of the existing.
-     */
     function adjustLimitOrder(
         bytes32 _orderKey,
         address _caller,
         Position.Conditionals calldata _conditionals,
         uint256 _sizeDelta,
-        uint256 _collateralDelta,
+        uint256 _newCollateralDelta,
         uint256 _collateralProvided,
+        uint256 _limitPrice,
         uint256 _maxSlippage,
         bool _isLong // Used to validate the token in
-    ) external onlyProcessor nonReentrant returns (uint256 refundAmount, uint256 fee, address market) {
+    ) external onlyPositionManager nonReentrant returns (uint256 refundAmount, uint256 fee, address market) {
         // Fetch the Position Request
         Position.Request memory order = orders[_orderKey];
         // Check it Exists
@@ -153,29 +119,37 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Check the Token in Matches the Expected
         if (order.input.isLong != _isLong) revert TradeStorage_InvalidTransferIn();
         // No Checks Needed -> Validated in Execution
+
         if (_sizeDelta != 0) {
             order.input.sizeDelta = _sizeDelta;
+        }
+        if (_limitPrice != 0) {
+            order.input.limitPrice = _limitPrice;
         }
 
         market = order.market;
 
-        if (_collateralDelta != 0) {
+        // @audit - accounting missing for fees
+        if (_newCollateralDelta != 0) {
+            if (_newCollateralDelta < MIN_COLLATERAL) revert TradeStorage_InvalidCollateralDelta();
             if (order.input.isIncrease) {
                 // If the new collateral delta is greater than the original, validate the user has provided the additional collateral
-                if (_collateralDelta > order.input.collateralDelta) {
-                    if (_collateralProvided < _collateralDelta - order.input.collateralDelta) {
+                if (_newCollateralDelta > order.input.collateralDelta) {
+                    if (_collateralProvided < _newCollateralDelta - order.input.collateralDelta) {
                         revert TradeStorage_InsufficientCollateralProvided();
                     }
                     // Update the Collateral Delta
-                    order.input.collateralDelta = _collateralDelta;
-                } else if (_collateralDelta < order.input.collateralDelta) {
+                    order.input.collateralDelta = _newCollateralDelta;
+                } else if (_newCollateralDelta < order.input.collateralDelta) {
                     // If new collateral delta is less than the original, handle a refund of the difference
+                    // Amount out = original - new
+                    uint256 deltaOut = order.input.collateralDelta - _newCollateralDelta;
                     // Charge an Adjustment Fee
-                    fee = mulDiv(_collateralDelta, ADJUSTMENT_FEE, PRECISION);
+                    fee = mulDiv(deltaOut, ADJUSTMENT_FEE, PRECISION);
                     // Calculate the Amount to refund
-                    refundAmount = order.input.collateralDelta - _collateralDelta - fee;
+                    refundAmount = deltaOut - fee;
                     // Refund the Difference directly from the user's stored collateral
-                    order.input.collateralDelta = _collateralDelta;
+                    order.input.collateralDelta = _newCollateralDelta;
                     // Accumulate the Fee in the Market's Storage
                     IMarket(order.market).accumulateFees(fee, order.input.isLong);
                 }
@@ -184,11 +158,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
                 // Get the position the order is tied to
                 bytes32 positionKey = Position.generateKey(order);
                 // Validate the new collateral delta is within the range of the position
-                if (openPositions[positionKey].collateralAmount < _collateralDelta) {
+                if (openPositions[positionKey].collateralAmount < _newCollateralDelta) {
                     revert TradeStorage_CollateralDeltaTooLarge();
                 }
                 // Update the Collateral Delta
-                order.input.collateralDelta = _collateralDelta;
+                order.input.collateralDelta = _newCollateralDelta;
             }
         }
 
@@ -219,7 +193,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit OrderAdjusted(_orderKey, order);
     }
 
-    function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyRouterOrProcessor {
+    function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyPositionManager {
         // Create a Storage Pointer to the Order Set
         EnumerableSet.Bytes32Set storage orderKeys = _isLimit ? limitOrderKeys : marketOrderKeys;
         // Check if the Order exists
@@ -233,7 +207,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     function executeCollateralIncrease(Position.Settlement memory _params, Execution.State memory _state)
         external
-        onlyProcessor
+        onlyPositionManager
         nonReentrant
     {
         // Check the Position exists
@@ -276,7 +250,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     function executeCollateralDecrease(Position.Settlement memory _params, Execution.State memory _state)
         external
-        onlyProcessor
+        onlyPositionManager
         nonReentrant
     {
         // Check the Position exists
@@ -297,6 +271,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             positionBefore, positionAfter, amountOut, _state.fee, _state.borrowFee, _state.affiliateRebate
         );
         // Check Market has enough available liquidity for payout
+        // @audit - smell
         if (_state.market.totalAvailableLiquidity(_params.request.input.isLong) < amountOut + _state.affiliateRebate) {
             revert TradeStorage_InsufficientFreeLiquidity();
         }
@@ -321,9 +296,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
         // Transfer Rebate to Referrer
         if (_state.affiliateRebate > 0) {
-            referralStorage.accumulateAffiliateRewards(
-                _state.referrer, _params.request.input.isLong, _state.affiliateRebate
-            );
             _state.market.transferOutTokens(
                 _state.referrer,
                 _state.affiliateRebate,
@@ -335,10 +307,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    // @audit - Set funding entry values
     function createNewPosition(Position.Settlement memory _params, Execution.State memory _state)
         external
-        onlyProcessor
+        onlyPositionManager
         nonReentrant
     {
         // Check the Position doesn't exist
@@ -381,10 +352,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit PositionCreated(positionKey, position);
     }
 
-    // @audit - SETTLE ALL PREVIOUS FUNDING AND START ACCUMULATING AT NEW RATE
     function increaseExistingPosition(Position.Settlement memory _params, Execution.State memory _state)
         external
-        onlyProcessor
+        onlyPositionManager
         nonReentrant
     {
         // Check the Position exists
@@ -429,10 +399,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         openPositions[positionKey] = positionAfter;
     }
 
-    // @audit - SETTLE ALL PREVIOUS FUNDING AND START ACCUMULATING AT NEW RATE OR CLOSE
+    // @audit - What if request type is stop loss or take profit?
     function decreaseExistingPosition(Position.Settlement calldata _params, Execution.State memory _state)
         external
-        onlyProcessor
+        onlyPositionManager
         nonReentrant
     {
         // Check the Position exists
@@ -505,9 +475,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
         // Transfer Rebate to Referrer
         if (_state.affiliateRebate > 0) {
-            referralStorage.accumulateAffiliateRewards(
-                _state.referrer, _params.request.input.isLong, _state.affiliateRebate
-            );
             _state.market.transferOutTokens(
                 _state.referrer,
                 _state.affiliateRebate,
@@ -523,7 +490,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     // @audit - need to calculate funding fees
     function liquidatePosition(Execution.State memory _state, bytes32 _positionKey, address _liquidator)
         external
-        onlyProcessor
+        onlyPositionManager
     {
         /* Update Initial Storage */
         Position.Data memory position = openPositions[_positionKey];
@@ -649,7 +616,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Pay Fees to LPs for Side (Position + Borrow)
         market.accumulateFees(_borrowAmount + _positionFee, _isLong);
         // Pay Affiliate Rebate to Referrer
-        referralStorage.accumulateAffiliateRewards(_referrer, _isLong, _affiliateRebate);
+        if (_affiliateRebate > 0) referralStorage.accumulateAffiliateRewards(_referrer, _isLong, _affiliateRebate);
     }
 
     function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory) {

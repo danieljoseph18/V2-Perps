@@ -116,7 +116,7 @@ library Execution {
     {
         // Subtract fee from collateral delta
         _params.request.input.collateralDelta -= _state.fee;
-        // Subtract the fee paid to the refferer
+        // Subtract the fee paid to the refferer -> @audit - should this be fee discount instead?
         if (_state.affiliateRebate > 0) {
             _params.request.input.collateralDelta -= _state.affiliateRebate;
         }
@@ -173,9 +173,6 @@ library Execution {
         _params.request.input.collateralDelta -= _state.fee;
         // Subtract the fee paid to the refferer
         if (_state.affiliateRebate > 0) {
-            _state.affiliateRebate = Position.convertUsdToCollateral(
-                _state.affiliateRebate, _state.collateralPrice, _state.collateralBaseUnit
-            );
             _params.request.input.collateralDelta -= _state.affiliateRebate;
         }
         // Cache Collateral Delta in USD

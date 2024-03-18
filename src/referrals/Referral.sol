@@ -18,11 +18,16 @@ library Referral {
         returns (uint256 newFee, uint256 affiliateRebate, address codeOwner)
     {
         uint256 discountPercentage = referralStorage.getDiscountForUser(_account);
+
         uint256 totalReduction = mulDiv(_fee, discountPercentage, PRECISION);
+
         // 50% goes to user as extra collateral, 50% goes to code owner
-        uint256 discount = totalReduction / 2;
-        affiliateRebate = totalReduction - discount;
+        uint256 discount = totalReduction / 2; // 0.000100020004000800.15 ether = 0.25 USD
+
+        affiliateRebate = totalReduction - discount; // Ensure full amount is accounted for in case of rounding down
+
         codeOwner = referralStorage.getAffiliateFromUser(_account);
+
         newFee = _fee - discount;
     }
 }

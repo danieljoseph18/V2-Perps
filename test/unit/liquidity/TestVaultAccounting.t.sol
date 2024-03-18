@@ -10,7 +10,7 @@ import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-import {Processor} from "../../../src/router/Processor.sol";
+import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
@@ -36,7 +36,7 @@ contract TestVaultAccounting is Test {
     IPriceFeed priceFeed; // Deployed in Helper Config
     TradeStorage tradeStorage;
     ReferralStorage referralStorage;
-    Processor processor;
+    PositionManager positionManager;
     Router router;
     address OWNER;
     Market market;
@@ -67,7 +67,7 @@ contract TestVaultAccounting is Test {
         priceFeed = contracts.priceFeed;
         tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
-        processor = contracts.processor;
+        positionManager = contracts.positionManager;
         router = contracts.router;
         OWNER = contracts.owner;
         ethPriceId = deploy.ethPriceId();
@@ -128,7 +128,7 @@ contract TestVaultAccounting is Test {
             feePercentageToOwner: 0.2e18,
             minTimeToExpiration: 1 minutes,
             priceFeed: address(priceFeed),
-            processor: address(processor),
+            positionManager: address(positionManager),
             poolOwner: OWNER,
             feeDistributor: OWNER,
             name: "WETH/USDC",
@@ -143,13 +143,13 @@ contract TestVaultAccounting is Test {
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        processor.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        processor.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -204,7 +204,9 @@ contract TestVaultAccounting is Test {
         });
         // Execute the Position
         vm.prank(OWNER);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         // Fetch the Position
         Position.Data memory position = tradeStorage.getPosition(keccak256(abi.encode(ethAssetId, OWNER, true)));
         // Compare the Vault State after to the expected values
@@ -276,7 +278,9 @@ contract TestVaultAccounting is Test {
         });
         // Execute the Position
         vm.prank(OWNER);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         // Fetch the Position
         Position.Data memory position = tradeStorage.getPosition(keccak256(abi.encode(ethAssetId, OWNER, false)));
         // Compare the Vault State after to the expected values
@@ -334,7 +338,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: 1.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Store the vault state before
         VaultState memory stateBefore = VaultState({
@@ -363,7 +369,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Get the Expected Collateral Delta (Collateral Delta - Fees)
         uint256 expectedCollateralDelta = input.collateralDelta
@@ -431,7 +439,9 @@ contract TestVaultAccounting is Test {
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createPositionRequest{value: 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Store the vault state before
         VaultState memory stateBefore = VaultState({
@@ -461,7 +471,9 @@ contract TestVaultAccounting is Test {
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createPositionRequest{value: 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Get the Expected Collateral Delta (Collateral Delta - Fees)
         uint256 expectedCollateralDelta = input.collateralDelta
@@ -523,7 +535,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: 10.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Store the vault state before
         VaultState memory stateBefore = VaultState({
@@ -555,7 +569,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
 
         // Get Vault State After
@@ -613,7 +629,9 @@ contract TestVaultAccounting is Test {
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createPositionRequest{value: 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Store the vault state before
         VaultState memory stateBefore = VaultState({
@@ -646,7 +664,9 @@ contract TestVaultAccounting is Test {
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createPositionRequest{value: 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
 
         // Get Vault State After
@@ -700,7 +720,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: 10.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Store the vault state before
         VaultState memory stateBefore = VaultState({
@@ -731,7 +753,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
 
         // Get Vault State After
@@ -788,7 +812,9 @@ contract TestVaultAccounting is Test {
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createPositionRequest{value: 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Store the vault state before
         VaultState memory stateBefore = VaultState({
@@ -820,7 +846,9 @@ contract TestVaultAccounting is Test {
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createPositionRequest{value: 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
 
         // Get Vault State After
@@ -875,7 +903,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: 100.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Store the vault state before
         VaultState memory stateBefore = VaultState({
@@ -904,7 +934,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
 
         // Get Vault State After
@@ -957,7 +989,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: 100.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
         // Store the vault state before
         VaultState memory stateBefore = VaultState({
@@ -986,7 +1020,9 @@ contract TestVaultAccounting is Test {
         });
         vm.startPrank(OWNER);
         router.createPositionRequest{value: 0.01 ether}(input);
-        processor.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
+        );
         vm.stopPrank();
 
         // Get Vault State After
