@@ -115,8 +115,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.priceFeed = priceFeed;
         params.deposit = market.getDepositRequest(_key);
         params.key = _key;
-        params.isLongToken = params.deposit.tokenIn == market.LONG_TOKEN();
-        params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.isLongToken, true); // Maximize AUM for deposits
+        params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.deposit.isLongToken, true); // Maximize AUM for deposits
         try market.executeDeposit(params) {}
         catch {
             revert PositionManager_ExecuteDepositFailed();
@@ -142,8 +141,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         if (deposit.owner != msg.sender) revert PositionManager_InvalidDepositOwner();
         if (deposit.expirationTimestamp >= block.timestamp) revert PositionManager_DepositNotExpired();
         market.deleteDeposit(_depositKey);
-        IERC20(deposit.tokenIn).safeTransfer(msg.sender, deposit.amountIn);
-        emit DepositRequestCancelled(_depositKey, deposit.owner, deposit.tokenIn, deposit.amountIn);
+        address tokenOut = deposit.isLongToken ? market.LONG_TOKEN() : market.SHORT_TOKEN();
+        IERC20(tokenOut).safeTransfer(msg.sender, deposit.amountIn);
+        emit DepositRequestCancelled(_depositKey, deposit.owner, tokenOut, deposit.amountIn);
     }
 
     // @audit - keeper needs to pass in cumulative net pnl
@@ -170,9 +170,19 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.priceFeed = priceFeed;
         params.withdrawal = market.getWithdrawalRequest(_key);
         params.key = _key;
-        params.isLongToken = params.withdrawal.tokenOut == market.LONG_TOKEN();
-        params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.isLongToken, false); // Minimize AUM for withdrawals
+        params.cumulativePnl =
+            Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.withdrawal.isLongToken, false); // Minimize AUM for withdrawals
         params.shouldUnwrap = params.withdrawal.shouldUnwrap;
+        // Calculate the amount out
+        (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(params.priceFeed);
+        // Calculate amountOut
+        params.amountOut = market.withdrawMarketTokensToTokens(
+            params.longPrices,
+            params.shortPrices,
+            params.withdrawal.marketTokenAmountIn,
+            params.cumulativePnl,
+            params.withdrawal.isLongToken
+        );
         try market.executeWithdrawal(params) {}
         catch {
             revert PositionManager_ExecuteWithdrawalFailed();
@@ -193,15 +203,15 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
     }
 
+    // @audit - feels wrong
     function cancelWithdrawal(IMarket market, bytes32 _withdrawalKey) external nonReentrant {
         IVault.Withdrawal memory withdrawal = market.getWithdrawalRequest(_withdrawalKey);
         if (withdrawal.owner != msg.sender) revert PositionManager_InvalidWithdrawalOwner();
         if (withdrawal.expirationTimestamp >= block.timestamp) revert PositionManager_WithdrawalNotExpired();
         market.deleteWithdrawal(_withdrawalKey);
-        IERC20(market.LONG_TOKEN()).safeTransfer(msg.sender, withdrawal.marketTokenAmountIn);
-        emit WithdrawalRequestCancelled(
-            _withdrawalKey, withdrawal.owner, withdrawal.tokenOut, withdrawal.marketTokenAmountIn
-        );
+        address tokenOut = withdrawal.isLongToken ? market.LONG_TOKEN() : market.SHORT_TOKEN();
+        IERC20(tokenOut).safeTransfer(msg.sender, withdrawal.marketTokenAmountIn);
+        emit WithdrawalRequestCancelled(_withdrawalKey, withdrawal.owner, tokenOut, withdrawal.marketTokenAmountIn);
     }
 
     // Used to transfer intermediary tokens to the market from deposits

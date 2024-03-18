@@ -16,6 +16,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Fee} from "../libraries/Fee.sol";
+import {Invariant} from "../libraries/Invariant.sol";
 
 // Stores all funds for the market(s)
 // Each Vault can be associated with 1+ markets
@@ -76,6 +77,59 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
             if (!withdrawalKeys.contains(_key)) revert Vault_InvalidKey();
         }
         _;
+    }
+
+    modifier isValidDeposit(Deposit calldata _deposit) {
+        // Cache the State Before
+        State memory stateBefore = State({
+            longPoolBalance: longTokenBalance,
+            shortPoolBalance: shortTokenBalance,
+            longAccumulatedFees: longAccumulatedFees,
+            shortAccumulatedFees: shortAccumulatedFees,
+            totalSupply: totalSupply(),
+            wethBalance: IERC20(LONG_TOKEN).balanceOf(address(this)),
+            usdcBalance: IERC20(SHORT_TOKEN).balanceOf(address(this))
+        });
+        _;
+        // Cache the state after
+        State memory stateAfter = State({
+            longPoolBalance: longTokenBalance,
+            shortPoolBalance: shortTokenBalance,
+            longAccumulatedFees: longAccumulatedFees,
+            shortAccumulatedFees: shortAccumulatedFees,
+            totalSupply: totalSupply(),
+            wethBalance: IERC20(LONG_TOKEN).balanceOf(address(this)),
+            usdcBalance: IERC20(SHORT_TOKEN).balanceOf(address(this))
+        });
+
+        // Validate the Vault State Delta
+        Invariant.validateDeposit(stateBefore, stateAfter, _deposit, feeScale);
+    }
+
+    modifier isValidWithdrawal(Withdrawal calldata _withdrawal, uint256 _amountOut) {
+        // Cache the State Before
+        State memory stateBefore = State({
+            longPoolBalance: longTokenBalance,
+            shortPoolBalance: shortTokenBalance,
+            longAccumulatedFees: longAccumulatedFees,
+            shortAccumulatedFees: shortAccumulatedFees,
+            totalSupply: totalSupply(),
+            wethBalance: IERC20(LONG_TOKEN).balanceOf(address(this)),
+            usdcBalance: IERC20(SHORT_TOKEN).balanceOf(address(this))
+        });
+        _;
+        // Cache the state after
+        State memory stateAfter = State({
+            longPoolBalance: longTokenBalance,
+            shortPoolBalance: shortTokenBalance,
+            longAccumulatedFees: longAccumulatedFees,
+            shortAccumulatedFees: shortAccumulatedFees,
+            totalSupply: totalSupply(),
+            wethBalance: IERC20(LONG_TOKEN).balanceOf(address(this)),
+            usdcBalance: IERC20(SHORT_TOKEN).balanceOf(address(this))
+        });
+        // Validate the Vault State Delta
+        Invariant.validateWithdrawal(stateBefore, stateAfter, _withdrawal, _amountOut, feeScale);
     }
 
     constructor(VaultConfig memory _config, address _roleStorage)
@@ -190,13 +244,13 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         onlyRouter
     {
         Deposit memory deposit = Deposit({
-            owner: _owner,
-            tokenIn: _tokenIn,
             amountIn: _amountIn,
             executionFee: _executionFee,
+            owner: _owner,
+            expirationTimestamp: uint48(block.timestamp) + minTimeToExpiration,
+            isLongToken: _tokenIn == LONG_TOKEN,
             shouldWrap: _shouldWrap,
             blockNumber: block.number,
-            expirationTimestamp: uint48(block.timestamp) + minTimeToExpiration,
             key: _generateKey(_owner, _tokenIn, _amountIn)
         });
         bool success = depositKeys.add(deposit.key);
@@ -210,22 +264,22 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - ETH should always be wrapped when sent in
-    function executeDeposit(ExecuteDeposit memory _params)
+    function executeDeposit(ExecuteDeposit calldata _params)
         external
         onlyPositionManager
         orderExists(_params.key, true)
         nonReentrant
+        isValidDeposit(_params.deposit)
     {
         // Delete Deposit Request
         _deleteDeposit(_params.key);
-        // Execute Deposit
 
         (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) =
             Oracle.getMarketTokenPrices(_params.priceFeed);
 
         // Calculate Fee
         Fee.Params memory feeParams = Fee.constructFeeParams(
-            _params.market, _params.deposit.amountIn, _params.isLongToken, longPrices, shortPrices, true
+            _params.market, _params.deposit.amountIn, _params.deposit.isLongToken, longPrices, shortPrices, true
         );
         uint256 fee = Fee.calculateForMarketAction(
             feeParams, longTokenBalance, LONG_BASE_UNIT, shortTokenBalance, SHORT_BASE_UNIT
@@ -235,19 +289,17 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         uint256 afterFeeAmount = _params.deposit.amountIn - fee;
 
         // Calculate Mint amount with the remaining amount
-        uint256 mintAmount = _depositTokensToMarketTokens(
-            longPrices, shortPrices, afterFeeAmount, _params.cumulativePnl, _params.isLongToken
+        uint256 mintAmount = depositTokensToMarketTokens(
+            longPrices, shortPrices, afterFeeAmount, _params.cumulativePnl, _params.deposit.isLongToken
         );
         // update storage
-        _accumulateFees(fee, _params.isLongToken);
-        _increasePoolBalance(afterFeeAmount, _params.isLongToken);
+        _accumulateFees(fee, _params.deposit.isLongToken);
+        _increasePoolBalance(afterFeeAmount, _params.deposit.isLongToken);
         // Transfer tokens into the market
-        positionManager.transferDepositTokens(address(this), _params.deposit.tokenIn, _params.deposit.amountIn);
-        // Invariant checks
-        // @audit - what invariants checks do we need here?
-        emit DepositExecuted(
-            _params.key, _params.deposit.owner, _params.deposit.tokenIn, _params.deposit.amountIn, mintAmount
-        );
+        address tokenIn = _params.deposit.isLongToken ? LONG_TOKEN : SHORT_TOKEN;
+        positionManager.transferDepositTokens(address(this), tokenIn, _params.deposit.amountIn);
+
+        emit DepositExecuted(_params.key, _params.deposit.owner, tokenIn, _params.deposit.amountIn, mintAmount);
         // mint tokens to user
         _mint(_params.deposit.owner, mintAmount);
     }
@@ -260,14 +312,26 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         uint256 _executionFee,
         bool _shouldUnwrap
     ) external payable onlyRouter {
+        /**
+         * struct Withdrawal {
+         *     uint256 marketTokenAmountIn;
+         *     uint256 executionFee;
+         *     address owner;
+         *     uint48 expirationTimestamp;
+         *     bool isLongToken;
+         *     bool shouldUnwrap;
+         *     uint256 blockNumber;
+         *     bytes32 key;
+         * }
+         */
         Withdrawal memory withdrawal = Withdrawal({
-            owner: _owner,
-            tokenOut: _tokenOut,
             marketTokenAmountIn: _marketTokenAmountIn,
             executionFee: _executionFee,
+            owner: _owner,
+            expirationTimestamp: uint48(block.timestamp) + minTimeToExpiration,
+            isLongToken: _tokenOut == LONG_TOKEN,
             shouldUnwrap: _shouldUnwrap,
             blockNumber: block.number,
-            expirationTimestamp: uint48(block.timestamp) + minTimeToExpiration,
             key: _generateKey(_owner, _tokenOut, _marketTokenAmountIn)
         });
 
@@ -283,11 +347,12 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - review
-    function executeWithdrawal(ExecuteWithdrawal memory _params)
+    function executeWithdrawal(ExecuteWithdrawal calldata _params)
         external
         onlyPositionManager
         orderExists(_params.key, false)
         nonReentrant
+        isValidWithdrawal(_params.withdrawal, _params.amountOut)
     {
         // Transfer in Market Tokens
         _params.positionManager.transferDepositTokens(
@@ -297,55 +362,44 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         _burn(address(this), _params.withdrawal.marketTokenAmountIn);
         // Delete the WIthdrawal from Storage
         _deleteWithdrawal(_params.key);
-        // Execute the Withdrawal
-
-        // get price signed to the block number of the request
-        (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) =
-            Oracle.getMarketTokenPrices(_params.priceFeed);
-        // Calculate amountOut
-        uint256 totalTokensOut = _withdrawMarketTokensToTokens(
-            longPrices, shortPrices, _params.withdrawal.marketTokenAmountIn, _params.cumulativePnl, _params.isLongToken
-        );
-
-        if (_params.isLongToken) {
-            if (totalTokensOut > longTokenBalance) revert Vault_InsufficientLongBalance();
-        } else {
-            if (totalTokensOut > shortTokenBalance) revert Vault_InsufficientShortBalance();
-        }
 
         // Calculate Fee
-        Fee.Params memory feeParams =
-            Fee.constructFeeParams(_params.market, totalTokensOut, _params.isLongToken, longPrices, shortPrices, false);
+        Fee.Params memory feeParams = Fee.constructFeeParams(
+            _params.market,
+            _params.amountOut,
+            _params.withdrawal.isLongToken,
+            _params.longPrices,
+            _params.shortPrices,
+            false
+        );
         uint256 fee = Fee.calculateForMarketAction(
             feeParams, longTokenBalance, LONG_BASE_UNIT, shortTokenBalance, SHORT_BASE_UNIT
         );
 
         // calculate amount remaining after fee and price impact
-        uint256 amountOut = totalTokensOut - fee;
+        uint256 amountOut = _params.amountOut - fee;
         // accumulate the fee
-        _accumulateFees(fee, _params.isLongToken);
+        _accumulateFees(fee, _params.withdrawal.isLongToken);
         // validate whether the pool has enough tokens
-        uint256 available =
-            _params.isLongToken ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
+        uint256 available = _params.withdrawal.isLongToken
+            ? longTokenBalance - longTokensReserved
+            : shortTokenBalance - shortTokensReserved;
         if (amountOut > available) revert Vault_InsufficientAvailableTokens();
         // decrease the pool
-        _decreasePoolBalance(totalTokensOut, _params.isLongToken);
+        _decreasePoolBalance(_params.amountOut, _params.withdrawal.isLongToken);
 
         // @audit - add invariant checks
         emit WithdrawalExecuted(
             _params.key,
             _params.withdrawal.owner,
-            _params.withdrawal.tokenOut,
+            _params.withdrawal.isLongToken ? LONG_TOKEN : SHORT_TOKEN,
             _params.withdrawal.marketTokenAmountIn,
             amountOut
         );
         // transfer tokens to user
-        _transferOutTokens(_params.withdrawal.owner, amountOut, _params.isLongToken, _params.shouldUnwrap);
+        _transferOutTokens(_params.withdrawal.owner, amountOut, _params.withdrawal.isLongToken, _params.shouldUnwrap);
     }
 
-    /**
-     * ====================== Internal Functions ======================
-     */
     function calculateUsdValue(
         bool _isLongToken,
         uint256 _longBaseUnit,
@@ -360,32 +414,32 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function _depositTokensToMarketTokens(
+    function depositTokensToMarketTokens(
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
         uint256 _amountIn,
         int256 _cumulativePnl,
         bool _isLongToken
-    ) internal view returns (uint256 marketTokenAmount) {
+    ) public view returns (uint256 marketTokenAmount) {
         // Minimise
         uint256 valueUsd = _isLongToken
             ? mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, LONG_BASE_UNIT)
             : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, SHORT_BASE_UNIT);
         // Maximise
-        uint256 marketTokenPrice = _getMarketTokenPrice(
+        uint256 marketTokenPrice = getMarketTokenPrice(
             _longPrices.price + _longPrices.confidence, _shortPrices.price + _shortPrices.confidence, _cumulativePnl
         );
         return marketTokenPrice == 0 ? valueUsd : mulDiv(valueUsd, SCALING_FACTOR, marketTokenPrice);
     }
 
-    function _withdrawMarketTokensToTokens(
+    function withdrawMarketTokensToTokens(
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
         uint256 _marketTokenAmountIn,
         int256 _cumulativePnl,
         bool _isLongToken
-    ) internal view returns (uint256 tokenAmount) {
-        uint256 marketTokenPrice = _getMarketTokenPrice(
+    ) public view returns (uint256 tokenAmount) {
+        uint256 marketTokenPrice = getMarketTokenPrice(
             _longPrices.price - _longPrices.confidence, _shortPrices.price - _shortPrices.confidence, _cumulativePnl
         );
         uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALING_FACTOR);
@@ -396,13 +450,13 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function _getMarketTokenPrice(uint256 _longTokenPrice, uint256 _shortTokenPrice, int256 _cumulativePnl)
-        internal
+    function getMarketTokenPrice(uint256 _longTokenPrice, uint256 _shortTokenPrice, int256 _cumulativePnl)
+        public
         view
         returns (uint256 lpTokenPrice)
     {
         // market token price = (worth of market pool in USD) / total supply
-        uint256 aum = _getAum(_longTokenPrice, _shortTokenPrice, _cumulativePnl);
+        uint256 aum = getAum(_longTokenPrice, _shortTokenPrice, _cumulativePnl);
         if (aum == 0 || totalSupply() == 0) {
             lpTokenPrice = 0;
         } else {
@@ -411,8 +465,8 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - probably need to account for some fees
-    function _getAum(uint256 _longTokenPrice, uint256 _shortTokenPrice, int256 _cumulativePnl)
-        internal
+    function getAum(uint256 _longTokenPrice, uint256 _shortTokenPrice, int256 _cumulativePnl)
+        public
         view
         returns (uint256 aum)
     {
@@ -426,6 +480,9 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
             : longTokenValue + shortTokenValue - _cumulativePnl.abs();
     }
 
+    /**
+     * ====================== Internal Functions ======================
+     */
     function _deleteWithdrawal(bytes32 _key) internal {
         bool success = withdrawalKeys.remove(_key);
         if (!success) revert Vault_FailedToRemoveWithdrawal();
@@ -462,6 +519,14 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
 
     function _generateKey(address _owner, address _tokenIn, uint256 _tokenAmount) internal view returns (bytes32) {
         return keccak256(abi.encode(_owner, _tokenIn, _tokenAmount, block.number));
+    }
+
+    function getTokenBalances() external view returns (uint256, uint256) {
+        return (longTokenBalance, shortTokenBalance);
+    }
+
+    function getReservedAmounts() external view returns (uint256, uint256) {
+        return (longTokensReserved, shortTokensReserved);
     }
 
     function getDepositRequestAtIndex(uint256 _index) external view returns (Deposit memory) {

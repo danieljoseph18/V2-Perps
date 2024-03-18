@@ -4,6 +4,7 @@ pragma solidity 0.8.23;
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {IMarket} from "./IMarket.sol";
 import {IPositionManager} from "../../router/interfaces/IPositionManager.sol";
+import {Oracle} from "../../oracle/Oracle.sol";
 
 interface IVault {
     struct VaultConfig {
@@ -22,25 +23,36 @@ interface IVault {
         string symbol;
     }
 
+    // For snapshotting state for invariant checks
+    struct State {
+        uint256 longPoolBalance;
+        uint256 shortPoolBalance;
+        uint256 longAccumulatedFees;
+        uint256 shortAccumulatedFees;
+        uint256 totalSupply;
+        uint256 wethBalance;
+        uint256 usdcBalance;
+    }
+
     struct Deposit {
-        address owner;
-        address tokenIn;
         uint256 amountIn;
         uint256 executionFee;
+        address owner;
+        uint48 expirationTimestamp;
+        bool isLongToken;
         bool shouldWrap;
         uint256 blockNumber;
-        uint48 expirationTimestamp;
         bytes32 key;
     }
 
     struct Withdrawal {
-        address owner;
-        address tokenOut;
         uint256 marketTokenAmountIn;
         uint256 executionFee;
+        address owner;
+        uint48 expirationTimestamp;
+        bool isLongToken;
         bool shouldUnwrap;
         uint256 blockNumber;
-        uint48 expirationTimestamp;
         bytes32 key;
     }
 
@@ -51,7 +63,6 @@ interface IVault {
         Deposit deposit;
         bytes32 key;
         int256 cumulativePnl;
-        bool isLongToken;
     }
 
     struct ExecuteWithdrawal {
@@ -59,9 +70,11 @@ interface IVault {
         IPositionManager positionManager;
         IPriceFeed priceFeed;
         Withdrawal withdrawal;
+        Oracle.Price longPrices;
+        Oracle.Price shortPrices;
         bytes32 key;
         int256 cumulativePnl;
-        bool isLongToken;
+        uint256 amountOut;
         bool shouldUnwrap;
     }
     // Admin functions
@@ -101,6 +114,13 @@ interface IVault {
         bool _shouldUnwrap
     ) external payable;
     function deleteWithdrawal(bytes32 _key) external;
+    function withdrawMarketTokensToTokens(
+        Oracle.Price memory _longPrices,
+        Oracle.Price memory _shortPrices,
+        uint256 _marketTokenAmountIn,
+        int256 _cumulativePnl,
+        bool _isLongToken
+    ) external view returns (uint256 tokenAmount);
 
     // Getter
     function collateralAmounts(address _user, bool _isLong) external view returns (uint256);
@@ -120,6 +140,8 @@ interface IVault {
     function getDepositRequestAtIndex(uint256 _index) external view returns (Deposit memory);
     function getWithdrawalRequestAtIndex(uint256 _index) external view returns (Withdrawal memory);
     function getPoolValues() external view returns (uint256, uint256, uint256, uint256, uint256);
+    function getTokenBalances() external view returns (uint256, uint256);
+    function getReservedAmounts() external view returns (uint256, uint256);
 
     event DepositRequestCreated(
         bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 blockNumber
