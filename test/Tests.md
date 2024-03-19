@@ -48,6 +48,7 @@ When index token == collateral token, the prices used should also be the same bu
 ### Common Exploit Tests
 
 - Reentrancy Tests
+- Blacklisted Addresses on USDC
 - Unexecutable Orders
 - Referral Spoofing
 - Accounting Exploits

@@ -15,11 +15,14 @@ library Gas {
     enum Action {
         DEPOSIT,
         WITHDRAW,
-        POSITION
+        POSITION,
+        POSITION_WITH_LIMIT,
+        POSITION_WITH_LIMITS
     }
 
     error Gas_InsufficientMsgValue(uint256 valueSent, uint256 executionFee);
     error Gas_InsufficientExecutionFee(uint256 executionFee, uint256 minExecutionFee);
+    error Gas_InvalidActionType();
 
     // @add -> If stop loss and take profit, add gas price for each that exists
     function validateExecutionFee(
@@ -65,8 +68,12 @@ library Gas {
             return positionManager.averageWithdrawalCost();
         } else if (_action == Action.POSITION) {
             return positionManager.averagePositionCost();
+        } else if (_action == Action.POSITION_WITH_LIMIT) {
+            return positionManager.averagePositionCost() * 2; // Eq 2x Positions
+        } else if (_action == Action.POSITION_WITH_LIMITS) {
+            return positionManager.averagePositionCost() * 3; // Eq 3x Positions
         } else {
-            revert("Invalid action type");
+            revert Gas_InvalidActionType();
         }
     }
 

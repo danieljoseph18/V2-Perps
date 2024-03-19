@@ -122,6 +122,8 @@ library Pricing {
     }
 
     /// @dev Returns fractional PNL in USD
+    // @audit - is this correct? Should be (totalPnl * % of position being realized)
+    // @audit - blend into the get position pnl function
     function getDecreasePositionPnl(
         uint256 _sizeDeltaUsd,
         uint256 _averageEntryPriceUsd,

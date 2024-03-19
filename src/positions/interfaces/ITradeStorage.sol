@@ -84,7 +84,7 @@ interface ITradeStorage {
     function getRequestQueueLengths() external view returns (uint256 marketLen, uint256 limitLen);
 
     // Getters for public variables
-    function liquidationFeeUsd() external view returns (uint256);
+    function liquidationFee() external view returns (uint256);
     function minCollateralUsd() external view returns (uint256);
     function tradingFee() external view returns (uint256);
     function executionFee() external view returns (uint256);

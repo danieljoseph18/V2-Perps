@@ -108,7 +108,7 @@ library Execution {
 
     // @audit - check the position isn't put below min leverage
     // @audit - should we process fees before updating the fee parameters?
-    // No Funding Involvement
+
     function increaseCollateral(Position.Data memory _position, Position.Settlement memory _params, State memory _state)
         external
         view
@@ -137,7 +137,6 @@ library Execution {
         return (_position, _state);
     }
 
-    // No Funding Involvement
     function decreaseCollateral(
         Position.Data memory _position,
         Position.Settlement memory _params,

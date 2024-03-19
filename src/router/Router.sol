@@ -129,22 +129,39 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
     }
 
-    /**
-     * function validateExecutionFee(
-     *     IPriceFeed priceFeed,
-     *     IPositionManager positionManager,
-     *     IMarket market,
-     *     uint256 _executionFee,
-     *     uint256 _msgValue,
-     *     Action _action
-     * )
-     */
     function createPositionRequest(Position.Input memory _trade) external payable nonReentrant {
         address market = marketMaker.tokenToMarkets(_trade.assetId);
-        Gas.validateExecutionFee(
-            priceFeed, positionManager, IMarket(market), _trade.executionFee, msg.value, Gas.Action.POSITION
-        );
 
+        /**
+         * 3 Cases:
+         * 1. Position with no Conditionals -> Gas.Action.POSITION
+         * 2. Position with Stop Loss or Take Profit -> Gas.Action.POSITION_WITH_LIMIT
+         * 3. Position with Stop Loss and Take Profit -> Gas.Action.POSITION_WITH_LIMITS
+         */
+        if (_trade.conditionals.stopLossSet && _trade.conditionals.takeProfitSet) {
+            Gas.validateExecutionFee(
+                priceFeed,
+                positionManager,
+                IMarket(market),
+                _trade.executionFee,
+                msg.value,
+                Gas.Action.POSITION_WITH_LIMITS
+            );
+        } else if (_trade.conditionals.stopLossSet || _trade.conditionals.takeProfitSet) {
+            Gas.validateExecutionFee(
+                priceFeed,
+                positionManager,
+                IMarket(market),
+                _trade.executionFee,
+                msg.value,
+                Gas.Action.POSITION_WITH_LIMIT
+            );
+        } else {
+            Gas.validateExecutionFee(
+                priceFeed, positionManager, IMarket(market), _trade.executionFee, msg.value, Gas.Action.POSITION
+            );
+        }
+        // If Long, Collateral must be (W)ETH, if Short, Colalteral must be USDC
         if (_trade.isLong) {
             if (_trade.collateralToken != address(WETH)) revert Router_InvalidTokenIn();
         } else {

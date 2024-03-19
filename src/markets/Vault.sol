@@ -387,7 +387,6 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         // decrease the pool
         _decreasePoolBalance(_params.amountOut, _params.withdrawal.isLongToken);
 
-        // @audit - add invariant checks
         emit WithdrawalExecuted(
             _params.key,
             _params.withdrawal.owner,
@@ -509,12 +508,15 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
     }
 
     function _transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) internal {
-        if (_shouldUnwrap) {
-            if (_isLongToken != true) revert Vault_InvalidUnwrapToken();
-            IWETH(LONG_TOKEN).withdraw(_amount);
-            payable(_to).sendValue(_amount);
+        if (_isLongToken) {
+            if (_shouldUnwrap) {
+                IWETH(LONG_TOKEN).withdraw(_amount);
+                payable(_to).sendValue(_amount);
+            } else {
+                IERC20(LONG_TOKEN).safeTransfer(_to, _amount);
+            }
         } else {
-            IERC20(_isLongToken ? LONG_TOKEN : SHORT_TOKEN).safeTransfer(_to, _amount);
+            IERC20(SHORT_TOKEN).safeTransfer(_to, _amount);
         }
     }
 

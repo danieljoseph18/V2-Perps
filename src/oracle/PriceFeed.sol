@@ -101,7 +101,6 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
      * E.g SOL = 2 * 64 = 128 - 191
      * E.g TIA = 3 * 64 = 192 - 255
      */
-    // @audit - add gas rebates & payments to keepers
     function setPrimaryPrices(
         bytes32[] calldata _assetIds,
         bytes[] calldata _pythPriceData,

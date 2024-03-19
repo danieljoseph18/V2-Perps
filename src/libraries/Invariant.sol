@@ -342,7 +342,7 @@ library Invariant {
         if (_positionBefore.collateralAmount != _positionAfter.collateralAmount + expectedCollateralDelta) {
             revert Invariant_DecreasePositionCollateral();
         }
-        // @audit - need to account for price impact??
+
         if (_positionBefore.positionSize != _positionAfter.positionSize + _sizeDelta) {
             revert Invariant_DecreasePositionSize();
         }

@@ -23,10 +23,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     IReferralStorage referralStorage;
 
     uint256 constant PRECISION = 1e18;
-    uint256 constant MAX_LIQUIDATION_FEE = 100e18; // 100 USD
+    uint256 constant MAX_LIQUIDATION_FEE = 0.5e18; // 50%
     uint256 constant MAX_TRADING_FEE = 0.01e18; // 1%
     uint256 constant ADJUSTMENT_FEE = 0.001e18; // 0.1%
-    uint256 private constant MIN_COLLATERAL = 1000;
+    uint256 constant MIN_COLLATERAL = 1000;
 
     mapping(bytes32 _key => Position.Request _order) private orders;
     EnumerableSet.Bytes32Set private marketOrderKeys;
@@ -38,7 +38,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     bool private isInitialised;
 
-    uint256 public liquidationFeeUsd;
+    uint256 public liquidationFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
     uint256 public minCollateralUsd;
     uint256 public tradingFee;
     uint256 public executionFee;
@@ -49,14 +49,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     function initialise(
-        uint256 _liquidationFee, // 5e18 = 5 USD
+        uint256 _liquidationFee,
         uint256 _positionFee, // 0.001e18 = 0.1%
         uint256 _executionFee, // 0.001 ether
         uint256 _minCollateralUsd, // 2e18 = 2 USD
         uint256 _minBlockDelay // e.g 1 minutes
     ) external onlyAdmin {
         if (isInitialised) revert TradeStorage_AlreadyInitialised();
-        liquidationFeeUsd = _liquidationFee;
+        liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
         executionFee = _executionFee;
         minCollateralUsd = _minCollateralUsd;
@@ -74,7 +74,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             revert TradeStorage_InvalidLiquidationFee();
         }
         if (!(_positionFee <= MAX_TRADING_FEE && _positionFee != 0)) revert TradeStorage_InvalidTradingFee();
-        liquidationFeeUsd = _liquidationFee;
+        liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
         emit FeesSet(_liquidationFee, _positionFee);
     }
@@ -230,7 +230,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
         // Add Value to Stored Collateral Amount in Market
         _state.market.increaseCollateralAmount(
-            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee, // @audit - correct? I think affiliate rebate needs to be removed.
+            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee,
             _params.request.user,
             _params.request.input.isLong
         );
@@ -262,7 +262,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Perform Execution in Library
         Position.Data memory positionAfter;
         (positionAfter, _state) =
-            Execution.decreaseCollateral(positionBefore, _params, _state, minCollateralUsd, liquidationFeeUsd);
+            Execution.decreaseCollateral(positionBefore, _params, _state, minCollateralUsd, liquidationFee);
         // Transfer Tokens to User
         uint256 amountOut =
             _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee;
@@ -389,7 +389,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         _reserveLiquidity(
             _state.market,
             _params.request.input.sizeDelta,
-            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee, // @audit - verify
+            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee,
             _state.collateralPrice,
             _state.collateralBaseUnit,
             positionBefore.user,
@@ -421,7 +421,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         Position.Data memory positionAfter;
         Execution.DecreaseState memory decreaseState;
         (positionAfter, decreaseState, _state) =
-            Execution.decreasePosition(positionBefore, _params, _state, minCollateralUsd, liquidationFeeUsd);
+            Execution.decreasePosition(positionBefore, _params, _state, minCollateralUsd, liquidationFee);
         // Validate the Position Change
         Invariant.validateDecreasePosition(
             positionBefore,
@@ -487,7 +487,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     /// @dev - Borrowing Fees ignored as all liquidated collateral goes to LPs
-    // @audit - need to calculate funding fees
+    // @audit - use minimal perps to update liquidate function
+    // need to work on liq fee particularly
     function liquidatePosition(Execution.State memory _state, bytes32 _positionKey, address _liquidator)
         external
         onlyPositionManager
@@ -510,7 +511,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // handle case for insolvent liquidations
         // Use Position.liquidate
         (uint256 feesOwedToUser, uint256 feesToAccumulate, uint256 liqFeeInCollateral) =
-            Position.liquidate(position, _state, liquidationFeeUsd);
+            Position.liquidate(position, _state, liquidationFee);
 
         // unreserve all of the position's liquidity
         _unreserveLiquidity(
@@ -535,12 +536,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             true // Unwrap by default
         );
         // Pay the fees owed to the user
-        _state.market.transferOutTokens(
-            position.user,
-            feesOwedToUser,
-            position.isLong,
-            true // Unwrap by default
-        );
+        if (feesOwedToUser > 0) {
+            _state.market.transferOutTokens(
+                position.user,
+                feesOwedToUser,
+                position.isLong,
+                true // Unwrap by default
+            );
+        }
 
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }

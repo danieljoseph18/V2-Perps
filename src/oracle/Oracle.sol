@@ -248,7 +248,6 @@ library Oracle {
 
     // Use chainlink price feed if available
     // @audit - VERY SENSITIVE - needs to ALWAYS return a valid price
-    // @audit - what about limit orders?
     // Use AMM price for reference if no chainlink price
     function getReferencePrice(Asset memory _asset) public view returns (uint256 referencePrice) {
         if (_asset.secondaryStrategy == SecondaryStrategy.CHAINLINK) {

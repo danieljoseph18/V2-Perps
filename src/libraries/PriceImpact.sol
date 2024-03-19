@@ -41,9 +41,6 @@ library PriceImpact {
     /**
      * PriceImpact = sizeDeltaUsd * skewScalar((skewBefore/totalOiBefore) - (skewAfter/totalOiAfter)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
      */
-    // @audit - should OI be OI before size delta or after??
-    // @audit - should be before delta for skewBefore and
-    // after delta for skew after as skewAfter can be > totalOiBefore - solves 0 case
     function execute(
         IMarket market,
         IPriceFeed priceFeed,
@@ -53,7 +50,7 @@ library PriceImpact {
         ImpactState memory state;
 
         state.impact = market.getImpactConfig(_request.input.assetId);
-        // @audit - these are entry OI values -> do we need current values?
+
         state.longOi = MarketUtils.getOpenInterestUsd(market, _request.input.assetId, true);
         state.shortOi = MarketUtils.getOpenInterestUsd(market, _request.input.assetId, false);
 

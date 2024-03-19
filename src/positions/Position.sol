@@ -367,7 +367,7 @@ library Position {
 
     // @audit - check math -> should never revert unless position is not liquidatable
     // should handle insolvent liqs etc.
-    function liquidate(Position.Data memory _position, Execution.State memory _state, uint256 liquidationFeeUsd)
+    function liquidate(Position.Data memory _position, Execution.State memory _state, uint256 liquidationFee)
         external
         view
         returns (uint256 feesOwedToUser, uint256 feesToAccumulate, uint256 liqFeeInCollateral)
@@ -382,7 +382,9 @@ library Position {
         // Get the Funding Fees Owed in USD
         int256 fundingFeesUsd = Funding.getTotalFeesOwedUsd(_position, _state.indexPrice);
         // Calculate the total losses
-        int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd + liquidationFeeUsd.toInt256();
+        // @audit - dont think we should account for liq fee here -> sets a min cap on collateral
+        // e.g all positions < $5 are insta liquidatable
+        int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd;
         // Check if the position is liquidatable
         if (losses < 0 && collateralValueUsd <= losses.abs()) {
             uint256 feesOwedToUserUsd = fundingFeesUsd > 0 ? fundingFeesUsd.abs() : 0;
@@ -392,23 +394,13 @@ library Position {
             // Convert borrowing fees owed to collateral
             feesToAccumulate =
                 convertUsdToCollateral(borrowingFeesUsd, _state.collateralPrice, _state.collateralBaseUnit);
-            liqFeeInCollateral =
-                convertUsdToCollateral(liquidationFeeUsd, _state.collateralPrice, _state.collateralBaseUnit);
+            // Calculate the liquidation fee as a percentage of the collateral
+            liqFeeInCollateral = mulDiv(_position.collateralAmount, liquidationFee, PRECISION);
         } else {
             revert Position_NotLiquidatable();
         }
     }
 
-    // Calculates the liquidation fee in Collateral Tokens
-    function calculateLiquidationFee(uint256 _collateralPrice, uint256 _collateralBaseUnit, uint256 _liquidationFeeUsd)
-        external
-        pure
-        returns (uint256 liquidationFee)
-    {
-        liquidationFee = mulDiv(_liquidationFeeUsd, _collateralBaseUnit, _collateralPrice);
-    }
-
-    // @audit - wrong order key
     function createAdlOrder(Data memory _position, uint256 _sizeDelta)
         external
         view
@@ -439,17 +431,6 @@ library Position {
         });
         settlement =
             Settlement({request: request, orderKey: generateOrderKey(request), feeReceiver: address(0), isAdl: true});
-    }
-
-    function convertIndexAmountToCollateral(
-        uint256 _indexAmount,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit
-    ) external pure returns (uint256 collateralAmount) {
-        uint256 indexUsd = mulDiv(_indexAmount, _indexPrice, _indexBaseUnit);
-        collateralAmount = mulDiv(indexUsd, _collateralBaseUnit, _collateralPrice);
     }
 
     function convertUsdToCollateral(uint256 _usdAmount, uint256 _collateralPrice, uint256 _collateralBaseUnit)
