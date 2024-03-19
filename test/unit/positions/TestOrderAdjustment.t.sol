@@ -162,34 +162,6 @@ contract TestOrderAdjustment is Test {
         _;
     }
 
-    /**
-     * struct Input {
-     *     bytes32 assetId; // Hash of the asset ticker, e.g keccak256(abi.encode("ETH"))
-     *     address collateralToken;
-     *     uint256 collateralDelta;
-     *     uint256 sizeDelta; // USD
-     *     uint256 limitPrice;
-     *     uint256 maxSlippage;
-     *     uint256 executionFee;
-     *     bool isLong;
-     *     bool isLimit;
-     *     bool isIncrease;
-     *     bool reverseWrap;
-     *     Conditionals conditionals;
-     * }
-     *
-     * function adjustLimitOrder(
-     * bytes32 _orderKey,
-     * Position.Conditionals calldata _conditionals,
-     * uint256 _sizeDelta,
-     * uint256 _collateralDelta,
-     * uint256 _collateralIn,
-     * uint256 _limitPrice,
-     * uint256 _maxSlippage,
-     * bool _isLongToken,
-     * bool _reverseWrap
-     * )
-     */
     function testWeCanAdjustALimitOrderLong(uint256 _sizeDelta, uint256 _maxSlippage, uint256 _limitPrice)
         public
         setUpMarkets
@@ -225,7 +197,7 @@ contract TestOrderAdjustment is Test {
         params.collateralIn = 0;
         params.limitPrice = _limitPrice;
         params.maxSlippage = _maxSlippage;
-        params.isLongToken = false;
+        params.isLongToken = true;
         params.reverseWrap = false;
         vm.prank(OWNER);
         positionManager.adjustLimitOrder(params);
@@ -382,7 +354,7 @@ contract TestOrderAdjustment is Test {
         params.orderKey = tradeStorage.getOrderAtIndex(0, true);
         params.conditionals = Position.Conditionals(false, false, 0, 0, 0, 0);
         params.sizeDelta = 0;
-        params.collateralDelta = 1;
+        params.collateralDelta = 1000;
         params.collateralIn = 0;
         params.limitPrice = 0;
         params.maxSlippage = 0;

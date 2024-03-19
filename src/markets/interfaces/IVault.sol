@@ -194,4 +194,5 @@ interface IVault {
     error Vault_InsufficientLongBalance();
     error Vault_InsufficientShortBalance();
     error Vault_InsufficientCollateral();
+    error Vault_InvalidAmountOut(uint256 actualOut, uint256 expectedOut);
 }

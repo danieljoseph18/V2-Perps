@@ -114,7 +114,12 @@ library Invariant {
             if (_stateAfter.longPoolBalance != _stateBefore.longPoolBalance - _amountOut) {
                 revert Invariant_DepositAccounting();
             }
-            if (_stateAfter.wethBalance != _stateBefore.wethBalance - _amountOut) {
+            // WETH Balance should decrease by (AmountOut - Fee)
+            // WETH balance after is between (Before - AmountOut + MinFee) and (Before - AmountOut + MaxFee)
+            if (
+                _stateAfter.wethBalance < _stateBefore.wethBalance - _amountOut + minFee
+                    || _stateAfter.wethBalance > _stateBefore.wethBalance - _amountOut + maxFee
+            ) {
                 revert Invariant_DepositAmountIn();
             }
         } else {
@@ -127,7 +132,12 @@ library Invariant {
             if (_stateAfter.shortPoolBalance != _stateBefore.shortPoolBalance - _amountOut) {
                 revert Invariant_DepositAccounting();
             }
-            if (_stateAfter.usdcBalance != _stateBefore.usdcBalance - _amountOut) {
+            // USDC Balance should decrease by (AmountOut - Fee)
+            // USDC balance after is between (Before - AmountOut + MinFee) and (Before - AmountOut + MaxFee)
+            if (
+                _stateAfter.usdcBalance < _stateBefore.usdcBalance - _amountOut + minFee
+                    || _stateAfter.usdcBalance > _stateBefore.usdcBalance - _amountOut + maxFee
+            ) {
                 revert Invariant_DepositAmountIn();
             }
         }

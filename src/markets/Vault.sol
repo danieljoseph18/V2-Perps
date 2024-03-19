@@ -312,18 +312,6 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         uint256 _executionFee,
         bool _shouldUnwrap
     ) external payable onlyRouter {
-        /**
-         * struct Withdrawal {
-         *     uint256 marketTokenAmountIn;
-         *     uint256 executionFee;
-         *     address owner;
-         *     uint48 expirationTimestamp;
-         *     bool isLongToken;
-         *     bool shouldUnwrap;
-         *     uint256 blockNumber;
-         *     bytes32 key;
-         * }
-         */
         Withdrawal memory withdrawal = Withdrawal({
             marketTokenAmountIn: _marketTokenAmountIn,
             executionFee: _executionFee,
@@ -358,10 +346,18 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         _params.positionManager.transferDepositTokens(
             address(this), address(this), _params.withdrawal.marketTokenAmountIn
         );
-        // Burn Market Tokens
-        _burn(address(this), _params.withdrawal.marketTokenAmountIn);
         // Delete the WIthdrawal from Storage
         _deleteWithdrawal(_params.key);
+
+        // Validate the Amount Out vs Expected Amount out
+        uint256 expectedOut = withdrawMarketTokensToTokens(
+            _params.longPrices,
+            _params.shortPrices,
+            _params.withdrawal.marketTokenAmountIn,
+            _params.cumulativePnl,
+            _params.withdrawal.isLongToken
+        );
+        if (_params.amountOut != expectedOut) revert Vault_InvalidAmountOut(_params.amountOut, expectedOut);
 
         // Calculate Fee
         Fee.Params memory feeParams = Fee.constructFeeParams(
@@ -376,15 +372,18 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
             feeParams, longTokenBalance, LONG_BASE_UNIT, shortTokenBalance, SHORT_BASE_UNIT
         );
 
+        // Calculate amount out / aum before burning
+        _burn(address(this), _params.withdrawal.marketTokenAmountIn);
+
         // calculate amount remaining after fee and price impact
-        uint256 amountOut = _params.amountOut - fee;
+        uint256 transferAmountOut = _params.amountOut - fee;
         // accumulate the fee
         _accumulateFees(fee, _params.withdrawal.isLongToken);
         // validate whether the pool has enough tokens
         uint256 available = _params.withdrawal.isLongToken
             ? longTokenBalance - longTokensReserved
             : shortTokenBalance - shortTokensReserved;
-        if (amountOut > available) revert Vault_InsufficientAvailableTokens();
+        if (transferAmountOut > available) revert Vault_InsufficientAvailableTokens();
         // decrease the pool
         _decreasePoolBalance(_params.amountOut, _params.withdrawal.isLongToken);
 
@@ -394,10 +393,12 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
             _params.withdrawal.owner,
             _params.withdrawal.isLongToken ? LONG_TOKEN : SHORT_TOKEN,
             _params.withdrawal.marketTokenAmountIn,
-            amountOut
+            transferAmountOut
         );
         // transfer tokens to user
-        _transferOutTokens(_params.withdrawal.owner, amountOut, _params.withdrawal.isLongToken, _params.shouldUnwrap);
+        _transferOutTokens(
+            _params.withdrawal.owner, transferAmountOut, _params.withdrawal.isLongToken, _params.shouldUnwrap
+        );
     }
 
     function calculateUsdValue(

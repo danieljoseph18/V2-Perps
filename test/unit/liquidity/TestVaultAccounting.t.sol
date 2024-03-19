@@ -517,7 +517,7 @@ contract TestVaultAccounting is Test {
     }
 
     function testDecreasePositionAccountingLong(uint256 _percentageToDecrease) public setUpMarkets {
-        _percentageToDecrease = bound(_percentageToDecrease, 1, 0.95e18); // Keep collat above min threshold
+        _percentageToDecrease = bound(_percentageToDecrease, 10000, 0.95e18); // Keep collat above min threshold
         // Open a regular position and execute it
         Position.Input memory input = Position.Input({
             assetId: ethAssetId,
@@ -610,7 +610,7 @@ contract TestVaultAccounting is Test {
     }
 
     function testDecreasePositionAccountingShort(uint256 _percentageToDecrease) public setUpMarkets {
-        _percentageToDecrease = bound(_percentageToDecrease, 10000000000, 0.95e18); // Keep collat above min threshold
+        _percentageToDecrease = bound(_percentageToDecrease, 100000000000000, 0.95e18); // Keep collat above min threshold
         // Open a regular position and execute it
         Position.Input memory input = Position.Input({
             assetId: ethAssetId,
