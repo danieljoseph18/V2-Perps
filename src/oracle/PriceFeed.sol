@@ -164,7 +164,8 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
         bytes32[] memory keys = assetsWithPrices.values();
         uint256 len = keys.length;
         for (uint256 i = 0; i < len;) {
-            assetsWithPrices.remove(keys[i]);
+            bool success = assetsWithPrices.remove(keys[i]);
+            if (!success) revert PriceFeed_FailedToRemovePrice();
             unchecked {
                 ++i;
             }

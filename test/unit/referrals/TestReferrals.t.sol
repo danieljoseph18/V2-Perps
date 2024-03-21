@@ -4,11 +4,10 @@ pragma solidity 0.8.23;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
@@ -31,10 +30,10 @@ contract TestReferrals is Test {
     using SignedMath for int256;
 
     RoleStorage roleStorage;
-    GlobalMarketConfig globalMarketConfig;
+
     MarketMaker marketMaker;
     IPriceFeed priceFeed; // Deployed in Helper Config
-    TradeStorage tradeStorage;
+    ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
     Router router;
@@ -62,10 +61,9 @@ contract TestReferrals is Test {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
-        globalMarketConfig = contracts.globalMarketConfig;
+
         marketMaker = contracts.marketMaker;
         priceFeed = contracts.priceFeed;
-        tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
@@ -138,6 +136,7 @@ contract TestReferrals is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
+        tradeStorage = market.tradeStorage();
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
@@ -231,7 +230,6 @@ contract TestReferrals is Test {
      * audit - What happened to the 4 wei
      *     - Why is the user not receiving their funds
      */
-    // @fail
     function testReceivingReferralRewardsFromAnAffiliateAccount() public setUpMarkets {
         // register an affiliate code
         bytes32 code = keccak256(abi.encode("CODE"));
@@ -267,7 +265,7 @@ contract TestReferrals is Test {
         // execute the position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
         // check and claim the affiliate rewards from the owner
         assertGt(referralStorage.getClaimableAffiliateRewards(OWNER, true), 0, "Owner should have claimable rewards");
         uint256 balBeforeClaim = WETH(weth).balanceOf(OWNER);
@@ -313,7 +311,7 @@ contract TestReferrals is Test {
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         // check and claim the affiliate rewards from the owner
         vm.prank(OWNER);
-        positionManager.cancelOrderRequest(orderKey, false);
+        positionManager.cancelOrderRequest(market, orderKey, false);
         assertEq(referralStorage.getClaimableAffiliateRewards(OWNER, true), 0);
     }
 }

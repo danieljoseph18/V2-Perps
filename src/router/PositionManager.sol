@@ -26,6 +26,7 @@ import {Roles} from "../access/Roles.sol";
 import {Invariant} from "../libraries/Invariant.sol";
 import {Pricing} from "../libraries/Pricing.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
+import {Borrowing} from "../libraries/Borrowing.sol";
 
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
@@ -40,7 +41,10 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     IWETH immutable WETH;
     IERC20 immutable USDC;
 
-    ITradeStorage public tradeStorage;
+    uint256 private LONG_BASE_UNIT = 1e18;
+    uint256 private SHORT_BASE_UNIT = 1e6;
+    uint256 constant GAS_BUFFER = 10000;
+
     IMarketMaker public marketMaker;
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
@@ -54,7 +58,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
     constructor(
         address _marketMaker,
-        address _tradeStorage,
         address _referralStorage,
         address _priceFeed,
         address _weth,
@@ -62,7 +65,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         marketMaker = IMarketMaker(_marketMaker);
-        tradeStorage = ITradeStorage(_tradeStorage);
         referralStorage = IReferralStorage(_referralStorage);
         priceFeed = IPriceFeed(_priceFeed);
         WETH = IWETH(_weth);
@@ -87,14 +89,10 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         emit GasLimitsUpdated(_deposit, _withdrawal, _position);
     }
 
-    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyAdmin {
         priceFeed = _priceFeed;
     }
 
-    // @audit - keeper needs to pass in cumulative net pnl
-    // Must make sure this value is valid. Get by looping through all current active markets
-    // and summing their PNLs
-    // @audit - what happens if the prices of many markets are stale?
     function executeDeposit(IMarket market, bytes32 _key, Oracle.PriceUpdateData calldata _priceUpdateData)
         external
         payable
@@ -115,6 +113,16 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.priceFeed = priceFeed;
         params.deposit = market.getDepositRequest(_key);
         params.key = _key;
+        // Get the signed prices
+        (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(priceFeed);
+        // Calculate cumulative borrow fees
+        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(
+            market, params.longPrices.price - params.longPrices.confidence, LONG_BASE_UNIT, true
+        );
+        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(
+            market, params.shortPrices.price - params.shortPrices.confidence, SHORT_BASE_UNIT, false
+        );
+        // Calculate Cumulative PNL
         params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.deposit.isLongToken, true); // Maximize AUM for deposits
         try market.executeDeposit(params) {}
         catch {
@@ -124,16 +132,15 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Clear all previously signed prices
         _clearOraclePrices();
 
+        // Gas Used + Fee Buffer
+        uint256 feeForExecutor = ((initialGas - gasleft()) * tx.gasprice) + ((GAS_BUFFER + 21000) * tx.gasprice);
+        uint256 feeToRefund;
+        if (feeForExecutor > params.deposit.executionFee) feeToRefund = 0;
+        else feeToRefund = params.deposit.executionFee - feeForExecutor;
+
         // Send Execution Fee + Rebate
-        uint256 feeForExecutor = (initialGas - gasleft()) * tx.gasprice;
-        // @audit - what about gas used here & in sending? How do we account for it?
-        uint256 feeToRefund = params.deposit.executionFee - feeForExecutor;
-
         payable(params.deposit.owner).sendValue(feeForExecutor);
-
-        if (feeToRefund > 0) {
-            payable(msg.sender).sendValue(feeToRefund);
-        }
+        if (feeToRefund > 0) payable(msg.sender).sendValue(feeToRefund);
     }
 
     function cancelDeposit(IMarket market, bytes32 _depositKey) external nonReentrant {
@@ -146,10 +153,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         emit DepositRequestCancelled(_depositKey, deposit.owner, tokenOut, deposit.amountIn);
     }
 
-    // @audit - keeper needs to pass in cumulative net pnl
-    // Must make sure this value is valid. Get by looping through all current active markets
-    // and summing their PNLs
-    // @audit - what happens if the prices of many markets are stale?
     function executeWithdrawal(IMarket market, bytes32 _key, Oracle.PriceUpdateData calldata _priceUpdateData)
         external
         payable
@@ -175,11 +178,20 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.shouldUnwrap = params.withdrawal.shouldUnwrap;
         // Calculate the amount out
         (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(params.priceFeed);
+        // Calculate cumulative borrow fees
+        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(
+            market, params.longPrices.price - params.longPrices.confidence, LONG_BASE_UNIT, true
+        );
+        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(
+            market, params.shortPrices.price - params.shortPrices.confidence, SHORT_BASE_UNIT, false
+        );
         // Calculate amountOut
         params.amountOut = market.withdrawMarketTokensToTokens(
             params.longPrices,
             params.shortPrices,
             params.withdrawal.marketTokenAmountIn,
+            params.longBorrowFeesUsd,
+            params.shortBorrowFeesUsd,
             params.cumulativePnl,
             params.withdrawal.isLongToken
         );
@@ -215,32 +227,38 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     }
 
     // Used to transfer intermediary tokens to the market from deposits
+    // @audit - permissions
     function transferDepositTokens(address _market, address _token, uint256 _amount) external onlyMarket {
         IERC20(_token).safeTransfer(_market, _amount);
     }
 
     /// @dev Only Keeper
     // @audit - don't think we're handling the stop loss / take profit case correctly
-    function executePosition(bytes32 _orderKey, address _feeReceiver, Oracle.PriceUpdateData calldata _priceUpdateData)
-        external
-        payable
-        nonReentrant
-        onlyKeeper
-    {
+    function executePosition(
+        IMarket market,
+        bytes32 _orderKey,
+        address _feeReceiver,
+        Oracle.PriceUpdateData calldata _priceUpdateData
+    ) external payable nonReentrant onlyKeeper {
         // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
 
         // Sign the Latest Oracle Prices
         _signOraclePrices(_priceUpdateData);
 
-        (Execution.State memory state, Position.Request memory request) =
-            Execution.constructParams(tradeStorage, marketMaker, priceFeed, _orderKey, _feeReceiver);
+        (Execution.State memory state, Position.Request memory request, ITradeStorage tradeStorage) =
+            Execution.constructParams(market, marketMaker, priceFeed, _orderKey, _feeReceiver);
         // Fetch the State of the Market Before the Position
-        IMarket.MarketStorage memory marketBefore = state.market.getStorage(request.input.assetId);
+        IMarket.MarketStorage memory marketBefore = market.getStorage(request.input.assetId);
 
-        _updateImpactPool(state.market, request.input.assetId, state.priceImpactUsd);
+        _updateImpactPool(market, request.input.assetId, state.priceImpactUsd);
         _updateMarketState(
-            state, request.input.assetId, request.input.sizeDelta, request.input.isLong, request.input.isIncrease
+            market,
+            state,
+            request.input.assetId,
+            request.input.sizeDelta,
+            request.input.isLong,
+            request.input.isIncrease
         );
 
         // Calculate Fee
@@ -276,15 +294,14 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
 
         // Fetch the State of the Market After the Position
-        IMarket.MarketStorage memory marketAfter = state.market.getStorage(request.input.assetId);
+        IMarket.MarketStorage memory marketAfter = market.getStorage(request.input.assetId);
 
         // Invariant Check
         Invariant.validateMarketDeltaPosition(marketBefore, marketAfter, request);
 
-        // @audit - is affiliate rebate taken care of for decrease / other positions?
         if (request.input.isIncrease) {
             _transferTokensForIncrease(
-                state.market, request.input.collateralToken, request.input.collateralDelta, state.affiliateRebate
+                market, request.input.collateralToken, request.input.collateralDelta, state.affiliateRebate
             );
         }
 
@@ -305,11 +322,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
     }
 
-    // need to store who flagged and liquidated
-    // let the liquidator claim liquidation rewards from the tradestorage contract
-    // Need to update prices for Index Token, Long Token, Short Token
-    // @audit - after liquidation - health score should improve of the pool
-    function liquidatePosition(bytes32 _positionKey, Oracle.PriceUpdateData calldata _priceUpdateData)
+    function liquidatePosition(IMarket market, bytes32 _positionKey, Oracle.PriceUpdateData calldata _priceUpdateData)
         external
         payable
         onlyLiquidationKeeper
@@ -318,9 +331,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         _signOraclePrices(_priceUpdateData);
         // Construct ExecutionState
         Execution.State memory state;
+        ITradeStorage tradeStorage = market.tradeStorage();
         // fetch position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
-        state.market = position.market;
 
         if (position.isLong) {
             // Min Price -> rounds in favour of the protocol
@@ -342,7 +355,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
             position.isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
 
         // Update the state of the market
-        _updateMarketState(state, position.assetId, position.positionSize, position.isLong, false);
+        _updateMarketState(market, state, position.assetId, position.positionSize, position.isLong, false);
         // liquidate the position
         try tradeStorage.liquidatePosition(state, _positionKey, msg.sender) {}
         catch {
@@ -353,8 +366,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         _clearOraclePrices();
     }
 
-    // @audit - is this vulnerable?
-    function cancelOrderRequest(bytes32 _key, bool _isLimit) external payable nonReentrant {
+    function cancelOrderRequest(IMarket market, bytes32 _key, bool _isLimit) external payable nonReentrant {
+        ITradeStorage tradeStorage = market.tradeStorage();
         // Fetch the Request
         Position.Request memory request = tradeStorage.getOrder(_key);
         // Check it exists
@@ -375,57 +388,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Refund the Execution Fee
         uint256 refundAmount = Gas.getRefundForCancellation(request.input.executionFee);
         payable(msg.sender).sendValue(refundAmount);
-    }
-
-    // @audit - any accounting changes needed?
-    function adjustLimitOrder(Position.Adjustment calldata _params) external payable nonReentrant {
-        // Transfer Tokens In If Necessary
-        if (_params.collateralIn > 0) {
-            if (_params.isLongToken) {
-                if (_params.reverseWrap) {
-                    if (msg.value != _params.collateralIn) revert PositionManager_InvalidTransferIn();
-                } else {
-                    WETH.safeTransferFrom(msg.sender, address(this), _params.collateralIn);
-                }
-            } else {
-                USDC.safeTransferFrom(msg.sender, address(this), _params.collateralIn);
-            }
-        }
-
-        (uint256 refundAmount, uint256 fee, address market) = tradeStorage.adjustLimitOrder(
-            _params.orderKey,
-            msg.sender,
-            _params.conditionals,
-            _params.sizeDelta,
-            _params.collateralDelta,
-            _params.collateralIn,
-            _params.limitPrice,
-            _params.maxSlippage,
-            _params.isLongToken
-        );
-        // Need to transfer out funds and adjust the necesssary state if any refund is required
-        // Send the Refund Fee to the Market
-        if (refundAmount > 0) {
-            if (_params.isLongToken) {
-                if (_params.reverseWrap) {
-                    // Send the Refund to the User
-                    WETH.withdraw(refundAmount);
-                    payable(msg.sender).sendValue(refundAmount);
-                    // Send the Refund Fee to the Market
-                    WETH.safeTransfer(market, fee);
-                } else {
-                    // Send the Refund to the User
-                    WETH.safeTransfer(msg.sender, refundAmount);
-                    // Send the Refund Fee to the Market
-                    WETH.safeTransfer(market, fee);
-                }
-            } else {
-                // Send the Refund to the User
-                USDC.safeTransfer(msg.sender, refundAmount);
-                // Send the Refund Fee to the Market
-                USDC.safeTransfer(market, fee);
-            }
-        }
     }
 
     function flagForAdl(
@@ -451,10 +413,10 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
 
         state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _assetId);
-        state.market = market;
+        market = market;
 
         // fetch pnl to pool ratio
-        int256 pnlFactor = _getPnlFactor(state, _assetId, _isLong);
+        int256 pnlFactor = _getPnlFactor(market, state, _assetId, _isLong);
         // fetch max pnl to pool ratio
         uint256 maxPnlFactor = market.getMaxPnlFactor(_assetId);
 
@@ -486,11 +448,13 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         } else {
             if (!adl.flaggedShort) revert PositionManager_ShortSideNotFlagged();
         }
+        // Get the storage
+        ITradeStorage tradeStorage = market.tradeStorage();
         // Check the position in question is active
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         if (position.positionSize == 0) revert PositionManager_PositionNotActive();
         // state the market
-        state.market = market;
+        market = market;
         // Get current pricing and token data
         state = Execution.cacheTokenPrices(priceFeed, state, position.assetId, position.isLong, false);
 
@@ -498,13 +462,13 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         state.impactedPrice = state.indexPrice;
         state.priceImpactUsd = 0;
         // Get starting PNL Factor
-        int256 startingPnlFactor = _getPnlFactor(state, _assetId, _isLong);
+        int256 startingPnlFactor = _getPnlFactor(market, state, _assetId, _isLong);
         // Construct an ADL Order
         Position.Settlement memory request = Position.createAdlOrder(position, _sizeDelta);
         // Execute the order
         tradeStorage.decreaseExistingPosition(request, state);
         // Get the new PNL to pool ratio
-        int256 newPnlFactor = _getPnlFactor(state, _assetId, _isLong);
+        int256 newPnlFactor = _getPnlFactor(market, state, _assetId, _isLong);
         // PNL to pool has reduced
         if (newPnlFactor >= startingPnlFactor) revert PositionManager_PNLFactorNotReduced();
         // Check if the new PNL to pool ratio is greater than
@@ -517,11 +481,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
         // Clear all previously signed prices
         _clearOraclePrices();
-    }
-
-    // @audit - is this vulnerable?
-    function sendExecutionFee(address payable _to, uint256 _amount) external onlyPositionManager {
-        _to.sendValue(_amount);
     }
 
     function _signOraclePrices(Oracle.PriceUpdateData calldata _priceUpdateData) internal {
@@ -554,26 +513,29 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         IERC20(_collateralToken).safeTransfer(address(market), tokensPlusFee);
     }
 
-    // @audit - Feels iffy -> need to determine which updates to do before tradestorage call and which are for after
+    // @audit - Do some calls need to be done after the call to tradeStorage?
     function _updateMarketState(
+        IMarket market,
         Execution.State memory _state,
         bytes32 _assetId,
         uint256 _sizeDelta,
         bool _isLong,
         bool _isIncrease
     ) internal {
+        // 1. Depends on Open Interest Delta to determine Skew
+        market.updateFundingRate(_assetId, _state.indexPrice);
         if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
             int256 signedSizeDelta = _isIncrease ? _sizeDelta.toInt256() : -_sizeDelta.toInt256();
-            _state.market.updateAverageEntryPrice(_assetId, _state.impactedPrice, signedSizeDelta, _isLong);
-            // Average Entry Price relies on OI, so it must be updated before this
-            _state.market.updateOpenInterest(_assetId, _sizeDelta, _isLong, _isIncrease);
+            // 2. Relies on Open Interest Delta
+            market.updateAverageEntryPrice(_assetId, _state.impactedPrice, signedSizeDelta, _isLong);
+            // 3. Updated pre-borrowing rate if size delta > 0
+            market.updateOpenInterest(_assetId, _sizeDelta, _isLong, _isIncrease);
         }
-        // @audit should this be before or after the OI / AEP update?
         uint256 collateralPrice = _isLong ? _state.longMarketTokenPrice : _state.shortMarketTokenPrice;
-        uint256 collateralBaseUnit = _isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
-        _state.market.updateFundingRate(_assetId, _state.indexPrice);
-        _state.market.updateBorrowingRate(
+        uint256 collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
+        // 4. Relies on Updated Open interest
+        market.updateBorrowingRate(
             _assetId, _state.indexPrice, _state.indexBaseUnit, collateralPrice, collateralBaseUnit, _isLong
         );
     }
@@ -589,13 +551,13 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     /**
      * Extrapolated into an internal function to prevent STD Errors
      */
-    function _getPnlFactor(Execution.State memory _state, bytes32 _assetId, bool _isLong)
+    function _getPnlFactor(IMarket market, Execution.State memory _state, bytes32 _assetId, bool _isLong)
         internal
         view
         returns (int256 pnlFactor)
     {
         pnlFactor = MarketUtils.getPnlFactor(
-            _state.market,
+            market,
             _assetId,
             _state.indexPrice,
             _state.indexBaseUnit,

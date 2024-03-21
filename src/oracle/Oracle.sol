@@ -155,18 +155,18 @@ library Oracle {
         confidence = _priceData.conf * (10 ** (PRICE_DECIMALS - absExponent));
     }
 
-    function getPrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 price) {
+    function getPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 price) {
         price = priceFeed.getPrimaryPrice(_assetId).price;
         if (price == 0) revert Oracle_PriceNotSet();
     }
 
-    function getMaxPrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 maxPrice) {
+    function getMaxPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 maxPrice) {
         Price memory priceData = priceFeed.getPrimaryPrice(_assetId);
         maxPrice = priceData.price + priceData.confidence;
         if (maxPrice == 0) revert Oracle_PriceNotSet();
     }
 
-    function getMinPrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 minPrice) {
+    function getMinPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 minPrice) {
         Price memory priceData = priceFeed.getPrimaryPrice(_assetId);
         minPrice = priceData.price - priceData.confidence;
         if (minPrice == 0) revert Oracle_PriceNotSet();
@@ -246,9 +246,6 @@ library Oracle {
         return getReferencePrice(priceFeed, priceFeed.shortAssetId());
     }
 
-    // Use chainlink price feed if available
-    // @audit - VERY SENSITIVE - needs to ALWAYS return a valid price
-    // Use AMM price for reference if no chainlink price
     function getReferencePrice(Asset memory _asset) public view returns (uint256 referencePrice) {
         if (_asset.secondaryStrategy == SecondaryStrategy.CHAINLINK) {
             if (_asset.chainlinkPriceFeed == address(0)) revert Oracle_InvalidChainlinkFeed();

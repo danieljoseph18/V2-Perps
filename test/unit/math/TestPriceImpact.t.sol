@@ -4,10 +4,9 @@ pragma solidity 0.8.23;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
@@ -24,10 +23,10 @@ import {Execution} from "../../../src/positions/Execution.sol";
 
 contract TestPriceImpact is Test {
     RoleStorage roleStorage;
-    GlobalMarketConfig globalMarketConfig;
+
     MarketMaker marketMaker;
     IPriceFeed priceFeed; // Deployed in Helper Config
-    TradeStorage tradeStorage;
+    ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
     Router router;
@@ -56,10 +55,9 @@ contract TestPriceImpact is Test {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
-        globalMarketConfig = contracts.globalMarketConfig;
+
         marketMaker = contracts.marketMaker;
         priceFeed = contracts.priceFeed;
-        tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
@@ -132,6 +130,7 @@ contract TestPriceImpact is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
+        tradeStorage = market.tradeStorage();
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
@@ -198,6 +197,7 @@ contract TestPriceImpact is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
+        tradeStorage = market.tradeStorage();
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
@@ -231,7 +231,7 @@ contract TestPriceImpact is Test {
      * Expected Price Impact: -200008000080000000000
      * Delta: 0
      */
-    // @fail
+
     // $50M Long / Short Liquidity
     function testPriceImpactValuesDeepLiquidity(uint256 _sizeDelta, uint256 _longOi, uint256 _shortOi)
         public
@@ -264,7 +264,6 @@ contract TestPriceImpact is Test {
                     takeProfitPercentage: 0
                 })
             }),
-            market: address(market),
             user: USER,
             requestBlock: block.number,
             requestType: Position.RequestType.POSITION_INCREASE
@@ -272,7 +271,6 @@ contract TestPriceImpact is Test {
         // Test negative price impact values
 
         Execution.State memory orderState = Execution.State({
-            market: market,
             indexPrice: 2500e18,
             indexBaseUnit: 1e18,
             impactedPrice: 2500.05e18,
@@ -301,7 +299,6 @@ contract TestPriceImpact is Test {
             PriceImpact.execute(market, priceFeed, request, orderState);
     }
 
-    // @fail
     function testPriceImpactValuesShallowLiquidity(uint256 _sizeDelta, uint256 _longOi, uint256 _shortOi)
         public
         setUpMarketsShallowLiquidity
@@ -333,7 +330,6 @@ contract TestPriceImpact is Test {
                     takeProfitPercentage: 0
                 })
             }),
-            market: address(market),
             user: USER,
             requestBlock: block.number,
             requestType: Position.RequestType.POSITION_INCREASE
@@ -341,7 +337,6 @@ contract TestPriceImpact is Test {
         // Test negative price impact values
 
         Execution.State memory orderState = Execution.State({
-            market: market,
             indexPrice: 2500e18,
             indexBaseUnit: 1e18,
             impactedPrice: 2500.05e18,

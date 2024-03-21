@@ -32,7 +32,6 @@ library Borrowing {
      * Long Fee Calculation: borrowing factor * (open interest in usd + pending pnl) ^ (borrowing exponent factor) / (pool usd)
      * Short Fee Calculation: borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
      */
-    // @audit - does the last update time affect this?
     function calculateRate(
         IMarket market,
         bytes32 _assetId,
@@ -80,21 +79,79 @@ library Borrowing {
         fee = _rate * timeElapsed;
     }
 
-    function getTotalCollateralFeesOwed(Position.Data calldata _position, Execution.State memory _state)
-        public
+    function getTotalCollateralFeesOwed(IMarket market, Position.Data calldata _position, Execution.State memory _state)
+        external
         view
         returns (uint256 collateralFeesOwed)
     {
-        uint256 feesUsd = _getTotalPositionFeesOwed(_state.market, _position);
+        uint256 feesUsd = _getTotalPositionFeesOwed(market, _position);
         collateralFeesOwed = mulDiv(feesUsd, _state.collateralBaseUnit, _state.collateralPrice);
     }
 
-    function getTotalFeesOwedUsd(Position.Data calldata _position, Execution.State memory _state)
+    function getTotalFeesOwedUsd(IMarket market, Position.Data calldata _position)
         external
         view
         returns (uint256 totalFeesOwedUsd)
     {
-        totalFeesOwedUsd = _getTotalPositionFeesOwed(_state.market, _position);
+        totalFeesOwedUsd = _getTotalPositionFeesOwed(market, _position);
+    }
+
+    function getTotalFeesOwedByMarkets(
+        IMarket market,
+        uint256 _marketTokenPrice,
+        uint256 _marketTokenBaseUnit,
+        bool _isLong
+    ) external view returns (uint256 totalFeeUsd) {
+        bytes32[] memory assetIds = market.getAssetIds();
+        uint256 len = assetIds.length;
+        totalFeeUsd;
+        for (uint256 i = 0; i < len;) {
+            totalFeeUsd += getTotalFeesOwedByMarket(market, assetIds[i], _isLong);
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function getTotalFeesOwedByMarket(IMarket market, bytes32 _assetId, bool _isLong)
+        public
+        view
+        returns (uint256 totalFeesOwedUsd)
+    {
+        uint256 accumulatedFees =
+            market.getCumulativeBorrowFee(_assetId, _isLong) - market.getAverageCumulativeBorrowFee(_assetId, _isLong);
+        uint256 openInterest = MarketUtils.getOpenInterestUsd(market, _assetId, _isLong);
+        totalFeesOwedUsd = mulDiv(accumulatedFees, openInterest, PRECISION);
+    }
+
+    /**
+     * This function stores an average of the "lastCumulativeBorrowFee" for all positions combined.
+     * It's used to track the average borrowing fee for all positions.
+     * The average is calculated by taking the old average
+     *
+     * w_new = (w_last * (1 - p)) + (f_current * p)
+     *
+     * w_new: New weighted average entry cumulative fee
+     * w_last: Last weighted average entry cumulative fee
+     * f_current: The current cumulative fee on the market.
+     * p: The proportion of the new position size relative to the total open interest.
+     */
+    function getNextAverageCumulative(IMarket market, bytes32 _assetId, uint256 _sizeDeltaUsd, bool _isLong)
+        external
+        view
+        returns (uint256 nextAverageCumulative)
+    {
+        // Get the Open Interest
+        uint256 openInterestUsd = MarketUtils.getOpenInterestUsd(market, _assetId, _isLong);
+        // Get the percentage of the new position size relative to the total open interest
+        uint256 relativeSize = mulDiv(_sizeDeltaUsd, PRECISION, openInterestUsd);
+        // Get the current cumulative fee on the market
+        uint256 currentCumulative = market.getCumulativeBorrowFee(_assetId, _isLong);
+        // Get the last weighted average entry cumulative fee
+        uint256 lastCumulative = market.getAverageCumulativeBorrowFee(_assetId, _isLong);
+        // Calculate the new weighted average entry cumulative fee
+        nextAverageCumulative = mulDiv(lastCumulative, PRECISION - relativeSize, PRECISION)
+            + mulDiv(currentCumulative, relativeSize, PRECISION);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens

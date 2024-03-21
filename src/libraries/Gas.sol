@@ -57,7 +57,7 @@ library Gas {
         return estimatedCost + bufferAmount;
     }
 
-    function getRefundForCancellation(uint256 _executionFee) public pure returns (uint256) {
+    function getRefundForCancellation(uint256 _executionFee) external pure returns (uint256) {
         return mulDiv(_executionFee, CANCELLATION_PENALTY, SCALING_FACTOR);
     }
 

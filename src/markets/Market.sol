@@ -12,13 +12,20 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Vault} from "./Vault.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 
 contract Market is Vault, IMarket {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SafeCast for uint256;
     using SignedMath for int256;
 
+    ITradeStorage public tradeStorage;
+    // Max 112 assets per market
+    // Fits 16 allocations per uint256
+    uint256 private constant MAX_ASSETS = 112;
+
     EnumerableSet.Bytes32Set private assetIds;
+    bool private isInitialized;
 
     // Each Asset's storage is tracked through this mapping
     mapping(bytes32 assetId => MarketStorage assetStorage) public marketStorage;
@@ -37,10 +44,18 @@ contract Market is Vault, IMarket {
         _addToken(_tokenConfig, _assetId, allocations);
     }
 
+    function initialize(ITradeStorage _tradeStorage) external onlyMarketMaker {
+        if (isInitialized) revert Market_AlreadyInitialized();
+        tradeStorage = _tradeStorage;
+        isInitialized = true;
+        emit Market_Initialzied();
+    }
+
     function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations)
         external
         onlyMarketMaker
     {
+        if (assetIds.length() >= MAX_ASSETS) revert Market_MaxAssetsReached();
         _addToken(_config, _assetId, _newAllocations);
     }
 
@@ -56,7 +71,7 @@ contract Market is Vault, IMarket {
     /**
      *  ========================= Market State Functions  =========================
      */
-    function updateConfig(Config memory _config, bytes32 _assetId) external onlyConfigurator {
+    function updateConfig(Config memory _config, bytes32 _assetId) external onlyAdmin {
         marketStorage[_assetId].config = _config;
         emit MarketConfigUpdated(_assetId, _config);
     }
@@ -195,7 +210,7 @@ contract Market is Vault, IMarket {
         uint256 allocationIndex = 0;
 
         for (uint256 i = 0; i < _allocations.length; ++i) {
-            for (uint256 bitIndex = 0; bitIndex < 16; ++bitIndex) {
+            for (uint256 bitIndex = 0; bitIndex < 16;) {
                 if (allocationIndex >= assetLen) {
                     break;
                 }
@@ -209,6 +224,9 @@ contract Market is Vault, IMarket {
                 if (allocationIndex < assetLen) {
                     marketStorage[assets[allocationIndex]].allocationPercentage = allocation;
                     ++allocationIndex;
+                }
+                unchecked {
+                    ++bitIndex;
                 }
             }
         }
@@ -320,6 +338,12 @@ contract Market is Vault, IMarket {
         return _isLong
             ? marketStorage[_assetId].pnl.longAverageEntryPriceUsd
             : marketStorage[_assetId].pnl.shortAverageEntryPriceUsd;
+    }
+
+    function getAverageCumulativeBorrowFee(bytes32 _assetId, bool _isLong) external view returns (uint256) {
+        return _isLong
+            ? marketStorage[_assetId].borrowing.weightedAvgCumulativeLong
+            : marketStorage[_assetId].borrowing.weightedAvgCumulativeShort;
     }
 
     function getImpactPool(bytes32 _assetId) external view returns (uint256) {

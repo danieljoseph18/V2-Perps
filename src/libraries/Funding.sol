@@ -37,12 +37,12 @@ library Funding {
         fundingFeeUsd = mulDivSigned(_sizeDelta.toInt256(), nextFundingAccrued - _entryFundingAccrued, PRICE_PRECISION);
     }
 
-    function getTotalFeesOwedUsd(Position.Data memory _position, uint256 _indexPrice)
+    function getTotalFeesOwedUsd(IMarket market, Position.Data memory _position, uint256 _indexPrice)
         external
         view
         returns (int256 totalFeesOwedUsd)
     {
-        (, int256 nextFundingAccrued) = _calculateNextFunding(_position.market, _position.assetId, _indexPrice);
+        (, int256 nextFundingAccrued) = _calculateNextFunding(market, _position.assetId, _indexPrice);
         totalFeesOwedUsd = mulDivSigned(
             _position.positionSize.toInt256(),
             nextFundingAccrued - _position.fundingParams.lastFundingAccrued,

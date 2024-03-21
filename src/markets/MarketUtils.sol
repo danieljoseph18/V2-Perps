@@ -17,12 +17,23 @@ library MarketUtils {
 
     error MarketUtils_MaxOiExceeded();
 
-    function getOpenInterestUsd(IMarket market, bytes32 _assetId, bool _isLong)
-        public
-        view
-        returns (uint256 longOiUsd)
-    {
-        return _isLong ? market.getOpenInterest(_assetId, true) : market.getOpenInterest(_assetId, false);
+    function getTotalOiForMarket(IMarket market, bool _isLong) external view returns (uint256) {
+        // get all asset ids from the market
+        bytes32[] memory assetIds = market.getAssetIds();
+        uint256 len = assetIds.length;
+        // loop through all asset ids and sum the open interest
+        uint256 totalOi;
+        for (uint256 i = 0; i < len;) {
+            totalOi += market.getOpenInterest(assetIds[i], _isLong);
+            unchecked {
+                ++i;
+            }
+        }
+        return totalOi;
+    }
+
+    function getOpenInterestUsd(IMarket market, bytes32 _assetId, bool _isLong) external view returns (uint256) {
+        return market.getOpenInterest(_assetId, _isLong);
     }
 
     function getTotalPoolBalanceUsd(
@@ -32,7 +43,7 @@ library MarketUtils {
         uint256 _shortTokenPrice,
         uint256 _longBaseUnit,
         uint256 _shortBaseUnit
-    ) public view returns (uint256 poolBalanceUsd) {
+    ) external view returns (uint256 poolBalanceUsd) {
         uint256 longPoolUsd = getPoolBalanceUsd(market, _assetId, _longTokenPrice, _longBaseUnit, true);
         uint256 shortPoolUsd = getPoolBalanceUsd(market, _assetId, _shortTokenPrice, _shortBaseUnit, false);
         poolBalanceUsd = longPoolUsd + shortPoolUsd;
@@ -72,8 +83,6 @@ library MarketUtils {
         // Get Max OI for side
         uint256 availableUsd = getAvailableOiUsd(market, _assetId, _collateralTokenPrice, _collateralBaseUnit, _isLong);
         // Check SizeDelta USD won't push the OI over the max
-        console.log("Available USD: ", availableUsd);
-        console.log("SizeDelta USD: ", _sizeDeltaUsd);
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 

@@ -17,7 +17,7 @@ contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
     address public longToken;
     address public shortToken;
 
-    mapping(address => uint256) public override referrerTiers; // link between user <> tier
+    mapping(address user => uint256 tier) public override referrerTiers; // link between user <> tier
     mapping(uint256 tier => uint256 discount) public tiers; // 0.1e18 = 10% discount
 
     mapping(address => bool) public isHandler;
@@ -77,9 +77,9 @@ contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
         emit RegisterCode(msg.sender, _code);
     }
 
-    function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount)
+    function accumulateAffiliateRewards(address _market, address _account, bool _isLongToken, uint256 _amount)
         external
-        onlyTradeStorage
+        onlyTradeStorage(_market)
     {
         affiliateRewards[_account][_isLongToken] += _amount;
     }

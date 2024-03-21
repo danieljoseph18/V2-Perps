@@ -37,6 +37,7 @@ library Invariant {
     error Invariant_TokenBurnFailed();
 
     uint256 constant SCALAR = 1e18;
+    uint256 constant BASE_FEE = 0.001e18; // 0.1%
 
     function validateDeposit(
         IVault.State calldata _stateBefore,
@@ -44,8 +45,8 @@ library Invariant {
         IVault.Deposit calldata _deposit,
         uint256 _feeScale
     ) external pure {
-        uint256 minFee = mulDiv(_deposit.amountIn, 0.001e18, SCALAR);
-        uint256 maxFee = mulDiv(_deposit.amountIn, 0.001e18 + _feeScale, SCALAR);
+        uint256 minFee = mulDiv(_deposit.amountIn, BASE_FEE, SCALAR);
+        uint256 maxFee = mulDiv(_deposit.amountIn, BASE_FEE + _feeScale, SCALAR);
         if (_deposit.isLongToken) {
             if (_stateAfter.longAccumulatedFees < _stateBefore.longAccumulatedFees + minFee) {
                 revert Invariant_DepositFee();
@@ -99,8 +100,8 @@ library Invariant {
         uint256 _amountOut,
         uint256 _feeScale
     ) external pure {
-        uint256 minFee = mulDiv(_amountOut, 0.001e18, SCALAR);
-        uint256 maxFee = mulDiv(_amountOut, 0.001e18 + _feeScale, SCALAR);
+        uint256 minFee = mulDiv(_amountOut, BASE_FEE, SCALAR);
+        uint256 maxFee = mulDiv(_amountOut, BASE_FEE + _feeScale, SCALAR);
         if (_stateBefore.totalSupply != _stateAfter.totalSupply + _withdrawal.marketTokenAmountIn) {
             revert Invariant_TokenBurnFailed();
         }
@@ -291,7 +292,6 @@ library Invariant {
         {
             sigBefore = keccak256(
                 abi.encode(
-                    _positionBefore.market,
                     _positionBefore.assetId,
                     _positionBefore.user,
                     _positionBefore.collateralToken,
@@ -305,7 +305,6 @@ library Invariant {
         {
             sigAfter = keccak256(
                 abi.encode(
-                    _positionAfter.market,
                     _positionAfter.assetId,
                     _positionAfter.user,
                     _positionAfter.collateralToken,
@@ -351,7 +350,6 @@ library Invariant {
         {
             sigBefore = keccak256(
                 abi.encode(
-                    _positionBefore.market,
                     _positionBefore.assetId,
                     _positionBefore.user,
                     _positionBefore.collateralToken,
@@ -365,7 +363,6 @@ library Invariant {
         {
             sigAfter = keccak256(
                 abi.encode(
-                    _positionAfter.market,
                     _positionAfter.assetId,
                     _positionAfter.user,
                     _positionAfter.collateralToken,

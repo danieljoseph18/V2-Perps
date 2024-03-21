@@ -61,7 +61,11 @@ interface IVault {
         IPositionManager positionManager;
         IPriceFeed priceFeed;
         Deposit deposit;
+        Oracle.Price longPrices;
+        Oracle.Price shortPrices;
         bytes32 key;
+        uint256 longBorrowFeesUsd;
+        uint256 shortBorrowFeesUsd;
         int256 cumulativePnl;
     }
 
@@ -73,6 +77,8 @@ interface IVault {
         Oracle.Price longPrices;
         Oracle.Price shortPrices;
         bytes32 key;
+        uint256 longBorrowFeesUsd;
+        uint256 shortBorrowFeesUsd;
         int256 cumulativePnl;
         uint256 amountOut;
         bool shouldUnwrap;
@@ -118,6 +124,8 @@ interface IVault {
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
         uint256 _marketTokenAmountIn,
+        uint256 _longBorrowFeesUsd,
+        uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl,
         bool _isLongToken
     ) external view returns (uint256 tokenAmount);

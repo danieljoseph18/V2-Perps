@@ -4,10 +4,9 @@ pragma solidity 0.8.23;
 import {Test, console, console2, stdStorage, StdStorage} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
@@ -28,10 +27,10 @@ contract TestBorrowing is Test {
     using stdStorage for StdStorage;
 
     RoleStorage roleStorage;
-    GlobalMarketConfig globalMarketConfig;
+
     MarketMaker marketMaker;
     IPriceFeed priceFeed; // Deployed in Helper Config
-    TradeStorage tradeStorage;
+    ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
     Router router;
@@ -59,10 +58,9 @@ contract TestBorrowing is Test {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
-        globalMarketConfig = contracts.globalMarketConfig;
+
         marketMaker = contracts.marketMaker;
         priceFeed = contracts.priceFeed;
-        tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
@@ -135,6 +133,7 @@ contract TestBorrowing is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
+        tradeStorage = market.tradeStorage();
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
@@ -181,13 +180,11 @@ contract TestBorrowing is Test {
      * market, indexPrice, indexBaseUnit, collateralBaseUnit, collateralPrice,
      *
      */
-    // @fail
     function testCalculatingTotalFeesOwedInCollateralTokensNoExistingCumulative(uint256 _collateral, uint256 _leverage)
         public
         setUpMarkets
     {
         Execution.State memory state;
-        state.market = IMarket(marketMaker.tokenToMarkets(ethAssetId));
         // Open a position to alter the borrowing rate
         Position.Input memory input = Position.Input({
             assetId: ethAssetId,
@@ -214,7 +211,9 @@ contract TestBorrowing is Test {
         router.createPositionRequest{value: 0.51 ether}(input);
 
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            market, tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData
+        );
         // Get the current rate
 
         vm.warp(block.timestamp + 1 days);
@@ -226,7 +225,6 @@ contract TestBorrowing is Test {
         uint256 positionSize = (_collateral * _leverage) * 2500e30 / 1e18;
 
         Position.Data memory position = Position.Data(
-            state.market,
             ethAssetId,
             USER,
             weth,
@@ -248,30 +246,27 @@ contract TestBorrowing is Test {
         state.collateralPrice = 2500e30;
 
         // Calculate Fees Owed
-        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, state);
+        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(market, position, state);
         // Index Tokens == Collateral Tokens
         uint256 expectedFees = mulDiv(
-            ((state.market.getBorrowingRate(ethAssetId, true) * 1 days) * positionSize) / 1e18,
+            ((market.getBorrowingRate(ethAssetId, true) * 1 days) * positionSize) / 1e18,
             state.collateralBaseUnit,
             state.collateralPrice
         );
         assertEq(feesOwed, expectedFees);
     }
 
-    // @fail
     function testCalculatingTotalFeesOwedInCollateralTokensWithExistingCumulative(
         uint256 _collateral,
         uint256 _leverage
     ) public setUpMarkets {
         Execution.State memory state;
-        state.market = IMarket(marketMaker.tokenToMarkets(ethAssetId));
 
         // Create an arbitrary position
         _collateral = bound(_collateral, 1, 100_000 ether);
         _leverage = bound(_leverage, 1, 100);
         uint256 positionSize = (_collateral * _leverage) * 2500e30 / 1e18;
         Position.Data memory position = Position.Data(
-            state.market,
             ethAssetId,
             USER,
             weth,
@@ -302,14 +297,13 @@ contract TestBorrowing is Test {
         state.collateralPrice = 2500e30;
 
         // Calculate Fees Owed
-        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(position, state);
+        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(market, position, state);
         // Index Tokens == Collateral Tokens
         uint256 expectedFees = mulDiv(bonusCumulative, positionSize, 1e18);
         expectedFees = mulDiv(expectedFees, state.collateralBaseUnit, state.collateralPrice);
         assertEq(feesOwed, expectedFees);
     }
 
-    // @fail
     function testBorrowingRateCalculationBasic() public setUpMarkets {
         // Open a position to alter the borrowing rate
         Position.Input memory input = Position.Input({
@@ -337,7 +331,9 @@ contract TestBorrowing is Test {
         router.createPositionRequest{value: 0.51 ether}(input);
 
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.01 ether}(tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.01 ether}(
+            market, tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData
+        );
 
         // Fetch the borrowing rate
         uint256 borrowingRate = market.getBorrowingRate(ethAssetId, true);

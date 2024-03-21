@@ -29,13 +29,13 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyConfigurator() {
-        if (!roleStorage.hasRole(Roles.CONFIGURATOR, msg.sender)) revert RoleValidation_AccessDenied();
+    modifier onlyConfigurator(address _market) {
+        if (!roleStorage.hasConfiguratorRole(_market, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
-    modifier onlyTradeStorage() {
-        if (!roleStorage.hasRole(Roles.TRADE_STORAGE, msg.sender)) revert RoleValidation_AccessDenied();
+    modifier onlyTradeStorage(address _market) {
+        if (!roleStorage.hasTradeStorageRole(_market, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 
@@ -66,5 +66,9 @@ contract RoleValidation {
 
     constructor(address _roleStorage) {
         roleStorage = RoleStorage(_roleStorage);
+    }
+
+    function getTradeStorage(address _market) internal view returns (address) {
+        return roleStorage.getTradeStorage(_market);
     }
 }

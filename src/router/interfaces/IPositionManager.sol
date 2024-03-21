@@ -48,7 +48,5 @@ interface IPositionManager {
     function averageDepositCost() external view returns (uint256);
     function averageWithdrawalCost() external view returns (uint256);
     function averagePositionCost() external view returns (uint256);
-    function sendExecutionFee(address payable _to, uint256 _amount) external;
     function baseGasLimit() external view returns (uint256);
-    function adjustLimitOrder(Position.Adjustment calldata _params) external payable;
 }

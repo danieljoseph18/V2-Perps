@@ -4,11 +4,10 @@ pragma solidity 0.8.23;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
@@ -29,10 +28,10 @@ contract TestPricing is Test {
     using SignedMath for int256;
 
     RoleStorage roleStorage;
-    GlobalMarketConfig globalMarketConfig;
+
     MarketMaker marketMaker;
     IPriceFeed priceFeed; // Deployed in Helper Config
-    TradeStorage tradeStorage;
+    ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
     Router router;
@@ -61,10 +60,9 @@ contract TestPricing is Test {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
-        globalMarketConfig = contracts.globalMarketConfig;
+
         marketMaker = contracts.marketMaker;
         priceFeed = contracts.priceFeed;
-        tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
@@ -137,6 +135,7 @@ contract TestPricing is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
+        tradeStorage = market.tradeStorage();
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
@@ -173,7 +172,6 @@ contract TestPricing is Test {
         _price = bound(_price, 2000e30, 3000e30);
 
         Position.Data memory position = Position.Data(
-            market,
             ethAssetId,
             USER,
             weth,
@@ -188,7 +186,7 @@ contract TestPricing is Test {
             bytes32(0)
         );
         // Check the PNL vs the expected PNL
-        int256 pnl = Pricing.getPositionPnl(position, _price, 1e18);
+        int256 pnl = Pricing.getPositionPnl(position.positionSize, position.weightedAvgEntryPrice, _price, 1e18, true);
         int256 priceDelta = int256(_price) - int256(position.weightedAvgEntryPrice);
         uint256 entryIndexAmount = mulDiv(position.positionSize, 1e18, position.weightedAvgEntryPrice);
         int256 expectedPnl;
@@ -205,7 +203,6 @@ contract TestPricing is Test {
         _price = bound(_price, 2000e30, 3000e30);
 
         Position.Data memory position = Position.Data(
-            market,
             ethAssetId,
             USER,
             usdc,
@@ -220,7 +217,7 @@ contract TestPricing is Test {
             bytes32(0)
         );
         // Check the PNL vs the expected PNL
-        int256 pnl = Pricing.getPositionPnl(position, _price, 1e18);
+        int256 pnl = Pricing.getPositionPnl(position.positionSize, position.weightedAvgEntryPrice, _price, 1e18, false);
         int256 priceDelta = int256(_price) - int256(position.weightedAvgEntryPrice);
         uint256 entryIndexAmount = mulDiv(position.positionSize, 1e18, position.weightedAvgEntryPrice);
         int256 expectedPnl;
@@ -398,18 +395,9 @@ contract TestPricing is Test {
         uint256 pnlCollateral = mulDiv(pnlUsd.abs(), 1e18, _collateralPrice);
         int256 expectedPnl = pnlUsd > 0 ? int256(pnlCollateral) : -int256(pnlCollateral);
 
-        // Directly use the `getDecreasePositionPnl` function to get the PNL in collateral terms
-        /**
-         * uint256 _sizeDeltaUsd,
-         *     uint256 _averageEntryPriceUsd,
-         *     uint256 _indexPrice,
-         *     uint256 _indexBaseUnit,
-         *     uint256 _collateralPriceUsd,
-         *     uint256 _collateralBaseUnit,
-         *     bool _isLong
-         */
-        int256 actualPnlCollateral = Pricing.getDecreasePositionPnl(
-            _sizeDelta, _averageEntryPrice, _indexPrice, 1e18, _collateralPrice, 1e18, true
+        // Directly use the `getPositionPnl` function to get the PNL in collateral terms
+        int256 actualPnlCollateral = Pricing.getRealizedPnl(
+            _sizeDelta, _sizeDelta, _averageEntryPrice, _indexPrice, 1e18, _collateralPrice, 1e18, true
         );
 
         // Assert that the actual PNL in collateral matches the expected PNL in collateral, considering the conversion and rounding

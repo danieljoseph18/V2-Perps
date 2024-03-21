@@ -4,7 +4,6 @@ pragma solidity 0.8.23;
 import {Script} from "forge-std/Script.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
 import {RoleStorage} from "../src/access/RoleStorage.sol";
-import {GlobalMarketConfig} from "../src/markets/GlobalMarketConfig.sol";
 import {Vault} from "../src/markets/Vault.sol";
 import {MarketMaker} from "../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../src/oracle/interfaces/IPriceFeed.sol";
@@ -21,10 +20,8 @@ contract Deploy is Script {
 
     struct Contracts {
         RoleStorage roleStorage;
-        GlobalMarketConfig globalMarketConfig;
         MarketMaker marketMaker;
         IPriceFeed priceFeed; // Deployed in Helper Config
-        TradeStorage tradeStorage;
         ReferralStorage referralStorage;
         PositionManager positionManager;
         Router router;
@@ -45,10 +42,8 @@ contract Deploy is Script {
 
         contracts = Contracts(
             RoleStorage(address(0)),
-            GlobalMarketConfig(address(0)),
             MarketMaker(address(0)),
             priceFeed,
-            TradeStorage(address(0)),
             ReferralStorage(payable(address(0))),
             PositionManager(payable(address(0))),
             Router(payable(address(0))),
@@ -64,11 +59,8 @@ contract Deploy is Script {
 
         contracts.referralStorage = new ReferralStorage(weth, usdc, weth, address(contracts.roleStorage));
 
-        contracts.tradeStorage = new TradeStorage(contracts.referralStorage, address(contracts.roleStorage));
-
         contracts.positionManager = new PositionManager(
             address(contracts.marketMaker),
-            address(contracts.tradeStorage),
             address(contracts.referralStorage),
             address(contracts.priceFeed),
             weth,
@@ -77,21 +69,11 @@ contract Deploy is Script {
         );
 
         contracts.router = new Router(
-            address(contracts.tradeStorage),
             address(contracts.marketMaker),
             address(contracts.priceFeed),
             usdc,
             weth,
             address(contracts.positionManager),
-            address(contracts.roleStorage)
-        );
-
-        contracts.globalMarketConfig = new GlobalMarketConfig(
-            address(contracts.tradeStorage),
-            address(contracts.marketMaker),
-            payable(address(contracts.positionManager)),
-            payable(address(contracts.router)),
-            payable(address(contracts.priceFeed)),
             address(contracts.roleStorage)
         );
 
@@ -120,11 +102,9 @@ contract Deploy is Script {
             }),
             adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18, flaggedLong: false, flaggedShort: false})
         });
-        contracts.marketMaker.initialise(
-            defaultMarketConfig, address(contracts.priceFeed), address(contracts.positionManager)
+        contracts.marketMaker.initialize(
+            defaultMarketConfig, address(contracts.priceFeed), address(contracts.referralStorage)
         );
-
-        contracts.tradeStorage.initialise(5e30, 0.001e18, 180000 gwei, 2e30, 10);
 
         contracts.positionManager.updateGasEstimates(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);
 
@@ -133,18 +113,14 @@ contract Deploy is Script {
         contracts.referralStorage.setTier(2, 0.15e18);
 
         // Set Up Roles
-        contracts.roleStorage.grantRole(Roles.CONFIGURATOR, address(contracts.globalMarketConfig));
         contracts.roleStorage.grantRole(Roles.MARKET_MAKER, address(contracts.marketMaker));
         contracts.roleStorage.grantRole(Roles.POSITION_MANAGER, address(contracts.positionManager));
-        contracts.roleStorage.grantRole(Roles.TRADE_STORAGE, address(contracts.tradeStorage));
         contracts.roleStorage.grantRole(Roles.ROUTER, address(contracts.router));
         contracts.roleStorage.grantRole(Roles.DEFAULT_ADMIN_ROLE, contracts.owner);
         contracts.roleStorage.grantRole(Roles.STATE_KEEPER, contracts.owner);
         contracts.roleStorage.grantRole(Roles.ADL_KEEPER, contracts.owner);
         contracts.roleStorage.grantRole(Roles.KEEPER, contracts.owner);
         contracts.roleStorage.grantRole(Roles.LIQUIDATOR, contracts.owner);
-        contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.tradeStorage));
-        contracts.roleStorage.grantRole(Roles.FEE_ACCUMULATOR, address(contracts.positionManager));
 
         vm.stopBroadcast();
 

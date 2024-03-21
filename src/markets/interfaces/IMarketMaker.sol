@@ -7,12 +7,12 @@ import {Oracle} from "../../oracle/Oracle.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface IMarketMaker {
-    event MarketMakerInitialised(address priceStorage);
+    event MarketMakerInitialized(address priceStorage);
     event MarketCreated(address market, bytes32 assetId, bytes32 priceId);
     event TokenAddedToMarket(address market, bytes32 assetId, bytes32 priceId);
     event DefaultConfigSet(IMarket.Config defaultConfig);
 
-    error MarketMaker_AlreadyInitialised();
+    error MarketMaker_AlreadyInitialized();
     error MarketMaker_InvalidAsset();
     error MarketMaker_InvalidPriceId();
     error MarketMaker_InvalidBaseUnit();
@@ -22,7 +22,7 @@ interface IMarketMaker {
     error MarketMaker_MarketDoesNotExist();
     error MarketMaker_FailedToAddMarket();
 
-    function initialise(IMarket.Config memory _defaultConfig, address _priceFeed, address _positionManager) external;
+    function initialize(IMarket.Config memory _defaultConfig, address _priceFeed, address _referralStorage) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function createNewMarket(

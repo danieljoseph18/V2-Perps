@@ -174,8 +174,6 @@ library PriceImpact {
         priceImpact = mulDivSigned(_sizeDelta.toInt256(), totalImpact, SIGNED_PRICE_PRECISION);
     }
 
-    // If positive, needs to be capped by the impact pool
-    // @audit - math / edge cases
     // @gas - probably more efficient to use PRB Math here
     /**
      * PriceImpact = sizeDeltaUsd * skewScalar((skewBefore/totalOiBefore) - (skewAfter/totalOiAfter)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
@@ -214,7 +212,6 @@ library PriceImpact {
 
     // impact is positive toward 0, so positive impact is simply the skew factor before
     // negative impact is the skew factor after
-    // @audit - math / edge cases
     /**
      * PriceImpact = sizeDeltaUsd * skewScalar((skewBefore/totalOiBefore) - (skewAfter/totalOiAfter)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
      */

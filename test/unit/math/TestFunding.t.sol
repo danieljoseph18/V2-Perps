@@ -4,10 +4,9 @@ pragma solidity 0.8.23;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
@@ -24,10 +23,10 @@ import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 
 contract TestFunding is Test {
     RoleStorage roleStorage;
-    GlobalMarketConfig globalMarketConfig;
+
     MarketMaker marketMaker;
     IPriceFeed priceFeed; // Deployed in Helper Config
-    TradeStorage tradeStorage;
+    ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
     Router router;
@@ -56,10 +55,9 @@ contract TestFunding is Test {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
-        globalMarketConfig = contracts.globalMarketConfig;
+
         marketMaker = contracts.marketMaker;
         priceFeed = contracts.priceFeed;
-        tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;

@@ -52,7 +52,6 @@ library Position {
 
     // Data for an Open Position
     struct Data {
-        IMarket market;
         bytes32 assetId;
         address user;
         address collateralToken; // WETH long, USDC short
@@ -111,7 +110,6 @@ library Position {
     // Request -> Constructed by Router based on User Input
     struct Request {
         Input input;
-        address market;
         address user;
         uint256 requestBlock;
         RequestType requestType;
@@ -233,7 +231,7 @@ library Position {
     }
 
     // 1x = 100
-    function checkLeverage(IMarket market, bytes32 _assetId, uint256 _sizeUsd, uint256 _collateralUsd) public view {
+    function checkLeverage(IMarket market, bytes32 _assetId, uint256 _sizeUsd, uint256 _collateralUsd) external view {
         uint256 maxLeverage = market.getMaxLeverage(_assetId);
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
@@ -245,30 +243,23 @@ library Position {
         if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
 
-    function createRequest(Input calldata _trade, address _market, address _user, RequestType _requestType)
+    function createRequest(Input calldata _trade, address _user, RequestType _requestType)
         external
         view
         returns (Request memory request)
     {
-        request = Request({
-            input: _trade,
-            market: _market,
-            user: _user,
-            requestBlock: block.number,
-            requestType: _requestType
-        });
+        request = Request({input: _trade, user: _user, requestBlock: block.number, requestType: _requestType});
     }
 
-    function generateNewPosition(Request memory _request, Execution.State memory _state)
+    function generateNewPosition(IMarket market, Request memory _request, Execution.State memory _state)
         external
         view
         returns (Data memory position)
     {
         // Get Entry Funding & Borrowing Values
-        (uint256 longBorrowFee, uint256 shortBorrowFee) = _state.market.getCumulativeBorrowFees(_request.input.assetId);
+        (uint256 longBorrowFee, uint256 shortBorrowFee) = market.getCumulativeBorrowFees(_request.input.assetId);
         // get Trade Value in USD
         position = Data({
-            market: _state.market,
             assetId: _request.input.assetId,
             collateralToken: _request.input.collateralToken,
             user: _request.user,
@@ -277,7 +268,7 @@ library Position {
             weightedAvgEntryPrice: _state.impactedPrice,
             lastUpdate: block.timestamp,
             isLong: _request.input.isLong,
-            fundingParams: FundingParams(_state.market.getFundingAccrued(_request.input.assetId), 0),
+            fundingParams: FundingParams(market.getFundingAccrued(_request.input.assetId), 0),
             borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
             stopLossKey: bytes32(0),
             takeProfitKey: bytes32(0)
@@ -285,22 +276,23 @@ library Position {
     }
 
     // SL / TP are Decrease Orders tied to a Position
-    function constructConditionalOrders(Position.Data memory _position, Position.Conditionals memory _conditionals)
-        external
-        view
-        returns (Position.Request memory stopLossOrder, Position.Request memory takeProfitOrder)
-    {
+    function constructConditionalOrders(
+        Data memory _position,
+        Conditionals memory _conditionals,
+        uint256 _totalExecutionFee
+    ) external view returns (Request memory stopLossOrder, Request memory takeProfitOrder) {
         // Construct the stop loss based on the values
+        uint256 slExecutionFee = mulDiv(_totalExecutionFee, 2, 3); // 2/3 of the total execution fee
         if (_conditionals.stopLossSet) {
-            stopLossOrder = Position.Request({
-                input: Position.Input({
+            stopLossOrder = Request({
+                input: Input({
                     assetId: _position.assetId,
                     collateralToken: _position.collateralToken,
                     collateralDelta: mulDiv(_position.collateralAmount, _conditionals.stopLossPercentage, PRECISION),
                     sizeDelta: mulDiv(_position.positionSize, _conditionals.stopLossPercentage, PRECISION),
                     limitPrice: _conditionals.stopLossPrice,
                     maxSlippage: MAX_SLIPPAGE,
-                    executionFee: 0, // @audit - how do we get user to pay for execution?
+                    executionFee: slExecutionFee,
                     isLong: !_position.isLong,
                     isLimit: true,
                     isIncrease: false,
@@ -314,28 +306,27 @@ library Position {
                         takeProfitPercentage: 0
                     })
                 }),
-                market: address(_position.market),
                 user: _position.user,
                 requestBlock: block.number,
-                requestType: Position.RequestType.STOP_LOSS
+                requestType: RequestType.STOP_LOSS
             });
         }
         // Construct the Take profit based on the values
         if (_conditionals.takeProfitSet) {
-            takeProfitOrder = Position.Request({
-                input: Position.Input({
+            takeProfitOrder = Request({
+                input: Input({
                     assetId: _position.assetId,
                     collateralToken: _position.collateralToken,
                     collateralDelta: mulDiv(_position.collateralAmount, _conditionals.takeProfitPercentage, PRECISION),
                     sizeDelta: mulDiv(_position.positionSize, _conditionals.takeProfitPercentage, PRECISION),
                     limitPrice: _conditionals.takeProfitPrice,
                     maxSlippage: MAX_SLIPPAGE,
-                    executionFee: 0, // @audit - how do we get user to pay for execution?
+                    executionFee: _totalExecutionFee - slExecutionFee,
                     isLong: !_position.isLong,
                     isLimit: true,
                     isIncrease: false,
                     reverseWrap: true,
-                    conditionals: Position.Conditionals({
+                    conditionals: Conditionals({
                         stopLossSet: false,
                         stopLossPrice: 0,
                         stopLossPercentage: 0,
@@ -344,10 +335,9 @@ library Position {
                         takeProfitPercentage: 0
                     })
                 }),
-                market: address(_position.market),
                 user: _position.user,
                 requestBlock: block.number,
-                requestType: Position.RequestType.TAKE_PROFIT
+                requestType: RequestType.TAKE_PROFIT
             });
         }
     }
@@ -365,27 +355,31 @@ library Position {
         }
     }
 
-    // @audit - check math -> should never revert unless position is not liquidatable
-    // should handle insolvent liqs etc.
-    function liquidate(Position.Data memory _position, Execution.State memory _state, uint256 liquidationFee)
-        external
-        view
-        returns (uint256 feesOwedToUser, uint256 feesToAccumulate, uint256 liqFeeInCollateral)
-    {
+    function liquidate(
+        IMarket market,
+        Position.Data memory _position,
+        Execution.State memory _state,
+        uint256 liquidationFee
+    ) external view returns (uint256 feesOwedToUser, uint256 feesToAccumulate, uint256 liqFeeInCollateral) {
         // Get the value of all collateral remaining in the position
         uint256 collateralValueUsd =
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
         // Get the PNL for the position
-        int256 pnl = Pricing.getPositionPnl(_position, _state.indexPrice, _state.indexBaseUnit);
+        int256 pnl = Pricing.getPositionPnl(
+            _position.positionSize,
+            _position.weightedAvgEntryPrice,
+            _state.indexPrice,
+            _state.indexBaseUnit,
+            _position.isLong
+        );
         // Get the Borrow Fees Owed in USD
-        uint256 borrowingFeesUsd = Borrowing.getTotalFeesOwedUsd(_position, _state);
+        uint256 borrowingFeesUsd = Borrowing.getTotalFeesOwedUsd(market, _position);
         // Get the Funding Fees Owed in USD
-        int256 fundingFeesUsd = Funding.getTotalFeesOwedUsd(_position, _state.indexPrice);
+        int256 fundingFeesUsd = Funding.getTotalFeesOwedUsd(market, _position, _state.indexPrice);
         // Calculate the total losses
-        // @audit - dont think we should account for liq fee here -> sets a min cap on collateral
-        // e.g all positions < $5 are insta liquidatable
         int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd;
         // Check if the position is liquidatable
+        // Handles case of Insolvent Liquidations too
         if (losses < 0 && collateralValueUsd <= losses.abs()) {
             uint256 feesOwedToUserUsd = fundingFeesUsd > 0 ? fundingFeesUsd.abs() : 0;
             if (pnl > 0) feesOwedToUserUsd += pnl.abs();
@@ -424,7 +418,6 @@ library Position {
                 reverseWrap: false,
                 conditionals: Conditionals(false, false, 0, 0, 0, 0)
             }),
-            market: address(_position.market),
             user: _position.user,
             requestBlock: block.number,
             requestType: RequestType.POSITION_DECREASE
@@ -441,12 +434,12 @@ library Position {
         collateralAmount = mulDiv(_usdAmount, _collateralBaseUnit, _collateralPrice);
     }
 
-    function getTotalFeesOwedUsd(Data memory _position, Execution.State memory _state)
-        public
+    function getTotalFeesOwedUsd(IMarket market, Data memory _position, Execution.State memory _state)
+        external
         view
         returns (uint256 totalFeesOwedUsd)
     {
-        uint256 borrowingFeeOwed = Borrowing.getTotalCollateralFeesOwed(_position, _state);
+        uint256 borrowingFeeOwed = Borrowing.getTotalCollateralFeesOwed(market, _position, _state);
         uint256 borrowingFeeUsd = mulDiv(borrowingFeeOwed, _state.collateralPrice, _state.collateralBaseUnit);
 
         totalFeesOwedUsd = borrowingFeeUsd;
@@ -497,16 +490,17 @@ library Position {
         return _conditionals;
     }
 
-    function validateRequest(IMarketMaker marketMaker, Request memory _request, Execution.State memory _state)
-        external
-        view
-        returns (Request memory)
-    {
+    function validateRequest(
+        IMarket market,
+        IMarketMaker marketMaker,
+        Request memory _request,
+        Execution.State memory _state
+    ) external view returns (Request memory) {
         // Get the Market from the Market Maker
         address inputMarket = marketMaker.tokenToMarkets(_request.input.assetId);
         // Re-Validate the Input
         validateInputParameters(_request.input, inputMarket);
-        if (inputMarket != _request.market) revert Position_UnmatchedMarkets();
+        if (inputMarket != address(market)) revert Position_UnmatchedMarkets();
         if (_request.user == address(0)) revert Position_ZeroAddress();
         if (_request.requestBlock > block.number) revert Position_InvalidRequestBlock();
         _request.input.conditionals =

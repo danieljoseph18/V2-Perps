@@ -4,6 +4,7 @@ pragma solidity 0.8.23;
 import {Position} from "../../positions/Position.sol";
 import {Execution} from "../Execution.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
+import {IMarket} from "../../markets/interfaces/IMarket.sol";
 
 interface ITradeStorage {
     event OrderRequestCreated(bytes32 indexed _orderKey, Position.Request indexed _request);
@@ -15,9 +16,7 @@ interface ITradeStorage {
     );
     event FeesProcessed(bytes32 indexed _positionKey, uint256 indexed _fundingFee, uint256 indexed _borrowFee);
     event FundingFeesClaimed(address _user, uint256 _fundingFees);
-    event TradeStorageInitialised(
-        uint256 indexed _liquidationFee, uint256 indexed _tradingFee, uint256 indexed _executionFee
-    );
+    event TradeStorageInitialized(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
     event FeesSet(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
     event CollateralEdited(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, bool indexed _isIncrease);
     event IncreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
@@ -42,7 +41,7 @@ interface ITradeStorage {
     );
     event OrderAdjusted(bytes32 _orderKey, Position.Request _request);
 
-    error TradeStorage_AlreadyInitialised();
+    error TradeStorage_AlreadyInitialized();
     error TradeStorage_InvalidLiquidationFee();
     error TradeStorage_InvalidTradingFee();
     error TradeStorage_OrderAlreadyExists();
@@ -62,11 +61,12 @@ interface ITradeStorage {
     error TradeStorage_CollateralDeltaTooLarge();
     error TradeStorage_InvalidTransferIn();
     error TradeStorage_InvalidCollateralDelta();
+    error TradeStorage_OrderRemovalFailed();
+    error TradeStorage_PositionRemovalFailed();
 
-    function initialise(
+    function initialize(
         uint256 _liquidationFee,
         uint256 _tradingFee,
-        uint256 _executionFee,
         uint256 _minCollateralUsd,
         uint256 _minCancellationTime
     ) external;
@@ -79,7 +79,7 @@ interface ITradeStorage {
     function decreaseExistingPosition(Position.Settlement memory _params, Execution.State memory _state) external;
     function liquidatePosition(Execution.State memory _state, bytes32 _positionKey, address _liquidator) external;
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external;
-    function getOpenPositionKeys(address _market, bool _isLong) external view returns (bytes32[] memory);
+    function getOpenPositionKeys(bool _isLong) external view returns (bytes32[] memory);
     function getOrderKeys(bool _isLimit) external view returns (bytes32[] memory orderKeys);
     function getRequestQueueLengths() external view returns (uint256 marketLen, uint256 limitLen);
 
@@ -87,20 +87,9 @@ interface ITradeStorage {
     function liquidationFee() external view returns (uint256);
     function minCollateralUsd() external view returns (uint256);
     function tradingFee() external view returns (uint256);
-    function executionFee() external view returns (uint256);
+    function market() external view returns (IMarket);
     function getOrder(bytes32 _key) external view returns (Position.Request memory _order);
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory);
     function getOrderAtIndex(uint256 _index, bool _isLimit) external view returns (bytes32);
     function minBlockDelay() external view returns (uint256);
-    function adjustLimitOrder(
-        bytes32 _orderKey,
-        address _caller,
-        Position.Conditionals calldata _conditionals,
-        uint256 _sizeDelta,
-        uint256 _collateralDelta,
-        uint256 _collateralProvided,
-        uint256 _limitPrice,
-        uint256 _maxSlippage,
-        bool _isLong
-    ) external returns (uint256 refundAmount, uint256 fee, address market);
 }

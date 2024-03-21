@@ -21,12 +21,12 @@ import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 import {Pricing} from "../../../src/libraries/Pricing.sol";
-import {Execution} from "../../../src/positions/Execution.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {Fee} from "../../../src/libraries/Fee.sol";
+import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 
-contract TestMarketAllocations is Test {
+contract TestSlTpOrders is Test {
     using SignedMath for int256;
 
     RoleStorage roleStorage;
@@ -45,17 +45,21 @@ contract TestMarketAllocations is Test {
     bytes32 ethPriceId;
     bytes32 usdcPriceId;
 
-    bytes32 ethAssetId = keccak256(abi.encode("ETH"));
-    bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
-
     bytes[] tokenUpdateData;
     uint256[] allocations;
+
+    address USER = makeAddr("USER");
+    address RANDOM1 = makeAddr("RANDOM1");
+    address RANDOM2 = makeAddr("RANDOM2");
+    address RANDOM3 = makeAddr("RANDOM3");
+
     bytes32[] assetIds;
     uint256[] compactedPrices;
 
     Oracle.PriceUpdateData ethPriceData;
 
-    address USER = makeAddr("USER");
+    bytes32 ethAssetId = keccak256(abi.encode("ETH"));
+    bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -139,16 +143,16 @@ contract TestMarketAllocations is Test {
         tradeStorage = market.tradeStorage();
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
+        router.createDeposit{value: 10_000.01 ether + 1 gwei}(market, OWNER, weth, 10_000 ether, 0.01 ether, true);
         bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 25_000_000e6, 0.01 ether, false);
         depositKey = market.getDepositRequestAtIndex(0).key;
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
         uint256 allocation = 10000;
@@ -160,130 +164,5 @@ contract TestMarketAllocations is Test {
         _;
     }
 
-    /**
-     * Tests Required:
-     *
-     *     - Listing multiple assets under the same market
-     *     - Dividing liquidity between multiple assets in the same market
-     *     - Testing data storage for different assets within the same market
-     */
-    function testCreatingMultipleAssetsUnderTheSameMarket() public {
-        // create some assets
-        IVault.VaultConfig memory wethVaultDetails = IVault.VaultConfig({
-            longToken: weth,
-            shortToken: usdc,
-            longBaseUnit: 1e18,
-            shortBaseUnit: 1e6,
-            feeScale: 0.03e18,
-            feePercentageToOwner: 0.2e18,
-            minTimeToExpiration: 1 minutes,
-            priceFeed: address(priceFeed),
-            positionManager: address(positionManager),
-            poolOwner: OWNER,
-            feeDistributor: OWNER,
-            name: "WETH/USDC",
-            symbol: "WETH/USDC"
-        });
-        Oracle.Asset memory wethData = Oracle.Asset({
-            isValid: true,
-            chainlinkPriceFeed: address(0),
-            priceId: ethPriceId,
-            baseUnit: 1e18,
-            heartbeatDuration: 1 minutes,
-            maxPriceDeviation: 0.01e18,
-            priceSpread: 0.1e18,
-            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
-            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            pool: Oracle.UniswapPool({
-                token0: weth,
-                token1: usdc,
-                poolAddress: address(0),
-                poolType: Oracle.PoolType.UNISWAP_V3
-            })
-        });
-        Oracle.Asset memory asset1 = Oracle.Asset({
-            isValid: true,
-            chainlinkPriceFeed: address(0),
-            priceId: ethPriceId,
-            baseUnit: 1e18,
-            heartbeatDuration: 1 minutes,
-            maxPriceDeviation: 0.01e18,
-            priceSpread: 0.01e18,
-            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
-            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)
-        });
-        Oracle.Asset memory asset2 = Oracle.Asset({
-            isValid: true,
-            chainlinkPriceFeed: address(0),
-            priceId: ethPriceId,
-            baseUnit: 1e18,
-            heartbeatDuration: 1 minutes,
-            maxPriceDeviation: 0.01e18,
-            priceSpread: 0.01e18,
-            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
-            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)
-        });
-        Oracle.Asset memory asset3 = Oracle.Asset({
-            isValid: true,
-            chainlinkPriceFeed: address(0),
-            priceId: ethPriceId,
-            baseUnit: 1e18,
-            heartbeatDuration: 1 minutes,
-            maxPriceDeviation: 0.01e18,
-            priceSpread: 0.01e18,
-            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
-            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)
-        });
-
-        IMarket marketInterface =
-            IMarket(marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData));
-
-        uint256 firstAllocation = 5000;
-        uint256 secondAllocation = 5000;
-
-        uint256 encodedAllocation = firstAllocation << 240;
-
-        encodedAllocation |= secondAllocation << 224;
-
-        delete allocations; // clear allocations
-        allocations.push(encodedAllocation);
-
-        // split the allocation between the markets
-        marketMaker.addTokenToMarket(
-            marketInterface, keccak256(abi.encode("RANDOM_ERC")), ethPriceId, asset1, allocations
-        );
-
-        assertEq(marketInterface.getAllocation(keccak256(abi.encode("RANDOM_ERC"))), 5000);
-
-        firstAllocation = 3334;
-        secondAllocation = 3333;
-
-        encodedAllocation = firstAllocation << 240;
-        encodedAllocation |= secondAllocation << 224;
-        encodedAllocation |= secondAllocation << 208;
-
-        delete allocations;
-        allocations.push(encodedAllocation);
-        marketMaker.addTokenToMarket(
-            marketInterface, keccak256(abi.encode("RANDOM_ERC_2")), ethPriceId, asset2, allocations
-        );
-
-        assertEq(marketInterface.getAllocation(keccak256(abi.encode("RANDOM_ERC_2"))), 3333);
-
-        firstAllocation = 2500;
-
-        encodedAllocation = firstAllocation << 240;
-        encodedAllocation |= firstAllocation << 224;
-        encodedAllocation |= firstAllocation << 208;
-        encodedAllocation |= firstAllocation << 192;
-
-        delete allocations;
-        allocations.push(encodedAllocation);
-        marketMaker.addTokenToMarket(
-            marketInterface, keccak256(abi.encode("RANDOM_ERC_3")), ethPriceId, asset3, allocations
-        );
-    }
+    // @audit - complete tests
 }

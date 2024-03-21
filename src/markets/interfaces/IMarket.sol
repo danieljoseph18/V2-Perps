@@ -2,6 +2,7 @@
 pragma solidity 0.8.23;
 
 import {IVault} from "./IVault.sol";
+import {ITradeStorage} from "../../positions/interfaces/ITradeStorage.sol";
 
 interface IMarket is IVault {
     /**
@@ -54,8 +55,10 @@ interface IMarket is IVault {
         uint48 lastBorrowUpdate;
         uint256 longBorrowingRate;
         uint256 longCumulativeBorrowFees;
+        uint256 weightedAvgCumulativeLong;
         uint256 shortBorrowingRate;
         uint256 shortCumulativeBorrowFees;
+        uint256 weightedAvgCumulativeShort;
     }
 
     struct OpenInterestValues {
@@ -158,6 +161,8 @@ interface IMarket is IVault {
     error Market_InvalidCumulativeAllocation();
     error Market_FailedToAddAssetId();
     error Market_FailedToRemoveAssetId();
+    error Market_AlreadyInitialized();
+    error Market_MaxAssetsReached();
 
     /**
      * ================ Events ================
@@ -172,10 +177,12 @@ interface IMarket is IVault {
         bytes32 indexed assetId, uint256 longAverageEntryPriceUsd, uint256 shortAverageEntryPriceUsd
     );
     event OpenInterestUpdated(bytes32 indexed assetId, uint256 longOpenInterestUsd, uint256 shortOpenInterestUsd);
+    event Market_Initialzied();
 
     /**
      * ================ Functions ================
      */
+    function initialize(ITradeStorage _tradeStorage) external;
     function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations) external;
     function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external;
     function updateConfig(Config memory _config, bytes32 _assetId) external;
@@ -193,7 +200,9 @@ interface IMarket is IVault {
         external;
     function updateOpenInterest(bytes32 _assetId, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd) external;
     function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external;
+    function setAllocationsWithBits(uint256[] memory _allocations) external;
 
+    function tradeStorage() external view returns (ITradeStorage);
     function getAssetIds() external view returns (bytes32[] memory);
     function getAssetsInMarket() external view returns (uint256);
     function getStorage(bytes32 _assetId) external view returns (MarketStorage memory);
@@ -215,5 +224,6 @@ interface IMarket is IVault {
     function getLastBorrowingUpdate(bytes32 _assetId) external view returns (uint48);
     function getFundingRates(bytes32 _assetId) external view returns (int256, int256);
     function getBorrowingRate(bytes32 _assetId, bool _isLong) external view returns (uint256);
+    function getAverageCumulativeBorrowFee(bytes32 _assetId, bool _isLong) external view returns (uint256);
     function getImpactPool(bytes32 _assetId) external view returns (uint256);
 }

@@ -13,6 +13,7 @@ interface IPriceFeed {
     error PriceFeed_InvalidPrimaryStrategy();
     error PriceFeed_FailedToClearPrices();
     error PriceFeed_InvalidGasParams();
+    error PriceFeed_FailedToRemovePrice();
 
     function supportAsset(bytes32 _assetId, Oracle.Asset memory _asset) external;
     function unsupportAsset(bytes32 _assetId) external;

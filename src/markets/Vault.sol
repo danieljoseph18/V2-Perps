@@ -153,7 +153,7 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
 
     function updateFees(address _poolOwner, address _feeDistributor, uint256 _feeScale, uint256 _feePercentageToOwner)
         external
-        onlyConfigurator
+        onlyConfigurator(address(this))
     {
         if (_poolOwner == address(0)) revert Vault_InvalidPoolOwner();
         if (_feeDistributor == address(0)) revert Vault_InvalidFeeDistributor();
@@ -165,11 +165,11 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         feePercentageToOwner = _feePercentageToOwner;
     }
 
-    function updatepositionManager(IPositionManager _positionManager) external onlyConfigurator {
+    function updatePositionManager(IPositionManager _positionManager) external onlyConfigurator(address(this)) {
         positionManager = _positionManager;
     }
 
-    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator(address(this)) {
         priceFeed = _priceFeed;
     }
 
@@ -192,25 +192,27 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         emit FeesWithdrawn(longFees, shortFees);
     }
 
-    // @audit - Should NEVER be able to transfer out tokens reserved for positions
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
-        onlyTradeStorage
+        onlyTradeStorage(address(this))
         nonReentrant
     {
+        uint256 available =
+            _isLongToken ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
+        if (_amount > available) revert Vault_InsufficientAvailableTokens();
         _transferOutTokens(_to, _amount, _isLongToken, _shouldUnwrap);
     }
 
-    function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorage {
+    function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorage(address(this)) {
         _accumulateFees(_amount, _isLong);
         emit FeesAccumulated(_amount, _isLong);
     }
 
-    function reserveLiquidity(uint256 _amount, bool _isLong) external onlyTradeStorage {
+    function reserveLiquidity(uint256 _amount, bool _isLong) external onlyTradeStorage(address(this)) {
         _isLong ? longTokensReserved += _amount : shortTokensReserved += _amount;
     }
 
-    function unreserveLiquidity(uint256 _amount, bool _isLong) external onlyTradeStorage {
+    function unreserveLiquidity(uint256 _amount, bool _isLong) external onlyTradeStorage(address(this)) {
         if (_isLong) {
             if (_amount > longTokensReserved) longTokensReserved = 0;
             else longTokensReserved -= _amount;
@@ -220,19 +222,25 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function increasePoolBalance(uint256 _amount, bool _isLong) external onlyTradeStorage {
+    function increasePoolBalance(uint256 _amount, bool _isLong) external onlyTradeStorage(address(this)) {
         _increasePoolBalance(_amount, _isLong);
     }
 
-    function decreasePoolBalance(uint256 _amount, bool _isLong) external onlyTradeStorage {
+    function decreasePoolBalance(uint256 _amount, bool _isLong) external onlyTradeStorage(address(this)) {
         _decreasePoolBalance(_amount, _isLong);
     }
 
-    function increaseCollateralAmount(uint256 _amount, address _user, bool _islong) external onlyTradeStorage {
+    function increaseCollateralAmount(uint256 _amount, address _user, bool _islong)
+        external
+        onlyTradeStorage(address(this))
+    {
         collateralAmounts[_user][_islong] += _amount;
     }
 
-    function decreaseCollateralAmount(uint256 _amount, address _user, bool _islong) external onlyTradeStorage {
+    function decreaseCollateralAmount(uint256 _amount, address _user, bool _islong)
+        external
+        onlyTradeStorage(address(this))
+    {
         if (_amount > collateralAmounts[_user][_islong]) revert Vault_InsufficientCollateral();
         else collateralAmounts[_user][_islong] -= _amount;
     }
@@ -263,7 +271,6 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         _deleteDeposit(_key);
     }
 
-    // @audit - ETH should always be wrapped when sent in
     function executeDeposit(ExecuteDeposit calldata _params)
         external
         onlyPositionManager
@@ -274,12 +281,14 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         // Delete Deposit Request
         _deleteDeposit(_params.key);
 
-        (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) =
-            Oracle.getMarketTokenPrices(_params.priceFeed);
-
         // Calculate Fee
         Fee.Params memory feeParams = Fee.constructFeeParams(
-            _params.market, _params.deposit.amountIn, _params.deposit.isLongToken, longPrices, shortPrices, true
+            _params.market,
+            _params.deposit.amountIn,
+            _params.deposit.isLongToken,
+            _params.longPrices,
+            _params.shortPrices,
+            true
         );
         uint256 fee = Fee.calculateForMarketAction(
             feeParams, longTokenBalance, LONG_BASE_UNIT, shortTokenBalance, SHORT_BASE_UNIT
@@ -290,7 +299,13 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
 
         // Calculate Mint amount with the remaining amount
         uint256 mintAmount = depositTokensToMarketTokens(
-            longPrices, shortPrices, afterFeeAmount, _params.cumulativePnl, _params.deposit.isLongToken
+            _params.longPrices,
+            _params.shortPrices,
+            afterFeeAmount,
+            _params.longBorrowFeesUsd,
+            _params.shortBorrowFeesUsd,
+            _params.cumulativePnl,
+            _params.deposit.isLongToken
         );
         // update storage
         _accumulateFees(fee, _params.deposit.isLongToken);
@@ -334,7 +349,6 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         _deleteWithdrawal(_key);
     }
 
-    // @audit - review
     function executeWithdrawal(ExecuteWithdrawal calldata _params)
         external
         onlyPositionManager
@@ -354,6 +368,8 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
             _params.longPrices,
             _params.shortPrices,
             _params.withdrawal.marketTokenAmountIn,
+            _params.longBorrowFeesUsd,
+            _params.shortBorrowFeesUsd,
             _params.cumulativePnl,
             _params.withdrawal.isLongToken
         );
@@ -418,6 +434,8 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
         uint256 _amountIn,
+        uint256 _longBorrowFeesUsd,
+        uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl,
         bool _isLongToken
     ) public view returns (uint256 marketTokenAmount) {
@@ -427,7 +445,11 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
             : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, SHORT_BASE_UNIT);
         // Maximise
         uint256 marketTokenPrice = getMarketTokenPrice(
-            _longPrices.price + _longPrices.confidence, _shortPrices.price + _shortPrices.confidence, _cumulativePnl
+            _longPrices.price + _longPrices.confidence,
+            _longBorrowFeesUsd,
+            _shortPrices.price + _shortPrices.confidence,
+            _shortBorrowFeesUsd,
+            _cumulativePnl
         );
         return marketTokenPrice == 0 ? valueUsd : mulDiv(valueUsd, SCALING_FACTOR, marketTokenPrice);
     }
@@ -436,11 +458,17 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
         uint256 _marketTokenAmountIn,
+        uint256 _longBorrowFeesUsd,
+        uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl,
         bool _isLongToken
     ) public view returns (uint256 tokenAmount) {
         uint256 marketTokenPrice = getMarketTokenPrice(
-            _longPrices.price - _longPrices.confidence, _shortPrices.price - _shortPrices.confidence, _cumulativePnl
+            _longPrices.price - _longPrices.confidence,
+            _longBorrowFeesUsd,
+            _shortPrices.price - _shortPrices.confidence,
+            _shortBorrowFeesUsd,
+            _cumulativePnl
         );
         uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALING_FACTOR);
         if (_isLongToken) {
@@ -450,13 +478,15 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function getMarketTokenPrice(uint256 _longTokenPrice, uint256 _shortTokenPrice, int256 _cumulativePnl)
-        public
-        view
-        returns (uint256 lpTokenPrice)
-    {
+    function getMarketTokenPrice(
+        uint256 _longTokenPrice,
+        uint256 _longBorrowFeesUsd,
+        uint256 _shortTokenPrice,
+        uint256 _shortBorrowFeesUsd,
+        int256 _cumulativePnl
+    ) public view returns (uint256 lpTokenPrice) {
         // market token price = (worth of market pool in USD) / total supply
-        uint256 aum = getAum(_longTokenPrice, _shortTokenPrice, _cumulativePnl);
+        uint256 aum = getAum(_longTokenPrice, _longBorrowFeesUsd, _shortTokenPrice, _shortBorrowFeesUsd, _cumulativePnl);
         if (aum == 0 || totalSupply() == 0) {
             lpTokenPrice = 0;
         } else {
@@ -464,15 +494,23 @@ contract Vault is IVault, ERC20, RoleValidation, ReentrancyGuard {
         }
     }
 
-    // @audit - probably need to account for some fees
-    function getAum(uint256 _longTokenPrice, uint256 _shortTokenPrice, int256 _cumulativePnl)
-        public
-        view
-        returns (uint256 aum)
-    {
+    // Funding Fees should be balanced between the longs and shorts, so don't need to be accounted for.
+    // They are however settled through the pool, so maybe they should be accounted for?
+    // If not, we must reduce the pool balance for each funding claim, which will account for them.
+    function getAum(
+        uint256 _longTokenPrice,
+        uint256 _longBorrowFeesUsd,
+        uint256 _shortTokenPrice,
+        uint256 _shortBorrowFeesUsd,
+        int256 _cumulativePnl
+    ) public view returns (uint256 aum) {
         // Get Values in USD -> Subtract reserved amounts from AUM
         uint256 longTokenValue = mulDiv(longTokenBalance - longTokensReserved, _longTokenPrice, LONG_BASE_UNIT);
         uint256 shortTokenValue = mulDiv(shortTokenBalance - shortTokensReserved, _shortTokenPrice, SHORT_BASE_UNIT);
+
+        // Add Borrow Fees
+        longTokenValue += _longBorrowFeesUsd;
+        shortTokenValue += _shortBorrowFeesUsd;
 
         // Calculate AUM
         aum = _cumulativePnl >= 0

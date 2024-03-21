@@ -23,14 +23,22 @@ library Pricing {
     /// @dev returns PNL in USD
     /// @dev returns PNL in USD
     // PNL = (Current Price - Average Entry Price) * (Position Value / Average Entry Price)
-    function getPositionPnl(Position.Data memory _position, uint256 _indexPrice, uint256 _indexBaseUnit)
-        external
-        pure
-        returns (int256)
-    {
-        int256 priceDelta = _indexPrice.toInt256() - _position.weightedAvgEntryPrice.toInt256();
-        uint256 entryIndexAmount = mulDiv(_position.positionSize, _indexBaseUnit, _position.weightedAvgEntryPrice);
-        if (_position.isLong) {
+    /**
+     * Need:
+     * - WAEP
+     * - Position Size
+     * - isLong
+     */
+    function getPositionPnl(
+        uint256 _positionSizeUsd,
+        uint256 _weightedAvgEntryPrice,
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
+        bool _isLong
+    ) public pure returns (int256) {
+        int256 priceDelta = _indexPrice.toInt256() - _weightedAvgEntryPrice.toInt256();
+        uint256 entryIndexAmount = mulDiv(_positionSizeUsd, _indexBaseUnit, _weightedAvgEntryPrice);
+        if (_isLong) {
             return mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
             return -mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
@@ -56,8 +64,7 @@ library Pricing {
         // Increasing position size
         uint256 newPositionSize = _prevPositionSize + _sizeDelta.abs();
 
-        uint256 numerator = _prevAverageEntryPrice * _prevPositionSize;
-        numerator += _indexPrice * _sizeDelta.abs();
+        uint256 numerator = (_prevAverageEntryPrice * _prevPositionSize) + (_indexPrice * _sizeDelta.abs());
 
         uint256 newAverageEntryPrice = numerator / newPositionSize;
 
@@ -121,27 +128,24 @@ library Pricing {
         return longPnl + shortPnl;
     }
 
-    /// @dev Returns fractional PNL in USD
-    // @audit - is this correct? Should be (totalPnl * % of position being realized)
-    // @audit - blend into the get position pnl function
-    function getDecreasePositionPnl(
+    /// @dev Returns fractional PNL in Collateral tokens
+    function getRealizedPnl(
+        uint256 _positionSizeUsd,
         uint256 _sizeDeltaUsd,
-        uint256 _averageEntryPriceUsd,
+        uint256 _weightedAvgEntryPrice,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
-        uint256 _collateralPriceUsd,
+        uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external pure returns (int256 decreasePositionPnl) {
-        int256 priceDelta = _indexPrice.toInt256() - _averageEntryPriceUsd.toInt256();
-        uint256 entryIndexAmount = mulDiv(_sizeDeltaUsd, _indexBaseUnit, _averageEntryPriceUsd);
-        int256 pnlUsd;
-        if (_isLong) {
-            pnlUsd = mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
-        } else {
-            pnlUsd = -mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
-        }
-        uint256 pnlCollateral = mulDiv(pnlUsd.abs(), _collateralBaseUnit, _collateralPriceUsd);
-        return pnlUsd > 0 ? pnlCollateral.toInt256() : -pnlCollateral.toInt256();
+        // Calculate whole position Pnl
+        int256 positionPnl =
+            getPositionPnl(_positionSizeUsd, _weightedAvgEntryPrice, _indexPrice, _indexBaseUnit, _isLong);
+        // Get (% realised) * pnl
+        int256 realizedPnl = mulDivSigned(positionPnl, _sizeDeltaUsd.toInt256(), _positionSizeUsd.toInt256());
+        // Convert from USD to collateral tokens
+        decreasePositionPnl =
+            mulDivSigned(realizedPnl, _collateralBaseUnit.toInt256(), _collateralTokenPrice.toInt256());
     }
 }

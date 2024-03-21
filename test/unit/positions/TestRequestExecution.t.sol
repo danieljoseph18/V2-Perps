@@ -4,11 +4,10 @@ pragma solidity 0.8.23;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
@@ -22,10 +21,10 @@ import {Funding} from "../../../src/libraries/Funding.sol";
 
 contract TestRequestExecution is Test {
     RoleStorage roleStorage;
-    GlobalMarketConfig globalMarketConfig;
+
     MarketMaker marketMaker;
     IPriceFeed priceFeed; // Deployed in Helper Config
-    TradeStorage tradeStorage;
+    ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
     Router router;
@@ -53,10 +52,9 @@ contract TestRequestExecution is Test {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
-        globalMarketConfig = contracts.globalMarketConfig;
+
         marketMaker = contracts.marketMaker;
         priceFeed = contracts.priceFeed;
-        tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
@@ -129,6 +127,7 @@ contract TestRequestExecution is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
+        tradeStorage = market.tradeStorage();
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
@@ -186,7 +185,7 @@ contract TestRequestExecution is Test {
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         uint256 vaultBalance = WETH(weth).balanceOf(address(market));
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
         // Check that the tokens for the position are stored in the Market contract
         uint256 positionManagerBalanceAfterExecution = WETH(weth).balanceOf(address(positionManager));
         assertEq(positionManagerBalanceAfterExecution, 0);
@@ -225,7 +224,7 @@ contract TestRequestExecution is Test {
         // Get the size of the impact pool before the position is executed
         uint256 impactPoolBefore = IMarket(marketMaker.tokenToMarkets(ethAssetId)).getImpactPool(ethAssetId);
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
         // Get the size of the impact pool after the position is executed
         uint256 impactPoolAfter = IMarket(marketMaker.tokenToMarkets(ethAssetId)).getImpactPool(ethAssetId);
         // Check that the impact pool has been updated
@@ -276,7 +275,7 @@ contract TestRequestExecution is Test {
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
 
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
         // Check that the prices are based on the price at the request block
         bytes32 positionKey = keccak256(abi.encode(ethAssetId, OWNER, input.isLong));
         Position.Data memory position = tradeStorage.getPosition(positionKey);
@@ -316,7 +315,7 @@ contract TestRequestExecution is Test {
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
 
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
 
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
@@ -364,7 +363,7 @@ contract TestRequestExecution is Test {
         bytes32 closeOrderKey = tradeStorage.getOrderAtIndex(0, false);
         uint256 balanceBefore = OWNER.balance;
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(closeOrderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, closeOrderKey, OWNER, ethPriceData);
         uint256 balanceAfter = OWNER.balance;
         // Check that the user receives profit
         assertGt(balanceAfter, balanceBefore);
@@ -400,7 +399,7 @@ contract TestRequestExecution is Test {
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
 
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
 
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
@@ -449,7 +448,7 @@ contract TestRequestExecution is Test {
         bytes32 closeOrderKey = tradeStorage.getOrderAtIndex(0, false);
         uint256 balanceBefore = OWNER.balance;
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(closeOrderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, closeOrderKey, OWNER, ethPriceData);
         uint256 balanceAfter = OWNER.balance;
         // Check that the user accrues losses
         uint256 expectedAmountOut = 0.5 ether;
@@ -489,7 +488,7 @@ contract TestRequestExecution is Test {
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
 
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
         // pass some time
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
@@ -514,7 +513,7 @@ contract TestRequestExecution is Test {
         // execute the request
         orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
         // check the market parameters
         longOpenInterest = market.getOpenInterest(ethAssetId, true);
         assertEq(longOpenInterest, 2000e30);

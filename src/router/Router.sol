@@ -23,7 +23,6 @@ contract Router is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IWETH;
     using Address for address payable;
 
-    ITradeStorage private tradeStorage;
     IMarketMaker private marketMaker;
     IPriceFeed private priceFeed;
     IERC20 private immutable USDC;
@@ -47,7 +46,6 @@ contract Router is ReentrancyGuard, RoleValidation {
     error Router_InvalidSizeDelta();
 
     constructor(
-        address _tradeStorage,
         address _marketMaker,
         address _priceFeed,
         address _usdc,
@@ -55,7 +53,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         address _positionManager,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
-        tradeStorage = ITradeStorage(_tradeStorage);
         marketMaker = IMarketMaker(_marketMaker);
         priceFeed = IPriceFeed(_priceFeed);
         USDC = IERC20(_usdc);
@@ -65,13 +62,12 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     receive() external payable {}
 
-    function updateConfig(address _tradeStorage, address _marketMaker, address _positionManager) external onlyAdmin {
-        tradeStorage = ITradeStorage(_tradeStorage);
+    function updateConfig(address _marketMaker, address _positionManager) external onlyAdmin {
         marketMaker = IMarketMaker(_marketMaker);
         positionManager = IPositionManager(_positionManager);
     }
 
-    function updatePriceFeed(IPriceFeed _priceFeed) external onlyConfigurator {
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyAdmin {
         priceFeed = _priceFeed;
     }
 
@@ -130,6 +126,8 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     function createPositionRequest(Position.Input memory _trade) external payable nonReentrant {
+        // Get the market to direct the user to
+        // @gas - can we cache the market and tradestorage within the request?
         address market = marketMaker.tokenToMarkets(_trade.assetId);
 
         /**
@@ -174,13 +172,15 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Construct the state for Order Creation
         bytes32 positionKey = Position.validateInputParameters(_trade, market);
 
+        ITradeStorage tradeStorage = IMarket(market).tradeStorage();
+
         Position.Data memory position = tradeStorage.getPosition(positionKey);
 
         // Set the Request Type
         Position.RequestType requestType = Position.getRequestType(_trade, position);
 
         // Construct the Request from the user input
-        Position.Request memory request = Position.createRequest(_trade, market, msg.sender, requestType);
+        Position.Request memory request = Position.createRequest(_trade, msg.sender, requestType);
 
         // Store the Order Request
         tradeStorage.createOrderRequest(request);
@@ -192,8 +192,6 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit Router_PriceUpdateRequested(_trade.assetId, block.number);
     }
 
-    // @audit - need to update collateral balance wherever collateral is stored
-    // @audit - decrease requests won't have any transfer in
     function _handleTokenTransfers(Position.Input memory _trade) private {
         if (_trade.reverseWrap) {
             if (_trade.collateralToken != address(WETH)) revert Router_InvalidCollateralToken();

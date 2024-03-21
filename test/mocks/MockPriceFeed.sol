@@ -140,8 +140,12 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
     function clearPrimaryPrices() external {
         bytes32[] memory keys = assetsWithPrices.values();
         uint256 len = keys.length;
-        for (uint256 i = 0; i < len; i++) {
-            assetsWithPrices.remove(keys[i]);
+        for (uint256 i = 0; i < len;) {
+            bool success = assetsWithPrices.remove(keys[i]);
+            if (!success) revert PriceFeed_FailedToRemovePrice();
+            unchecked {
+                ++i;
+            }
         }
         if (assetsWithPrices.length() != 0) revert PriceFeed_FailedToClearPrices();
         emit PriceFeed_PricesCleared();

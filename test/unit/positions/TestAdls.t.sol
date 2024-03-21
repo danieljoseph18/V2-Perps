@@ -4,11 +4,10 @@ pragma solidity 0.8.23;
 import {Test, console, console2, stdStorage, StdStorage} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
@@ -32,10 +31,10 @@ contract TestADLs is Test {
     using stdStorage for StdStorage;
 
     RoleStorage roleStorage;
-    GlobalMarketConfig globalMarketConfig;
+
     MarketMaker marketMaker;
     IPriceFeed priceFeed; // Deployed in Helper Config
-    TradeStorage tradeStorage;
+    ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
     Router router;
@@ -67,10 +66,9 @@ contract TestADLs is Test {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
-        globalMarketConfig = contracts.globalMarketConfig;
+
         marketMaker = contracts.marketMaker;
         priceFeed = contracts.priceFeed;
-        tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
@@ -143,6 +141,7 @@ contract TestADLs is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
+        tradeStorage = market.tradeStorage();
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 10_000.01 ether + 1 gwei}(market, OWNER, weth, 10_000 ether, 0.01 ether, true);
@@ -218,15 +217,15 @@ contract TestADLs is Test {
         // Execute the Position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, USER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, USER, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, RANDOM1, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, RANDOM1, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, RANDOM2, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, RANDOM2, ethPriceData);
         orderKey = tradeStorage.getOrderAtIndex(0, false);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, RANDOM3, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, RANDOM3, ethPriceData);
 
         vm.warp(block.timestamp + 10);
         vm.roll(block.number + 1);
@@ -240,7 +239,7 @@ contract TestADLs is Test {
         vm.prank(OWNER);
         positionManager.flagForAdl{value: 0.01 ether}(market, ethAssetId, false, ethPriceData);
         // get one of the position keys
-        bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(address(market), false);
+        bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(false);
         // adl it
         vm.prank(OWNER);
         positionManager.executeAdl{value: 0.01 ether}(market, ethAssetId, 5000e30, positionKeys[0], false, ethPriceData);

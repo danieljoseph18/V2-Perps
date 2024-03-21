@@ -4,11 +4,10 @@ pragma solidity 0.8.23;
 import {Test, console, console2, stdStorage, StdStorage} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {GlobalMarketConfig} from "../../../src/markets/GlobalMarketConfig.sol";
 import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
 import {PositionManager} from "../../../src/router/PositionManager.sol";
 import {Router} from "../../../src/router/Router.sol";
@@ -31,10 +30,10 @@ contract TestLiquidations is Test {
     using stdStorage for StdStorage;
 
     RoleStorage roleStorage;
-    GlobalMarketConfig globalMarketConfig;
+
     MarketMaker marketMaker;
     IPriceFeed priceFeed; // Deployed in Helper Config
-    TradeStorage tradeStorage;
+    ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
     Router router;
@@ -62,10 +61,9 @@ contract TestLiquidations is Test {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
         roleStorage = contracts.roleStorage;
-        globalMarketConfig = contracts.globalMarketConfig;
+
         marketMaker = contracts.marketMaker;
         priceFeed = contracts.priceFeed;
-        tradeStorage = contracts.tradeStorage;
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
@@ -138,6 +136,7 @@ contract TestLiquidations is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
+        tradeStorage = market.tradeStorage();
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
@@ -191,7 +190,7 @@ contract TestLiquidations is Test {
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
 
         vm.prank(OWNER);
-        positionManager.executePosition{value: 0.0001 ether}(orderKey, OWNER, ethPriceData);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
 
         vm.warp(block.timestamp + 10);
         vm.roll(block.number + 10);
@@ -204,8 +203,8 @@ contract TestLiquidations is Test {
         ethPriceData.pythData = tokenUpdateData;
 
         // liquidate it
-        bytes32 positionKey = tradeStorage.getOpenPositionKeys(address(market), true)[0];
+        bytes32 positionKey = tradeStorage.getOpenPositionKeys(true)[0];
         vm.prank(OWNER);
-        positionManager.liquidatePosition{value: 0.0001 ether}(positionKey, ethPriceData);
+        positionManager.liquidatePosition{value: 0.0001 ether}(market, positionKey, ethPriceData);
     }
 }
