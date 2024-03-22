@@ -151,7 +151,7 @@ library Position {
         pure
         returns (RequestType requestType)
     {
-        // Case 1: Position doesn't exist (Create Position)
+        // Case 1: Position doesn't exist (Create Position (Market / Limit))
         if (_position.user == address(0)) {
             if (!_trade.isIncrease) revert Position_InvalidDecrease();
             if (_trade.sizeDelta == 0) revert Position_SizeDelta();
@@ -164,14 +164,27 @@ library Position {
                 if (_position.collateralAmount < _trade.collateralDelta) revert Position_DeltaExceedsCollateral();
                 requestType = RequestType.COLLATERAL_DECREASE;
             }
+        } else if (_trade.isIncrease) {
+            // Case 3: Trade is a Market / Limit Increase on an Existing Position
+            requestType = RequestType.POSITION_INCREASE;
         } else {
-            // Case 3: Position exists and sizeDelta is not 0 (Position Increase / Decrease)
-            if (_trade.sizeDelta == 0) revert Position_SizeDelta();
-            if (_trade.isIncrease) {
-                requestType = RequestType.POSITION_INCREASE;
+            // Case 4 & 5: Trade is a Market Decrease or Limit Order (SL / TP) on an Existing Position
+            if (_trade.collateralDelta > _position.collateralAmount) revert Position_InvalidCollateralDelta();
+            if (_trade.sizeDelta > _position.positionSize) revert Position_InvalidSizeDelta();
+
+            if (_trade.isLimit) {
+                // Case 4: Trade is a Limit Order on an Existing Position (SL / TP)
+                if (_position.isLong) {
+                    requestType = (_trade.limitPrice > _position.weightedAvgEntryPrice)
+                        ? RequestType.TAKE_PROFIT
+                        : RequestType.STOP_LOSS;
+                } else {
+                    requestType = (_trade.limitPrice < _position.weightedAvgEntryPrice)
+                        ? RequestType.TAKE_PROFIT
+                        : RequestType.STOP_LOSS;
+                }
             } else {
-                if (_trade.collateralDelta > _position.collateralAmount) revert Position_InvalidCollateralDelta();
-                if (_trade.sizeDelta > _position.positionSize) revert Position_InvalidSizeDelta();
+                // Case 5: Trade is a Market Decrease on an Existing Position
                 requestType = RequestType.POSITION_DECREASE;
             }
         }
@@ -216,14 +229,6 @@ library Position {
                 _request.input.limitPrice // Enables multiple limit orders
             )
         );
-    }
-
-    function checkLimitPrice(uint256 _price, Input memory _request) external pure {
-        if (_request.isLong) {
-            if (_price > _request.limitPrice) revert Position_LimitPriceExceeded();
-        } else {
-            if (_price < _request.limitPrice) revert Position_LimitPriceExceeded();
-        }
     }
 
     function exists(Data memory _position) external pure returns (bool) {

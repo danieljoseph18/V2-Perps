@@ -116,12 +116,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Get the signed prices
         (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(priceFeed);
         // Calculate cumulative borrow fees
-        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(
-            market, params.longPrices.price - params.longPrices.confidence, LONG_BASE_UNIT, true
-        );
-        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(
-            market, params.shortPrices.price - params.shortPrices.confidence, SHORT_BASE_UNIT, false
-        );
+        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
+        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
         // Calculate Cumulative PNL
         params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.deposit.isLongToken, true); // Maximize AUM for deposits
         try market.executeDeposit(params) {}
@@ -179,12 +175,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Calculate the amount out
         (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(params.priceFeed);
         // Calculate cumulative borrow fees
-        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(
-            market, params.longPrices.price - params.longPrices.confidence, LONG_BASE_UNIT, true
-        );
-        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(
-            market, params.shortPrices.price - params.shortPrices.confidence, SHORT_BASE_UNIT, false
-        );
+        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
+        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
         // Calculate amountOut
         params.amountOut = market.withdrawMarketTokensToTokens(
             params.longPrices,
@@ -227,7 +219,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     }
 
     // Used to transfer intermediary tokens to the market from deposits
-    // @audit - permissions
+    // @audit - permissions -> could someone create a malicious market and transfer tokens from it?
+    // how do we make sure only the intended market can call this?
     function transferDepositTokens(address _market, address _token, uint256 _amount) external onlyMarket {
         IERC20(_token).safeTransfer(_market, _amount);
     }
@@ -528,7 +521,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
             // Use Impacted Price for Entry
             int256 signedSizeDelta = _isIncrease ? _sizeDelta.toInt256() : -_sizeDelta.toInt256();
             // 2. Relies on Open Interest Delta
-            market.updateAverageEntryPrice(_assetId, _state.impactedPrice, signedSizeDelta, _isLong);
+            market.updateWeightedAverages(_assetId, _state.impactedPrice, signedSizeDelta, _isLong);
             // 3. Updated pre-borrowing rate if size delta > 0
             market.updateOpenInterest(_assetId, _sizeDelta, _isLong, _isIncrease);
         }

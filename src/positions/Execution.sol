@@ -33,6 +33,7 @@ library Execution {
     error Execution_InvalidPriceRetrieval();
     error Execution_InvalidRequestKey();
     error Execution_InvalidFeeReceiver();
+    error Execution_LimitPriceNotMet();
 
     /**
      * ========================= Data Structures =========================
@@ -74,14 +75,29 @@ library Execution {
         request = tradeStorage.getOrder(_orderKey);
         if (request.user == address(0)) revert Execution_InvalidRequestKey();
         if (_feeReceiver == address(0)) revert Execution_InvalidFeeReceiver();
-        // Validate the request before continuing execution, if invalid, delete the request
+        // Validate the request before continuing execution
 
         // Fetch and validate price
         state =
             cacheTokenPrices(priceFeed, state, request.input.assetId, request.input.isLong, request.input.isIncrease);
 
-        if (request.input.isLimit) Position.checkLimitPrice(state.indexPrice, request.input);
         Position.validateRequest(market, marketMaker, request, state);
+
+        // Check the Price for Limit orders
+        if (request.input.isLimit) {
+            bool limitPriceCondition;
+            // For TP -> Position must be in profit
+            if (request.requestType == Position.RequestType.TAKE_PROFIT) {
+                limitPriceCondition = request.input.isLong
+                    ? state.indexPrice >= request.input.limitPrice
+                    : state.indexPrice <= request.input.limitPrice;
+            } else {
+                limitPriceCondition = request.input.isLong
+                    ? state.indexPrice <= request.input.limitPrice
+                    : state.indexPrice >= request.input.limitPrice;
+            }
+            if (!limitPriceCondition) revert Execution_LimitPriceNotMet();
+        }
 
         if (request.input.sizeDelta != 0) {
             // Execute Price Impact

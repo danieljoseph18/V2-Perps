@@ -92,6 +92,20 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         bool success = orderSet.add(orderKey);
         if (!success) revert TradeStorage_OrderAdditionFailed();
         orders[orderKey] = _request;
+        // If SL / TP, tie to the position
+        if (_request.requestType == Position.RequestType.STOP_LOSS) {
+            bytes32 positionKey = Position.generateKey(_request);
+            Position.Data memory position = openPositions[positionKey];
+            if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
+            if (position.stopLossKey != bytes32(0)) revert TradeStorage_StopLossAlreadySet();
+            openPositions[positionKey].stopLossKey = orderKey;
+        } else if (_request.requestType == Position.RequestType.TAKE_PROFIT) {
+            bytes32 positionKey = Position.generateKey(_request);
+            Position.Data memory position = openPositions[positionKey];
+            if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
+            if (position.takeProfitKey != bytes32(0)) revert TradeStorage_TakeProfitAlreadySet();
+            openPositions[positionKey].takeProfitKey = orderKey;
+        }
         // Fire Event
         emit OrderRequestCreated(orderKey, _request);
     }
@@ -290,7 +304,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         Position.Data memory positionBefore = openPositions[positionKey];
         if (!Position.exists(positionBefore)) revert TradeStorage_PositionDoesNotExist();
         // Delete the Order from Storage
-        _deleteOrder(_params.orderKey, _params.request.input.isLimit);
+        if (!_params.isAdl) _deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // If SL / TP, clear from the position
         if (_params.request.requestType == Position.RequestType.STOP_LOSS) {
             positionBefore.stopLossKey = bytes32(0);

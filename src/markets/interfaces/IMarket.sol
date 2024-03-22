@@ -196,8 +196,7 @@ interface IMarket is IVault {
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external;
-    function updateAverageEntryPrice(bytes32 _assetId, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
-        external;
+    function updateWeightedAverages(bytes32 _assetId, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong) external;
     function updateOpenInterest(bytes32 _assetId, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd) external;
     function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external;
     function setAllocationsWithBits(uint256[] memory _allocations) external;

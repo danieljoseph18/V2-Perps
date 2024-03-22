@@ -137,7 +137,10 @@ contract Market is Vault, IMarket {
         emit BorrowingRatesUpdated(_assetId, borrowing.longBorrowingRate, borrowing.shortBorrowingRate);
     }
 
-    function updateAverageEntryPrice(bytes32 _assetId, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
+    /**
+     * Updates the weighted average values for the market. Both rely on the market condition pre-open interest update.
+     */
+    function updateWeightedAverages(bytes32 _assetId, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
         external
         onlyPositionManager
     {
@@ -153,6 +156,8 @@ contract Market is Vault, IMarket {
                 _sizeDeltaUsd,
                 _priceUsd
             );
+            marketStorage[_assetId].borrowing.weightedAvgCumulativeLong =
+                Borrowing.getNextAverageCumulative(this, _assetId, _sizeDeltaUsd, true);
         } else {
             pnl.shortAverageEntryPriceUsd = Pricing.calculateWeightedAverageEntryPrice(
                 pnl.shortAverageEntryPriceUsd,
@@ -160,6 +165,8 @@ contract Market is Vault, IMarket {
                 _sizeDeltaUsd,
                 _priceUsd
             );
+            marketStorage[_assetId].borrowing.weightedAvgCumulativeShort =
+                Borrowing.getNextAverageCumulative(this, _assetId, _sizeDeltaUsd, false);
         }
 
         // Update Storage

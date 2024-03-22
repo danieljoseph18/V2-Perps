@@ -96,12 +96,7 @@ library Borrowing {
         totalFeesOwedUsd = _getTotalPositionFeesOwed(market, _position);
     }
 
-    function getTotalFeesOwedByMarkets(
-        IMarket market,
-        uint256 _marketTokenPrice,
-        uint256 _marketTokenBaseUnit,
-        bool _isLong
-    ) external view returns (uint256 totalFeeUsd) {
+    function getTotalFeesOwedByMarkets(IMarket market, bool _isLong) external view returns (uint256 totalFeeUsd) {
         bytes32[] memory assetIds = market.getAssetIds();
         uint256 len = assetIds.length;
         totalFeeUsd;
@@ -136,19 +131,32 @@ library Borrowing {
      * f_current: The current cumulative fee on the market.
      * p: The proportion of the new position size relative to the total open interest.
      */
-    function getNextAverageCumulative(IMarket market, bytes32 _assetId, uint256 _sizeDeltaUsd, bool _isLong)
+    function getNextAverageCumulative(IMarket market, bytes32 _assetId, int256 _sizeDeltaUsd, bool _isLong)
         external
         view
         returns (uint256 nextAverageCumulative)
     {
+        // Get the abs size delta
+        uint256 absSizeDelta = _sizeDeltaUsd.abs();
         // Get the Open Interest
         uint256 openInterestUsd = MarketUtils.getOpenInterestUsd(market, _assetId, _isLong);
-        // Get the percentage of the new position size relative to the total open interest
-        uint256 relativeSize = mulDiv(_sizeDeltaUsd, PRECISION, openInterestUsd);
         // Get the current cumulative fee on the market
-        uint256 currentCumulative = market.getCumulativeBorrowFee(_assetId, _isLong);
+        uint256 currentCumulative =
+            market.getCumulativeBorrowFee(_assetId, _isLong) + _calculatePendingFees(market, _assetId, _isLong);
         // Get the last weighted average entry cumulative fee
         uint256 lastCumulative = market.getAverageCumulativeBorrowFee(_assetId, _isLong);
+        // If OI before is 0, or last cumulative = 0, return current cumulative
+        if (openInterestUsd == 0 || lastCumulative == 0) return currentCumulative;
+        // If Position is Decrease
+        if (_sizeDeltaUsd < 0) {
+            // If full decrease, reset the average cumulative
+            if (absSizeDelta == openInterestUsd) return 0;
+            // Else, the cumulative shouldn't change
+            else return lastCumulative;
+        }
+        // If this point in execution is reached -> calculate the next average cumulative
+        // Get the percentage of the new position size relative to the total open interest
+        uint256 relativeSize = mulDiv(absSizeDelta, PRECISION, openInterestUsd);
         // Calculate the new weighted average entry cumulative fee
         nextAverageCumulative = mulDiv(lastCumulative, PRECISION - relativeSize, PRECISION)
             + mulDiv(currentCumulative, relativeSize, PRECISION);

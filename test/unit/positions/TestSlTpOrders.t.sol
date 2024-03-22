@@ -164,5 +164,417 @@ contract TestSlTpOrders is Test {
         _;
     }
 
-    // @audit - complete tests
+    function testCreatingAStopLossOrderDirectly() public setUpMarkets {
+        // Create a Position
+        Position.Input memory input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 10_000e30,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        router.createPositionRequest{value: 0.51 ether}(input);
+        positionManager.executePosition{value: 0.0001 ether}(
+            market, tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData
+        );
+        vm.stopPrank();
+        // Create a limit decrease with trigger price < entry price
+
+        input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.25 ether,
+            sizeDelta: 5000e30,
+            limitPrice: 2000e30,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: true,
+            isIncrease: false,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 0.01 ether}(input);
+    }
+
+    function testCreatingATakeProfitOrderDirectly() public setUpMarkets {
+        // Create a Position
+        Position.Input memory input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 10_000e30,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        router.createPositionRequest{value: 0.51 ether}(input);
+        positionManager.executePosition{value: 0.0001 ether}(
+            market, tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData
+        );
+        vm.stopPrank();
+        // Create a limit decrease with trigger price < entry price
+
+        input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.25 ether,
+            sizeDelta: 5000e30,
+            limitPrice: 5000e30,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: true,
+            isIncrease: false,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 0.01 ether}(input);
+    }
+
+    function testExecutingAStopLossOrderTiesItToThePosition() public setUpMarkets {
+        // Create a Position
+        Position.Input memory input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 10_000e30,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        router.createPositionRequest{value: 0.51 ether}(input);
+        positionManager.executePosition{value: 0.0001 ether}(
+            market, tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData
+        );
+        vm.stopPrank();
+        // Create a limit decrease with trigger price < entry price
+
+        input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.25 ether,
+            sizeDelta: 5000e30,
+            limitPrice: 2000e30,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: true,
+            isIncrease: false,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 0.01 ether}(input);
+
+        // Check the SL is linked
+        bytes32 posKey = keccak256(abi.encode(ethAssetId, OWNER, true));
+        bytes32 slKey = tradeStorage.getOrderAtIndex(0, true);
+        Position.Data memory position = tradeStorage.getPosition(posKey);
+        assertEq(slKey, position.stopLossKey);
+
+        // Update the price data
+        vm.startPrank(OWNER);
+        tokenUpdateData[0] = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 200000, 0, -2, 200000, 0, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
+        positionManager.executePosition{value: 0.0001 ether}(market, slKey, OWNER, ethPriceData);
+        vm.stopPrank();
+
+        position = tradeStorage.getPosition(posKey);
+        assertEq(position.positionSize, 5000e30);
+    }
+
+    function testExecutingATakeProfitOrderTiesItToThePosition() public setUpMarkets {
+        // Create a Position
+        Position.Input memory input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 10_000e30,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        router.createPositionRequest{value: 0.51 ether}(input);
+        positionManager.executePosition{value: 0.0001 ether}(
+            market, tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData
+        );
+        vm.stopPrank();
+        // Create a limit decrease with trigger price < entry price
+
+        input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.25 ether,
+            sizeDelta: 5000e30,
+            limitPrice: 5000e30,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: true,
+            isIncrease: false,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 0.01 ether}(input);
+
+        // Check the TP is linked
+        bytes32 posKey = keccak256(abi.encode(ethAssetId, OWNER, true));
+        bytes32 tpKey = tradeStorage.getOrderAtIndex(0, true);
+        Position.Data memory position = tradeStorage.getPosition(posKey);
+        assertEq(tpKey, position.stopLossKey);
+
+        // Update the price data
+        vm.startPrank(OWNER);
+        tokenUpdateData[0] = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 500000, 0, -2, 500000, 0, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
+        positionManager.executePosition{value: 0.0001 ether}(market, tpKey, OWNER, ethPriceData);
+        vm.stopPrank();
+
+        position = tradeStorage.getPosition(posKey);
+        assertEq(position.positionSize, 5000e30);
+    }
+
+    function testSlOrdersCantExecuteAtIncorrectSpecifiedPrices() public setUpMarkets {
+        // Create a Position
+        Position.Input memory input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 10_000e30,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        router.createPositionRequest{value: 0.51 ether}(input);
+        positionManager.executePosition{value: 0.0001 ether}(
+            market, tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData
+        );
+        vm.stopPrank();
+        // Create a limit decrease with trigger price < entry price
+
+        input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.25 ether,
+            sizeDelta: 5000e30,
+            limitPrice: 2000e30,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: true,
+            isIncrease: false,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 0.01 ether}(input);
+
+        // Check the SL is linked
+        bytes32 posKey = keccak256(abi.encode(ethAssetId, OWNER, true));
+        bytes32 slKey = tradeStorage.getOrderAtIndex(0, true);
+        Position.Data memory position = tradeStorage.getPosition(posKey);
+        assertEq(slKey, position.stopLossKey);
+
+        // Update the price data
+        vm.startPrank(OWNER);
+        tokenUpdateData[0] = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 250000, 0, -2, 250000, 0, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
+        vm.expectRevert();
+        positionManager.executePosition{value: 0.0001 ether}(market, slKey, OWNER, ethPriceData);
+        vm.stopPrank();
+    }
+
+    function testTpOrdersCantExecuteAtIncorrectPrices() public setUpMarkets {
+        // Create a Position
+        Position.Input memory input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 10_000e30,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.startPrank(OWNER);
+        router.createPositionRequest{value: 0.51 ether}(input);
+        positionManager.executePosition{value: 0.0001 ether}(
+            market, tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData
+        );
+        vm.stopPrank();
+        // Create a limit decrease with trigger price < entry price
+
+        input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.25 ether,
+            sizeDelta: 5000e30,
+            limitPrice: 5000e30,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: true,
+            isIncrease: false,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 0.01 ether}(input);
+
+        // Check the TP is linked
+        bytes32 posKey = keccak256(abi.encode(ethAssetId, OWNER, true));
+        bytes32 tpKey = tradeStorage.getOrderAtIndex(0, true);
+        Position.Data memory position = tradeStorage.getPosition(posKey);
+        assertEq(tpKey, position.takeProfitKey);
+
+        // Update the price data
+        vm.startPrank(OWNER);
+        tokenUpdateData[0] = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 490000, 0, -2, 490000, 0, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        ethPriceData =
+            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
+        vm.expectRevert();
+        positionManager.executePosition{value: 0.0001 ether}(market, tpKey, OWNER, ethPriceData);
+        vm.stopPrank();
+    }
 }

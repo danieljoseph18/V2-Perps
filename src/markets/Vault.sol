@@ -4,7 +4,6 @@ pragma solidity 0.8.23;
 import {IVault} from "./interfaces/IVault.sol";
 import {ERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {Withdrawal} from "./Withdrawal.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";

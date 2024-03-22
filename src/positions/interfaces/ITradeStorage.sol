@@ -63,6 +63,8 @@ interface ITradeStorage {
     error TradeStorage_InvalidCollateralDelta();
     error TradeStorage_OrderRemovalFailed();
     error TradeStorage_PositionRemovalFailed();
+    error TradeStorage_StopLossAlreadySet();
+    error TradeStorage_TakeProfitAlreadySet();
 
     function initialize(
         uint256 _liquidationFee,
