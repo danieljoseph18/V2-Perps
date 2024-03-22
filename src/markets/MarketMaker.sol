@@ -10,6 +10,8 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IReferralStorage} from "../referrals/ReferralStorage.sol";
+import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
+import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {Roles} from "../access/Roles.sol";
 
 /// @dev Needs MarketMaker Role
@@ -18,6 +20,18 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
 
     IPriceFeed priceFeed;
     IReferralStorage referralStorage;
+    IFeeDistributor feeDistributor;
+    IPositionManager positionManager;
+
+    uint256 private constant LONG_BASE_UNIT = 1e18;
+    uint256 private constant SHORT_BASE_UNIT = 1e6;
+    uint256 private constant MAX_FEE_SCALE = 0.1e18; // 10%
+    uint256 private constant MAX_FEE_TO_OWNER = 0.3e18; // 30%
+    uint256 private constant MIN_TIME_TO_EXPIRATION = 1 days; // @audit
+    uint256 private constant MAX_TIME_TO_EXPIRATION = 365 days; // @audit
+    uint256 private constant MAX_HEARTBEAT_DURATION = 1 days;
+    uint256 private constant MAX_PERCENTAGE = 1e18;
+    uint256 private constant MIN_PERCENTAGE = 0.01e18; // 1%
 
     EnumerableSet.AddressSet private markets;
     // switch to enumerable set? what if a token has 2+ markets?
@@ -25,20 +39,89 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     uint256[] private defaultAllocation;
 
     bool private isInitialized;
+    address private weth;
+    address private usdc;
     IMarket.Config public defaultConfig;
 
     constructor(address _roleStorage) RoleValidation(_roleStorage) {
         defaultAllocation.push(10000 << 240);
     }
 
-    function initialize(IMarket.Config memory _defaultConfig, address _priceFeed, address _referralStorage)
-        external
-        onlyAdmin
-    {
+    modifier validAsset(Oracle.Asset calldata _asset) {
+        if (!_asset.isValid) revert MarketMaker_InvalidAsset();
+        if (_asset.baseUnit != 1e18 && _asset.baseUnit != 1e8 && _asset.baseUnit != 1e6) {
+            revert MarketMaker_InvalidBaseUnit();
+        }
+        if (_asset.heartbeatDuration > MAX_HEARTBEAT_DURATION) {
+            revert MarketMaker_InvalidHeartbeatDuration();
+        }
+        if (_asset.maxPriceDeviation > MAX_PERCENTAGE || _asset.maxPriceDeviation < MIN_PERCENTAGE) {
+            revert MarketMaker_InvalidMaxPriceDeviation();
+        }
+        if (
+            _asset.primaryStrategy != Oracle.PrimaryStrategy.PYTH
+                && _asset.primaryStrategy != Oracle.PrimaryStrategy.OFFCHAIN
+        ) {
+            revert MarketMaker_InvalidPrimaryStrategy();
+        }
+
+        if (_asset.secondaryStrategy == Oracle.SecondaryStrategy.CHAINLINK && _asset.chainlinkPriceFeed == address(0)) {
+            revert MarketMaker_InvalidSecondaryStrategy();
+        } else if (_asset.secondaryStrategy == Oracle.SecondaryStrategy.AMM) {
+            if (
+                _asset.pool.poolType != Oracle.PoolType.UNISWAP_V3 && _asset.pool.poolType != Oracle.PoolType.UNISWAP_V2
+            ) {
+                revert MarketMaker_InvalidPoolType();
+            }
+            if (_asset.pool.token0 == address(0) || _asset.pool.token1 == address(0)) {
+                revert MarketMaker_InvalidPoolTokens();
+            }
+            if (_asset.pool.poolAddress == address(0)) {
+                revert MarketMaker_InvalidPoolAddress();
+            }
+        } else if (_asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+            revert MarketMaker_InvalidSecondaryStrategy();
+        }
+        _;
+    }
+
+    modifier validConfig(IVault.VaultConfig calldata _config) {
+        if (_config.priceFeed != address(priceFeed)) revert MarketMaker_InvalidPriceFeed();
+        if (
+            _config.longToken != weth || _config.shortToken != usdc || _config.longBaseUnit != LONG_BASE_UNIT
+                || _config.shortBaseUnit != SHORT_BASE_UNIT
+        ) {
+            revert MarketMaker_InvalidTokensOrBaseUnits();
+        }
+        if (_config.feeScale > MAX_FEE_SCALE || _config.feePercentageToOwner > MAX_FEE_TO_OWNER) {
+            revert MarketMaker_InvalidFeeConfig();
+        }
+        if (_config.poolOwner != msg.sender) revert MarketMaker_InvalidPoolOwner();
+        if (_config.positionManager != address(positionManager)) revert MarketMaker_InvalidPositionManager();
+        if (_config.feeDistributor != address(feeDistributor)) revert MarketMaker_InvalidFeeDistributor();
+        if (
+            _config.minTimeToExpiration < MIN_TIME_TO_EXPIRATION || _config.minTimeToExpiration > MAX_TIME_TO_EXPIRATION
+        ) revert MarketMaker_InvalidTimeToExpiration();
+        _;
+    }
+
+    function initialize(
+        IMarket.Config memory _defaultConfig,
+        address _priceFeed,
+        address _referralStorage,
+        address _feeDistributor,
+        address _positionManager,
+        address _weth,
+        address _usdc
+    ) external onlyAdmin {
         if (isInitialized) revert MarketMaker_AlreadyInitialized();
         priceFeed = IPriceFeed(_priceFeed);
         referralStorage = IReferralStorage(_referralStorage);
         defaultConfig = _defaultConfig;
+        feeDistributor = IFeeDistributor(_feeDistributor);
+        positionManager = IPositionManager(_positionManager);
+        weth = _weth;
+        usdc = _usdc;
         isInitialized = true;
         emit MarketMakerInitialized(_priceFeed);
     }
@@ -52,68 +135,52 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
-    /// @dev Only MarketFactory
-    // We need to enable the use of synthetic markets
-    // Can use an existing asset vault to attach multiple tokens to it, or
-    // create a new asset vault for the token
-    // @audit - config vulnerable?
-    /// @dev Once a Market is created, for it to be functional, must grant role
-    /// "MARKET"
-    /// Need to grant roles to TradeStorage too
-    /**
-     * New structure is going to deploy an instance of TradeStorage with each market.
-     * This will allow for a more scalable model.
-     * To do this we need to:
-     * - Make permissions more specific -> OnlyTradeStorage won't do with this model
-     * - Deploy a TradeStorage contract in this function alongisde each market.
-     * - Immutably store the TradeStorage contract within the market, so they're hard-linked.
-     *
-     * - Should also probably deploy a separate ReferralStorage for each market too?
-     *
-     * - add a flag for single asset markets to limit them to just 1 market. Only privileged roles
-     * should be able to launch multi asset markets
-     */
-    /**
-     * MarketMaker role should grant the contract permission to provide the roles:
-     * - Market
-     * - TradeStorage
-     */
+    function updateTokenAddresses(address _weth, address _usdc) external onlyAdmin {
+        weth = _weth;
+        usdc = _usdc;
+    }
+
+    function updateFeeDistributor(address _feeDistributor) external onlyAdmin {
+        feeDistributor = IFeeDistributor(_feeDistributor);
+    }
+
+    function updatePositionManager(address _positionManager) external onlyAdmin {
+        positionManager = IPositionManager(_positionManager);
+    }
+
     function createNewMarket(
-        IVault.VaultConfig memory _vaultDetails,
-        bytes32 _assetId, // use a bytes32 asset id instead???
+        IVault.VaultConfig calldata _vaultConfig,
+        bytes32 _assetId,
         bytes32 _priceId,
-        Oracle.Asset memory _asset
-    ) external nonReentrant onlyAdmin returns (address marketAddress) {
+        Oracle.Asset calldata _asset
+    ) external nonReentrant onlyAdmin validAsset(_asset) validConfig(_vaultConfig) returns (address) {
         if (_assetId == bytes32(0)) revert MarketMaker_InvalidAsset();
         if (_priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
-        if (_asset.baseUnit != 1e18 && _asset.baseUnit != 1e8 && _asset.baseUnit != 1e6) {
-            revert MarketMaker_InvalidBaseUnit();
-        }
         if (tokenToMarkets[_assetId] != address(0)) revert MarketMaker_MarketExists();
-        if (_vaultDetails.priceFeed != address(priceFeed)) revert MarketMaker_InvalidPriceFeed();
 
         // Set Up Price Oracle
         priceFeed.supportAsset(_assetId, _asset);
         // Create new Market contract
-        Market market = new Market(_vaultDetails, defaultConfig, _assetId, address(roleStorage));
+        Market market = new Market(_vaultConfig, defaultConfig, _assetId, address(roleStorage));
         // Create new TradeStorage contract
         TradeStorage tradeStorage = new TradeStorage(market, referralStorage, address(roleStorage));
         // Initialize Market with TradeStorage
         market.initialize(tradeStorage);
         // Initialize TradeStorage with Default values
         tradeStorage.initialize(0.05e18, 0.001e18, 2e30, 10);
-        // Cache
-        marketAddress = address(market);
+
         // Add to Storage
-        bool success = markets.add(marketAddress);
+        bool success = markets.add(address(market));
         if (!success) revert MarketMaker_FailedToAddMarket();
-        tokenToMarkets[_assetId] = marketAddress;
+        tokenToMarkets[_assetId] = address(market);
 
         // Set Up Roles -> Enable Caller to control Market
-        roleStorage.setMarketRoles(marketAddress, Roles.MarketRoles(address(tradeStorage), msg.sender, msg.sender));
+        roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender, msg.sender));
 
         // Fire Event
-        emit MarketCreated(marketAddress, _assetId, _priceId);
+        emit MarketCreated(address(market), _assetId, _priceId);
+
+        return address(market);
     }
 
     function addTokenToMarket(

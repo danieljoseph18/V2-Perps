@@ -35,7 +35,6 @@ library Oracle {
         uint256[] compactedPrices;
     }
 
-    // @gas - use smaller data types
     struct Asset {
         bool isValid;
         address chainlinkPriceFeed; // Chainlink Price Feed Address
@@ -43,7 +42,6 @@ library Oracle {
         uint64 baseUnit; // 1 Unit of the Token e.g 1e18 for ETH
         uint32 heartbeatDuration; // Duration after which the price is considered stale
         uint256 maxPriceDeviation; // Max Price Deviation from Reference Price
-        uint256 priceSpread; // Spread to Apply to Price if Alternative Asset (e.g $0.1 = 0.1e18)
         PrimaryStrategy primaryStrategy;
         SecondaryStrategy secondaryStrategy;
         UniswapPool pool; // Uniswap V3 Pool
@@ -58,7 +56,7 @@ library Oracle {
 
     struct Price {
         uint256 price;
-        uint256 confidence; // @gas - use smaller type
+        uint256 confidence;
     }
 
     enum PrimaryStrategy {

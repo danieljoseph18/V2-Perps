@@ -107,7 +107,6 @@ contract TestMarketAllocations is Test {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
-            priceSpread: 0.1e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
@@ -191,7 +190,6 @@ contract TestMarketAllocations is Test {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
-            priceSpread: 0.1e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
@@ -208,7 +206,6 @@ contract TestMarketAllocations is Test {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
-            priceSpread: 0.01e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)
@@ -220,7 +217,6 @@ contract TestMarketAllocations is Test {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
-            priceSpread: 0.01e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)
@@ -232,7 +228,6 @@ contract TestMarketAllocations is Test {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
-            priceSpread: 0.01e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool(address(0), address(0), address(0), Oracle.PoolType.UNISWAP_V2)

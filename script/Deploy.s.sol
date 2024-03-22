@@ -14,6 +14,7 @@ import {Router} from "../src/router/Router.sol";
 import {IMarket} from "../src/markets/interfaces/IMarket.sol";
 import {Roles} from "../src/access/Roles.sol";
 import {Oracle} from "../src/oracle/Oracle.sol";
+import {FeeDistributor} from "../src/rewards/FeeDistributor.sol";
 
 contract Deploy is Script {
     HelperConfig public helperConfig;
@@ -25,6 +26,7 @@ contract Deploy is Script {
         ReferralStorage referralStorage;
         PositionManager positionManager;
         Router router;
+        FeeDistributor feeDistributor;
         address owner;
     }
 
@@ -47,6 +49,7 @@ contract Deploy is Script {
             ReferralStorage(payable(address(0))),
             PositionManager(payable(address(0))),
             Router(payable(address(0))),
+            FeeDistributor(address(0)),
             msg.sender
         );
 
@@ -77,6 +80,8 @@ contract Deploy is Script {
             address(contracts.roleStorage)
         );
 
+        contracts.feeDistributor = new FeeDistributor();
+
         /**
          * ============ Set Up Contracts ============
          */
@@ -102,8 +107,15 @@ contract Deploy is Script {
             }),
             adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18, flaggedLong: false, flaggedShort: false})
         });
+
         contracts.marketMaker.initialize(
-            defaultMarketConfig, address(contracts.priceFeed), address(contracts.referralStorage)
+            defaultMarketConfig,
+            address(contracts.priceFeed),
+            address(contracts.referralStorage),
+            address(contracts.feeDistributor),
+            address(contracts.positionManager),
+            weth,
+            usdc
         );
 
         contracts.positionManager.updateGasEstimates(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);

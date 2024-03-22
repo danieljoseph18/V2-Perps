@@ -226,7 +226,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     }
 
     /// @dev Only Keeper
-    // @audit - don't think we're handling the stop loss / take profit case correctly
     function executePosition(
         IMarket market,
         bytes32 _orderKey,

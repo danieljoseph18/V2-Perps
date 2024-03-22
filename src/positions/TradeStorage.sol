@@ -13,6 +13,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Invariant} from "../libraries/Invariant.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
+import {MarketUtils} from "../markets/MarketUtils.sol";
 import {console} from "forge-std/Test.sol";
 
 /// @dev Needs TradeStorage Role & Fee Accumulator
@@ -182,8 +183,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             positionBefore, positionAfter, amountOut, _state.fee, _state.borrowFee, _state.affiliateRebate
         );
         // Check Market has enough available liquidity for payout
-        // @audit - smell
-        if (market.totalAvailableLiquidity(_params.request.input.isLong) < amountOut + _state.affiliateRebate) {
+        if (
+            MarketUtils.getPoolBalance(market, _params.request.input.assetId, _params.request.input.isLong)
+                < amountOut + _state.affiliateRebate
+        ) {
             revert TradeStorage_InsufficientFreeLiquidity();
         }
         // Decrease the Collateral Amount in the Market by the full delta

@@ -49,14 +49,14 @@ library MarketUtils {
         poolBalanceUsd = longPoolUsd + shortPoolUsd;
     }
 
-    // In Index Tokens
+    // In Collateral Tokens
     function getPoolBalance(IMarket market, bytes32 _assetId, bool _isLong) public view returns (uint256 poolAmount) {
         // get the allocation percentage
-        uint256 allocationPercentage = market.getAllocation(_assetId);
+        uint256 allocationShare = market.getAllocation(_assetId);
         // get the total liquidity available for that side
         uint256 totalAvailableLiquidity = market.totalAvailableLiquidity(_isLong);
         // calculate liquidity allocated to the market for that side
-        poolAmount = mulDiv(totalAvailableLiquidity, allocationPercentage, MAX_ALLOCATION);
+        poolAmount = mulDiv(totalAvailableLiquidity, allocationShare, MAX_ALLOCATION);
     }
 
     function getPoolBalanceUsd(

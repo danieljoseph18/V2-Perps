@@ -21,8 +21,29 @@ interface IMarketMaker {
     error MarketMaker_InvalidPositionManager();
     error MarketMaker_MarketDoesNotExist();
     error MarketMaker_FailedToAddMarket();
+    error MarketMaker_InvalidPoolOwner();
+    error MarketMaker_InvalidFeeDistributor();
+    error MarketMaker_InvalidTimeToExpiration();
+    error MarketMaker_InvalidTokensOrBaseUnits();
+    error MarketMaker_InvalidFeeConfig();
+    error MarketMaker_InvalidHeartbeatDuration();
+    error MarketMaker_InvalidMaxPriceDeviation();
+    error MarketMaker_InvalidPriceSpread();
+    error MarketMaker_InvalidPrimaryStrategy();
+    error MarketMaker_InvalidSecondaryStrategy();
+    error MarketMaker_InvalidPoolType();
+    error MarketMaker_InvalidPoolTokens();
+    error MarketMaker_InvalidPoolAddress();
 
-    function initialize(IMarket.Config memory _defaultConfig, address _priceFeed, address _referralStorage) external;
+    function initialize(
+        IMarket.Config memory _defaultConfig,
+        address _priceFeed,
+        address _referralStorage,
+        address _feeDistributor,
+        address _positionManager,
+        address _weth,
+        address _usdc
+    ) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function createNewMarket(

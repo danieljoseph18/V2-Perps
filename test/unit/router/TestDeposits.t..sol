@@ -95,7 +95,6 @@ contract TestDeposits is Test {
             baseUnit: 1e18,
             heartbeatDuration: 1 minutes,
             maxPriceDeviation: 0.01e18,
-            priceSpread: 0.1e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
             pool: Oracle.UniswapPool({
@@ -230,7 +229,6 @@ contract TestDeposits is Test {
         assertGt(balanceAfter, balanceBefore);
     }
 
-    // @audit - Fee values correct?
     function testDynamicFeesOnImbalancedDeposits() public setUpMarkets {
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
