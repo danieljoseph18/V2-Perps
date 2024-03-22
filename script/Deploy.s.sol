@@ -6,7 +6,8 @@ import {HelperConfig} from "./HelperConfig.s.sol";
 import {RoleStorage} from "../src/access/RoleStorage.sol";
 import {Vault} from "../src/markets/Vault.sol";
 import {MarketMaker} from "../src/markets/MarketMaker.sol";
-import {IPriceFeed} from "../src/oracle/interfaces/IPriceFeed.sol";
+import {PriceFeed, IPriceFeed} from "../src/oracle/PriceFeed.sol";
+import {MockPriceFeed} from "../test/mocks/MockPriceFeed.sol";
 import {TradeStorage} from "../src/positions/TradeStorage.sol";
 import {ReferralStorage} from "../src/referrals/ReferralStorage.sol";
 import {PositionManager} from "../src/router/PositionManager.sol";
@@ -34,11 +35,14 @@ contract Deploy is Script {
     address public weth;
     bytes32 public ethPriceId;
     bytes32 public usdcPriceId;
+    Oracle.Asset public wethAsset;
+    Oracle.Asset public usdcAsset;
+    bool mockFeed;
 
     function run() external returns (Contracts memory contracts) {
         helperConfig = new HelperConfig();
         IPriceFeed priceFeed;
-        (priceFeed, weth, usdc, ethPriceId, usdcPriceId) = helperConfig.activeNetworkConfig();
+        (weth, usdc, ethPriceId, usdcPriceId, wethAsset, usdcAsset, mockFeed) = helperConfig.activeNetworkConfig();
 
         vm.startBroadcast();
 
@@ -57,6 +61,22 @@ contract Deploy is Script {
          * ============ Deploy Contracts ============
          */
         contracts.roleStorage = new RoleStorage();
+
+        if (mockFeed) {
+            contracts.priceFeed = new MockPriceFeed(
+                10, 1, keccak256(abi.encode("ETH")), keccak256(abi.encode("USDC")), wethAsset, usdcAsset
+            );
+        } else {
+            contracts.priceFeed = new PriceFeed(
+                0xDd24F84d36BF92C65F92307595335bdFab5Bbd21,
+                keccak256(abi.encode("ETH")),
+                keccak256(abi.encode("USDC")),
+                wethAsset,
+                usdcAsset,
+                address(0),
+                address(contracts.roleStorage)
+            );
+        }
 
         contracts.marketMaker = new MarketMaker(address(contracts.roleStorage));
 
