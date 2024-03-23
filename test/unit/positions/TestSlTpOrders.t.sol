@@ -72,10 +72,7 @@ contract TestSlTpOrders is Test {
         positionManager = contracts.positionManager;
         router = contracts.router;
         OWNER = contracts.owner;
-        ethPriceId = deploy.ethPriceId();
-        usdcPriceId = deploy.usdcPriceId();
-        weth = deploy.weth();
-        usdc = deploy.usdc();
+        (weth, usdc, ethPriceId, usdcPriceId,,,,) = deploy.activeNetworkConfig();
         // Pass some time so block timestamp isn't 0
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);

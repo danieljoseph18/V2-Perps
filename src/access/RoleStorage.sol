@@ -21,14 +21,6 @@ contract RoleStorage is AccessControl {
         marketRoles[_market] = _roles;
     }
 
-    /**
-     * struct MarketRoles {
-     *     address tradeStorage;
-     *     address router;
-     *     address stateKeeper;
-     *     address configurator;
-     * }
-     */
     function hasTradeStorageRole(address _market, address _account) external view returns (bool) {
         return marketRoles[_market].tradeStorage == _account;
     }

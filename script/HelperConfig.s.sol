@@ -6,19 +6,10 @@ import {MockUSDC} from "../test/mocks/MockUSDC.sol";
 import {IPriceFeed} from "../src/oracle/interfaces/IPriceFeed.sol";
 import {WETH} from "../src/tokens/WETH.sol";
 import {Oracle} from "../src/oracle/Oracle.sol";
+import {IHelperConfig} from "./IHelperConfig.s.sol";
 
-contract HelperConfig is Script {
-    NetworkConfig public activeNetworkConfig;
-
-    struct NetworkConfig {
-        address weth;
-        address usdc;
-        bytes32 ethPriceId;
-        bytes32 usdcPriceId;
-        Oracle.Asset wethAsset;
-        Oracle.Asset usdcAsset;
-        bool mockFeed;
-    }
+contract HelperConfig is IHelperConfig, Script {
+    NetworkConfig private activeNetworkConfig;
 
     uint256 public constant DEFAULT_ANVIL_PRIVATE_KEY =
         0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
@@ -74,15 +65,20 @@ contract HelperConfig is Script {
             })
         });
 
-        sepoliaConfig = NetworkConfig({
-            weth: address(weth),
-            usdc: address(mockUsdc),
-            ethPriceId: ethPriceId,
-            usdcPriceId: usdcPriceId,
-            wethAsset: wethAsset,
-            usdcAsset: usdcAsset,
-            mockFeed: false
-        });
+        activeNetworkConfig.weth = address(weth);
+        activeNetworkConfig.usdc = address(mockUsdc);
+        activeNetworkConfig.ethPriceId = ethPriceId;
+        activeNetworkConfig.usdcPriceId = usdcPriceId;
+        activeNetworkConfig.wethAsset = wethAsset;
+        activeNetworkConfig.usdcAsset = usdcAsset;
+        activeNetworkConfig.mockFeed = true;
+        activeNetworkConfig.sequencerUptimeFeed = address(0);
+
+        sepoliaConfig = activeNetworkConfig;
+    }
+
+    function getActiveNetworkConfig() public view returns (NetworkConfig memory) {
+        return activeNetworkConfig;
     }
 
     function getBaseConfig() public view returns (NetworkConfig memory baseConfig) {
@@ -135,14 +131,15 @@ contract HelperConfig is Script {
             })
         });
 
-        anvilConfig = NetworkConfig({
-            weth: address(weth),
-            usdc: address(mockUsdc),
-            ethPriceId: ethPriceId,
-            usdcPriceId: usdcPriceId,
-            wethAsset: wethAsset,
-            usdcAsset: usdcAsset,
-            mockFeed: true
-        });
+        activeNetworkConfig.weth = address(weth);
+        activeNetworkConfig.usdc = address(mockUsdc);
+        activeNetworkConfig.ethPriceId = ethPriceId;
+        activeNetworkConfig.usdcPriceId = usdcPriceId;
+        activeNetworkConfig.wethAsset = wethAsset;
+        activeNetworkConfig.usdcAsset = usdcAsset;
+        activeNetworkConfig.mockFeed = true;
+        activeNetworkConfig.sequencerUptimeFeed = address(0);
+
+        anvilConfig = activeNetworkConfig;
     }
 }
