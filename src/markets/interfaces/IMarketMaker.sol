@@ -2,7 +2,6 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "./IMarket.sol";
-import {IVault} from "./IVault.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
@@ -47,7 +46,7 @@ interface IMarketMaker {
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function createNewMarket(
-        IVault.VaultConfig memory _config,
+        IMarket.VaultConfig memory _config,
         bytes32 _assetId,
         bytes32 _priceId,
         Oracle.Asset memory _asset

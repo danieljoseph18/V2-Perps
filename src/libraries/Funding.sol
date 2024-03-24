@@ -2,7 +2,6 @@
 pragma solidity 0.8.23;
 
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {Position} from "../positions/Position.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -25,31 +24,6 @@ library Funding {
         skewUsd = longOI.toInt256() - shortOI.toInt256();
     }
 
-    function getFeeForPositionChange(
-        IMarket market,
-        bytes32 _assetId,
-        uint256 _indexPrice,
-        uint256 _sizeDelta,
-        int256 _entryFundingAccrued
-    ) external view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
-        (, nextFundingAccrued) = _calculateNextFunding(market, _assetId, _indexPrice);
-        // Both Values in USD -> 30 D.P: Divide by Price precision to get 30 D.P value
-        fundingFeeUsd = mulDivSigned(_sizeDelta.toInt256(), nextFundingAccrued - _entryFundingAccrued, PRICE_PRECISION);
-    }
-
-    function getTotalFeesOwedUsd(IMarket market, Position.Data memory _position, uint256 _indexPrice)
-        external
-        view
-        returns (int256 totalFeesOwedUsd)
-    {
-        (, int256 nextFundingAccrued) = _calculateNextFunding(market, _position.assetId, _indexPrice);
-        totalFeesOwedUsd = mulDivSigned(
-            _position.positionSize.toInt256(),
-            nextFundingAccrued - _position.fundingParams.lastFundingAccrued,
-            PRICE_PRECISION
-        );
-    }
-
     //  - proportionalSkew = skew / skewScale
     //  - velocity         = proportionalSkew * maxFundingVelocity
     function getCurrentVelocity(IMarket market, bytes32 _assetId, int256 _skew)
@@ -57,7 +31,7 @@ library Funding {
         view
         returns (int256 velocity)
     {
-        IMarket.FundingConfig memory funding = market.getFundingConfig(_assetId);
+        IMarket.FundingConfig memory funding = MarketUtils.getFundingConfig(market, _assetId);
         // Get the proportionalSkew
         int256 proportionalSkew = mulDivSigned(_skew, SIGNED_PRECISION, funding.skewScale);
         // Check if the absolute value of proportionalSkew is less than the fundingVelocityClamp
@@ -75,17 +49,17 @@ library Funding {
         view
         returns (int256 nextFundingRate, int256 nextFundingAccruedUsd)
     {
-        (nextFundingRate, nextFundingAccruedUsd) = _calculateNextFunding(market, _assetId, _indexPrice);
+        (nextFundingRate, nextFundingAccruedUsd) = calculateNextFunding(market, _assetId, _indexPrice);
     }
 
-    function _calculateNextFunding(IMarket market, bytes32 _assetId, uint256 _indexPrice)
-        internal
+    function calculateNextFunding(IMarket market, bytes32 _assetId, uint256 _indexPrice)
+        public
         view
         returns (int256 nextRate, int256 nextFundingAccrued)
     {
         (int256 fundingRate, int256 unrecordedFunding) = _getUnrecordedFundingWithRate(market, _assetId, _indexPrice);
         nextRate = fundingRate;
-        nextFundingAccrued = market.getFundingAccrued(_assetId) + unrecordedFunding;
+        nextFundingAccrued = MarketUtils.getFundingAccrued(market, _assetId) + unrecordedFunding;
     }
 
     /**
@@ -104,7 +78,7 @@ library Funding {
         // currentFundingRate = 0 + 0.0025 * (29,000 / 86,400)
         //                    = 0 + 0.0025 * 0.33564815
         //                    = 0.00083912
-        (int256 fundingRate, int256 fundingRateVelocity) = market.getFundingRates(_assetId);
+        (int256 fundingRate, int256 fundingRateVelocity) = MarketUtils.getFundingRates(market, _assetId);
         return fundingRate
             + mulDivSigned(fundingRateVelocity, _getProportionalFundingElapsed(market, _assetId), SIGNED_PRECISION);
     }
@@ -115,7 +89,9 @@ library Funding {
      */
     function _getProportionalFundingElapsed(IMarket market, bytes32 _assetId) internal view returns (int256) {
         return mulDivSigned(
-            (block.timestamp - market.getLastFundingUpdate(_assetId)).toInt256(), SIGNED_PRECISION, SECONDS_IN_DAY
+            (block.timestamp - MarketUtils.getLastFundingUpdate(market, _assetId)).toInt256(),
+            SIGNED_PRECISION,
+            SECONDS_IN_DAY
         );
     }
 
@@ -128,7 +104,7 @@ library Funding {
         returns (int256 fundingRate, int256 unrecordedFunding)
     {
         fundingRate = getCurrentFundingRate(market, _assetId);
-        (int256 storedFundingRate,) = market.getFundingRates(_assetId);
+        (int256 storedFundingRate,) = MarketUtils.getFundingRates(market, _assetId);
         // Minus sign is needed as funding flows in the opposite direction of the skew
         // Essentially taking an average, where Signed Precision == units
         int256 avgFundingRate = -mulDivSigned(storedFundingRate, fundingRate, 2 * SIGNED_PRECISION);

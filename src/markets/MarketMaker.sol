@@ -4,7 +4,8 @@ pragma solidity 0.8.23;
 import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {Market, IMarket, IVault} from "./Market.sol";
+import {Market, IMarket} from "./Market.sol";
+import {MarketToken} from "./MarketToken.sol";
 import {TradeStorage} from "../positions/TradeStorage.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -27,8 +28,8 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     uint256 private constant SHORT_BASE_UNIT = 1e6;
     uint256 private constant MAX_FEE_SCALE = 0.1e18; // 10%
     uint256 private constant MAX_FEE_TO_OWNER = 0.3e18; // 30%
-    uint256 private constant MIN_TIME_TO_EXPIRATION = 1 days; // @audit
-    uint256 private constant MAX_TIME_TO_EXPIRATION = 365 days; // @audit
+    uint256 private constant MIN_TIME_TO_EXPIRATION = 10 seconds;
+    uint256 private constant MAX_TIME_TO_EXPIRATION = 10 minutes;
     uint256 private constant MAX_HEARTBEAT_DURATION = 1 days;
     uint256 private constant MAX_PERCENTAGE = 1e18;
     uint256 private constant MIN_PERCENTAGE = 0.01e18; // 1%
@@ -85,8 +86,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         _;
     }
 
-    modifier validConfig(IVault.VaultConfig calldata _config) {
-        if (_config.priceFeed != address(priceFeed)) revert MarketMaker_InvalidPriceFeed();
+    modifier validConfig(IMarket.VaultConfig calldata _config) {
         if (
             _config.longToken != weth || _config.shortToken != usdc || _config.longBaseUnit != LONG_BASE_UNIT
                 || _config.shortBaseUnit != SHORT_BASE_UNIT
@@ -97,7 +97,6 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
             revert MarketMaker_InvalidFeeConfig();
         }
         if (_config.poolOwner != msg.sender) revert MarketMaker_InvalidPoolOwner();
-        if (_config.positionManager != address(positionManager)) revert MarketMaker_InvalidPositionManager();
         if (_config.feeDistributor != address(feeDistributor)) revert MarketMaker_InvalidFeeDistributor();
         if (
             _config.minTimeToExpiration < MIN_TIME_TO_EXPIRATION || _config.minTimeToExpiration > MAX_TIME_TO_EXPIRATION
@@ -149,7 +148,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     }
 
     function createNewMarket(
-        IVault.VaultConfig calldata _vaultConfig,
+        IMarket.VaultConfig calldata _vaultConfig,
         bytes32 _assetId,
         bytes32 _priceId,
         Oracle.Asset calldata _asset
@@ -160,12 +159,14 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
 
         // Set Up Price Oracle
         priceFeed.supportAsset(_assetId, _asset);
+        // Create new Market Token
+        MarketToken marketToken = new MarketToken(_vaultConfig.name, _vaultConfig.symbol, address(roleStorage));
         // Create new Market contract
-        Market market = new Market(_vaultConfig, defaultConfig, _assetId, address(roleStorage));
+        Market market = new Market(_vaultConfig, defaultConfig, address(marketToken), _assetId, address(roleStorage));
         // Create new TradeStorage contract
         TradeStorage tradeStorage = new TradeStorage(market, referralStorage, address(roleStorage));
         // Initialize Market with TradeStorage
-        market.initialize(tradeStorage);
+        market.initialize(address(tradeStorage));
         // Initialize TradeStorage with Default values
         tradeStorage.initialize(0.05e18, 0.001e18, 2e30, 10);
 
@@ -176,6 +177,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
 
         // Set Up Roles -> Enable Caller to control Market
         roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender, msg.sender));
+        roleStorage.setMinter(address(marketToken), address(market));
 
         // Fire Event
         emit MarketCreated(address(market), _assetId, _priceId);

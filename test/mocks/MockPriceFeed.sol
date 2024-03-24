@@ -98,6 +98,10 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
             bytes32 assetId = _assetIds[index];
             Oracle.Asset memory asset = assets[assetId];
             if (!asset.isValid) revert PriceFeed_InvalidToken(assetId);
+            // Add the Price to the Set
+            bool success = assetsWithPrices.add(assetId);
+            if (!success) revert PriceFeed_FailedToAddPrice();
+            // Set Prices based on strategy
             if (asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
                 // Get the Pyth Price Data
                 PythStructs.Price memory data = queryPriceFeed(asset.priceId).price;
@@ -127,8 +131,6 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
             } else {
                 revert PriceFeed_InvalidPrimaryStrategy();
             }
-            // Add the Price to the Set
-            assetsWithPrices.add(assetId);
             // Increment the Loop Counter
             unchecked {
                 ++index;
@@ -141,6 +143,7 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
         bytes32[] memory keys = assetsWithPrices.values();
         uint256 len = keys.length;
         for (uint256 i = 0; i < len;) {
+            delete prices[keys[i]];
             bool success = assetsWithPrices.remove(keys[i]);
             if (!success) revert PriceFeed_FailedToRemovePrice();
             unchecked {

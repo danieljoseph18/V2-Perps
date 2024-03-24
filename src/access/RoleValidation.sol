@@ -39,6 +39,11 @@ contract RoleValidation {
         _;
     }
 
+    modifier onlyMinter(address _marketToken) {
+        if (roleStorage.getMinter(_marketToken) != msg.sender) revert RoleValidation_AccessDenied();
+        _;
+    }
+
     modifier onlyKeeper() {
         if (!roleStorage.hasRole(Roles.KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
         _;

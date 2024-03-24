@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IMarket, IVault} from "../markets/interfaces/IMarket.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
@@ -15,12 +15,14 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
+import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
 contract Router is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
+    using SafeERC20 for IMarketToken;
     using Address for address payable;
 
     IMarketMaker private marketMaker;
@@ -93,7 +95,7 @@ contract Router is ReentrancyGuard, RoleValidation {
             IERC20(_tokenIn).safeTransferFrom(msg.sender, address(positionManager), _amountIn);
         }
 
-        market.createDeposit(_owner, _tokenIn, _amountIn, _executionFee, _shouldWrap);
+        market.createRequest(_owner, _tokenIn, _amountIn, _executionFee, _shouldWrap, true);
         _sendExecutionFee(_executionFee);
 
         // Request a Price Update for the Asset
@@ -116,9 +118,11 @@ contract Router is ReentrancyGuard, RoleValidation {
         } else {
             if (_tokenOut != address(USDC) && _tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         }
-        IERC20(address(market)).safeTransferFrom(msg.sender, address(positionManager), _marketTokenAmountIn);
 
-        market.createWithdrawal(_owner, _tokenOut, _marketTokenAmountIn, _executionFee, _shouldUnwrap);
+        IMarketToken marketToken = market.MARKET_TOKEN();
+        marketToken.safeTransferFrom(msg.sender, address(positionManager), _marketTokenAmountIn);
+
+        market.createRequest(_owner, _tokenOut, _marketTokenAmountIn, _executionFee, _shouldUnwrap, false);
         _sendExecutionFee(_executionFee);
 
         // Request a Price Update for the Asset
@@ -172,7 +176,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Construct the state for Order Creation
         bytes32 positionKey = Position.validateInputParameters(_trade, market);
 
-        ITradeStorage tradeStorage = IMarket(market).tradeStorage();
+        ITradeStorage tradeStorage = ITradeStorage(IMarket(market).tradeStorage());
 
         Position.Data memory position = tradeStorage.getPosition(positionKey);
 

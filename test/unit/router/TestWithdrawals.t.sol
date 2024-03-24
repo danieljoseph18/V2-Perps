@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {Test, console} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
@@ -14,6 +14,8 @@ import {Router} from "../../../src/router/Router.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
+import {IMarketToken} from "../../../src/markets/interfaces/IMarketToken.sol";
 
 contract TestWithdrawals is Test {
     RoleStorage roleStorage;
@@ -26,6 +28,7 @@ contract TestWithdrawals is Test {
     Router router;
     address OWNER;
     Market market;
+    address feeDistributor;
 
     address weth;
     address usdc;
@@ -54,6 +57,7 @@ contract TestWithdrawals is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        feeDistributor = address(contracts.feeDistributor);
         OWNER = contracts.owner;
         (weth, usdc, ethPriceId, usdcPriceId,,,,) = deploy.activeNetworkConfig();
         // Pass some time so block timestamp isn't 0
@@ -100,7 +104,7 @@ contract TestWithdrawals is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        IVault.VaultConfig memory wethVaultDetails = IVault.VaultConfig({
+        IMarket.VaultConfig memory wethVaultDetails = IMarket.VaultConfig({
             longToken: weth,
             shortToken: usdc,
             longBaseUnit: 1e18,
@@ -108,10 +112,8 @@ contract TestWithdrawals is Test {
             feeScale: 0.03e18,
             feePercentageToOwner: 0.2e18,
             minTimeToExpiration: 1 minutes,
-            priceFeed: address(priceFeed),
-            positionManager: address(positionManager),
             poolOwner: OWNER,
-            feeDistributor: OWNER,
+            feeDistributor: feeDistributor,
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
@@ -119,19 +121,19 @@ contract TestWithdrawals is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
-        tradeStorage = market.tradeStorage();
+        tradeStorage = ITradeStorage(market.tradeStorage());
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        bytes32 depositKey = market.getRequestAtIndex(0).key;
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-        depositKey = market.getDepositRequestAtIndex(0).key;
+        depositKey = market.getRequestAtIndex(0).key;
         positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
@@ -139,30 +141,32 @@ contract TestWithdrawals is Test {
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(ethAssetId), 10000);
+        assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
 
     function testCreatingAWithdrawalRequest() public setUpMarkets {
         // Construct the withdrawal input
-        uint256 marketTokenBalance = market.balanceOf(OWNER);
+        IMarketToken marketToken = market.MARKET_TOKEN();
+        uint256 marketTokenBalance = marketToken.balanceOf(OWNER);
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
-        market.approve(address(router), type(uint256).max);
+        marketToken.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: 0.01 ether}(market, OWNER, weth, marketTokenBalance / 1000, 0.01 ether, true);
         vm.stopPrank();
     }
 
     function testExecutingAWithdrawalRequest() public setUpMarkets {
         // Construct the withdrawal input
-        uint256 marketTokenBalance = market.balanceOf(OWNER);
+        IMarketToken marketToken = market.MARKET_TOKEN();
+        uint256 marketTokenBalance = marketToken.balanceOf(OWNER);
 
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
-        market.approve(address(router), type(uint256).max);
+        marketToken.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: 0.01 ether}(market, OWNER, weth, marketTokenBalance / 1000, 0.01 ether, true);
-        bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
+        bytes32 withdrawalKey = market.getRequestAtIndex(0).key;
         positionManager.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
     }
@@ -170,33 +174,36 @@ contract TestWithdrawals is Test {
     function testWithdrawalRequestWithTinyAmountOut() public setUpMarkets {
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
-        market.approve(address(router), type(uint256).max);
+        IMarketToken marketToken = market.MARKET_TOKEN();
+        marketToken.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: 0.01 ether}(market, OWNER, weth, 1, 0.01 ether, true);
-        bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
+        bytes32 withdrawalKey = market.getRequestAtIndex(0).key;
         vm.expectRevert();
         positionManager.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
     }
 
     function testWithdrawalRequestForGreaterThanPoolBalance() public setUpMarkets {
-        uint256 marketTokenBalance = market.balanceOf(OWNER);
+        IMarketToken marketToken = market.MARKET_TOKEN();
+        uint256 marketTokenBalance = marketToken.balanceOf(OWNER);
 
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
-        market.approve(address(router), type(uint256).max);
+        marketToken.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: 0.01 ether}(market, OWNER, weth, marketTokenBalance, 0.01 ether, true);
-        bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
+        bytes32 withdrawalKey = market.getRequestAtIndex(0).key;
         vm.expectRevert();
         positionManager.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
     }
 
     function testLargeWithdrawalRequest() public setUpMarkets {
-        uint256 marketTokenBalance = market.balanceOf(OWNER);
+        IMarketToken marketToken = market.MARKET_TOKEN();
+        uint256 marketTokenBalance = marketToken.balanceOf(OWNER);
 
         // Call the withdrawal function with sufficient gas
         vm.startPrank(OWNER);
-        market.approve(address(router), type(uint256).max);
+        marketToken.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: 0.01 ether}(
             market,
             OWNER,
@@ -205,7 +212,7 @@ contract TestWithdrawals is Test {
             0.01 ether,
             true // Quarter of balance
         );
-        bytes32 withdrawalKey = market.getWithdrawalRequestAtIndex(0).key;
+        bytes32 withdrawalKey = market.getRequestAtIndex(0).key;
         positionManager.executeWithdrawal{value: 0.0001 ether}(market, withdrawalKey, ethPriceData);
         vm.stopPrank();
     }

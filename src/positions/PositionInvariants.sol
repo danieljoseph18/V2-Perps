@@ -2,13 +2,14 @@
 pragma solidity 0.8.23;
 
 import {Position} from "../positions/Position.sol";
-import {IMarket, IVault} from "../markets/interfaces/IMarket.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {console} from "forge-std/Test.sol";
 
-library Invariant {
+// @audit - rename and nuke a bunch of this
+// @audit - move functions into position lib
+library PositionInvariants {
     using SignedMath for int256;
     using SafeCast for uint256;
 
@@ -31,118 +32,9 @@ library Invariant {
     error Invariant_BorrowRateDelta();
     error Invariant_CumulativeBorrowDelta();
     error Invariant_OpenInterestDelta();
-    error Invariant_DepositFee();
-    error Invariant_DepositAmountIn();
-    error Invariant_DepositAccounting();
-    error Invariant_TokenBurnFailed();
 
     uint256 constant SCALAR = 1e18;
     uint256 constant BASE_FEE = 0.001e18; // 0.1%
-
-    function validateDeposit(
-        IVault.State calldata _stateBefore,
-        IVault.State calldata _stateAfter,
-        IVault.Deposit calldata _deposit,
-        uint256 _feeScale
-    ) external pure {
-        uint256 minFee = mulDiv(_deposit.amountIn, BASE_FEE, SCALAR);
-        uint256 maxFee = mulDiv(_deposit.amountIn, BASE_FEE + _feeScale, SCALAR);
-        if (_deposit.isLongToken) {
-            if (_stateAfter.longAccumulatedFees < _stateBefore.longAccumulatedFees + minFee) {
-                revert Invariant_DepositFee();
-            }
-
-            if (_stateAfter.longAccumulatedFees > _stateBefore.longAccumulatedFees + maxFee) {
-                revert Invariant_DepositFee();
-            }
-            // Long Pool Balance should increase by a minimum of (amount in - max fee) and a maximum of (amount in - min fee)
-            if (
-                _stateAfter.longPoolBalance < _stateBefore.longPoolBalance + _deposit.amountIn - maxFee
-                    || _stateAfter.longPoolBalance > _stateBefore.longPoolBalance + _deposit.amountIn - minFee
-            ) {
-                revert Invariant_DepositAccounting();
-            }
-            // Market's WETH Balance should increase by AmountIn
-            if (_stateAfter.wethBalance != _stateBefore.wethBalance + _deposit.amountIn) {
-                revert Invariant_DepositAmountIn();
-            }
-        } else {
-            if (_stateAfter.shortAccumulatedFees < _stateBefore.shortAccumulatedFees + minFee) {
-                revert Invariant_DepositFee();
-            }
-            if (_stateAfter.shortAccumulatedFees > _stateBefore.shortAccumulatedFees + maxFee) {
-                revert Invariant_DepositFee();
-            }
-            // Short Pool Balance should increase by a minimum of (amount in - max fee) and a maximum of (amount in - min fee)
-            if (
-                _stateAfter.shortPoolBalance < _stateBefore.shortPoolBalance + _deposit.amountIn - maxFee
-                    || _stateAfter.shortPoolBalance > _stateBefore.shortPoolBalance + _deposit.amountIn - minFee
-            ) {
-                revert Invariant_DepositAccounting();
-            }
-            // Market's USDC Balance should increase by AmountIn
-            if (_stateAfter.usdcBalance != _stateBefore.usdcBalance + _deposit.amountIn) {
-                revert Invariant_DepositAmountIn();
-            }
-        }
-    }
-
-    /**
-     * - Total Supply should decrease by the market token amount in
-     * - The Fee should increase within S.D of the max fee
-     * - The pool balance should decrease by the amount out
-     * - The vault balance should decrease by the amount out
-     */
-    function validateWithdrawal(
-        IVault.State calldata _stateBefore,
-        IVault.State calldata _stateAfter,
-        IVault.Withdrawal calldata _withdrawal,
-        uint256 _amountOut,
-        uint256 _feeScale
-    ) external pure {
-        uint256 minFee = mulDiv(_amountOut, BASE_FEE, SCALAR);
-        uint256 maxFee = mulDiv(_amountOut, BASE_FEE + _feeScale, SCALAR);
-        if (_stateBefore.totalSupply != _stateAfter.totalSupply + _withdrawal.marketTokenAmountIn) {
-            revert Invariant_TokenBurnFailed();
-        }
-        if (_withdrawal.isLongToken) {
-            if (
-                _stateAfter.longAccumulatedFees < _stateBefore.longAccumulatedFees + minFee
-                    || _stateAfter.longAccumulatedFees > _stateBefore.longAccumulatedFees + maxFee
-            ) {
-                revert Invariant_DepositFee();
-            }
-            if (_stateAfter.longPoolBalance != _stateBefore.longPoolBalance - _amountOut) {
-                revert Invariant_DepositAccounting();
-            }
-            // WETH Balance should decrease by (AmountOut - Fee)
-            // WETH balance after is between (Before - AmountOut + MinFee) and (Before - AmountOut + MaxFee)
-            if (
-                _stateAfter.wethBalance < _stateBefore.wethBalance - _amountOut + minFee
-                    || _stateAfter.wethBalance > _stateBefore.wethBalance - _amountOut + maxFee
-            ) {
-                revert Invariant_DepositAmountIn();
-            }
-        } else {
-            if (
-                _stateAfter.shortAccumulatedFees < _stateBefore.shortAccumulatedFees + minFee
-                    || _stateAfter.shortAccumulatedFees > _stateBefore.shortAccumulatedFees + maxFee
-            ) {
-                revert Invariant_DepositFee();
-            }
-            if (_stateAfter.shortPoolBalance != _stateBefore.shortPoolBalance - _amountOut) {
-                revert Invariant_DepositAccounting();
-            }
-            // USDC Balance should decrease by (AmountOut - Fee)
-            // USDC balance after is between (Before - AmountOut + MinFee) and (Before - AmountOut + MaxFee)
-            if (
-                _stateAfter.usdcBalance < _stateBefore.usdcBalance - _amountOut + minFee
-                    || _stateAfter.usdcBalance > _stateBefore.usdcBalance - _amountOut + maxFee
-            ) {
-                revert Invariant_DepositAmountIn();
-            }
-        }
-    }
 
     function validateMarketDeltaPosition(
         IMarket.MarketStorage calldata _prevStorage,

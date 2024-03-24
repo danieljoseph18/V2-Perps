@@ -6,12 +6,11 @@ import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
-import {mulDiv} from "@prb/math/Common.sol";
+import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {Pricing} from "../libraries/Pricing.sol";
 import {Execution} from "../positions/Execution.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {console} from "forge-std/Test.sol";
+import {MarketUtils} from "../markets/MarketUtils.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -46,6 +45,7 @@ library Position {
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant LEVERAGE_PRECISION = 100;
     uint256 public constant PRECISION = 1e18;
+    int256 public constant PRICE_PRECISION = 1e30;
     uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
     uint256 private constant MIN_COLLATERAL = 1000;
@@ -237,14 +237,10 @@ library Position {
 
     // 1x = 100
     function checkLeverage(IMarket market, bytes32 _assetId, uint256 _sizeUsd, uint256 _collateralUsd) external view {
-        uint256 maxLeverage = market.getMaxLeverage(_assetId);
+        uint256 maxLeverage = MarketUtils.getMaxLeverage(market, _assetId);
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
-        console.log("Size USD: ", _sizeUsd);
-        console.log("Collateral USD: ", _collateralUsd);
-        console.log("Leverage: ", leverage);
-
         if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
 
@@ -262,7 +258,8 @@ library Position {
         returns (Data memory position)
     {
         // Get Entry Funding & Borrowing Values
-        (uint256 longBorrowFee, uint256 shortBorrowFee) = market.getCumulativeBorrowFees(_request.input.assetId);
+        (uint256 longBorrowFee, uint256 shortBorrowFee) =
+            MarketUtils.getCumulativeBorrowFees(market, _request.input.assetId);
         // get Trade Value in USD
         position = Data({
             assetId: _request.input.assetId,
@@ -273,7 +270,7 @@ library Position {
             weightedAvgEntryPrice: _state.impactedPrice,
             lastUpdate: block.timestamp,
             isLong: _request.input.isLong,
-            fundingParams: FundingParams(market.getFundingAccrued(_request.input.assetId), 0),
+            fundingParams: FundingParams(MarketUtils.getFundingAccrued(market, _request.input.assetId), 0),
             borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
             stopLossKey: bytes32(0),
             takeProfitKey: bytes32(0)
@@ -302,7 +299,7 @@ library Position {
                     isLimit: true,
                     isIncrease: false,
                     reverseWrap: true,
-                    conditionals: Position.Conditionals({
+                    conditionals: Conditionals({
                         stopLossSet: false,
                         stopLossPrice: 0,
                         stopLossPercentage: 0,
@@ -370,7 +367,7 @@ library Position {
         uint256 collateralValueUsd =
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
         // Get the PNL for the position
-        int256 pnl = Pricing.getPositionPnl(
+        int256 pnl = getPositionPnl(
             _position.positionSize,
             _position.weightedAvgEntryPrice,
             _state.indexPrice,
@@ -378,9 +375,9 @@ library Position {
             _position.isLong
         );
         // Get the Borrow Fees Owed in USD
-        uint256 borrowingFeesUsd = Borrowing.getTotalFeesOwedUsd(market, _position);
+        uint256 borrowingFeesUsd = getTotalBorrowFeesUsd(market, _position);
         // Get the Funding Fees Owed in USD
-        int256 fundingFeesUsd = Funding.getTotalFeesOwedUsd(market, _position, _state.indexPrice);
+        int256 fundingFeesUsd = getTotalFundingFees(market, _position, _state.indexPrice);
         // Calculate the total losses
         int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd;
         // Check if the position is liquidatable
@@ -444,7 +441,7 @@ library Position {
         view
         returns (uint256 totalFeesOwedUsd)
     {
-        uint256 borrowingFeeOwed = Borrowing.getTotalCollateralFeesOwed(market, _position, _state);
+        uint256 borrowingFeeOwed = getTotalBorrowFees(market, _position, _state);
         uint256 borrowingFeeUsd = mulDiv(borrowingFeeOwed, _state.collateralPrice, _state.collateralBaseUnit);
 
         totalFeesOwedUsd = borrowingFeeUsd;
@@ -512,5 +509,121 @@ library Position {
             validateConditionals(_request.input.conditionals, _state.indexPrice, _request.input.isLong);
 
         return _request;
+    }
+
+    function calculateFee(
+        ITradeStorage tradeStorage,
+        uint256 _tokenAmount,
+        uint256 _collateralDelta,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit
+    ) external view returns (uint256 fee) {
+        uint256 feePercentage = tradeStorage.tradingFee();
+        // convert index amount to collateral amount
+        if (_tokenAmount != 0) {
+            uint256 sizeInCollateral = convertUsdToCollateral(_tokenAmount, _collateralPrice, _collateralBaseUnit);
+            // calculate fee
+            fee = mulDiv(sizeInCollateral, feePercentage, PRECISION);
+        } else {
+            fee = mulDiv(_collateralDelta, feePercentage, PRECISION);
+        }
+    }
+
+    function getFundingFeeDelta(
+        IMarket market,
+        bytes32 _assetId,
+        uint256 _indexPrice,
+        uint256 _sizeDelta,
+        int256 _entryFundingAccrued
+    ) external view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
+        (, nextFundingAccrued) = Funding.calculateNextFunding(market, _assetId, _indexPrice);
+        // Both Values in USD -> 30 D.P: Divide by Price precision to get 30 D.P value
+        fundingFeeUsd = mulDivSigned(_sizeDelta.toInt256(), nextFundingAccrued - _entryFundingAccrued, PRICE_PRECISION);
+    }
+
+    function getTotalFundingFees(IMarket market, Data memory _position, uint256 _indexPrice)
+        public
+        view
+        returns (int256 totalFeesOwedUsd)
+    {
+        (, int256 nextFundingAccrued) = Funding.calculateNextFunding(market, _position.assetId, _indexPrice);
+        totalFeesOwedUsd = mulDivSigned(
+            _position.positionSize.toInt256(),
+            nextFundingAccrued - _position.fundingParams.lastFundingAccrued,
+            PRICE_PRECISION
+        );
+    }
+
+    function getTotalBorrowFees(IMarket market, Data memory _position, Execution.State memory _state)
+        public
+        view
+        returns (uint256 collateralFeesOwed)
+    {
+        uint256 feesUsd = getTotalBorrowFeesUsd(market, _position);
+        collateralFeesOwed = mulDiv(feesUsd, _state.collateralBaseUnit, _state.collateralPrice);
+    }
+
+    /// @dev Gets Total Fees Owed By a Position in Tokens
+    /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
+    /// @dev Units: Fees in USD (% of fees applied to position size)
+    function getTotalBorrowFeesUsd(IMarket market, Data memory _position)
+        public
+        view
+        returns (uint256 totalFeesOwedUsd)
+    {
+        uint256 borrowFee = _position.isLong
+            ? MarketUtils.getCumulativeBorrowFee(market, _position.assetId, true)
+                - _position.borrowingParams.lastLongCumulativeBorrowFee
+            : MarketUtils.getCumulativeBorrowFee(market, _position.assetId, false)
+                - _position.borrowingParams.lastShortCumulativeBorrowFee;
+        borrowFee += Borrowing.calculatePendingFees(market, _position.assetId, _position.isLong);
+        uint256 feeSinceUpdate = borrowFee == 0 ? 0 : mulDiv(_position.positionSize, borrowFee, PRECISION);
+        totalFeesOwedUsd = feeSinceUpdate + _position.borrowingParams.feesOwed;
+    }
+
+    /// @dev returns PNL in USD
+    /// @dev returns PNL in USD
+    // PNL = (Current Price - Average Entry Price) * (Position Value / Average Entry Price)
+    /**
+     * Need:
+     * - WAEP
+     * - Position Size
+     * - isLong
+     */
+    function getPositionPnl(
+        uint256 _positionSizeUsd,
+        uint256 _weightedAvgEntryPrice,
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
+        bool _isLong
+    ) public pure returns (int256) {
+        int256 priceDelta = _indexPrice.toInt256() - _weightedAvgEntryPrice.toInt256();
+        uint256 entryIndexAmount = mulDiv(_positionSizeUsd, _indexBaseUnit, _weightedAvgEntryPrice);
+        if (_isLong) {
+            return mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
+        } else {
+            return -mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
+        }
+    }
+
+    /// @dev Returns fractional PNL in Collateral tokens
+    function getRealizedPnl(
+        uint256 _positionSizeUsd,
+        uint256 _sizeDeltaUsd,
+        uint256 _weightedAvgEntryPrice,
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
+        uint256 _collateralTokenPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) external pure returns (int256 decreasePositionPnl) {
+        // Calculate whole position Pnl
+        int256 positionPnl =
+            getPositionPnl(_positionSizeUsd, _weightedAvgEntryPrice, _indexPrice, _indexBaseUnit, _isLong);
+        // Get (% realised) * pnl
+        int256 realizedPnl = mulDivSigned(positionPnl, _sizeDeltaUsd.toInt256(), _positionSizeUsd.toInt256());
+        // Convert from USD to collateral tokens
+        decreasePositionPnl =
+            mulDivSigned(realizedPnl, _collateralBaseUnit.toInt256(), _collateralTokenPrice.toInt256());
     }
 }

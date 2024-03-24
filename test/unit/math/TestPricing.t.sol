@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
@@ -14,17 +14,16 @@ import {Router} from "../../../src/router/Router.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
-import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
-import {Pricing} from "../../../src/libraries/Pricing.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
 
-contract TestPricing is Test {
+contract TestMarketUtils is Test {
     using SignedMath for int256;
 
     RoleStorage roleStorage;
@@ -37,6 +36,7 @@ contract TestPricing is Test {
     Router router;
     address OWNER;
     Market market;
+    address feeDistributor;
 
     address weth;
     address usdc;
@@ -66,6 +66,7 @@ contract TestPricing is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        feeDistributor = address(contracts.feeDistributor);
         OWNER = contracts.owner;
         (weth, usdc, ethPriceId, usdcPriceId,,,,) = deploy.activeNetworkConfig();
         // Pass some time so block timestamp isn't 0
@@ -112,7 +113,7 @@ contract TestPricing is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        IVault.VaultConfig memory wethVaultDetails = IVault.VaultConfig({
+        IMarket.VaultConfig memory wethVaultDetails = IMarket.VaultConfig({
             longToken: weth,
             shortToken: usdc,
             longBaseUnit: 1e18,
@@ -120,10 +121,8 @@ contract TestPricing is Test {
             feeScale: 0.03e18,
             feePercentageToOwner: 0.2e18,
             minTimeToExpiration: 1 minutes,
-            priceFeed: address(priceFeed),
-            positionManager: address(positionManager),
             poolOwner: OWNER,
-            feeDistributor: OWNER,
+            feeDistributor: feeDistributor,
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
@@ -131,19 +130,19 @@ contract TestPricing is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
-        tradeStorage = market.tradeStorage();
+        tradeStorage = ITradeStorage(market.tradeStorage());
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        bytes32 depositKey = market.getRequestAtIndex(0).key;
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-        depositKey = market.getDepositRequestAtIndex(0).key;
+        depositKey = market.getRequestAtIndex(0).key;
         positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
@@ -151,7 +150,7 @@ contract TestPricing is Test {
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(ethAssetId), 10000);
+        assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -176,13 +175,13 @@ contract TestPricing is Test {
             2500e30,
             block.timestamp,
             true,
-            Position.FundingParams(market.getFundingAccrued(ethAssetId), 0),
+            Position.FundingParams(MarketUtils.getFundingAccrued(market, ethAssetId), 0),
             Position.BorrowingParams(0, 0, 0),
             bytes32(0),
             bytes32(0)
         );
         // Check the PNL vs the expected PNL
-        int256 pnl = Pricing.getPositionPnl(position.positionSize, position.weightedAvgEntryPrice, _price, 1e18, true);
+        int256 pnl = Position.getPositionPnl(position.positionSize, position.weightedAvgEntryPrice, _price, 1e18, true);
         int256 priceDelta = int256(_price) - int256(position.weightedAvgEntryPrice);
         uint256 entryIndexAmount = mulDiv(position.positionSize, 1e18, position.weightedAvgEntryPrice);
         int256 expectedPnl;
@@ -207,13 +206,13 @@ contract TestPricing is Test {
             2500e30,
             block.timestamp,
             false,
-            Position.FundingParams(market.getFundingAccrued(ethAssetId), 0),
+            Position.FundingParams(MarketUtils.getFundingAccrued(market, ethAssetId), 0),
             Position.BorrowingParams(0, 0, 0),
             bytes32(0),
             bytes32(0)
         );
         // Check the PNL vs the expected PNL
-        int256 pnl = Pricing.getPositionPnl(position.positionSize, position.weightedAvgEntryPrice, _price, 1e18, false);
+        int256 pnl = Position.getPositionPnl(position.positionSize, position.weightedAvgEntryPrice, _price, 1e18, false);
         int256 priceDelta = int256(_price) - int256(position.weightedAvgEntryPrice);
         uint256 entryIndexAmount = mulDiv(position.positionSize, 1e18, position.weightedAvgEntryPrice);
         int256 expectedPnl;
@@ -251,7 +250,7 @@ contract TestPricing is Test {
             expectedWaep = numerator / newPositionSize;
         }
 
-        uint256 actualWaep = Pricing.calculateWeightedAverageEntryPrice(
+        uint256 actualWaep = MarketUtils.calculateWeightedAverageEntryPrice(
             _prevAverageEntryPrice, _prevPositionSize, _sizeDelta, _indexPrice
         );
         assertEq(actualWaep, expectedWaep, "Calculated WAEP does not match expected WAEP");
@@ -272,13 +271,13 @@ contract TestPricing is Test {
         // Update the storage of the market to vary the oi and entry value
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(IMarket.getOpenInterest.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
             abi.encode(_longOpenInterest)
         );
 
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(IMarket.getAverageEntryPrice.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getAverageEntryPrice.selector, ethAssetId, true),
             abi.encode(_longAverageEntryPrice)
         );
 
@@ -286,7 +285,7 @@ contract TestPricing is Test {
         int256 priceDelta = int256(_indexPrice) - int256(_longAverageEntryPrice);
         uint256 entryIndexAmount = mulDiv(_longOpenInterest, 1e18, _longAverageEntryPrice);
         int256 expectedPnl = priceDelta * int256(entryIndexAmount) / 1e18;
-        int256 actualPnl = Pricing.getMarketPnl(market, ethAssetId, _indexPrice, 1e18, true);
+        int256 actualPnl = MarketUtils.getMarketPnl(market, ethAssetId, _indexPrice, 1e18, true);
         assertEq(actualPnl, expectedPnl, "Calculated PNL does not match expected PNL");
     }
 
@@ -302,12 +301,12 @@ contract TestPricing is Test {
         // Update the storage of the market to vary the oi and entry value
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(IMarket.getOpenInterest.selector, ethAssetId, false),
+            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, false),
             abi.encode(_shortOpenInterest)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(IMarket.getAverageEntryPrice.selector, ethAssetId, false),
+            abi.encodeWithSelector(MarketUtils.getAverageEntryPrice.selector, ethAssetId, false),
             abi.encode(_shortAverageEntryPrice)
         );
 
@@ -315,7 +314,7 @@ contract TestPricing is Test {
         int256 priceDelta = int256(_indexPrice) - int256(_shortAverageEntryPrice);
         uint256 entryIndexAmount = mulDiv(_shortOpenInterest, 1e18, _shortAverageEntryPrice);
         int256 expectedPnl = -priceDelta * int256(entryIndexAmount) / 1e18;
-        int256 actualPnl = Pricing.getMarketPnl(market, ethAssetId, _indexPrice, 1e18, false);
+        int256 actualPnl = MarketUtils.getMarketPnl(market, ethAssetId, _indexPrice, 1e18, false);
         assertEq(actualPnl, expectedPnl, "Calculated PNL does not match expected PNL");
     }
 
@@ -335,24 +334,24 @@ contract TestPricing is Test {
         // Update the storage of the market to vary the oi and entry value
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(IMarket.getOpenInterest.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
             abi.encode(_longOpenInterest)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(IMarket.getAverageEntryPrice.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getAverageEntryPrice.selector, ethAssetId, true),
             abi.encode(_longAverageEntryPrice)
         );
 
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(IMarket.getOpenInterest.selector, ethAssetId, false),
+            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, false),
             abi.encode(_shortOpenInterest)
         );
 
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(IMarket.getAverageEntryPrice.selector, ethAssetId, false),
+            abi.encodeWithSelector(MarketUtils.getAverageEntryPrice.selector, ethAssetId, false),
             abi.encode(_shortAverageEntryPrice)
         );
         // fuzz to test expected vs actual values
@@ -368,7 +367,7 @@ contract TestPricing is Test {
         }
         int256 expectedPnl = longPnl + shortPnl;
 
-        int256 actualPnl = Pricing.getNetMarketPnl(market, ethAssetId, _indexPrice, 1e18);
+        int256 actualPnl = MarketUtils.getNetMarketPnl(market, ethAssetId, _indexPrice, 1e18);
         assertEq(actualPnl, expectedPnl, "Calculated PNL does not match expected PNL");
     }
 
@@ -392,7 +391,7 @@ contract TestPricing is Test {
         int256 expectedPnl = pnlUsd > 0 ? int256(pnlCollateral) : -int256(pnlCollateral);
 
         // Directly use the `getPositionPnl` function to get the PNL in collateral terms
-        int256 actualPnlCollateral = Pricing.getRealizedPnl(
+        int256 actualPnlCollateral = Position.getRealizedPnl(
             _sizeDelta, _sizeDelta, _averageEntryPrice, _indexPrice, 1e18, _collateralPrice, 1e18, true
         );
 

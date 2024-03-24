@@ -7,15 +7,14 @@ import {Position} from "./Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
-import {Pricing} from "../libraries/Pricing.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {Fee} from "../libraries/Fee.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {PriceImpact} from "../libraries/PriceImpact.sol";
+import {MarketUtils} from "../markets/MarketUtils.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -33,7 +32,7 @@ library Execution {
     error Execution_InvalidPriceRetrieval();
     error Execution_InvalidRequestKey();
     error Execution_InvalidFeeReceiver();
-    error Execution_LimitPriceNotMet();
+    error Execution_LimitPriceNotMet(uint256 limitPrice, uint256 markPrice);
 
     /**
      * ========================= Data Structures =========================
@@ -71,7 +70,7 @@ library Execution {
         address _feeReceiver
     ) external view returns (State memory state, Position.Request memory request, ITradeStorage tradeStorage) {
         // Fetch and validate request from key
-        tradeStorage = market.tradeStorage();
+        tradeStorage = ITradeStorage(market.tradeStorage());
         request = tradeStorage.getOrder(_orderKey);
         if (request.user == address(0)) revert Execution_InvalidRequestKey();
         if (_feeReceiver == address(0)) revert Execution_InvalidFeeReceiver();
@@ -96,7 +95,7 @@ library Execution {
                     ? state.indexPrice <= request.input.limitPrice
                     : state.indexPrice >= request.input.limitPrice;
             }
-            if (!limitPriceCondition) revert Execution_LimitPriceNotMet();
+            if (!limitPriceCondition) revert Execution_LimitPriceNotMet(request.input.limitPrice, state.indexPrice);
         }
 
         if (request.input.sizeDelta != 0) {
@@ -352,7 +351,7 @@ library Execution {
             // Increase the Position's collateral
             _position.collateralAmount += _collateralDelta;
             if (_sizeDelta > 0) {
-                _position.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
+                _position.weightedAvgEntryPrice = MarketUtils.calculateWeightedAverageEntryPrice(
                     _position.weightedAvgEntryPrice, _position.positionSize, _sizeDelta.toInt256(), _state.impactedPrice
                 );
                 _position.positionSize += _sizeDelta;
@@ -360,7 +359,7 @@ library Execution {
         } else {
             _position.collateralAmount -= _collateralDelta;
             if (_sizeDelta > 0) {
-                _position.weightedAvgEntryPrice = Pricing.calculateWeightedAverageEntryPrice(
+                _position.weightedAvgEntryPrice = MarketUtils.calculateWeightedAverageEntryPrice(
                     _position.weightedAvgEntryPrice,
                     _position.positionSize,
                     -_sizeDelta.toInt256(),
@@ -383,7 +382,7 @@ library Execution {
         uint256 collateralValueUsd =
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
         // Get the PNL for the position
-        int256 pnl = Pricing.getPositionPnl(
+        int256 pnl = Position.getPositionPnl(
             _position.positionSize,
             _position.weightedAvgEntryPrice,
             _state.indexPrice,
@@ -391,9 +390,9 @@ library Execution {
             _position.isLong
         );
         // Get the Borrow Fees Owed in USD
-        uint256 borrowingFeesUsd = Borrowing.getTotalFeesOwedUsd(market, _position);
+        uint256 borrowingFeesUsd = Position.getTotalBorrowFeesUsd(market, _position);
         // Get the Funding Fees Owed in USD
-        int256 fundingFeesUsd = Funding.getTotalFeesOwedUsd(market, _position, _state.indexPrice);
+        int256 fundingFeesUsd = Position.getTotalFundingFees(market, _position, _state.indexPrice);
         // Calculate the total losses
         int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd + _liquidationFeeUsd.toInt256();
         // Check if the losses exceed the collateral value
@@ -409,7 +408,7 @@ library Execution {
         pure
         returns (int256 pnl)
     {
-        pnl = Pricing.getRealizedPnl(
+        pnl = Position.getRealizedPnl(
             _position.positionSize,
             _sizeDelta,
             _position.weightedAvgEntryPrice,
@@ -430,7 +429,7 @@ library Execution {
         State memory _state
     ) internal view returns (Position.Data memory) {
         // Calculate and subtract the funding fee
-        (int256 fundingFeeUsd, int256 nextFundingAccrued) = Funding.getFeeForPositionChange(
+        (int256 fundingFeeUsd, int256 nextFundingAccrued) = Position.getFundingFeeDelta(
             market,
             _params.request.input.assetId,
             _state.indexPrice,
@@ -454,14 +453,14 @@ library Execution {
         State memory _state
     ) internal view returns (Position.Data memory, uint256 borrowFee) {
         // Calculate and subtract the Borrowing Fee
-        borrowFee = Borrowing.getTotalCollateralFeesOwed(market, _position, _state);
+        borrowFee = Position.getTotalBorrowFees(market, _position, _state);
 
         _position.borrowingParams.feesOwed = 0;
         if (borrowFee > _params.request.input.collateralDelta) revert Execution_FeeExceedsDelta();
 
         // Update the position's borrowing parameters
         (_position.borrowingParams.lastLongCumulativeBorrowFee, _position.borrowingParams.lastShortCumulativeBorrowFee)
-        = market.getCumulativeBorrowFees(_position.assetId);
+        = MarketUtils.getCumulativeBorrowFees(market, _position.assetId);
 
         return (_position, borrowFee);
     }

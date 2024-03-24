@@ -1,13 +1,71 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IVault} from "./IVault.sol";
-import {ITradeStorage} from "../../positions/interfaces/ITradeStorage.sol";
+import {IMarket} from "./IMarket.sol";
+import {Oracle} from "../../oracle/Oracle.sol";
+import {IMarketToken} from "./IMarketToken.sol";
 
-interface IMarket is IVault {
+interface IMarket {
     /**
-     * ================ Storage for Each Market ================
+     * ================ Structs ================
      */
+    struct VaultConfig {
+        address longToken;
+        address shortToken;
+        uint64 longBaseUnit;
+        uint64 shortBaseUnit;
+        uint64 feeScale;
+        uint64 feePercentageToOwner;
+        uint48 minTimeToExpiration;
+        address poolOwner;
+        address feeDistributor;
+        string name;
+        string symbol;
+    }
+
+    // For snapshotting state for invariant checks
+    struct State {
+        uint256 totalSupply;
+        uint256 wethBalance;
+        uint256 usdcBalance;
+    }
+
+    struct Input {
+        uint256 amountIn;
+        uint256 executionFee;
+        address owner;
+        uint48 expirationTimestamp;
+        bool isLongToken;
+        bool reverseWrap;
+        bool isDeposit;
+        uint256 blockNumber;
+        bytes32 key;
+    }
+
+    struct ExecuteDeposit {
+        IMarket market;
+        Input deposit;
+        Oracle.Price longPrices;
+        Oracle.Price shortPrices;
+        bytes32 key;
+        uint256 longBorrowFeesUsd;
+        uint256 shortBorrowFeesUsd;
+        int256 cumulativePnl;
+    }
+
+    struct ExecuteWithdrawal {
+        IMarket market;
+        Input withdrawal;
+        Oracle.Price longPrices;
+        Oracle.Price shortPrices;
+        bytes32 key;
+        uint256 longBorrowFeesUsd;
+        uint256 shortBorrowFeesUsd;
+        int256 cumulativePnl;
+        uint256 amountOut;
+        bool shouldUnwrap;
+    }
+
     struct MarketStorage {
         Config config;
         FundingValues funding;
@@ -71,9 +129,6 @@ interface IMarket is IVault {
         uint256 shortAverageEntryPriceUsd;
     }
 
-    /**
-     * ================ Config for the Market ================
-     */
     struct Config {
         /**
          * Maximum Leverage for the Market
@@ -155,6 +210,19 @@ interface IMarket is IVault {
     /**
      * ================ Errors ================
      */
+    error Market_InvalidKey();
+    error Market_InvalidPoolOwner();
+    error Market_InvalidFeeDistributor();
+    error Market_InvalidFeeScale();
+    error Market_InvalidFeePercentage();
+    error Market_InsufficientAvailableTokens();
+    error Market_InvalidUnwrapToken();
+    error Market_FailedToAddRequest();
+    error Market_FailedToRemoveRequest();
+    error Market_InsufficientLongBalance();
+    error Market_InsufficientShortBalance();
+    error Market_InsufficientCollateral();
+    error Market_InvalidAmountOut(uint256 actualOut, uint256 expectedOut);
     error Market_TokenAlreadyExists();
     error Market_TokenDoesNotExist();
     error Market_PriceIsZero();
@@ -178,11 +246,92 @@ interface IMarket is IVault {
     );
     event OpenInterestUpdated(bytes32 indexed assetId, uint256 longOpenInterestUsd, uint256 shortOpenInterestUsd);
     event Market_Initialzied();
+    event RequestCreated(
+        bytes32 indexed key,
+        address indexed owner,
+        address indexed tokenIn,
+        uint256 amountIn,
+        uint256 blockNumber,
+        bool isDeposit
+    );
+    event DepositRequestCancelled(
+        bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn
+    );
+    event DepositExecuted(
+        bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 mintAmount
+    );
+    event WithdrawalRequestCancelled(
+        bytes32 indexed key, address indexed owner, address indexed tokenOut, uint256 marketTokenAmountIn
+    );
+    event WithdrawalExecuted(
+        bytes32 indexed key,
+        address indexed owner,
+        address indexed tokenOut,
+        uint256 marketTokenAmountIn,
+        uint256 amountOut
+    );
+    event ProfitTransferred(address indexed user, uint256 amount, bool isLong);
+    event LiquidityReserved(address indexed user, uint256 amount, bool isIncrease, bool isLong);
+    event FeesAccumulated(uint256 amount, bool _isLong);
+    event TransferOutTokens(address _market, address indexed _to, uint256 _collateralDelta, bool _isLong);
+    event PositionCollateralLiquidated(
+        address indexed _liquidator, uint256 indexed _liqFee, address _market, uint256 _totalCollateral, bool _isLong
+    );
+    event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
+    event TransferInCollateral(address indexed _market, uint256 indexed _collateralDelta, bool _isLong);
+    event MarketAdded(address indexed _market);
+
+    // Admin functions
+
+    function updateFees(address _poolOwner, address _feeDistributor, uint256 _feeScale, uint256 _feePercentageToOwner)
+        external;
+
+    // Trading related functions
+    function reserveLiquidity(uint256 _amount, bool _isLong) external;
+    function unreserveLiquidity(uint256 _amount, bool _isLong) external;
+    function accumulateFees(uint256 _amount, bool _isLong) external;
+    function decreasePoolBalance(uint256 _amount, bool _isLong) external;
+    function increasePoolBalance(uint256 _amount, bool _isLong) external;
+    function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) external;
+    function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease) external;
+
+    // Deposit execution
+    function executeDeposit(ExecuteDeposit memory _params) external;
+
+    // Withdrawal execution
+    function executeWithdrawal(ExecuteWithdrawal memory _params) external;
+
+    function createRequest(
+        address _owner,
+        address _tokenIn,
+        uint256 _amountIn,
+        uint256 _executionFee,
+        bool _reverseWrap,
+        bool _isDeposit
+    ) external payable;
+
+    function deleteRequest(bytes32 _key) external;
+    function withdrawMarketTokensToTokens(
+        Oracle.Price memory _longPrices,
+        Oracle.Price memory _shortPrices,
+        uint256 _marketTokenAmountIn,
+        uint256 _longBorrowFeesUsd,
+        uint256 _shortBorrowFeesUsd,
+        int256 _cumulativePnl,
+        bool _isLongToken
+    ) external view returns (uint256 tokenAmount);
+
+    // Getter
+    function feeScale() external view returns (uint256);
+    function BASE_FEE() external view returns (uint64);
+    function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total);
+    function getRequest(bytes32 _key) external view returns (Input memory);
+    function getRequestAtIndex(uint256 _index) external view returns (Input memory);
 
     /**
      * ================ Functions ================
      */
-    function initialize(ITradeStorage _tradeStorage) external;
+    function initialize(address _tradeStorage) external;
     function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations) external;
     function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external;
     function updateConfig(Config memory _config, bytes32 _assetId) external;
@@ -201,28 +350,9 @@ interface IMarket is IVault {
     function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external;
     function setAllocationsWithBits(uint256[] memory _allocations) external;
 
-    function tradeStorage() external view returns (ITradeStorage);
+    function tradeStorage() external view returns (address);
+    function MARKET_TOKEN() external view returns (IMarketToken);
     function getAssetIds() external view returns (bytes32[] memory);
     function getAssetsInMarket() external view returns (uint256);
     function getStorage(bytes32 _assetId) external view returns (MarketStorage memory);
-    function getConfig(bytes32 _assetId) external view returns (Config memory);
-    function getBorrowingConfig(bytes32 _assetId) external view returns (BorrowingConfig memory);
-    function getFundingConfig(bytes32 _assetId) external view returns (FundingConfig memory);
-    function getImpactConfig(bytes32 _assetId) external view returns (ImpactConfig memory);
-    function getAdlConfig(bytes32 _assetId) external view returns (AdlConfig memory);
-    function getReserveFactor(bytes32 _assetId) external view returns (uint256);
-    function getMaxLeverage(bytes32 _assetId) external view returns (uint32);
-    function getMaxPnlFactor(bytes32 _assetId) external view returns (uint256);
-    function getAllocation(bytes32 _assetId) external view returns (uint256);
-    function getOpenInterest(bytes32 _assetId, bool _isLong) external view returns (uint256);
-    function getAverageEntryPrice(bytes32 _assetId, bool _isLong) external view returns (uint256);
-    function getFundingAccrued(bytes32 _assetId) external view returns (int256);
-    function getCumulativeBorrowFees(bytes32 _assetId) external view returns (uint256, uint256);
-    function getCumulativeBorrowFee(bytes32 _assetId, bool _isLong) external view returns (uint256);
-    function getLastFundingUpdate(bytes32 _assetId) external view returns (uint48);
-    function getLastBorrowingUpdate(bytes32 _assetId) external view returns (uint48);
-    function getFundingRates(bytes32 _assetId) external view returns (int256, int256);
-    function getBorrowingRate(bytes32 _assetId, bool _isLong) external view returns (uint256);
-    function getAverageCumulativeBorrowFee(bytes32 _assetId, bool _isLong) external view returns (uint256);
-    function getImpactPool(bytes32 _assetId) external view returns (uint256);
 }

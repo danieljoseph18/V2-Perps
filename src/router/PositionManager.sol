@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IMarket, IVault} from "../markets/interfaces/IMarket.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
@@ -10,7 +10,6 @@ import {Position} from "../positions/Position.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {Fee} from "../libraries/Fee.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {Execution} from "../positions/Execution.sol";
@@ -23,10 +22,10 @@ import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Roles} from "../access/Roles.sol";
-import {Invariant} from "../libraries/Invariant.sol";
-import {Pricing} from "../libraries/Pricing.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
+import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
+import {PositionInvariants} from "../positions/PositionInvariants.sol";
 
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
@@ -34,6 +33,7 @@ import {Borrowing} from "../libraries/Borrowing.sol";
 contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
+    using SafeERC20 for IMarketToken;
     using SafeCast for uint256;
     using Address for address payable;
     using SignedMath for int256;
@@ -107,11 +107,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
-        IVault.ExecuteDeposit memory params;
+        IMarket.ExecuteDeposit memory params;
         params.market = market;
-        params.positionManager = this;
-        params.priceFeed = priceFeed;
-        params.deposit = market.getDepositRequest(_key);
+        params.deposit = market.getRequest(_key);
         params.key = _key;
         // Get the signed prices
         (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(priceFeed);
@@ -119,11 +117,15 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
         // Calculate Cumulative PNL
-        params.cumulativePnl = Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.deposit.isLongToken, true); // Maximize AUM for deposits
-        try market.executeDeposit(params) {}
-        catch {
-            revert PositionManager_ExecuteDepositFailed();
-        }
+        params.cumulativePnl =
+            MarketUtils.calculateCumulativeMarketPnl(market, priceFeed, params.deposit.isLongToken, true); // Maximize AUM for deposits
+
+        // Execute the Deposit
+        market.executeDeposit(params);
+
+        // Send Tokens to the Market
+        if (params.deposit.isLongToken) WETH.safeTransfer(address(market), params.deposit.amountIn);
+        else USDC.safeTransfer(address(market), params.deposit.amountIn);
 
         // Clear all previously signed prices
         _clearOraclePrices();
@@ -140,13 +142,14 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     }
 
     function cancelDeposit(IMarket market, bytes32 _depositKey) external nonReentrant {
-        IVault.Deposit memory deposit = market.getDepositRequest(_depositKey);
+        IMarket.Input memory deposit = market.getRequest(_depositKey);
         if (deposit.owner != msg.sender) revert PositionManager_InvalidDepositOwner();
         if (deposit.expirationTimestamp >= block.timestamp) revert PositionManager_DepositNotExpired();
-        market.deleteDeposit(_depositKey);
-        address tokenOut = deposit.isLongToken ? market.LONG_TOKEN() : market.SHORT_TOKEN();
-        IERC20(tokenOut).safeTransfer(msg.sender, deposit.amountIn);
-        emit DepositRequestCancelled(_depositKey, deposit.owner, tokenOut, deposit.amountIn);
+        if (!deposit.isDeposit) revert PositionManager_InvalidDeposit();
+        market.deleteRequest(_depositKey);
+        IERC20 tokenOut = deposit.isLongToken ? WETH : USDC;
+        tokenOut.safeTransfer(msg.sender, deposit.amountIn);
+        emit DepositRequestCancelled(_depositKey, deposit.owner, address(tokenOut), deposit.amountIn);
     }
 
     function executeWithdrawal(IMarket market, bytes32 _key, Oracle.PriceUpdateData calldata _priceUpdateData)
@@ -163,17 +166,15 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
-        IVault.ExecuteWithdrawal memory params;
+        IMarket.ExecuteWithdrawal memory params;
         params.market = market;
-        params.positionManager = this;
-        params.priceFeed = priceFeed;
-        params.withdrawal = market.getWithdrawalRequest(_key);
+        params.withdrawal = market.getRequest(_key);
         params.key = _key;
         params.cumulativePnl =
-            Pricing.calculateCumulativeMarketPnl(market, priceFeed, params.withdrawal.isLongToken, false); // Minimize AUM for withdrawals
-        params.shouldUnwrap = params.withdrawal.shouldUnwrap;
+            MarketUtils.calculateCumulativeMarketPnl(market, priceFeed, params.withdrawal.isLongToken, false); // Minimize AUM for withdrawals
+        params.shouldUnwrap = params.withdrawal.reverseWrap;
         // Calculate the amount out
-        (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(params.priceFeed);
+        (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(priceFeed);
         // Calculate cumulative borrow fees
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
@@ -181,16 +182,19 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.amountOut = market.withdrawMarketTokensToTokens(
             params.longPrices,
             params.shortPrices,
-            params.withdrawal.marketTokenAmountIn,
+            params.withdrawal.amountIn,
             params.longBorrowFeesUsd,
             params.shortBorrowFeesUsd,
             params.cumulativePnl,
             params.withdrawal.isLongToken
         );
-        try market.executeWithdrawal(params) {}
-        catch {
-            revert PositionManager_ExecuteWithdrawalFailed();
-        }
+
+        // Transfer the Deposit Tokens to the Market
+        IMarketToken marketToken = market.MARKET_TOKEN();
+        marketToken.safeTransfer(address(market), params.withdrawal.amountIn);
+
+        // Execute the Withdrawal
+        market.executeWithdrawal(params);
 
         // Clear all previously signed prices
         _clearOraclePrices();
@@ -208,14 +212,16 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - feels wrong
+    // @audit - can combine with cancel deposit
     function cancelWithdrawal(IMarket market, bytes32 _withdrawalKey) external nonReentrant {
-        IVault.Withdrawal memory withdrawal = market.getWithdrawalRequest(_withdrawalKey);
+        IMarket.Input memory withdrawal = market.getRequest(_withdrawalKey);
         if (withdrawal.owner != msg.sender) revert PositionManager_InvalidWithdrawalOwner();
         if (withdrawal.expirationTimestamp >= block.timestamp) revert PositionManager_WithdrawalNotExpired();
-        market.deleteWithdrawal(_withdrawalKey);
-        address tokenOut = withdrawal.isLongToken ? market.LONG_TOKEN() : market.SHORT_TOKEN();
-        IERC20(tokenOut).safeTransfer(msg.sender, withdrawal.marketTokenAmountIn);
-        emit WithdrawalRequestCancelled(_withdrawalKey, withdrawal.owner, tokenOut, withdrawal.marketTokenAmountIn);
+        if (withdrawal.isDeposit) revert PositionManager_InvalidWithdrawal();
+        market.deleteRequest(_withdrawalKey);
+        IERC20 tokenOut = withdrawal.isLongToken ? WETH : USDC;
+        tokenOut.safeTransfer(msg.sender, withdrawal.amountIn);
+        emit WithdrawalRequestCancelled(_withdrawalKey, withdrawal.owner, address(tokenOut), withdrawal.amountIn);
     }
 
     // Used to transfer intermediary tokens to the market from deposits
@@ -254,7 +260,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         );
 
         // Calculate Fee
-        state.fee = Fee.calculateForPosition(
+        state.fee = Position.calculateFee(
             tradeStorage,
             request.input.sizeDelta,
             request.input.collateralDelta,
@@ -289,7 +295,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         IMarket.MarketStorage memory marketAfter = market.getStorage(request.input.assetId);
 
         // Invariant Check
-        Invariant.validateMarketDeltaPosition(marketBefore, marketAfter, request);
+        PositionInvariants.validateMarketDeltaPosition(marketBefore, marketAfter, request);
 
         if (request.input.isIncrease) {
             _transferTokensForIncrease(
@@ -323,7 +329,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         _signOraclePrices(_priceUpdateData);
         // Construct ExecutionState
         Execution.State memory state;
-        ITradeStorage tradeStorage = market.tradeStorage();
+        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // fetch position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
 
@@ -359,7 +365,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     }
 
     function cancelOrderRequest(IMarket market, bytes32 _key, bool _isLimit) external payable nonReentrant {
-        ITradeStorage tradeStorage = market.tradeStorage();
+        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Fetch the Request
         Position.Request memory request = tradeStorage.getOrder(_key);
         // Check it exists
@@ -410,7 +416,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // fetch pnl to pool ratio
         int256 pnlFactor = _getPnlFactor(market, state, _assetId, _isLong);
         // fetch max pnl to pool ratio
-        uint256 maxPnlFactor = market.getMaxPnlFactor(_assetId);
+        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market, _assetId);
 
         if (pnlFactor.abs() > maxPnlFactor && pnlFactor > 0) {
             market.updateAdlState(_assetId, true, _isLong);
@@ -433,7 +439,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Sign the Latest Oracle Prices
         _signOraclePrices(_priceUpdateData);
         Execution.State memory state;
-        IMarket.AdlConfig memory adl = market.getAdlConfig(_assetId);
+        IMarket.AdlConfig memory adl = MarketUtils.getAdlConfig(market, _assetId);
         // Check ADL is enabled for the market and for the side
         if (_isLong) {
             if (!adl.flaggedLong) revert PositionManager_LongSideNotFlagged();
@@ -441,13 +447,13 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
             if (!adl.flaggedShort) revert PositionManager_ShortSideNotFlagged();
         }
         // Get the storage
-        ITradeStorage tradeStorage = market.tradeStorage();
+        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Check the position in question is active
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         if (position.positionSize == 0) revert PositionManager_PositionNotActive();
         // state the market
         market = market;
-        // Get current pricing and token data
+        // Get current MarketUtils and token data
         state = Execution.cacheTokenPrices(priceFeed, state, position.assetId, position.isLong, false);
 
         // Set the impacted price to the index price => 0 price impact on ADLs

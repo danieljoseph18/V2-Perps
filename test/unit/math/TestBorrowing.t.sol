@@ -13,15 +13,15 @@ import {Router} from "../../../src/router/Router.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
-import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
-import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 import {Execution} from "../../../src/positions/Execution.sol";
 import {mulDiv} from "@prb/math/Common.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
 
 contract TestBorrowing is Test {
     using stdStorage for StdStorage;
@@ -36,6 +36,7 @@ contract TestBorrowing is Test {
     Router router;
     address OWNER;
     Market market;
+    address feeDistributor;
 
     address weth;
     address usdc;
@@ -64,6 +65,7 @@ contract TestBorrowing is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        feeDistributor = address(contracts.feeDistributor);
         OWNER = contracts.owner;
         (weth, usdc, ethPriceId, usdcPriceId,,,,) = deploy.activeNetworkConfig();
         // Pass some time so block timestamp isn't 0
@@ -110,7 +112,7 @@ contract TestBorrowing is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        IVault.VaultConfig memory wethVaultDetails = IVault.VaultConfig({
+        IMarket.VaultConfig memory wethVaultDetails = IMarket.VaultConfig({
             longToken: weth,
             shortToken: usdc,
             longBaseUnit: 1e18,
@@ -118,10 +120,8 @@ contract TestBorrowing is Test {
             feeScale: 0.03e18,
             feePercentageToOwner: 0.2e18,
             minTimeToExpiration: 1 minutes,
-            priceFeed: address(priceFeed),
-            positionManager: address(positionManager),
             poolOwner: OWNER,
-            feeDistributor: OWNER,
+            feeDistributor: feeDistributor,
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
@@ -129,18 +129,18 @@ contract TestBorrowing is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
-        tradeStorage = market.tradeStorage();
+        tradeStorage = ITradeStorage(market.tradeStorage());
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        bytes32 depositKey = market.getRequestAtIndex(0).key;
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-        depositKey = market.getDepositRequestAtIndex(0).key;
+        depositKey = market.getRequestAtIndex(0).key;
         positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
@@ -148,7 +148,7 @@ contract TestBorrowing is Test {
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(ethAssetId), 10000);
+        assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -221,7 +221,7 @@ contract TestBorrowing is Test {
             2500e30,
             block.timestamp,
             true,
-            Position.FundingParams(market.getFundingAccrued(ethAssetId), 0),
+            Position.FundingParams(MarketUtils.getFundingAccrued(market, ethAssetId), 0),
             Position.BorrowingParams(0, 0, 0),
             bytes32(0),
             bytes32(0)
@@ -234,10 +234,10 @@ contract TestBorrowing is Test {
         state.collateralPrice = 2500e30;
 
         // Calculate Fees Owed
-        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(market, position, state);
+        uint256 feesOwed = Position.getTotalBorrowFees(market, position, state);
         // Index Tokens == Collateral Tokens
         uint256 expectedFees = mulDiv(
-            ((market.getBorrowingRate(ethAssetId, true) * 1 days) * positionSize) / 1e18,
+            ((MarketUtils.getBorrowingRate(market, ethAssetId, true) * 1 days) * positionSize) / 1e18,
             state.collateralBaseUnit,
             state.collateralPrice
         );
@@ -263,7 +263,7 @@ contract TestBorrowing is Test {
             2500e30,
             block.timestamp,
             true,
-            Position.FundingParams(market.getFundingAccrued(ethAssetId), 0),
+            Position.FundingParams(MarketUtils.getFundingAccrued(market, ethAssetId), 0),
             Position.BorrowingParams(0, 1e18, 0), // Set entry cumulative to 1e18
             bytes32(0),
             bytes32(0)
@@ -274,7 +274,7 @@ contract TestBorrowing is Test {
 
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getCumulativeBorrowFee.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getCumulativeBorrowFee.selector, ethAssetId, true),
             abi.encode(uint256(1e18) + bonusCumulative) // Mock return value
         );
 
@@ -285,7 +285,7 @@ contract TestBorrowing is Test {
         state.collateralPrice = 2500e30;
 
         // Calculate Fees Owed
-        uint256 feesOwed = Borrowing.getTotalCollateralFeesOwed(market, position, state);
+        uint256 feesOwed = Position.getTotalBorrowFees(market, position, state);
         // Index Tokens == Collateral Tokens
         uint256 expectedFees = mulDiv(bonusCumulative, positionSize, 1e18);
         expectedFees = mulDiv(expectedFees, state.collateralBaseUnit, state.collateralPrice);
@@ -324,7 +324,7 @@ contract TestBorrowing is Test {
         );
 
         // Fetch the borrowing rate
-        uint256 borrowingRate = market.getBorrowingRate(ethAssetId, true);
+        uint256 borrowingRate = MarketUtils.getBorrowingRate(market, ethAssetId, true);
         // Cross check
         assertGt(borrowingRate, 0);
     }
@@ -348,25 +348,25 @@ contract TestBorrowing is Test {
         // mock the previous cumulative
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getCumulativeBorrowFee.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getCumulativeBorrowFee.selector, ethAssetId, true),
             abi.encode(_lastCumulative) // Mock return value
         );
         // mock the previous average cumulative
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getAverageCumulativeBorrowFee.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getAverageCumulativeBorrowFee.selector, ethAssetId, true),
             abi.encode(_prevAverageCumulative)
         );
         // mock the open interest
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getOpenInterest.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
             abi.encode(_openInterest)
         );
         // mock the rate
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getBorrowingRate.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getBorrowingRate.selector, ethAssetId, true),
             abi.encode(_borrowingRate)
         );
         // Pass some time
@@ -443,19 +443,19 @@ contract TestBorrowing is Test {
         // mock the previous cumulative
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getCumulativeBorrowFee.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getCumulativeBorrowFee.selector, ethAssetId, true),
             abi.encode(_cumulativeFee) // Mock return value
         );
         // mock the previous average cumulative
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getAverageCumulativeBorrowFee.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getAverageCumulativeBorrowFee.selector, ethAssetId, true),
             abi.encode(_avgCumulativeFee)
         );
         // mock the open interest
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getOpenInterest.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
             abi.encode(_openInterest)
         );
         // Assert Eq EV vs Actual
@@ -477,19 +477,19 @@ contract TestBorrowing is Test {
         // mock the previous cumulative
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getCumulativeBorrowFee.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getCumulativeBorrowFee.selector, ethAssetId, true),
             abi.encode(_cumulativeFee) // Mock return value
         );
         // mock the previous average cumulative
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getAverageCumulativeBorrowFee.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getAverageCumulativeBorrowFee.selector, ethAssetId, true),
             abi.encode(_avgCumulativeFee)
         );
         // mock the open interest
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getOpenInterest.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
             abi.encode(_openInterest)
         );
         // Assert Eq EV vs Actual

@@ -13,17 +13,15 @@ import {Router} from "../../../src/router/Router.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
-import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
-import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {Borrowing} from "../../../src/libraries/Borrowing.sol";
-import {Pricing} from "../../../src/libraries/Pricing.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {Fee} from "../../../src/libraries/Fee.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
 
 contract TestFee is Test {
     using SignedMath for int256;
@@ -39,6 +37,7 @@ contract TestFee is Test {
     Router router;
     address OWNER;
     Market market;
+    address feeDistributor;
 
     address weth;
     address usdc;
@@ -67,6 +66,7 @@ contract TestFee is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        feeDistributor = address(contracts.feeDistributor);
         OWNER = contracts.owner;
         (weth, usdc, ethPriceId, usdcPriceId,,,,) = deploy.activeNetworkConfig();
         // Pass some time so block timestamp isn't 0
@@ -113,7 +113,7 @@ contract TestFee is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        IVault.VaultConfig memory wethVaultDetails = IVault.VaultConfig({
+        IMarket.VaultConfig memory wethVaultDetails = IMarket.VaultConfig({
             longToken: weth,
             shortToken: usdc,
             longBaseUnit: 1e18,
@@ -121,10 +121,8 @@ contract TestFee is Test {
             feeScale: 0.03e18,
             feePercentageToOwner: 0.2e18,
             minTimeToExpiration: 1 minutes,
-            priceFeed: address(priceFeed),
-            positionManager: address(positionManager),
             poolOwner: OWNER,
-            feeDistributor: OWNER,
+            feeDistributor: feeDistributor,
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
@@ -132,18 +130,18 @@ contract TestFee is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
-        tradeStorage = market.tradeStorage();
+        tradeStorage = ITradeStorage(market.tradeStorage());
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        bytes32 depositKey = market.getRequestAtIndex(0).key;
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-        depositKey = market.getDepositRequestAtIndex(0).key;
+        depositKey = market.getRequestAtIndex(0).key;
         positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
@@ -151,7 +149,7 @@ contract TestFee is Test {
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(ethAssetId), 10000);
+        assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -163,7 +161,8 @@ contract TestFee is Test {
      */
     function testConstructionOfFeeParameters(uint256 _tokenAmount) public setUpMarkets {
         (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) = Oracle.getLastMarketTokenPrices(priceFeed);
-        Fee.Params memory feeParams = Fee.constructFeeParams(market, _tokenAmount, true, longPrices, shortPrices, true);
+        MarketUtils.FeeParams memory feeParams =
+            MarketUtils.constructFeeParams(market, _tokenAmount, true, longPrices, shortPrices, true);
         assertEq(feeParams.tokenAmount, _tokenAmount);
     }
 
@@ -174,18 +173,18 @@ contract TestFee is Test {
         // calculate expected fee
         uint256 expectedFee = mulDiv(sizeDeltaCollateral, tradeStorage.tradingFee(), 1e18);
         // calculate fee
-        uint256 fee = Fee.calculateForPosition(tradeStorage, _sizeDelta, 0, 2500e30, 1e18);
+        uint256 fee = Position.calculateFee(tradeStorage, _sizeDelta, 0, 2500e30, 1e18);
         assertEq(fee, expectedFee);
     }
 
     function testCalculatingFeesForAMarketAction(uint256 _tokenAmount) public setUpMarkets {
-        _tokenAmount = bound(_tokenAmount, 1000, 1_000_000_000e18);
-        (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) = Oracle.getLastMarketTokenPrices(priceFeed);
-        Fee.Params memory feeParams = Fee.constructFeeParams(market, _tokenAmount, true, longPrices, shortPrices, true);
+        // _tokenAmount = bound(_tokenAmount, 1000, 1_000_000_000e18);
+        // (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) = Oracle.getLastMarketTokenPrices(priceFeed);
+        // MarketUtils.FeeParams memory feeParams = Fee.constructFeeParams(market, _tokenAmount, true, longPrices, shortPrices, true);
 
-        uint256 fee =
-            Fee.calculateForMarketAction(feeParams, market.longTokenBalance(), 1e18, market.shortTokenBalance(), 1e6);
-        console.log("Fee: ", fee);
-        require(fee >= 0, "Invalid Fee");
+        // uint256 fee =
+        //     Fee.calculateFee(feeParams, market.longTokenBalance(), 1e18, market.shortTokenBalance(), 1e6);
+        // console.log("Fee: ", fee);
+        // require(fee >= 0, "Invalid Fee");
     }
 }

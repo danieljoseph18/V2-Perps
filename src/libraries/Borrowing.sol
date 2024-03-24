@@ -2,13 +2,10 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {Pricing} from "./Pricing.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {Execution} from "../positions/Execution.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
@@ -43,13 +40,13 @@ library Borrowing {
     ) external view returns (uint256 rate) {
         BorrowingState memory state;
         // Calculate the new Borrowing Rate
-        state.config = market.getBorrowingConfig(_assetId);
+        state.config = MarketUtils.getBorrowingConfig(market, _assetId);
         state.borrowingFactor = ud(state.config.factor);
         if (_isLong) {
             // get the long open interest
             state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _assetId, true));
             // get the long pending pnl
-            state.pendingPnl = Pricing.getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, true);
+            state.pendingPnl = MarketUtils.getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, true);
             // get the long pool balance
             state.poolBalance =
                 ud(MarketUtils.getPoolBalanceUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, true));
@@ -79,23 +76,6 @@ library Borrowing {
         fee = _rate * timeElapsed;
     }
 
-    function getTotalCollateralFeesOwed(IMarket market, Position.Data calldata _position, Execution.State memory _state)
-        external
-        view
-        returns (uint256 collateralFeesOwed)
-    {
-        uint256 feesUsd = _getTotalPositionFeesOwed(market, _position);
-        collateralFeesOwed = mulDiv(feesUsd, _state.collateralBaseUnit, _state.collateralPrice);
-    }
-
-    function getTotalFeesOwedUsd(IMarket market, Position.Data calldata _position)
-        external
-        view
-        returns (uint256 totalFeesOwedUsd)
-    {
-        totalFeesOwedUsd = _getTotalPositionFeesOwed(market, _position);
-    }
-
     function getTotalFeesOwedByMarkets(IMarket market, bool _isLong) external view returns (uint256 totalFeeUsd) {
         bytes32[] memory assetIds = market.getAssetIds();
         uint256 len = assetIds.length;
@@ -113,8 +93,8 @@ library Borrowing {
         view
         returns (uint256 totalFeesOwedUsd)
     {
-        uint256 accumulatedFees =
-            market.getCumulativeBorrowFee(_assetId, _isLong) - market.getAverageCumulativeBorrowFee(_assetId, _isLong);
+        uint256 accumulatedFees = MarketUtils.getCumulativeBorrowFee(market, _assetId, _isLong)
+            - MarketUtils.getAverageCumulativeBorrowFee(market, _assetId, _isLong);
         uint256 openInterest = MarketUtils.getOpenInterestUsd(market, _assetId, _isLong);
         totalFeesOwedUsd = mulDiv(accumulatedFees, openInterest, PRECISION);
     }
@@ -141,10 +121,10 @@ library Borrowing {
         // Get the Open Interest
         uint256 openInterestUsd = MarketUtils.getOpenInterestUsd(market, _assetId, _isLong);
         // Get the current cumulative fee on the market
-        uint256 currentCumulative =
-            market.getCumulativeBorrowFee(_assetId, _isLong) + _calculatePendingFees(market, _assetId, _isLong);
+        uint256 currentCumulative = MarketUtils.getCumulativeBorrowFee(market, _assetId, _isLong)
+            + calculatePendingFees(market, _assetId, _isLong);
         // Get the last weighted average entry cumulative fee
-        uint256 lastCumulative = market.getAverageCumulativeBorrowFee(_assetId, _isLong);
+        uint256 lastCumulative = MarketUtils.getAverageCumulativeBorrowFee(market, _assetId, _isLong);
         // If OI before is 0, or last cumulative = 0, return current cumulative
         if (openInterestUsd == 0 || lastCumulative == 0) return currentCumulative;
         // If Position is Decrease
@@ -162,46 +142,16 @@ library Borrowing {
             + mulDiv(currentCumulative, relativeSize, PRECISION);
     }
 
-    /// @dev Gets Total Fees Owed By a Position in Tokens
-    function _getTotalPositionFeesOwed(IMarket market, Position.Data calldata _position)
-        internal
-        view
-        returns (uint256 feesOwedUsd)
-    {
-        uint256 feeSinceUpdate = _getFeesSinceLastPositionUpdate(market, _position);
-        feesOwedUsd = feeSinceUpdate + _position.borrowingParams.feesOwed;
-    }
-
-    /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
-    /// @dev Units: Fees in USD (% of fees applied to position size)
-    function _getFeesSinceLastPositionUpdate(IMarket market, Position.Data calldata _position)
-        internal
-        view
-        returns (uint256 feesUsd)
-    {
-        // get cumulative borrowing fees since last update
-        uint256 borrowFee = _position.isLong
-            ? market.getCumulativeBorrowFee(_position.assetId, true) - _position.borrowingParams.lastLongCumulativeBorrowFee
-            : market.getCumulativeBorrowFee(_position.assetId, false)
-                - _position.borrowingParams.lastShortCumulativeBorrowFee;
-        borrowFee += _calculatePendingFees(market, _position.assetId, _position.isLong);
-        if (borrowFee == 0) {
-            feesUsd = 0;
-        } else {
-            feesUsd = mulDiv(_position.positionSize, borrowFee, PRECISION);
-        }
-    }
-
     /// @dev Units: Fees as a percentage (e.g 0.03e18 = 3%)
     /// @dev Gets fees since last time the cumulative market rate was updated
-    function _calculatePendingFees(IMarket market, bytes32 _assetId, bool _isLong)
-        internal
+    function calculatePendingFees(IMarket market, bytes32 _assetId, bool _isLong)
+        public
         view
         returns (uint256 pendingFees)
     {
-        uint256 borrowRate = market.getBorrowingRate(_assetId, _isLong);
+        uint256 borrowRate = MarketUtils.getBorrowingRate(market, _assetId, _isLong);
         if (borrowRate == 0) return 0;
-        uint256 timeElapsed = block.timestamp - market.getLastBorrowingUpdate(_assetId);
+        uint256 timeElapsed = block.timestamp - MarketUtils.getLastBorrowingUpdate(market, _assetId);
         if (timeElapsed == 0) return 0;
         pendingFees = borrowRate * timeElapsed;
     }

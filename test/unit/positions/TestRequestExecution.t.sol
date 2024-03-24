@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
@@ -14,10 +14,10 @@ import {Router} from "../../../src/router/Router.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
-import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
 
 contract TestRequestExecution is Test {
     RoleStorage roleStorage;
@@ -30,6 +30,7 @@ contract TestRequestExecution is Test {
     Router router;
     address OWNER;
     Market market;
+    address feeDistributor;
 
     address weth;
     address usdc;
@@ -58,6 +59,7 @@ contract TestRequestExecution is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        feeDistributor = address(contracts.feeDistributor);
         OWNER = contracts.owner;
         (weth, usdc, ethPriceId, usdcPriceId,,,,) = deploy.activeNetworkConfig();
         // Pass some time so block timestamp isn't 0
@@ -104,7 +106,7 @@ contract TestRequestExecution is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        IVault.VaultConfig memory wethVaultDetails = IVault.VaultConfig({
+        IMarket.VaultConfig memory wethVaultDetails = IMarket.VaultConfig({
             longToken: weth,
             shortToken: usdc,
             longBaseUnit: 1e18,
@@ -112,10 +114,8 @@ contract TestRequestExecution is Test {
             feeScale: 0.03e18,
             feePercentageToOwner: 0.2e18,
             minTimeToExpiration: 1 minutes,
-            priceFeed: address(priceFeed),
-            positionManager: address(positionManager),
             poolOwner: OWNER,
-            feeDistributor: OWNER,
+            feeDistributor: feeDistributor,
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
@@ -123,19 +123,19 @@ contract TestRequestExecution is Test {
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
-        tradeStorage = market.tradeStorage();
+        tradeStorage = ITradeStorage(market.tradeStorage());
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        bytes32 depositKey = market.getRequestAtIndex(0).key;
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-        depositKey = market.getDepositRequestAtIndex(0).key;
+        depositKey = market.getRequestAtIndex(0).key;
         positionManager.executeDeposit{value: 0.0001 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
@@ -143,7 +143,7 @@ contract TestRequestExecution is Test {
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(ethAssetId), 10000);
+        assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -218,11 +218,12 @@ contract TestRequestExecution is Test {
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
 
         // Get the size of the impact pool before the position is executed
-        uint256 impactPoolBefore = IMarket(marketMaker.tokenToMarkets(ethAssetId)).getImpactPool(ethAssetId);
+        uint256 impactPoolBefore =
+            MarketUtils.getImpactPool(IMarket(marketMaker.tokenToMarkets(ethAssetId)), ethAssetId);
         vm.prank(OWNER);
         positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
         // Get the size of the impact pool after the position is executed
-        uint256 impactPoolAfter = IMarket(marketMaker.tokenToMarkets(ethAssetId)).getImpactPool(ethAssetId);
+        uint256 impactPoolAfter = MarketUtils.getImpactPool(IMarket(marketMaker.tokenToMarkets(ethAssetId)), ethAssetId);
         // Check that the impact pool has been updated
         assertGt(impactPoolAfter, impactPoolBefore);
     }
@@ -489,9 +490,9 @@ contract TestRequestExecution is Test {
         vm.warp(block.timestamp + 100 seconds);
         vm.roll(block.number + 1);
         // check the market parameters
-        uint256 longOpenInterest = market.getOpenInterest(ethAssetId, true);
+        uint256 longOpenInterest = MarketUtils.getOpenInterest(market, ethAssetId, true);
         assertEq(longOpenInterest, 1000e30);
-        uint256 longAverageEntryPrice = market.getAverageEntryPrice(ethAssetId, true);
+        uint256 longAverageEntryPrice = MarketUtils.getAverageEntryPrice(market, ethAssetId, true);
         assertNotEq(longAverageEntryPrice, 0);
         // Update the Price
         bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
@@ -511,15 +512,15 @@ contract TestRequestExecution is Test {
         vm.prank(OWNER);
         positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
         // check the market parameters
-        longOpenInterest = market.getOpenInterest(ethAssetId, true);
+        longOpenInterest = MarketUtils.getOpenInterest(market, ethAssetId, true);
         assertEq(longOpenInterest, 2000e30);
-        uint256 newLongWaep = market.getAverageEntryPrice(ethAssetId, true);
+        uint256 newLongWaep = MarketUtils.getAverageEntryPrice(market, ethAssetId, true);
         assertNotEq(newLongWaep, longAverageEntryPrice);
-        uint256 lastBorrowingUpdate = market.getLastBorrowingUpdate(ethAssetId);
+        uint256 lastBorrowingUpdate = MarketUtils.getLastBorrowingUpdate(market, ethAssetId);
         assertEq(lastBorrowingUpdate, block.timestamp);
-        uint256 lastFundingUpdate = market.getLastFundingUpdate(ethAssetId);
+        uint256 lastFundingUpdate = MarketUtils.getLastFundingUpdate(market, ethAssetId);
         assertEq(lastFundingUpdate, block.timestamp);
-        uint256 longBorrowingRate = market.getLastBorrowingUpdate(ethAssetId);
+        uint256 longBorrowingRate = MarketUtils.getLastBorrowingUpdate(market, ethAssetId);
         assertNotEq(longBorrowingRate, 0);
     }
 
@@ -552,7 +553,7 @@ contract TestRequestExecution is Test {
         uint256 feeUsd = (10_000e30 * 0.001e18) / 1e18;
         uint256 predictedFee = Position.convertUsdToCollateral(feeUsd, 2500e30, 1e18);
         // compare it with the fee owed from the contract
-        uint256 fee = Fee.calculateForPosition(tradeStorage, 10_000e30, 0.5 ether, 2500e30, 1e18);
+        uint256 fee = Position.calculateFee(tradeStorage, 10_000e30, 0.5 ether, 2500e30, 1e18);
         assertEq(predictedFee, fee);
     }
 }

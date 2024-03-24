@@ -10,11 +10,10 @@ import {Position} from "../positions/Position.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {Execution} from "./Execution.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {Invariant} from "../libraries/Invariant.sol";
+import {PositionInvariants} from "./PositionInvariants.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {console} from "forge-std/Test.sol";
 
 /// @dev Needs TradeStorage Role & Fee Accumulator
 /// @dev Need to add liquidity reservation for positions
@@ -139,7 +138,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         Position.Data memory positionAfter;
         (positionAfter, _state) = Execution.increaseCollateral(market, positionBefore, _params, _state);
         // Validate the Position Change
-        Invariant.validateCollateralIncrease(
+        PositionInvariants.validateCollateralIncrease(
             positionBefore,
             positionAfter,
             _params.request.input.collateralDelta,
@@ -148,10 +147,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _state.affiliateRebate
         );
         // Add Value to Stored Collateral Amount in Market
-        market.increaseCollateralAmount(
+        market.updateCollateralAmount(
             _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee,
             _params.request.user,
-            _params.request.input.isLong
+            _params.request.input.isLong,
+            true
         );
 
         _payFees(_state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
@@ -179,7 +179,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         uint256 amountOut =
             _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee;
         // Validate the Position Change
-        Invariant.validateCollateralDecrease(
+        PositionInvariants.validateCollateralDecrease(
             positionBefore, positionAfter, amountOut, _state.fee, _state.borrowFee, _state.affiliateRebate
         );
         // Check Market has enough available liquidity for payout
@@ -190,8 +190,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             revert TradeStorage_InsufficientFreeLiquidity();
         }
         // Decrease the Collateral Amount in the Market by the full delta
-        market.decreaseCollateralAmount(
-            _params.request.input.collateralDelta, _params.request.user, _params.request.input.isLong
+        market.updateCollateralAmount(
+            _params.request.input.collateralDelta, _params.request.user, _params.request.input.isLong, false
         );
         // Pay Fees
         _payFees(_state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
@@ -228,7 +228,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         Position.Data memory position;
         (position, _state) = Execution.createNewPosition(market, _params, _state, minCollateralUsd);
         // Validate the New Position
-        Invariant.validateNewPosition(
+        PositionInvariants.validateNewPosition(
             _params.request.input.collateralDelta, position.collateralAmount, _state.fee, _state.affiliateRebate
         );
         // If Request has conditionals, create the SL / TP
@@ -273,7 +273,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         Position.Data memory positionAfter;
         (positionAfter, _state) = Execution.increasePosition(market, positionBefore, _params, _state);
         // Validate the Position Change
-        Invariant.validateIncreasePosition(
+        PositionInvariants.validateIncreasePosition(
             positionBefore,
             positionAfter,
             _params.request.input.collateralDelta,
@@ -320,7 +320,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         (positionAfter, decreaseState, _state) =
             Execution.decreasePosition(market, positionBefore, _params, _state, minCollateralUsd, liquidationFee);
         // Validate the Position Change
-        Invariant.validateDecreasePosition(
+        PositionInvariants.validateDecreasePosition(
             positionBefore,
             positionAfter,
             decreaseState.afterFeeAmount,
@@ -463,7 +463,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Reserve an Amount of Liquidity Equal to the Position Size
         market.reserveLiquidity(reserveDelta, _isLong);
         // Register the Collateral in
-        market.increaseCollateralAmount(_collateralDelta, _user, _isLong);
+        market.updateCollateralAmount(_collateralDelta, _user, _isLong, true);
     }
 
     function _unreserveLiquidity(
@@ -479,7 +479,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Unreserve an Amount of Liquidity Equal to the Position Size
         market.unreserveLiquidity(reserveDelta, _isLong);
         // Register the Collateral out
-        market.decreaseCollateralAmount(_collateralDelta, _user, _isLong);
+        market.updateCollateralAmount(_collateralDelta, _user, _isLong, false);
     }
 
     function _payFees(

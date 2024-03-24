@@ -6,7 +6,6 @@ import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Oracle} from "./Oracle.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
@@ -121,6 +120,10 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
             bytes32 assetId = _assetIds[index];
             Oracle.Asset memory asset = assets[assetId];
             if (!asset.isValid) revert PriceFeed_InvalidToken(assetId);
+            // Add the Price to the Set
+            bool success = assetsWithPrices.add(assetId);
+            if (!success) revert PriceFeed_FailedToAddPrice();
+            // Set Prices based on strategy
             if (asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
                 // Get the Pyth Price Data
                 PythStructs.Price memory data = pyth.getPrice(asset.priceId);
@@ -150,8 +153,6 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
             } else {
                 revert PriceFeed_InvalidPrimaryStrategy();
             }
-            // Add the Price to the Set
-            assetsWithPrices.add(assetId);
             // Increment the Loop Counter
             unchecked {
                 ++index;
@@ -164,6 +165,7 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
         bytes32[] memory keys = assetsWithPrices.values();
         uint256 len = keys.length;
         for (uint256 i = 0; i < len;) {
+            delete prices[keys[i]];
             bool success = assetsWithPrices.remove(keys[i]);
             if (!success) revert PriceFeed_FailedToRemovePrice();
             unchecked {

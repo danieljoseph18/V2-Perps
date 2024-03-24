@@ -10,6 +10,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Execution} from "../positions/Execution.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {MarketUtils} from "../markets/MarketUtils.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
@@ -49,7 +50,7 @@ library PriceImpact {
     ) external view returns (uint256 impactedPrice, int256 priceImpactUsd) {
         ImpactState memory state;
 
-        state.impact = market.getImpactConfig(_request.input.assetId);
+        state.impact = MarketUtils.getImpactConfig(market, _request.input.assetId);
 
         state.longOi = MarketUtils.getOpenInterestUsd(market, _request.input.assetId, true);
         state.shortOi = MarketUtils.getOpenInterestUsd(market, _request.input.assetId, false);
@@ -273,7 +274,7 @@ library PriceImpact {
         view
         returns (int256)
     {
-        int256 impactPoolUsd = market.getImpactPool(_assetId).toInt256();
+        int256 impactPoolUsd = MarketUtils.getImpactPool(market, _assetId).toInt256();
         if (_priceImpactUsd > impactPoolUsd) {
             return impactPoolUsd;
         } else {

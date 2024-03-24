@@ -13,13 +13,13 @@ import {Router} from "../../../src/router/Router.sol";
 import {WETH} from "../../../src/tokens/WETH.sol";
 import {Oracle} from "../../../src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
-import {Fee} from "../../../src/libraries/Fee.sol";
 import {Position} from "../../../src/positions/Position.sol";
-import {Market, IMarket, IVault} from "../../../src/markets/Market.sol";
+import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
 
 contract TestFunding is Test {
     RoleStorage roleStorage;
@@ -32,6 +32,7 @@ contract TestFunding is Test {
     Router router;
     address OWNER;
     Market market;
+    address feeDistributor;
 
     address weth;
     address usdc;
@@ -61,6 +62,7 @@ contract TestFunding is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        feeDistributor = address(contracts.feeDistributor);
         OWNER = contracts.owner;
         (weth, usdc, ethPriceId, usdcPriceId,,,,) = deploy.activeNetworkConfig();
         // Pass some time so block timestamp isn't 0
@@ -107,7 +109,7 @@ contract TestFunding is Test {
                 poolType: Oracle.PoolType.UNISWAP_V3
             })
         });
-        IVault.VaultConfig memory wethVaultDetails = IVault.VaultConfig({
+        IMarket.VaultConfig memory wethVaultDetails = IMarket.VaultConfig({
             longToken: weth,
             shortToken: usdc,
             longBaseUnit: 1e18,
@@ -115,10 +117,8 @@ contract TestFunding is Test {
             feeScale: 0.03e18,
             feePercentageToOwner: 0.2e18,
             minTimeToExpiration: 1 minutes,
-            priceFeed: address(priceFeed),
-            positionManager: address(positionManager),
             poolOwner: OWNER,
-            feeDistributor: OWNER,
+            feeDistributor: feeDistributor,
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
@@ -129,14 +129,14 @@ contract TestFunding is Test {
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-        bytes32 depositKey = market.getDepositRequestAtIndex(0).key;
+        bytes32 depositKey = market.getRequestAtIndex(0).key;
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-        depositKey = market.getDepositRequestAtIndex(0).key;
+        depositKey = market.getRequestAtIndex(0).key;
         positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
@@ -144,7 +144,7 @@ contract TestFunding is Test {
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
         market.setAllocationsWithBits(allocations);
-        assertEq(market.getAllocation(ethAssetId), 10000);
+        assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
@@ -213,12 +213,12 @@ contract TestFunding is Test {
         // Mock Fuzz long & short Oi
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getOpenInterest.selector, ethAssetId, true),
+            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
             abi.encode(_longOi)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getOpenInterest.selector, ethAssetId, false),
+            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, false),
             abi.encode(_shortOi)
         );
         // Skew should be long oi - short oi
@@ -231,13 +231,13 @@ contract TestFunding is Test {
         // Mock an existing rate and velocity
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingRates.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getFundingRates.selector, ethAssetId),
             abi.encode(0, 0.0025e18)
         );
         // Mock the lastFundingUpdate to block timestamp
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getLastFundingUpdate.selector, ethAssetId),
             abi.encode(block.timestamp)
         );
         // get current funding rate
@@ -294,13 +294,13 @@ contract TestFunding is Test {
         // Mock an existing negative rate and positive velocity
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingRates.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getFundingRates.selector, ethAssetId),
             abi.encode(-0.0005e18, 0.0025e18)
         );
         // Mock the lastFundingUpdate to block timestamp
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getLastFundingUpdate.selector, ethAssetId),
             abi.encode(block.timestamp)
         );
         // get current funding rate
@@ -381,17 +381,17 @@ contract TestFunding is Test {
         // Mock the necessary market functions
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingRates.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getFundingRates.selector, ethAssetId),
             abi.encode(values.fundingRate, values.fundingVelocity)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingAccrued.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getFundingAccrued.selector, ethAssetId),
             abi.encode(values.entryFundingAccrued)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getLastFundingUpdate.selector, ethAssetId),
             abi.encode(block.timestamp)
         );
 
@@ -401,7 +401,7 @@ contract TestFunding is Test {
 
         // Call the function with the fuzzed inputs
         (values.fundingFeeUsd, values.nextFundingAccrued) =
-            Funding.getFeeForPositionChange(market, ethAssetId, 2500e30, values.sizeDelta, values.entryFundingAccrued);
+            Position.getFundingFeeDelta(market, ethAssetId, 2500e30, values.sizeDelta, values.entryFundingAccrued);
 
         // Assert that the outputs are within expected ranges
         assertEq(
@@ -424,17 +424,17 @@ contract TestFunding is Test {
         // Mock the necessary market functions
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingRates.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getFundingRates.selector, ethAssetId),
             abi.encode(_fundingRate, _fundingVelocity)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getFundingAccrued.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getFundingAccrued.selector, ethAssetId),
             abi.encode(_entryFundingAccrued)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(Market.getLastFundingUpdate.selector, ethAssetId),
+            abi.encodeWithSelector(MarketUtils.getLastFundingUpdate.selector, ethAssetId),
             abi.encode(block.timestamp)
         );
 
