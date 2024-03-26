@@ -234,18 +234,12 @@ interface IMarket {
     event MarketConfigUpdated(bytes32 indexed assetId, Config config);
     event MarketStateUpdated(bytes32 assetId, bool isLong);
     event Market_Initialzied();
-    event RequestCreated(
-        bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, bool isDeposit
-    );
+    event RequestCreated(bytes32 indexed key, address indexed owner, address tokenIn, uint256 amountIn, bool isDeposit);
     event DepositExecuted(
-        bytes32 indexed key, address indexed owner, address indexed tokenIn, uint256 amountIn, uint256 mintAmount
+        bytes32 indexed key, address indexed owner, address tokenIn, uint256 amountIn, uint256 mintAmount
     );
     event WithdrawalExecuted(
-        bytes32 indexed key,
-        address indexed owner,
-        address indexed tokenOut,
-        uint256 marketTokenAmountIn,
-        uint256 amountOut
+        bytes32 indexed key, address indexed owner, address tokenOut, uint256 marketTokenAmountIn, uint256 amountOut
     );
     event FeesAccumulated(uint256 amount, bool _isLong);
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
@@ -292,7 +286,6 @@ interface IMarket {
     function initialize(address _tradeStorage) external;
     function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations) external;
     function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external;
-    function updateConfig(Config memory _config, bytes32 _assetId) external;
     function updateMarketState(
         bytes32 _assetId,
         uint256 _sizeDelta,

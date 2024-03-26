@@ -45,7 +45,13 @@ interface IMarketMaker {
     ) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
-    function createNewMarket(
+    function requestNewMarket(
+        IMarket.VaultConfig memory _config,
+        bytes32 _assetId,
+        bytes32 _priceId,
+        Oracle.Asset memory _asset
+    ) external;
+    function executeNewMarket(
         IMarket.VaultConfig memory _config,
         bytes32 _assetId,
         bytes32 _priceId,

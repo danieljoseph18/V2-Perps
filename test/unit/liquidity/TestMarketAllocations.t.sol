@@ -127,7 +127,7 @@ contract TestMarketAllocations is Test {
             name: "WETH/USDC",
             symbol: "WETH/USDC"
         });
-        marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
+        marketMaker.executeNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
         vm.stopPrank();
         address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
         market = Market(payable(wethMarket));
@@ -228,7 +228,7 @@ contract TestMarketAllocations is Test {
         });
 
         IMarket marketInterface =
-            IMarket(marketMaker.createNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData));
+            IMarket(marketMaker.executeNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData));
 
         uint256 firstAllocation = 5000;
         uint256 secondAllocation = 5000;

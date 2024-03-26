@@ -147,13 +147,20 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         positionManager = IPositionManager(_positionManager);
     }
 
+    function requestNewMarket(
+        IMarket.VaultConfig calldata _vaultConfig,
+        bytes32 _assetId,
+        bytes32 _priceId,
+        Oracle.Asset calldata _asset
+    ) external {}
+
     // @audit - make this a request - fulfillment model
     // people request to create a market and we fulfil it if valid
     // let people create their own custom pools with whichever assets they want
     // we can then incentivise pool creation
     // need to separate assets between pools
     // positive sum thinking - we can make others earn by attracting liquidity with an incentive structure
-    function createNewMarket(
+    function executeNewMarket(
         IMarket.VaultConfig calldata _vaultConfig,
         bytes32 _assetId,
         bytes32 _priceId,

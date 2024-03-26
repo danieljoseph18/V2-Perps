@@ -23,6 +23,7 @@ library MarketUtils {
     error MarketUtils_WithdrawalAmountOut();
     error MarketUtils_AmountTooSmall();
     error MarketUtils_InvalidAmountOut(uint256 amountOut, uint256 expectedOut);
+    error MarketUtils_TokenMintFailed();
 
     struct FeeParams {
         IMarket market;
@@ -229,6 +230,9 @@ library MarketUtils {
             if (_stateAfter.usdcBalance != _stateBefore.usdcBalance + _amountIn) {
                 revert MarketUtils_DepositAmountIn();
             }
+        }
+        if (_stateAfter.totalSupply <= _stateBefore.totalSupply) {
+            revert MarketUtils_TokenMintFailed();
         }
     }
 

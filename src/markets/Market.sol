@@ -12,7 +12,6 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
 import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
-import {Oracle} from "../oracle/Oracle.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
@@ -121,8 +120,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         _addToken(_tokenConfig, _assetId, allocations);
     }
 
-    receive() external payable {}
-
     function initialize(address _tradeStorage) external onlyMarketMaker {
         if (isInitialized) revert Market_AlreadyInitialized();
         tradeStorage = _tradeStorage;
@@ -143,8 +140,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external onlyAdmin {
         if (!assetIds.contains(_assetId)) revert Market_TokenDoesNotExist();
-        bool success = assetIds.remove(_assetId);
-        if (!success) revert Market_FailedToRemoveAssetId();
+        if (!assetIds.remove(_assetId)) revert Market_FailedToRemoveAssetId();
         _setAllocationsWithBits(_newAllocations);
         delete marketStorage[_assetId];
         emit TokenRemoved(_assetId);
@@ -177,8 +173,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         _setAllocationsWithBits(_allocations);
     }
 
-    // @audit - should we move all of these onlyPositionManager modifiers to Tradestorage modifiers?
-    // makes more sense to have them there
     function updateMarketState(
         bytes32 _assetId,
         uint256 _sizeDelta,
@@ -188,20 +182,22 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         uint256 _collateralPrice,
         bool _isLong,
         bool _isIncrease
-    ) external nonReentrant onlyPositionManager {
+    ) external nonReentrant onlyTradeStorage(address(this)) {
         // 1. Depends on Open Interest Delta to determine Skew
         _updateFundingRate(_assetId, _indexPrice);
         if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
-            int256 signedSizeDelta = _isIncrease ? int256(_sizeDelta) : -int256(_sizeDelta);
             // 2. Relies on Open Interest Delta
-            _updateWeightedAverages(_assetId, _impactedPrice, signedSizeDelta, _isLong);
+            _updateWeightedAverages(
+                _assetId, _impactedPrice, _isIncrease ? int256(_sizeDelta) : -int256(_sizeDelta), _isLong
+            );
             // 3. Updated pre-borrowing rate if size delta > 0
             _updateOpenInterest(_assetId, _sizeDelta, _isLong, _isIncrease);
         }
-        uint256 collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
         // 4. Relies on Updated Open interest
-        _updateBorrowingRate(_assetId, _indexPrice, _indexBaseUnit, _collateralPrice, collateralBaseUnit, _isLong);
+        _updateBorrowingRate(
+            _assetId, _indexPrice, _indexBaseUnit, _collateralPrice, _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT, _isLong
+        );
         // Fire Event
         emit MarketStateUpdated(_assetId, _isLong);
     }
@@ -298,15 +294,14 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             isDeposit: _isDeposit,
             key: _generateKey(_owner, _tokenIn, _amountIn, _isDeposit)
         });
-        bool success = requestKeys.add(request.key);
-        if (!success) revert Market_FailedToAddRequest();
+        if (!requestKeys.add(request.key)) revert Market_FailedToAddRequest();
         requests[request.key] = request;
         emit RequestCreated(request.key, _owner, _tokenIn, _amountIn, _isDeposit);
     }
 
     function executeDeposit(ExecuteDeposit calldata _params)
         external
-        onlyPositionManager
+        onlyTradeStorage(address(this))
         orderExists(_params.key)
         nonReentrant
         validAction(_params.deposit.amountIn, 0, _params.deposit.isLongToken, true)
@@ -328,13 +323,13 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         MARKET_TOKEN.mint(_params.deposit.owner, mintAmount);
     }
 
-    function deleteRequest(bytes32 _key) external onlyPositionManager {
+    function deleteRequest(bytes32 _key) external onlyTradeStorage(address(this)) {
         _deleteRequest(_key);
     }
 
     function executeWithdrawal(ExecuteWithdrawal calldata _params)
         external
-        onlyPositionManager
+        onlyTradeStorage(address(this))
         orderExists(_params.key)
         nonReentrant
         validAction(_params.withdrawal.amountIn, _params.amountOut, _params.withdrawal.isLongToken, false)
@@ -464,7 +459,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external onlyPositionManager {
+    function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external onlyTradeStorage(address(this)) {
         _priceImpactUsd > 0
             ? marketStorage[_assetId].impactPool += _priceImpactUsd.abs()
             : marketStorage[_assetId].impactPool -= _priceImpactUsd.abs();
@@ -474,13 +469,19 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         bytes32[] memory assets = assetIds.values();
         uint256 assetLen = assets.length;
         uint256 total;
-
-        for (uint256 i = 0; i < _allocations.length; ++i) {
+        uint256 len = _allocations.length;
+        for (uint256 i = 0; i < len;) {
             uint256 allocation = _allocations[i];
-            for (uint256 j = 0; j < 16 && i * 16 + j < assetLen; ++j) {
+            for (uint256 j = 0; j < 16 && i * 16 + j < assetLen;) {
                 uint256 allocationValue = (allocation >> (240 - j * 16)) & BITMASK_16;
                 total += allocationValue;
                 marketStorage[assets[i * 16 + j]].allocationPercentage = allocationValue;
+                unchecked {
+                    ++j;
+                }
+            }
+            unchecked {
+                ++i;
             }
         }
 
@@ -489,8 +490,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function _addToken(Config memory _config, bytes32 _assetId, uint256[] memory _newAllocations) internal {
         if (assetIds.contains(_assetId)) revert Market_TokenAlreadyExists();
-        bool success = assetIds.add(_assetId);
-        if (!success) revert Market_FailedToAddAssetId();
+        if (!assetIds.add(_assetId)) revert Market_FailedToAddAssetId();
         _setAllocationsWithBits(_newAllocations);
         marketStorage[_assetId].config = _config;
         marketStorage[_assetId].funding.lastFundingUpdate = uint48(block.timestamp);
@@ -499,8 +499,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     }
 
     function _deleteRequest(bytes32 _key) internal {
-        bool success = requestKeys.remove(_key);
-        if (!success) revert Market_FailedToRemoveRequest();
+        if (!requestKeys.remove(_key)) revert Market_FailedToRemoveRequest();
         delete requests[_key];
     }
 
