@@ -17,6 +17,7 @@ interface IPositionManager {
     event WithdrawalRequestCancelled(
         bytes32 indexed _withdrawalKey, address indexed _owner, address indexed _token, uint256 _amount
     );
+    event AdlTargetRatioReached(IMarket indexed market, int256 newFactor, bool isLong);
 
     error PositionManager_AccessDenied();
     error PositionManager_InvalidMarket();

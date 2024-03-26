@@ -279,17 +279,14 @@ contract TestPriceImpact is Test {
             referrer: address(0)
         });
 
+        // Get market storage
+        IMarket.MarketStorage memory marketStorage = market.getStorage(ethAssetId);
+        marketStorage.openInterest.longOpenInterest = _longOi;
+        marketStorage.openInterest.shortOpenInterest = _shortOi;
+
         // Mock call open interest values
         vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, weth, true),
-            abi.encode(_longOi)
-        );
-
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, weth, false),
-            abi.encode(_shortOi)
+            address(market), abi.encodeWithSelector(market.getStorage.selector, ethAssetId), abi.encode(marketStorage)
         );
 
         (orderState.impactedPrice, orderState.priceImpactUsd) =
@@ -349,17 +346,14 @@ contract TestPriceImpact is Test {
             referrer: address(0)
         });
 
+        // Get Market Storage
+        IMarket.MarketStorage memory marketStorage = market.getStorage(ethAssetId);
+        marketStorage.openInterest.longOpenInterest = _longOi;
+        marketStorage.openInterest.shortOpenInterest = _shortOi;
+
         // Mock call open interest values
         vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, weth, true),
-            abi.encode(_longOi)
-        );
-
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, weth, false),
-            abi.encode(_shortOi)
+            address(market), abi.encodeWithSelector(market.getStorage.selector, ethAssetId), abi.encode(marketStorage)
         );
 
         (orderState.impactedPrice, orderState.priceImpactUsd) =

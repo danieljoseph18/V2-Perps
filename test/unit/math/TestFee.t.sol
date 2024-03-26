@@ -159,13 +159,6 @@ contract TestFee is Test {
      * - Dynamic fees for market actions (deposit / withdrawal )
      * - Calculate for a position
      */
-    function testConstructionOfFeeParameters(uint256 _tokenAmount) public setUpMarkets {
-        (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) = Oracle.getLastMarketTokenPrices(priceFeed);
-        MarketUtils.FeeParams memory feeParams =
-            MarketUtils.constructFeeParams(market, _tokenAmount, true, longPrices, shortPrices, true);
-        assertEq(feeParams.tokenAmount, _tokenAmount);
-    }
-
     function testCalculatingFeesForASinglePosition(uint256 _sizeDelta) public setUpMarkets {
         _sizeDelta = bound(_sizeDelta, 1, 1_000_000_000e30);
         // convert size delta usd to collateral

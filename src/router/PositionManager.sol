@@ -119,13 +119,15 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Calculate Cumulative PNL
         params.cumulativePnl =
             MarketUtils.calculateCumulativeMarketPnl(market, priceFeed, params.deposit.isLongToken, true); // Maximize AUM for deposits
+        params.marketToken = market.MARKET_TOKEN();
+
+        // Approve the Market to spend the Collateral
+        // @audit - could someone front-run?
+        if (params.deposit.isLongToken) WETH.approve(address(market), params.deposit.amountIn);
+        else USDC.approve(address(market), params.deposit.amountIn);
 
         // Execute the Deposit
         market.executeDeposit(params);
-
-        // Send Tokens to the Market
-        if (params.deposit.isLongToken) WETH.safeTransfer(address(market), params.deposit.amountIn);
-        else USDC.safeTransfer(address(market), params.deposit.amountIn);
 
         // Clear all previously signed prices
         _clearOraclePrices();
@@ -178,20 +180,25 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Calculate cumulative borrow fees
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
+        params.marketToken = market.MARKET_TOKEN();
         // Calculate amountOut
-        params.amountOut = market.withdrawMarketTokensToTokens(
+        params.amountOut = MarketUtils.calculateWithdrawalAmount(
+            market,
+            params.marketToken,
             params.longPrices,
             params.shortPrices,
             params.withdrawal.amountIn,
             params.longBorrowFeesUsd,
+            LONG_BASE_UNIT,
             params.shortBorrowFeesUsd,
+            SHORT_BASE_UNIT,
             params.cumulativePnl,
             params.withdrawal.isLongToken
         );
 
-        // Transfer the Deposit Tokens to the Market
-        IMarketToken marketToken = market.MARKET_TOKEN();
-        marketToken.safeTransfer(address(market), params.withdrawal.amountIn);
+        // Approve the Market to spend deposit tokens
+        // @audit - could someone front-run?
+        IERC20(params.marketToken).approve(address(market), params.withdrawal.amountIn);
 
         // Execute the Withdrawal
         market.executeWithdrawal(params);
@@ -388,46 +395,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         payable(msg.sender).sendValue(refundAmount);
     }
 
-    function flagForAdl(
-        IMarket market,
-        bytes32 _assetId,
-        bool _isLong,
-        Oracle.PriceUpdateData calldata _priceUpdateData
-    ) external payable onlyAdlKeeper {
-        // Sign the Latest Oracle Prices
-        _signOraclePrices(_priceUpdateData);
-        if (market == IMarket(address(0))) revert PositionManager_InvalidMarket();
-        Execution.State memory state;
-        // get current price
-        state.indexPrice = Oracle.getPrice(priceFeed, _assetId);
-        state.collateralPrice;
-        state.collateralBaseUnit;
-        if (_isLong) {
-            (state.collateralPrice,) = Oracle.getMarketTokenPrices(priceFeed, true);
-            state.collateralBaseUnit = Oracle.getLongBaseUnit(priceFeed);
-        } else {
-            (, state.collateralPrice) = Oracle.getMarketTokenPrices(priceFeed, false);
-            state.collateralBaseUnit = Oracle.getShortBaseUnit(priceFeed);
-        }
-
-        state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _assetId);
-        market = market;
-
-        // fetch pnl to pool ratio
-        int256 pnlFactor = _getPnlFactor(market, state, _assetId, _isLong);
-        // fetch max pnl to pool ratio
-        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market, _assetId);
-
-        if (pnlFactor.abs() > maxPnlFactor && pnlFactor > 0) {
-            market.updateAdlState(_assetId, true, _isLong);
-        } else {
-            revert PositionManager_PnlToPoolRatioNotExceeded(pnlFactor, maxPnlFactor);
-        }
-
-        // Clear all previously signed prices
-        _clearOraclePrices();
-    }
-
     function executeAdl(
         IMarket market,
         bytes32 _assetId,
@@ -440,12 +407,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         _signOraclePrices(_priceUpdateData);
         Execution.State memory state;
         IMarket.AdlConfig memory adl = MarketUtils.getAdlConfig(market, _assetId);
-        // Check ADL is enabled for the market and for the side
-        if (_isLong) {
-            if (!adl.flaggedLong) revert PositionManager_LongSideNotFlagged();
-        } else {
-            if (!adl.flaggedShort) revert PositionManager_ShortSideNotFlagged();
-        }
         // Get the storage
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Check the position in question is active
@@ -461,6 +422,14 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         state.priceImpactUsd = 0;
         // Get starting PNL Factor
         int256 startingPnlFactor = _getPnlFactor(market, state, _assetId, _isLong);
+        // fetch max pnl to pool ratio
+        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market, _assetId);
+
+        // Check the PNL Factor is greater than the max PNL Factor
+        if (startingPnlFactor.abs() <= maxPnlFactor || startingPnlFactor < 0) {
+            revert PositionManager_PnlToPoolRatioNotExceeded(startingPnlFactor, maxPnlFactor);
+        }
+
         // Construct an ADL Order
         Position.Settlement memory request = Position.createAdlOrder(position, _sizeDelta);
         // Execute the order
@@ -469,11 +438,10 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         int256 newPnlFactor = _getPnlFactor(market, state, _assetId, _isLong);
         // PNL to pool has reduced
         if (newPnlFactor >= startingPnlFactor) revert PositionManager_PNLFactorNotReduced();
-        // Check if the new PNL to pool ratio is greater than
-        // the min PNL factor after ADL (~20%)
-        // If not, unflag for ADL
+        // Check if the new PNL to pool ratio is below the threshold
+        // Fire event to alert the keepers
         if (newPnlFactor.abs() <= adl.targetPnlFactor) {
-            market.updateAdlState(_assetId, false, _isLong);
+            emit AdlTargetRatioReached(market, newPnlFactor, _isLong);
         }
         emit AdlExecuted(market, _positionKey, _sizeDelta, _isLong);
 
@@ -511,7 +479,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         IERC20(_collateralToken).safeTransfer(address(market), tokensPlusFee);
     }
 
-    // @audit - Do some calls need to be done after the call to tradeStorage?
     function _updateMarketState(
         IMarket market,
         Execution.State memory _state,
@@ -520,21 +487,15 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         bool _isLong,
         bool _isIncrease
     ) internal {
-        // 1. Depends on Open Interest Delta to determine Skew
-        market.updateFundingRate(_assetId, _state.indexPrice);
-        if (_sizeDelta != 0) {
-            // Use Impacted Price for Entry
-            int256 signedSizeDelta = _isIncrease ? _sizeDelta.toInt256() : -_sizeDelta.toInt256();
-            // 2. Relies on Open Interest Delta
-            market.updateWeightedAverages(_assetId, _state.impactedPrice, signedSizeDelta, _isLong);
-            // 3. Updated pre-borrowing rate if size delta > 0
-            market.updateOpenInterest(_assetId, _sizeDelta, _isLong, _isIncrease);
-        }
-        uint256 collateralPrice = _isLong ? _state.longMarketTokenPrice : _state.shortMarketTokenPrice;
-        uint256 collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
-        // 4. Relies on Updated Open interest
-        market.updateBorrowingRate(
-            _assetId, _state.indexPrice, _state.indexBaseUnit, collateralPrice, collateralBaseUnit, _isLong
+        market.updateMarketState(
+            _assetId,
+            _sizeDelta,
+            _state.indexPrice,
+            _state.impactedPrice,
+            _state.indexBaseUnit,
+            _state.collateralPrice,
+            _isLong,
+            _isIncrease
         );
     }
 

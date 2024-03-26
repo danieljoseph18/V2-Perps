@@ -400,7 +400,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             position.isLong
         );
         // Remanining collateral after fees is added to the relevant pool
-        market.increasePoolBalance(remainingCollateral, position.isLong);
+        market.updatePoolBalance(remainingCollateral, position.isLong, true);
         // Accumulate the fees to accumulate
         market.accumulateFees(feesToAccumulate, position.isLong);
 
@@ -461,7 +461,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Convert Size Delta USD to Collateral Tokens
         uint256 reserveDelta = mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice);
         // Reserve an Amount of Liquidity Equal to the Position Size
-        market.reserveLiquidity(reserveDelta, _isLong);
+        market.updateLiquidityReservation(reserveDelta, _isLong, true);
         // Register the Collateral in
         market.updateCollateralAmount(_collateralDelta, _user, _isLong, true);
     }
@@ -477,7 +477,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Convert Size Delta USD to Collateral Tokens
         uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice)); // Could use collateral delta * leverage for gas savings?
         // Unreserve an Amount of Liquidity Equal to the Position Size
-        market.unreserveLiquidity(reserveDelta, _isLong);
+        market.updateLiquidityReservation(reserveDelta, _isLong, false);
         // Register the Collateral out
         market.updateCollateralAmount(_collateralDelta, _user, _isLong, false);
     }

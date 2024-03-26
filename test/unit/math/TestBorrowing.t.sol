@@ -272,10 +272,14 @@ contract TestBorrowing is Test {
         // Amount the user should be charged for
         uint256 bonusCumulative = 0.000003e18;
 
+        // get market storage
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
+        mockedMarketStorage.borrowing.longCumulativeBorrowFees = 1e18 + bonusCumulative;
+
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(MarketUtils.getCumulativeBorrowFee.selector, ethAssetId, true),
-            abi.encode(uint256(1e18) + bonusCumulative) // Mock return value
+            abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
+            abi.encode(mockedMarketStorage) // Mock return value
         );
 
         // state necessary Variables
@@ -345,30 +349,20 @@ contract TestBorrowing is Test {
         vm.assume(_openInterest < 1_000_000_000_000e30);
         _sizeDelta = bound(_sizeDelta, -int256(_openInterest), int256(_openInterest));
         _borrowingRate = bound(_borrowingRate, 0, 0.1e18);
-        // mock the previous cumulative
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getCumulativeBorrowFee.selector, ethAssetId, true),
-            abi.encode(_lastCumulative) // Mock return value
-        );
-        // mock the previous average cumulative
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getAverageCumulativeBorrowFee.selector, ethAssetId, true),
-            abi.encode(_prevAverageCumulative)
-        );
-        // mock the open interest
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
-            abi.encode(_openInterest)
-        );
+        // Get Market storage
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
+        mockedMarketStorage.borrowing.longCumulativeBorrowFees = _lastCumulative;
+        mockedMarketStorage.borrowing.weightedAvgCumulativeLong = _prevAverageCumulative;
+        mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
+        mockedMarketStorage.borrowing.longBorrowingRate = _borrowingRate;
+
         // mock the rate
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(MarketUtils.getBorrowingRate.selector, ethAssetId, true),
-            abi.encode(_borrowingRate)
+            abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
+            abi.encode(mockedMarketStorage)
         );
+
         // Pass some time
         vm.warp(block.timestamp + 1000 seconds);
         vm.roll(block.number + 1);
@@ -407,31 +401,6 @@ contract TestBorrowing is Test {
         }
     }
 
-    /**
-     * function getTotalFeesOwedByMarkets(IMarket market, bool _isLong) external view returns (uint256 totalFeeUsd) {
-     *     bytes32[] memory assetIds = market.getAssetIds();
-     *     uint256 len = assetIds.length;
-     *     totalFeeUsd;
-     *     for (uint256 i = 0; i < len;) {
-     *         totalFeeUsd += getTotalFeesOwedByMarket(market, assetIds[i], _isLong);
-     *         unchecked {
-     *             ++i;
-     *         }
-     *     }
-     * }
-     *
-     * function getTotalFeesOwedByMarket(IMarket market, bytes32 _assetId, bool _isLong)
-     *     public
-     *     view
-     *     returns (uint256 totalFeesOwedUsd)
-     * {
-     *     uint256 accumulatedFees =
-     *         market.getCumulativeBorrowFee(_assetId, _isLong) - market.getAverageCumulativeBorrowFee(_assetId, _isLong);
-     *     uint256 openInterest = MarketUtils.getOpenInterestUsd(market, _assetId, _isLong);
-     *     totalFeesOwedUsd = mulDiv(accumulatedFees, openInterest, PRECISION);
-     * }
-     *
-     */
     function testGettingTheTotalFeesOwedByAMarket(
         uint256 _cumulativeFee,
         uint256 _avgCumulativeFee,
@@ -440,23 +409,16 @@ contract TestBorrowing is Test {
         vm.assume(_cumulativeFee < 1e30);
         vm.assume(_avgCumulativeFee < _cumulativeFee);
         vm.assume(_openInterest < 1_000_000_000_000e30);
+        // Get market storage
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
+        mockedMarketStorage.borrowing.longCumulativeBorrowFees = _cumulativeFee;
+        mockedMarketStorage.borrowing.weightedAvgCumulativeLong = _avgCumulativeFee;
+        mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
         // mock the previous cumulative
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(MarketUtils.getCumulativeBorrowFee.selector, ethAssetId, true),
-            abi.encode(_cumulativeFee) // Mock return value
-        );
-        // mock the previous average cumulative
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getAverageCumulativeBorrowFee.selector, ethAssetId, true),
-            abi.encode(_avgCumulativeFee)
-        );
-        // mock the open interest
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
-            abi.encode(_openInterest)
+            abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
+            abi.encode(mockedMarketStorage) // Mock return value
         );
         // Assert Eq EV vs Actual
         uint256 val = Borrowing.getTotalFeesOwedByMarket(market, ethAssetId, true);
@@ -474,23 +436,16 @@ contract TestBorrowing is Test {
         vm.assume(_cumulativeFee < 1e30);
         vm.assume(_avgCumulativeFee < _cumulativeFee);
         vm.assume(_openInterest < 1_000_000_000_000e30);
+        // get market storage
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
+        mockedMarketStorage.borrowing.longCumulativeBorrowFees = _cumulativeFee;
+        mockedMarketStorage.borrowing.weightedAvgCumulativeLong = _avgCumulativeFee;
+        mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
         // mock the previous cumulative
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(MarketUtils.getCumulativeBorrowFee.selector, ethAssetId, true),
-            abi.encode(_cumulativeFee) // Mock return value
-        );
-        // mock the previous average cumulative
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getAverageCumulativeBorrowFee.selector, ethAssetId, true),
-            abi.encode(_avgCumulativeFee)
-        );
-        // mock the open interest
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
-            abi.encode(_openInterest)
+            abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
+            abi.encode(mockedMarketStorage) // Mock return value
         );
         // Assert Eq EV vs Actual
         uint256 val = Borrowing.getTotalFeesOwedByMarkets(market, true);

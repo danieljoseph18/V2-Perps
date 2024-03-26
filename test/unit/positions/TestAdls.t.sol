@@ -229,9 +229,6 @@ contract TestADLs is Test {
         );
         tokenUpdateData[0] = wethUpdateData;
         ethPriceData.pythData = tokenUpdateData;
-        // adl the positions
-        vm.prank(OWNER);
-        positionManager.flagForAdl{value: 0.01 ether}(market, ethAssetId, false, ethPriceData);
         // get one of the position keys
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(false);
         // adl it
@@ -241,6 +238,4 @@ contract TestADLs is Test {
         Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
         assertEq(position.positionSize, 2_495_000e30);
     }
-
-    function testAPositionCanOnlyBeAdldIfItHasBeenFlaggedPrior() public setUpMarkets {}
 }

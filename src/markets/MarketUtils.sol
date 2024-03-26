@@ -2,6 +2,7 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "./interfaces/IMarket.sol";
+import {IMarketToken} from "./interfaces/IMarketToken.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -21,6 +22,7 @@ library MarketUtils {
     error MarketUtils_DepositAmountIn();
     error MarketUtils_WithdrawalAmountOut();
     error MarketUtils_AmountTooSmall();
+    error MarketUtils_InvalidAmountOut(uint256 amountOut, uint256 expectedOut);
 
     struct FeeParams {
         IMarket market;
@@ -46,40 +48,27 @@ library MarketUtils {
         uint256 indexFee;
     }
 
-    function constructFeeParams(
+    // @gas
+    function calculateFee(
         IMarket market,
         uint256 _tokenAmount,
         bool _isLongToken,
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
-        bool _isDeposit
-    ) external pure returns (FeeParams memory) {
-        return FeeParams({
-            market: market,
-            tokenAmount: _tokenAmount,
-            isLongToken: _isLongToken,
-            longPrices: _longPrices,
-            shortPrices: _shortPrices,
-            isDeposit: _isDeposit
-        });
-    }
-
-    // @gas
-    function calculateFee(
-        FeeParams memory _params,
+        bool _isDeposit,
         uint256 _longTokenBalance,
         uint256 _longBaseUnit,
         uint256 _shortTokenBalance,
         uint256 _shortBaseUnit
-    ) external view returns (uint256) {
+    ) public view returns (uint256) {
         FeeState memory state;
         // get the base fee
-        state.baseFee = mulDiv(_params.tokenAmount, _params.market.BASE_FEE(), SCALAR);
+        state.baseFee = mulDiv(_tokenAmount, market.BASE_FEE(), SCALAR);
 
         // Convert skew to USD values and calculate amountUsd once
-        state.amountUsd = _params.isLongToken
-            ? mulDiv(_params.tokenAmount, _params.longPrices.price + _params.longPrices.confidence, _longBaseUnit)
-            : mulDiv(_params.tokenAmount, _params.shortPrices.price + _params.shortPrices.confidence, _shortBaseUnit);
+        state.amountUsd = _isLongToken
+            ? mulDiv(_tokenAmount, _longPrices.price + _longPrices.confidence, _longBaseUnit)
+            : mulDiv(_tokenAmount, _shortPrices.price + _shortPrices.confidence, _shortBaseUnit);
 
         // If Size Delta * Price < Base Unit -> Action has no effect on skew
         if (state.amountUsd == 0) {
@@ -87,10 +76,8 @@ library MarketUtils {
         }
 
         // Calculate pool balances before and minimise value of pool to maximise the effect on the skew
-        state.longTokenValue =
-            mulDiv(_longTokenBalance, _params.longPrices.price - _params.longPrices.confidence, _longBaseUnit);
-        state.shortTokenValue =
-            mulDiv(_shortTokenBalance, _params.shortPrices.price - _params.shortPrices.confidence, _shortBaseUnit);
+        state.longTokenValue = mulDiv(_longTokenBalance, _longPrices.price - _longPrices.confidence, _longBaseUnit);
+        state.shortTokenValue = mulDiv(_shortTokenBalance, _shortPrices.price - _shortPrices.confidence, _shortBaseUnit);
 
         // Don't want to disincentivise deposits on empty pool
         if (state.longTokenValue == 0 && state.shortTokenValue == 0) {
@@ -107,12 +94,12 @@ library MarketUtils {
         }
 
         // Adjust long or short token value based on the operation
-        if (_params.isLongToken) {
+        if (_isLongToken) {
             state.longTokenValue =
-                _params.isDeposit ? state.longTokenValue += state.amountUsd : state.longTokenValue -= state.amountUsd;
+                _isDeposit ? state.longTokenValue += state.amountUsd : state.longTokenValue -= state.amountUsd;
         } else {
             state.shortTokenValue =
-                _params.isDeposit ? state.shortTokenValue += state.amountUsd : state.shortTokenValue -= state.amountUsd;
+                _isDeposit ? state.shortTokenValue += state.amountUsd : state.shortTokenValue -= state.amountUsd;
         }
 
         if (state.longTokenValue > state.shortTokenValue) {
@@ -132,15 +119,13 @@ library MarketUtils {
             // Calculate the additional fee
             // Uses the original value for LTV + STV so SkewDelta is never > LTV + STV
             state.feeAdditionUsd = mulDiv(
-                state.skewDelta,
-                _params.market.feeScale(),
-                state.longTokenValue + state.shortTokenValue + state.amountUsd
+                state.skewDelta, market.feeScale(), state.longTokenValue + state.shortTokenValue + state.amountUsd
             );
 
             // Convert the additional fee to index tokens
-            state.indexFee = _params.isLongToken
-                ? mulDiv(state.feeAdditionUsd, _longBaseUnit, _params.longPrices.price + _params.longPrices.confidence)
-                : mulDiv(state.feeAdditionUsd, _shortBaseUnit, _params.shortPrices.price + _params.shortPrices.confidence);
+            state.indexFee = _isLongToken
+                ? mulDiv(state.feeAdditionUsd, _longBaseUnit, _longPrices.price + _longPrices.confidence)
+                : mulDiv(state.feeAdditionUsd, _shortBaseUnit, _shortPrices.price + _shortPrices.confidence);
 
             // Return base fee + additional fee
             return state.baseFee + state.indexFee;
@@ -148,6 +133,84 @@ library MarketUtils {
 
         // If no skew flip and skew improved, return base fee
         return state.baseFee;
+    }
+
+    function calculateDepositAmounts(IMarket.ExecuteDeposit calldata _params)
+        external
+        view
+        returns (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount)
+    {
+        // Calculate Fee (Internal Function to avoid STD)
+        fee = calculateFee(
+            _params.market,
+            _params.deposit.amountIn,
+            _params.deposit.isLongToken,
+            _params.longPrices,
+            _params.shortPrices,
+            true,
+            _params.market.longTokenBalance(),
+            _params.market.LONG_BASE_UNIT(),
+            _params.market.shortTokenBalance(),
+            _params.market.SHORT_BASE_UNIT()
+        );
+
+        // Calculate remaining after fee
+        afterFeeAmount = _params.deposit.amountIn - fee;
+
+        // Calculate Mint amount with the remaining amount
+        mintAmount = calculateMintAmount(
+            _params.market,
+            _params.marketToken,
+            _params.longPrices,
+            _params.shortPrices,
+            afterFeeAmount,
+            _params.longBorrowFeesUsd,
+            _params.market.LONG_BASE_UNIT(),
+            _params.shortBorrowFeesUsd,
+            _params.market.SHORT_BASE_UNIT(),
+            _params.cumulativePnl,
+            _params.deposit.isLongToken
+        );
+    }
+
+    function calculateWithdrawalAmounts(IMarket.ExecuteWithdrawal calldata _params)
+        external
+        view
+        returns (uint256 tokenAmountOut, uint256 fee)
+    {
+        // Validate the Amount Out vs Expected Amount out
+        uint256 expectedOut = calculateWithdrawalAmount(
+            _params.market,
+            _params.marketToken,
+            _params.longPrices,
+            _params.shortPrices,
+            _params.withdrawal.amountIn,
+            _params.longBorrowFeesUsd,
+            _params.market.LONG_BASE_UNIT(),
+            _params.shortBorrowFeesUsd,
+            _params.market.SHORT_BASE_UNIT(),
+            _params.cumulativePnl,
+            _params.withdrawal.isLongToken
+        );
+
+        if (_params.amountOut != expectedOut) revert MarketUtils_InvalidAmountOut(_params.amountOut, expectedOut);
+
+        // Calculate Fee on the Amount Out
+        fee = calculateFee(
+            _params.market,
+            _params.amountOut,
+            _params.withdrawal.isLongToken,
+            _params.longPrices,
+            _params.shortPrices,
+            false,
+            _params.market.longTokenBalance(),
+            _params.market.LONG_BASE_UNIT(),
+            _params.market.shortTokenBalance(),
+            _params.market.SHORT_BASE_UNIT()
+        );
+
+        // Calculate the Token Amount Out
+        tokenAmountOut = _params.amountOut - fee;
     }
 
     function validateDeposit(
@@ -207,6 +270,116 @@ library MarketUtils {
                 revert MarketUtils_WithdrawalAmountOut();
             }
         }
+    }
+
+    function calculateMintAmount(
+        IMarket market,
+        IMarketToken marketToken,
+        Oracle.Price memory _longPrices,
+        Oracle.Price memory _shortPrices,
+        uint256 _amountIn,
+        uint256 _longBorrowFeesUsd,
+        uint256 _longBaseUnit,
+        uint256 _shortBorrowFeesUsd,
+        uint256 _shortBaseUnit,
+        int256 _cumulativePnl,
+        bool _isLongToken
+    ) public view returns (uint256 marketTokenAmount) {
+        uint256 marketTokenPrice = getMarketTokenPrice(
+            market,
+            marketToken,
+            _longPrices.price + _longPrices.confidence,
+            _longBorrowFeesUsd,
+            _shortPrices.price + _shortPrices.confidence,
+            _shortBorrowFeesUsd,
+            _cumulativePnl
+        );
+        if (marketTokenPrice == 0) {
+            marketTokenAmount = _isLongToken
+                ? mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, _shortBaseUnit)
+                : mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, _longBaseUnit);
+        } else {
+            uint256 valueUsd = _isLongToken
+                ? mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, _longBaseUnit)
+                : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, _shortBaseUnit);
+            marketTokenAmount = mulDiv(valueUsd, SCALAR, marketTokenPrice);
+        }
+    }
+
+    function calculateWithdrawalAmount(
+        IMarket market,
+        IMarketToken marketToken,
+        Oracle.Price memory _longPrices,
+        Oracle.Price memory _shortPrices,
+        uint256 _marketTokenAmountIn,
+        uint256 _longBorrowFeesUsd,
+        uint256 _longBaseUnit,
+        uint256 _shortBorrowFeesUsd,
+        uint256 _shortBaseUnit,
+        int256 _cumulativePnl,
+        bool _isLongToken
+    ) public view returns (uint256 tokenAmount) {
+        uint256 marketTokenPrice = getMarketTokenPrice(
+            market,
+            marketToken,
+            _longPrices.price - _longPrices.confidence,
+            _longBorrowFeesUsd,
+            _shortPrices.price - _shortPrices.confidence,
+            _shortBorrowFeesUsd,
+            _cumulativePnl
+        );
+        uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALAR);
+        tokenAmount = _isLongToken
+            ? mulDiv(valueUsd, _longBaseUnit, _longPrices.price + _longPrices.confidence)
+            : mulDiv(valueUsd, _shortBaseUnit, _shortPrices.price + _shortPrices.confidence);
+    }
+
+    function getMarketTokenPrice(
+        IMarket market,
+        IMarketToken marketToken,
+        uint256 _longTokenPrice,
+        uint256 _longBorrowFeesUsd,
+        uint256 _shortTokenPrice,
+        uint256 _shortBorrowFeesUsd,
+        int256 _cumulativePnl
+    ) public view returns (uint256 lpTokenPrice) {
+        uint256 totalSupply = marketToken.totalSupply();
+        if (totalSupply == 0) {
+            lpTokenPrice = 0;
+        } else {
+            uint256 aum = getAum(
+                market, _longTokenPrice, _longBorrowFeesUsd, _shortTokenPrice, _shortBorrowFeesUsd, _cumulativePnl
+            );
+            lpTokenPrice = mulDiv(aum, SCALAR, totalSupply);
+        }
+    }
+
+    // Funding Fees should be balanced between the longs and shorts, so don't need to be accounted for.
+    // They are however settled through the pool, so maybe they should be accounted for?
+    // If not, we must reduce the pool balance for each funding claim, which will account for them.
+    function getAum(
+        IMarket market,
+        uint256 _longTokenPrice,
+        uint256 _longBorrowFeesUsd,
+        uint256 _shortTokenPrice,
+        uint256 _shortBorrowFeesUsd,
+        int256 _cumulativePnl
+    ) public view returns (uint256 aum) {
+        // Get Values in USD -> Subtract reserved amounts from AUM
+        uint256 longTokenValue =
+            mulDiv(market.longTokenBalance() - market.longTokensReserved(), _longTokenPrice, market.LONG_BASE_UNIT());
+        uint256 shortTokenValue = mulDiv(
+            market.shortTokenBalance() - market.shortTokensReserved(), _shortTokenPrice, market.SHORT_BASE_UNIT()
+        );
+
+        // Add Borrow Fees
+        longTokenValue += _longBorrowFeesUsd;
+        shortTokenValue += _shortBorrowFeesUsd;
+
+        // Calculate AUM
+        aum = _cumulativePnl >= 0
+            ? longTokenValue + shortTokenValue + _cumulativePnl.abs()
+            : longTokenValue + shortTokenValue - _cumulativePnl.abs();
     }
 
     /**
@@ -338,13 +511,13 @@ library MarketUtils {
         IMarket market,
         bytes32 _assetId,
         uint256 _collateralTokenPrice,
-        uint256 _collateralBaseUnits,
+        uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 poolUsd) {
         // get the liquidity allocated to the market for that side
         uint256 allocationInTokens = getPoolBalance(market, _assetId, _isLong);
         // convert to usd
-        poolUsd = mulDiv(allocationInTokens, _collateralTokenPrice, _collateralBaseUnits);
+        poolUsd = mulDiv(allocationInTokens, _collateralTokenPrice, _collateralBaseUnit);
     }
 
     function validateAllocation(

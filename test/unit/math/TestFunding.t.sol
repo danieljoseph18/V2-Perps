@@ -210,16 +210,13 @@ contract TestFunding is Test {
     function testSkewCalculationForDifferentSkews(uint256 _longOi, uint256 _shortOi) public setUpMarkets {
         _longOi = bound(_longOi, 1e30, 1_000_000_000_000e30); // Bound between $1 and $1 Trillion
         _shortOi = bound(_shortOi, 1e30, 1_000_000_000_000e30); // Bound between $1 and $1 Trillion
+        // Get market storage
+        IMarket.MarketStorage memory marketStorage = market.getStorage(ethAssetId);
+        marketStorage.openInterest.longOpenInterest = _longOi;
+        marketStorage.openInterest.shortOpenInterest = _shortOi;
         // Mock Fuzz long & short Oi
         vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
-            abi.encode(_longOi)
-        );
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, false),
-            abi.encode(_shortOi)
+            address(market), abi.encodeWithSelector(market.getStorage.selector, ethAssetId), abi.encode(marketStorage)
         );
         // Skew should be long oi - short oi
         int256 skew = Funding.calculateSkewUsd(market, ethAssetId);
@@ -228,17 +225,14 @@ contract TestFunding is Test {
     }
 
     function testGettingTheCurrentFundingRateChangesOverTimeWithVelocity() public setUpMarkets {
+        // Get market storage
+        IMarket.MarketStorage memory marketStorage = market.getStorage(ethAssetId);
+        marketStorage.funding.fundingRate = 0;
+        marketStorage.funding.fundingRateVelocity = 0.0025e18;
+        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
         // Mock an existing rate and velocity
         vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getFundingRates.selector, ethAssetId),
-            abi.encode(0, 0.0025e18)
-        );
-        // Mock the lastFundingUpdate to block timestamp
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getLastFundingUpdate.selector, ethAssetId),
-            abi.encode(block.timestamp)
+            address(market), abi.encodeWithSelector(market.getStorage.selector, ethAssetId), abi.encode(marketStorage)
         );
         // get current funding rate
         int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
@@ -291,17 +285,15 @@ contract TestFunding is Test {
 
     // Test funding trajectory with sign flip
     function testGettingTheCurrentFundingRateIsConsistentAfterASignFlip() public setUpMarkets {
+        // Get market storage
+        IMarket.MarketStorage memory marketStorage = market.getStorage(ethAssetId);
+        marketStorage.funding.fundingRate = -0.0005e18;
+        marketStorage.funding.fundingRateVelocity = 0.0025e18;
+        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
+
         // Mock an existing negative rate and positive velocity
         vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getFundingRates.selector, ethAssetId),
-            abi.encode(-0.0005e18, 0.0025e18)
-        );
-        // Mock the lastFundingUpdate to block timestamp
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getLastFundingUpdate.selector, ethAssetId),
-            abi.encode(block.timestamp)
+            address(market), abi.encodeWithSelector(market.getStorage.selector, ethAssetId), abi.encode(marketStorage)
         );
         // get current funding rate
         int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethAssetId);
@@ -378,21 +370,16 @@ contract TestFunding is Test {
         values.fundingRate = bound(_fundingRate, -1e18, 1e18); // Between -100% and 100%
         values.fundingVelocity = bound(_fundingVelocity, -1e18, 1e18); // Between -100% and 100%
 
+        // Get market storage
+        IMarket.MarketStorage memory marketStorage = market.getStorage(ethAssetId);
+        marketStorage.funding.fundingRate = values.fundingRate;
+        marketStorage.funding.fundingRateVelocity = values.fundingVelocity;
+        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
+        marketStorage.funding.fundingAccruedUsd = values.entryFundingAccrued;
+
         // Mock the necessary market functions
         vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getFundingRates.selector, ethAssetId),
-            abi.encode(values.fundingRate, values.fundingVelocity)
-        );
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getFundingAccrued.selector, ethAssetId),
-            abi.encode(values.entryFundingAccrued)
-        );
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getLastFundingUpdate.selector, ethAssetId),
-            abi.encode(block.timestamp)
+            address(market), abi.encodeWithSelector(market.getStorage.selector, ethAssetId), abi.encode(marketStorage)
         );
 
         // Pass some time
@@ -421,21 +408,15 @@ contract TestFunding is Test {
         _fundingVelocity = bound(_fundingVelocity, -1e18, 1e18); // Between -100% and 100%
         _entryFundingAccrued = bound(_entryFundingAccrued, -1e30, 1e30); // Between -$1 and $1
         _indexPrice = bound(_indexPrice, 100e30, 100_000e30);
+        // Get market storage
+        IMarket.MarketStorage memory marketStorage = market.getStorage(ethAssetId);
+        marketStorage.funding.fundingRate = _fundingRate;
+        marketStorage.funding.fundingRateVelocity = _fundingVelocity;
+        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
+        marketStorage.funding.fundingAccruedUsd = _entryFundingAccrued;
         // Mock the necessary market functions
         vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getFundingRates.selector, ethAssetId),
-            abi.encode(_fundingRate, _fundingVelocity)
-        );
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getFundingAccrued.selector, ethAssetId),
-            abi.encode(_entryFundingAccrued)
-        );
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getLastFundingUpdate.selector, ethAssetId),
-            abi.encode(block.timestamp)
+            address(market), abi.encodeWithSelector(market.getStorage.selector, ethAssetId), abi.encode(marketStorage)
         );
 
         vm.warp(block.timestamp + 10_000);

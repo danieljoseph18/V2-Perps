@@ -127,7 +127,7 @@ contract Deploy is Script {
                 positiveLiquidityScalar: 1e18,
                 negativeLiquidityScalar: 1e18
             }),
-            adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18, flaggedLong: false, flaggedShort: false})
+            adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18})
         });
 
         contracts.marketMaker.initialize(

@@ -22,6 +22,35 @@ library Borrowing {
         int256 pendingPnl;
     }
 
+    function updateState(
+        IMarket market,
+        IMarket.BorrowingValues memory borrowing,
+        bytes32 _assetId,
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) external view returns (IMarket.BorrowingValues memory) {
+        if (_isLong) {
+            borrowing.longCumulativeBorrowFees +=
+                calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
+            borrowing.longBorrowingRate = calculateRate(
+                market, _assetId, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, true
+            );
+        } else {
+            borrowing.shortCumulativeBorrowFees +=
+                calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
+            borrowing.shortBorrowingRate = calculateRate(
+                market, _assetId, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, false
+            );
+        }
+
+        borrowing.lastBorrowUpdate = uint48(block.timestamp);
+
+        return borrowing;
+    }
+
     /**
      * Borrowing Fees are paid from open positions to liquidity providers in exchange
      * for reserving liquidity for their position.
@@ -37,7 +66,7 @@ library Borrowing {
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) external view returns (uint256 rate) {
+    ) public view returns (uint256 rate) {
         BorrowingState memory state;
         // Calculate the new Borrowing Rate
         state.config = MarketUtils.getBorrowingConfig(market, _assetId);
@@ -71,7 +100,7 @@ library Borrowing {
         }
     }
 
-    function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) external view returns (uint256 fee) {
+    function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) public view returns (uint256 fee) {
         uint256 timeElapsed = block.timestamp - _lastUpdate;
         fee = _rate * timeElapsed;
     }

@@ -268,17 +268,17 @@ contract TestMarketUtils is Test {
         _longOpenInterest = bound(_longOpenInterest, 1e30, 1_000_000_000e30);
         _longAverageEntryPrice = bound(_longAverageEntryPrice, 1e30, 10e30);
         _indexPrice = bound(_indexPrice, 1e30, 10e30);
+        // Get Market Storage
+        IMarket.MarketStorage memory mockedMarketStorage;
+        {
+            mockedMarketStorage.openInterest.longOpenInterest = _longOpenInterest;
+            mockedMarketStorage.pnl.longAverageEntryPriceUsd = _longAverageEntryPrice;
+        }
         // Update the storage of the market to vary the oi and entry value
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
-            abi.encode(_longOpenInterest)
-        );
-
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getAverageEntryPrice.selector, ethAssetId, true),
-            abi.encode(_longAverageEntryPrice)
+            abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
+            abi.encode(mockedMarketStorage)
         );
 
         // fuzz to test expected vs actual values
@@ -298,16 +298,17 @@ contract TestMarketUtils is Test {
         _shortOpenInterest = bound(_shortOpenInterest, 1e30, 1_000_000_000e30);
         _shortAverageEntryPrice = bound(_shortAverageEntryPrice, 1e30, 10e30);
         _indexPrice = bound(_indexPrice, 1e30, 10e30);
+        // Get Market Storage
+        IMarket.MarketStorage memory mockedMarketStorage;
+        {
+            mockedMarketStorage.openInterest.shortOpenInterest = _shortOpenInterest;
+            mockedMarketStorage.pnl.shortAverageEntryPriceUsd = _shortAverageEntryPrice;
+        }
         // Update the storage of the market to vary the oi and entry value
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, false),
-            abi.encode(_shortOpenInterest)
-        );
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getAverageEntryPrice.selector, ethAssetId, false),
-            abi.encode(_shortAverageEntryPrice)
+            abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
+            abi.encode(mockedMarketStorage)
         );
 
         // fuzz to test expected vs actual values
@@ -331,29 +332,22 @@ contract TestMarketUtils is Test {
         _shortOpenInterest = bound(_shortOpenInterest, 1e30, 1_000_000_000e30);
         _shortAverageEntryPrice = bound(_shortAverageEntryPrice, 1e30, 10e30);
         _indexPrice = bound(_indexPrice, 1e30, 10e30);
+
+        IMarket.MarketStorage memory mockedMarketStorage;
+        {
+            mockedMarketStorage.openInterest.longOpenInterest = _longOpenInterest;
+            mockedMarketStorage.openInterest.shortOpenInterest = _shortOpenInterest;
+            mockedMarketStorage.pnl.longAverageEntryPriceUsd = _longAverageEntryPrice;
+            mockedMarketStorage.pnl.shortAverageEntryPriceUsd = _shortAverageEntryPrice;
+        }
+
         // Update the storage of the market to vary the oi and entry value
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, true),
-            abi.encode(_longOpenInterest)
-        );
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getAverageEntryPrice.selector, ethAssetId, true),
-            abi.encode(_longAverageEntryPrice)
+            abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
+            abi.encode(mockedMarketStorage)
         );
 
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getOpenInterest.selector, ethAssetId, false),
-            abi.encode(_shortOpenInterest)
-        );
-
-        vm.mockCall(
-            address(market),
-            abi.encodeWithSelector(MarketUtils.getAverageEntryPrice.selector, ethAssetId, false),
-            abi.encode(_shortAverageEntryPrice)
-        );
         // fuzz to test expected vs actual values
         int256 longPnl;
         {

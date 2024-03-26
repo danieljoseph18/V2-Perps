@@ -17,7 +17,27 @@ library Funding {
     int256 constant PRICE_PRECISION = 1e30;
     int256 constant SECONDS_IN_DAY = 86400;
 
-    function calculateSkewUsd(IMarket market, bytes32 _assetId) external view returns (int256 skewUsd) {
+    function updateState(IMarket market, IMarket.FundingValues memory funding, bytes32 _assetId, uint256 _indexPrice)
+        external
+        view
+        returns (IMarket.FundingValues memory)
+    {
+        // Calculate the skew in USD
+        int256 skewUsd = calculateSkewUsd(market, _assetId);
+
+        // Calculate the current funding velocity
+        funding.fundingRateVelocity = getCurrentVelocity(market, _assetId, skewUsd);
+
+        // Calculate the current funding rate
+        (funding.fundingRate, funding.fundingAccruedUsd) = recompute(market, _assetId, _indexPrice);
+
+        // Update storage
+        funding.lastFundingUpdate = block.timestamp.toUint48();
+
+        return funding;
+    }
+
+    function calculateSkewUsd(IMarket market, bytes32 _assetId) public view returns (int256 skewUsd) {
         uint256 longOI = MarketUtils.getOpenInterestUsd(market, _assetId, true);
         uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _assetId, false);
 
@@ -26,11 +46,7 @@ library Funding {
 
     //  - proportionalSkew = skew / skewScale
     //  - velocity         = proportionalSkew * maxFundingVelocity
-    function getCurrentVelocity(IMarket market, bytes32 _assetId, int256 _skew)
-        external
-        view
-        returns (int256 velocity)
-    {
+    function getCurrentVelocity(IMarket market, bytes32 _assetId, int256 _skew) public view returns (int256 velocity) {
         IMarket.FundingConfig memory funding = MarketUtils.getFundingConfig(market, _assetId);
         // Get the proportionalSkew
         int256 proportionalSkew = mulDivSigned(_skew, SIGNED_PRECISION, funding.skewScale);
@@ -45,7 +61,7 @@ library Funding {
     }
 
     function recompute(IMarket market, bytes32 _assetId, uint256 _indexPrice)
-        external
+        public
         view
         returns (int256 nextFundingRate, int256 nextFundingAccruedUsd)
     {
