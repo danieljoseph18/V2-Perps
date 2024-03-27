@@ -78,7 +78,8 @@ contract Deploy is Script {
             );
         }
 
-        contracts.marketMaker = new MarketMaker(address(contracts.roleStorage));
+        contracts.marketMaker =
+            new MarketMaker(activeNetworkConfig.weth, activeNetworkConfig.usdc, address(contracts.roleStorage));
 
         contracts.referralStorage = new ReferralStorage(
             activeNetworkConfig.weth, activeNetworkConfig.usdc, activeNetworkConfig.weth, address(contracts.roleStorage)
@@ -134,10 +135,10 @@ contract Deploy is Script {
             defaultMarketConfig,
             address(contracts.priceFeed),
             address(contracts.referralStorage),
-            address(contracts.feeDistributor),
             address(contracts.positionManager),
-            activeNetworkConfig.weth,
-            activeNetworkConfig.usdc
+            address(contracts.feeDistributor),
+            msg.sender,
+            0.01 ether
         );
 
         contracts.positionManager.updateGasEstimates(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);

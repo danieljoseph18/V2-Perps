@@ -42,12 +42,11 @@ library PriceImpact {
     /**
      * PriceImpact = sizeDeltaUsd * skewScalar((skewBefore/totalOiBefore) - (skewAfter/totalOiAfter)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
      */
-    function execute(
-        IMarket market,
-        IPriceFeed priceFeed,
-        Position.Request memory _request,
-        Execution.State memory _orderState
-    ) external view returns (uint256 impactedPrice, int256 priceImpactUsd) {
+    function execute(IMarket market, Position.Request memory _request, Execution.State memory _orderState)
+        external
+        view
+        returns (uint256 impactedPrice, int256 priceImpactUsd)
+    {
         ImpactState memory state;
 
         state.impact = MarketUtils.getImpactConfig(market, _request.input.assetId);
@@ -61,12 +60,7 @@ library PriceImpact {
 
         // Calculate the impact on available liquidity
         uint256 availableOi = MarketUtils.getTotalAvailableOiUsd(
-            market,
-            _request.input.assetId,
-            _orderState.longMarketTokenPrice,
-            _orderState.shortMarketTokenPrice,
-            Oracle.getLongBaseUnit(priceFeed), // @gas cache elsewhere?
-            Oracle.getShortBaseUnit(priceFeed)
+            market, _request.input.assetId, _orderState.longMarketTokenPrice, _orderState.shortMarketTokenPrice
         );
         // Can't trade on an empty pool
         if (availableOi == 0) {

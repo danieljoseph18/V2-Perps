@@ -18,109 +18,56 @@ import {Roles} from "../access/Roles.sol";
 /// @dev Needs MarketMaker Role
 contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
+    using EnumerableSet for EnumerableSet.Bytes32Set;
 
     IPriceFeed priceFeed;
     IReferralStorage referralStorage;
     IFeeDistributor feeDistributor;
     IPositionManager positionManager;
 
-    uint256 private constant LONG_BASE_UNIT = 1e18;
-    uint256 private constant SHORT_BASE_UNIT = 1e6;
-    uint256 private constant MAX_FEE_SCALE = 0.1e18; // 10%
     uint256 private constant MAX_FEE_TO_OWNER = 0.3e18; // 30%
-    uint256 private constant MIN_TIME_TO_EXPIRATION = 10 seconds;
-    uint256 private constant MAX_TIME_TO_EXPIRATION = 10 minutes;
     uint256 private constant MAX_HEARTBEAT_DURATION = 1 days;
     uint256 private constant MAX_PERCENTAGE = 1e18;
     uint256 private constant MIN_PERCENTAGE = 0.01e18; // 1%
+    address private immutable WETH;
+    address private immutable USDC;
 
     EnumerableSet.AddressSet private markets;
-    // switch to enumerable set? what if a token has 2+ markets?
-    mapping(bytes32 assetId => address market) public tokenToMarkets;
+    EnumerableSet.Bytes32Set private requestKeys;
+    mapping(bytes32 requestKey => MarketRequest) public requests;
+    // An asset can be supported by multiple markets
+    // @audit - is this really permissionless? How else could we do this?
+    mapping(bytes32 assetId => address market) public tokenToMarket;
     uint256[] private defaultAllocation;
 
     bool private isInitialized;
-    address private weth;
-    address private usdc;
     IMarket.Config public defaultConfig;
+    address public feeReceiver;
+    uint256 public marketCreationFee;
 
-    constructor(address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(address _weth, address _usdc, address _roleStorage) RoleValidation(_roleStorage) {
+        WETH = _weth;
+        USDC = _usdc;
         defaultAllocation.push(10000 << 240);
-    }
-
-    modifier validAsset(Oracle.Asset calldata _asset) {
-        if (!_asset.isValid) revert MarketMaker_InvalidAsset();
-        if (_asset.baseUnit != 1e18 && _asset.baseUnit != 1e8 && _asset.baseUnit != 1e6) {
-            revert MarketMaker_InvalidBaseUnit();
-        }
-        if (_asset.heartbeatDuration > MAX_HEARTBEAT_DURATION) {
-            revert MarketMaker_InvalidHeartbeatDuration();
-        }
-        if (_asset.maxPriceDeviation > MAX_PERCENTAGE || _asset.maxPriceDeviation < MIN_PERCENTAGE) {
-            revert MarketMaker_InvalidMaxPriceDeviation();
-        }
-        if (
-            _asset.primaryStrategy != Oracle.PrimaryStrategy.PYTH
-                && _asset.primaryStrategy != Oracle.PrimaryStrategy.OFFCHAIN
-        ) {
-            revert MarketMaker_InvalidPrimaryStrategy();
-        }
-
-        if (_asset.secondaryStrategy == Oracle.SecondaryStrategy.CHAINLINK && _asset.chainlinkPriceFeed == address(0)) {
-            revert MarketMaker_InvalidSecondaryStrategy();
-        } else if (_asset.secondaryStrategy == Oracle.SecondaryStrategy.AMM) {
-            if (
-                _asset.pool.poolType != Oracle.PoolType.UNISWAP_V3 && _asset.pool.poolType != Oracle.PoolType.UNISWAP_V2
-            ) {
-                revert MarketMaker_InvalidPoolType();
-            }
-            if (_asset.pool.token0 == address(0) || _asset.pool.token1 == address(0)) {
-                revert MarketMaker_InvalidPoolTokens();
-            }
-            if (_asset.pool.poolAddress == address(0)) {
-                revert MarketMaker_InvalidPoolAddress();
-            }
-        } else if (_asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
-            revert MarketMaker_InvalidSecondaryStrategy();
-        }
-        _;
-    }
-
-    modifier validConfig(IMarket.VaultConfig calldata _config) {
-        if (
-            _config.longToken != weth || _config.shortToken != usdc || _config.longBaseUnit != LONG_BASE_UNIT
-                || _config.shortBaseUnit != SHORT_BASE_UNIT
-        ) {
-            revert MarketMaker_InvalidTokensOrBaseUnits();
-        }
-        if (_config.feeScale > MAX_FEE_SCALE || _config.feePercentageToOwner > MAX_FEE_TO_OWNER) {
-            revert MarketMaker_InvalidFeeConfig();
-        }
-        if (_config.poolOwner != msg.sender) revert MarketMaker_InvalidPoolOwner();
-        if (_config.feeDistributor != address(feeDistributor)) revert MarketMaker_InvalidFeeDistributor();
-        if (
-            _config.minTimeToExpiration < MIN_TIME_TO_EXPIRATION || _config.minTimeToExpiration > MAX_TIME_TO_EXPIRATION
-        ) revert MarketMaker_InvalidTimeToExpiration();
-        _;
     }
 
     function initialize(
         IMarket.Config memory _defaultConfig,
         address _priceFeed,
         address _referralStorage,
-        address _feeDistributor,
         address _positionManager,
-        address _weth,
-        address _usdc
+        address _feeDistributor,
+        address _feeReceiver,
+        uint256 _marketCreationFee
     ) external onlyAdmin {
         if (isInitialized) revert MarketMaker_AlreadyInitialized();
         priceFeed = IPriceFeed(_priceFeed);
         referralStorage = IReferralStorage(_referralStorage);
-        defaultConfig = _defaultConfig;
         feeDistributor = IFeeDistributor(_feeDistributor);
         positionManager = IPositionManager(_positionManager);
-        weth = _weth;
-        usdc = _usdc;
+        defaultConfig = _defaultConfig;
+        feeReceiver = _feeReceiver;
+        marketCreationFee = _marketCreationFee;
         isInitialized = true;
         emit MarketMakerInitialized(_priceFeed);
     }
@@ -134,9 +81,8 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
-    function updateTokenAddresses(address _weth, address _usdc) external onlyAdmin {
-        weth = _weth;
-        usdc = _usdc;
+    function updateMarketCreationFee(uint256 _marketCreationFee) external onlyAdmin {
+        marketCreationFee = _marketCreationFee;
     }
 
     function updateFeeDistributor(address _feeDistributor) external onlyAdmin {
@@ -147,35 +93,121 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         positionManager = IPositionManager(_positionManager);
     }
 
-    function requestNewMarket(
-        IMarket.VaultConfig calldata _vaultConfig,
-        bytes32 _assetId,
-        bytes32 _priceId,
-        Oracle.Asset calldata _asset
-    ) external {}
+    // @audit - need to add execution fee / gas rebates
+    // probably add a timeout so people can't spam request markets
+    // maybe users need to pay a fee to create a new market?
+    function requestNewMarket(MarketRequest calldata _request) external payable nonReentrant {
+        /* Validate the Inputs */
+        // 1. Msg.value should be > marketCreationFee
+        if (msg.value != marketCreationFee) revert MarketMaker_InvalidFee();
+        // 2. Owner should be msg.sender
+        if (_request.owner != msg.sender) revert MarketMaker_InvalidOwner();
+        // 3. Base Unit should be non-zero
+        if (_request.asset.baseUnit == 0) revert MarketMaker_InvalidBaseUnit();
+        // 4. If primary strategy is pyth, priceId should be non-zero
+        if (_request.asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
+            if (_request.asset.priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
+        } else if (_request.asset.primaryStrategy != Oracle.PrimaryStrategy.OFFCHAIN) {
+            revert MarketMaker_InvalidPrimaryStrategy();
+        }
+        // 5. If secondary strategy is chainlink, chainlinkPriceFeed should be non-zero
+        if (_request.asset.secondaryStrategy == Oracle.SecondaryStrategy.CHAINLINK) {
+            if (_request.asset.chainlinkPriceFeed == address(0)) revert MarketMaker_InvalidPriceFeed();
+        } else if (_request.asset.secondaryStrategy == Oracle.SecondaryStrategy.AMM) {
+            // 6. If secondary strategy is AMM, Uniswap Pool should be correctly configured -> @audit what if they try to use the illiquid v of a pool?
+            if (
+                _request.asset.pool.poolType != Oracle.PoolType.V3 && _request.asset.pool.poolType != Oracle.PoolType.V2
+            ) {
+                revert MarketMaker_InvalidPoolType();
+            }
+            if (_request.asset.pool.poolAddress == address(0)) revert MarketMaker_InvalidPoolAddress();
+            if (_request.asset.pool.token0 == address(0) || _request.asset.pool.token1 == address(0)) {
+                revert MarketMaker_InvalidPoolTokens();
+            }
+        } else if (_request.asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+            revert MarketMaker_InvalidSecondaryStrategy();
+        }
+        // 7. Max Price Deviation should be within bounds
+        if (_request.asset.maxPriceDeviation > MAX_PERCENTAGE || _request.asset.maxPriceDeviation < MIN_PERCENTAGE) {
+            revert MarketMaker_InvalidMaxPriceDeviation();
+        }
+        // 8. Market shouldn't already exist for that asset
+        if (tokenToMarket[generateAssetId(_request.indexTokenTicker)] != address(0)) {
+            revert MarketMaker_MarketExists();
+        }
 
-    // @audit - make this a request - fulfillment model
-    // people request to create a market and we fulfil it if valid
-    // let people create their own custom pools with whichever assets they want
-    // we can then incentivise pool creation
-    // need to separate assets between pools
-    // positive sum thinking - we can make others earn by attracting liquidity with an incentive structure
-    function executeNewMarket(
-        IMarket.VaultConfig calldata _vaultConfig,
-        bytes32 _assetId,
-        bytes32 _priceId,
-        Oracle.Asset calldata _asset
-    ) external nonReentrant onlyAdmin validAsset(_asset) validConfig(_vaultConfig) returns (address) {
-        if (_assetId == bytes32(0)) revert MarketMaker_InvalidAsset();
-        if (_priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
-        if (tokenToMarkets[_assetId] != address(0)) revert MarketMaker_MarketExists();
+        /* Generate a differentiated Request Key based on the inputs */
+        bytes32 requestKey = getMarketRequestKey(msg.sender, _request.indexTokenTicker);
+
+        // Add the request key to storage
+        requestKeys.add(requestKey);
+        // Add the request to storage
+        requests[requestKey] = _request;
+
+        // Fire Event
+        emit MarketRequested(requestKey, _request.indexTokenTicker);
+    }
+
+    /// @dev - Before calling this function, the request's input should be cross-referenced with EVs.
+    /// This function could potentially pass on a malicious input.
+    // @audit - set the max price deviation based on the secondary strategy?
+    // If AMM - set it higher. If Chainlink - set it lower. If none, set to 0?
+    /// @dev - using chainlink functions or similar, we can eventually open this up to the public by implementing off-chain validation
+    /// @dev - never reverts. If the request is invalid, it's deleted and the function returns;
+    function executeNewMarket(bytes32 _requestKey) external nonReentrant onlyMarketKeeper returns (address) {
+        // Get the Request
+        MarketRequest memory request = requests[_requestKey];
+
+        // Generate the Asset ID
+        bytes32 assetId = generateAssetId(request.indexTokenTicker);
+
+        /* Validate and Update the Request */
+
+        // 1. If asset already has a market, delete request and return
+        if (tokenToMarket[assetId] != address(0)) {
+            _deleteMarketRequest(_requestKey);
+            return address(0);
+        }
+        // 2. Make sure Market token name and symbol are < 32 bytes for gas efficiency
+        if (bytes(request.marketTokenName).length > 32 || bytes(request.marketTokenSymbol).length > 32) {
+            _deleteMarketRequest(_requestKey);
+            return address(0);
+        }
+        // 3. If price id is set, make a call to check it returns a non 0 value from pyth
+        if (request.asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
+            // @audit - someone can pass in the wrong price feed
+            (uint256 price,) = priceFeed.getPriceUnsafe(request.asset);
+            if (price == 0) {
+                _deleteMarketRequest(_requestKey);
+                return address(0);
+            }
+        }
+        // 4. If secondary strategy is set, make a call to check it returns a non 0 value
+        if (request.asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+            // @audit - someone can spoof a return value here
+            if (Oracle.getReferencePrice(request.asset) == 0) {
+                _deleteMarketRequest(_requestKey);
+                return address(0);
+            }
+        }
 
         // Set Up Price Oracle
-        priceFeed.supportAsset(_assetId, _asset);
+        priceFeed.supportAsset(assetId, request.asset);
         // Create new Market Token
-        MarketToken marketToken = new MarketToken(_vaultConfig.name, _vaultConfig.symbol, address(roleStorage));
+        MarketToken marketToken =
+            new MarketToken(request.marketTokenName, request.marketTokenSymbol, address(roleStorage));
         // Create new Market contract
-        Market market = new Market(_vaultConfig, defaultConfig, address(marketToken), _assetId, address(roleStorage));
+        Market market = new Market(
+            defaultConfig,
+            request.owner,
+            feeReceiver,
+            address(feeDistributor),
+            WETH,
+            USDC,
+            address(marketToken),
+            assetId,
+            address(roleStorage)
+        );
         // Create new TradeStorage contract
         TradeStorage tradeStorage = new TradeStorage(market, referralStorage, address(roleStorage));
         // Initialize Market with TradeStorage
@@ -186,18 +218,21 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Add to Storage
         bool success = markets.add(address(market));
         if (!success) revert MarketMaker_FailedToAddMarket();
-        tokenToMarkets[_assetId] = address(market);
 
         // Set Up Roles -> Enable Caller to control Market
         roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender, msg.sender));
         roleStorage.setMinter(address(marketToken), address(market));
 
+        // Send Market Creation Fee to Executor
+        payable(msg.sender).transfer(marketCreationFee);
+
         // Fire Event
-        emit MarketCreated(address(market), _assetId, _priceId);
+        emit MarketCreated(address(market), assetId, request.asset.priceId);
 
         return address(market);
     }
 
+    /// @dev - Only the Admin can create multi-asset markets
     function addTokenToMarket(
         IMarket market,
         bytes32 _assetId,
@@ -207,18 +242,12 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     ) external onlyAdmin nonReentrant {
         if (_assetId == bytes32(0)) revert MarketMaker_InvalidAsset();
         if (_priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
-        if (_asset.baseUnit != 1e18 && _asset.baseUnit != 1e8 && _asset.baseUnit != 1e6) {
-            revert MarketMaker_InvalidBaseUnit();
-        }
-        if (tokenToMarkets[_assetId] != address(0)) revert MarketMaker_MarketExists();
         if (!markets.contains(address(market))) revert MarketMaker_MarketDoesNotExist();
 
         // Set Up Price Oracle
         priceFeed.supportAsset(_assetId, _asset);
         // Cache
         address marketAddress = address(market);
-        // Add to Storage
-        tokenToMarkets[_assetId] = marketAddress;
         // Add to Market
         market.addToken(defaultConfig, _assetId, _newAllocations);
 
@@ -226,11 +255,38 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         emit TokenAddedToMarket(marketAddress, _assetId, _priceId);
     }
 
+    /**
+     * ========================= Getter Functions =========================
+     */
     function getMarkets() external view returns (address[] memory) {
         return markets.values();
     }
 
+    function getMarketAtIndex(uint256 _index) external view returns (address) {
+        return markets.at(_index);
+    }
+
+    function getMarketRequestKey(address _user, string calldata _indexTokenTicker)
+        public
+        pure
+        returns (bytes32 requestKey)
+    {
+        return keccak256(abi.encodePacked(_user, _indexTokenTicker));
+    }
+
+    function generateAssetId(string memory _indexTokenTicker) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(_indexTokenTicker));
+    }
+
     function isMarket(address _market) external view returns (bool) {
         return markets.contains(_market);
+    }
+
+    /**
+     * ========================= Internal Functions =========================
+     */
+    function _deleteMarketRequest(bytes32 _requestKey) internal {
+        requestKeys.remove(_requestKey);
+        delete requests[_requestKey];
     }
 }

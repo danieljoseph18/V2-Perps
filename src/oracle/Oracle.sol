@@ -36,15 +36,14 @@ library Oracle {
     }
 
     struct Asset {
-        bool isValid;
         address chainlinkPriceFeed; // Chainlink Price Feed Address
         bytes32 priceId; // Pyth Price ID
         uint64 baseUnit; // 1 Unit of the Token e.g 1e18 for ETH
         uint32 heartbeatDuration; // Duration after which the price is considered stale
         uint256 maxPriceDeviation; // Max Price Deviation from Reference Price
-        PrimaryStrategy primaryStrategy;
-        SecondaryStrategy secondaryStrategy;
-        UniswapPool pool; // Uniswap V3 Pool
+        PrimaryStrategy primaryStrategy; // Strategy for fetching the Primary Price
+        SecondaryStrategy secondaryStrategy; // Strategy for fetching the Secondary Price
+        UniswapPool pool; // Uniswap Pool
     }
 
     struct UniswapPool {
@@ -67,12 +66,13 @@ library Oracle {
     enum SecondaryStrategy {
         CHAINLINK,
         AMM,
-        NONE
+        NONE // High Risk Pools -> @audit - how can we ensure that the price is not manipulated?
+
     }
 
     enum PoolType {
-        UNISWAP_V3,
-        UNISWAP_V2
+        V3,
+        V2
     }
 
     uint64 private constant MAX_PERCENTAGE = 1e18; // 100%
@@ -80,7 +80,7 @@ library Oracle {
     uint8 private constant CHAINLINK_PRICE_DECIMALS = 8;
 
     function isValidAsset(IPriceFeed priceFeed, bytes32 _assetId) external view returns (bool) {
-        return priceFeed.getAsset(_assetId).isValid;
+        return priceFeed.getAsset(_assetId).baseUnit != 0;
     }
 
     function isSequencerUp(IPriceFeed priceFeed) external view {
@@ -267,14 +267,6 @@ library Oracle {
         return priceFeed.getAsset(_assetId).baseUnit;
     }
 
-    function getLongBaseUnit(IPriceFeed priceFeed) external view returns (uint256) {
-        return getBaseUnit(priceFeed, priceFeed.longAssetId());
-    }
-
-    function getShortBaseUnit(IPriceFeed priceFeed) external view returns (uint256) {
-        return getBaseUnit(priceFeed, priceFeed.shortAssetId());
-    }
-
     function priceWasSigned(IPriceFeed priceFeed, bool _isLong) external view returns (bool) {
         // If long, get the long asset price, else short asset price
         bytes32 assetId = _isLong ? priceFeed.longAssetId() : priceFeed.shortAssetId();
@@ -284,7 +276,7 @@ library Oracle {
     /// @dev _baseUnit is the base unit of the token0
     // ONLY EVER USED FOR REFERENCE PRICE -> PRICE IS MANIPULATABLE
     function getAmmPrice(UniswapPool memory _pool) public view returns (uint256 price) {
-        if (_pool.poolType == PoolType.UNISWAP_V3) {
+        if (_pool.poolType == PoolType.V3) {
             IUniswapV3Pool pool = IUniswapV3Pool(_pool.poolAddress);
             (uint160 sqrtPriceX96,,,,,,) = pool.slot0();
             (bool success, uint256 token0Decimals) = _tryGetAssetDecimals(IERC20(_pool.token0));
@@ -294,7 +286,7 @@ library Oracle {
             UD60x18 denominator = ud(2).powu(192);
             price = unwrap(numerator.div(denominator));
             return price;
-        } else if (_pool.poolType == PoolType.UNISWAP_V2) {
+        } else if (_pool.poolType == PoolType.V2) {
             IUniswapV2Pair pair = IUniswapV2Pair(_pool.poolAddress);
             (uint112 reserve0, uint112 reserve1,) = pair.getReserves();
             address pairToken0 = pair.token0();

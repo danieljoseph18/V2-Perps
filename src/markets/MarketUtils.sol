@@ -16,6 +16,8 @@ library MarketUtils {
     uint256 constant SCALAR = 1e18;
     uint256 constant BASE_FEE = 0.001e18; // 0.1%
     uint256 public constant MAX_ALLOCATION = 10000;
+    uint256 constant LONG_BASE_UNIT = 1e18;
+    uint256 constant SHORT_BASE_UNIT = 1e6;
 
     error MarketUtils_MaxOiExceeded();
     error MarketUtils_TokenBurnFailed();
@@ -58,9 +60,7 @@ library MarketUtils {
         Oracle.Price memory _shortPrices,
         bool _isDeposit,
         uint256 _longTokenBalance,
-        uint256 _longBaseUnit,
-        uint256 _shortTokenBalance,
-        uint256 _shortBaseUnit
+        uint256 _shortTokenBalance
     ) public view returns (uint256) {
         FeeState memory state;
         // get the base fee
@@ -68,8 +68,8 @@ library MarketUtils {
 
         // Convert skew to USD values and calculate amountUsd once
         state.amountUsd = _isLongToken
-            ? mulDiv(_tokenAmount, _longPrices.price + _longPrices.confidence, _longBaseUnit)
-            : mulDiv(_tokenAmount, _shortPrices.price + _shortPrices.confidence, _shortBaseUnit);
+            ? mulDiv(_tokenAmount, _longPrices.price + _longPrices.confidence, LONG_BASE_UNIT)
+            : mulDiv(_tokenAmount, _shortPrices.price + _shortPrices.confidence, SHORT_BASE_UNIT);
 
         // If Size Delta * Price < Base Unit -> Action has no effect on skew
         if (state.amountUsd == 0) {
@@ -77,8 +77,9 @@ library MarketUtils {
         }
 
         // Calculate pool balances before and minimise value of pool to maximise the effect on the skew
-        state.longTokenValue = mulDiv(_longTokenBalance, _longPrices.price - _longPrices.confidence, _longBaseUnit);
-        state.shortTokenValue = mulDiv(_shortTokenBalance, _shortPrices.price - _shortPrices.confidence, _shortBaseUnit);
+        state.longTokenValue = mulDiv(_longTokenBalance, _longPrices.price - _longPrices.confidence, LONG_BASE_UNIT);
+        state.shortTokenValue =
+            mulDiv(_shortTokenBalance, _shortPrices.price - _shortPrices.confidence, SHORT_BASE_UNIT);
 
         // Don't want to disincentivise deposits on empty pool
         if (state.longTokenValue == 0 && state.shortTokenValue == 0) {
@@ -120,13 +121,13 @@ library MarketUtils {
             // Calculate the additional fee
             // Uses the original value for LTV + STV so SkewDelta is never > LTV + STV
             state.feeAdditionUsd = mulDiv(
-                state.skewDelta, market.feeScale(), state.longTokenValue + state.shortTokenValue + state.amountUsd
+                state.skewDelta, market.FEE_SCALE(), state.longTokenValue + state.shortTokenValue + state.amountUsd
             );
 
             // Convert the additional fee to index tokens
             state.indexFee = _isLongToken
-                ? mulDiv(state.feeAdditionUsd, _longBaseUnit, _longPrices.price + _longPrices.confidence)
-                : mulDiv(state.feeAdditionUsd, _shortBaseUnit, _shortPrices.price + _shortPrices.confidence);
+                ? mulDiv(state.feeAdditionUsd, LONG_BASE_UNIT, _longPrices.price + _longPrices.confidence)
+                : mulDiv(state.feeAdditionUsd, SHORT_BASE_UNIT, _shortPrices.price + _shortPrices.confidence);
 
             // Return base fee + additional fee
             return state.baseFee + state.indexFee;
@@ -150,9 +151,7 @@ library MarketUtils {
             _params.shortPrices,
             true,
             _params.market.longTokenBalance(),
-            _params.market.LONG_BASE_UNIT(),
-            _params.market.shortTokenBalance(),
-            _params.market.SHORT_BASE_UNIT()
+            _params.market.shortTokenBalance()
         );
 
         // Calculate remaining after fee
@@ -166,9 +165,7 @@ library MarketUtils {
             _params.shortPrices,
             afterFeeAmount,
             _params.longBorrowFeesUsd,
-            _params.market.LONG_BASE_UNIT(),
             _params.shortBorrowFeesUsd,
-            _params.market.SHORT_BASE_UNIT(),
             _params.cumulativePnl,
             _params.deposit.isLongToken
         );
@@ -187,9 +184,7 @@ library MarketUtils {
             _params.shortPrices,
             _params.withdrawal.amountIn,
             _params.longBorrowFeesUsd,
-            _params.market.LONG_BASE_UNIT(),
             _params.shortBorrowFeesUsd,
-            _params.market.SHORT_BASE_UNIT(),
             _params.cumulativePnl,
             _params.withdrawal.isLongToken
         );
@@ -205,9 +200,7 @@ library MarketUtils {
             _params.shortPrices,
             false,
             _params.market.longTokenBalance(),
-            _params.market.LONG_BASE_UNIT(),
-            _params.market.shortTokenBalance(),
-            _params.market.SHORT_BASE_UNIT()
+            _params.market.shortTokenBalance()
         );
 
         // Calculate the Token Amount Out
@@ -283,9 +276,7 @@ library MarketUtils {
         Oracle.Price memory _shortPrices,
         uint256 _amountIn,
         uint256 _longBorrowFeesUsd,
-        uint256 _longBaseUnit,
         uint256 _shortBorrowFeesUsd,
-        uint256 _shortBaseUnit,
         int256 _cumulativePnl,
         bool _isLongToken
     ) public view returns (uint256 marketTokenAmount) {
@@ -300,12 +291,12 @@ library MarketUtils {
         );
         if (marketTokenPrice == 0) {
             marketTokenAmount = _isLongToken
-                ? mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, _shortBaseUnit)
-                : mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, _longBaseUnit);
+                ? mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, SHORT_BASE_UNIT)
+                : mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, LONG_BASE_UNIT);
         } else {
             uint256 valueUsd = _isLongToken
-                ? mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, _longBaseUnit)
-                : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, _shortBaseUnit);
+                ? mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, LONG_BASE_UNIT)
+                : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, SHORT_BASE_UNIT);
             marketTokenAmount = mulDiv(valueUsd, SCALAR, marketTokenPrice);
         }
     }
@@ -317,9 +308,7 @@ library MarketUtils {
         Oracle.Price memory _shortPrices,
         uint256 _marketTokenAmountIn,
         uint256 _longBorrowFeesUsd,
-        uint256 _longBaseUnit,
         uint256 _shortBorrowFeesUsd,
-        uint256 _shortBaseUnit,
         int256 _cumulativePnl,
         bool _isLongToken
     ) public view returns (uint256 tokenAmount) {
@@ -334,8 +323,8 @@ library MarketUtils {
         );
         uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALAR);
         tokenAmount = _isLongToken
-            ? mulDiv(valueUsd, _longBaseUnit, _longPrices.price + _longPrices.confidence)
-            : mulDiv(valueUsd, _shortBaseUnit, _shortPrices.price + _shortPrices.confidence);
+            ? mulDiv(valueUsd, LONG_BASE_UNIT, _longPrices.price + _longPrices.confidence)
+            : mulDiv(valueUsd, SHORT_BASE_UNIT, _shortPrices.price + _shortPrices.confidence);
     }
 
     function getMarketTokenPrice(
@@ -371,10 +360,9 @@ library MarketUtils {
     ) public view returns (uint256 aum) {
         // Get Values in USD -> Subtract reserved amounts from AUM
         uint256 longTokenValue =
-            mulDiv(market.longTokenBalance() - market.longTokensReserved(), _longTokenPrice, market.LONG_BASE_UNIT());
-        uint256 shortTokenValue = mulDiv(
-            market.shortTokenBalance() - market.shortTokensReserved(), _shortTokenPrice, market.SHORT_BASE_UNIT()
-        );
+            mulDiv(market.longTokenBalance() - market.longTokensReserved(), _longTokenPrice, LONG_BASE_UNIT);
+        uint256 shortTokenValue =
+            mulDiv(market.shortTokenBalance() - market.shortTokensReserved(), _shortTokenPrice, SHORT_BASE_UNIT);
 
         // Add Borrow Fees
         longTokenValue += _longBorrowFeesUsd;
@@ -488,16 +476,13 @@ library MarketUtils {
         return getOpenInterest(market, _assetId, _isLong);
     }
 
-    function getTotalPoolBalanceUsd(
-        IMarket market,
-        bytes32 _assetId,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice,
-        uint256 _longBaseUnit,
-        uint256 _shortBaseUnit
-    ) external view returns (uint256 poolBalanceUsd) {
-        uint256 longPoolUsd = getPoolBalanceUsd(market, _assetId, _longTokenPrice, _longBaseUnit, true);
-        uint256 shortPoolUsd = getPoolBalanceUsd(market, _assetId, _shortTokenPrice, _shortBaseUnit, false);
+    function getTotalPoolBalanceUsd(IMarket market, bytes32 _assetId, uint256 _longTokenPrice, uint256 _shortTokenPrice)
+        external
+        view
+        returns (uint256 poolBalanceUsd)
+    {
+        uint256 longPoolUsd = getPoolBalanceUsd(market, _assetId, _longTokenPrice, LONG_BASE_UNIT, true);
+        uint256 shortPoolUsd = getPoolBalanceUsd(market, _assetId, _shortTokenPrice, SHORT_BASE_UNIT, false);
         poolBalanceUsd = longPoolUsd + shortPoolUsd;
     }
 
@@ -538,16 +523,13 @@ library MarketUtils {
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 
-    function getTotalAvailableOiUsd(
-        IMarket market,
-        bytes32 _assetId,
-        uint256 _longTokenPrice,
-        uint256 _shortTokenPrice,
-        uint256 _longBaseUnit,
-        uint256 _shortBaseUnit
-    ) external view returns (uint256 totalAvailableOiUsd) {
-        uint256 longOiUsd = getAvailableOiUsd(market, _assetId, _longTokenPrice, _longBaseUnit, true);
-        uint256 shortOiUsd = getAvailableOiUsd(market, _assetId, _shortTokenPrice, _shortBaseUnit, false);
+    function getTotalAvailableOiUsd(IMarket market, bytes32 _assetId, uint256 _longTokenPrice, uint256 _shortTokenPrice)
+        external
+        view
+        returns (uint256 totalAvailableOiUsd)
+    {
+        uint256 longOiUsd = getAvailableOiUsd(market, _assetId, _longTokenPrice, LONG_BASE_UNIT, true);
+        uint256 shortOiUsd = getAvailableOiUsd(market, _assetId, _shortTokenPrice, SHORT_BASE_UNIT, false);
         totalAvailableOiUsd = longOiUsd + shortOiUsd;
     }
 

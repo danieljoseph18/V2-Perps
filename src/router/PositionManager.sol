@@ -41,8 +41,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     IWETH immutable WETH;
     IERC20 immutable USDC;
 
-    uint256 private LONG_BASE_UNIT = 1e18;
-    uint256 private SHORT_BASE_UNIT = 1e6;
+    uint256 private constant LONG_BASE_UNIT = 1e18;
+    uint256 private constant SHORT_BASE_UNIT = 1e6;
     uint256 constant GAS_BUFFER = 10000;
 
     IMarketMaker public marketMaker;
@@ -143,17 +143,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         if (feeToRefund > 0) payable(msg.sender).sendValue(feeToRefund);
     }
 
-    function cancelDeposit(IMarket market, bytes32 _depositKey) external nonReentrant {
-        IMarket.Input memory deposit = market.getRequest(_depositKey);
-        if (deposit.owner != msg.sender) revert PositionManager_InvalidDepositOwner();
-        if (deposit.expirationTimestamp >= block.timestamp) revert PositionManager_DepositNotExpired();
-        if (!deposit.isDeposit) revert PositionManager_InvalidDeposit();
-        market.deleteRequest(_depositKey);
-        IERC20 tokenOut = deposit.isLongToken ? WETH : USDC;
-        tokenOut.safeTransfer(msg.sender, deposit.amountIn);
-        emit DepositRequestCancelled(_depositKey, deposit.owner, address(tokenOut), deposit.amountIn);
-    }
-
     function executeWithdrawal(IMarket market, bytes32 _key, Oracle.PriceUpdateData calldata _priceUpdateData)
         external
         payable
@@ -189,9 +178,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
             params.shortPrices,
             params.withdrawal.amountIn,
             params.longBorrowFeesUsd,
-            LONG_BASE_UNIT,
             params.shortBorrowFeesUsd,
-            SHORT_BASE_UNIT,
             params.cumulativePnl,
             params.withdrawal.isLongToken
         );
@@ -218,17 +205,20 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
     }
 
-    // @audit - feels wrong
-    // @audit - can combine with cancel deposit
-    function cancelWithdrawal(IMarket market, bytes32 _withdrawalKey) external nonReentrant {
-        IMarket.Input memory withdrawal = market.getRequest(_withdrawalKey);
-        if (withdrawal.owner != msg.sender) revert PositionManager_InvalidWithdrawalOwner();
-        if (withdrawal.expirationTimestamp >= block.timestamp) revert PositionManager_WithdrawalNotExpired();
-        if (withdrawal.isDeposit) revert PositionManager_InvalidWithdrawal();
-        market.deleteRequest(_withdrawalKey);
-        IERC20 tokenOut = withdrawal.isLongToken ? WETH : USDC;
-        tokenOut.safeTransfer(msg.sender, withdrawal.amountIn);
-        emit WithdrawalRequestCancelled(_withdrawalKey, withdrawal.owner, address(tokenOut), withdrawal.amountIn);
+    function cancelMarketRequest(IMarket market, bytes32 _requestKey) external nonReentrant {
+        // Check if the market exists /  is valid on the market maker
+        if (!marketMaker.isMarket(address(market))) revert PositionManager_InvalidMarket();
+        // Cancel the Request
+        (address tokenOut, uint256 amountOut, bool shouldUnwrap) = market.cancelRequest(_requestKey, msg.sender);
+        // Transfer out the Tokens from the Request
+        if (shouldUnwrap) {
+            // If should unwrap, unwrap the WETH and transfer ETH to the user
+            WETH.withdraw(amountOut);
+            payable(msg.sender).sendValue(amountOut);
+        } else {
+            IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
+        }
+        emit MarketRequestCancelled(_requestKey, msg.sender, tokenOut, amountOut);
     }
 
     // Used to transfer intermediary tokens to the market from deposits
@@ -239,6 +229,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     }
 
     /// @dev Only Keeper
+    // @audit - move everything we can into trade storage
+    // this should just be the access point, all important execution should be done in trade storage
     function executePosition(
         IMarket market,
         bytes32 _orderKey,
@@ -252,19 +244,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         _signOraclePrices(_priceUpdateData);
 
         (Execution.State memory state, Position.Request memory request, ITradeStorage tradeStorage) =
-            Execution.constructParams(market, marketMaker, priceFeed, _orderKey, _feeReceiver);
+            Execution.constructParams(market, priceFeed, _orderKey, _feeReceiver);
         // Fetch the State of the Market Before the Position
         IMarket.MarketStorage memory marketBefore = market.getStorage(request.input.assetId);
-
-        _updateImpactPool(market, request.input.assetId, state.priceImpactUsd);
-        _updateMarketState(
-            market,
-            state,
-            request.input.assetId,
-            request.input.sizeDelta,
-            request.input.isLong,
-            request.input.isIncrease
-        );
 
         // Calculate Fee
         state.fee = Position.calculateFee(
@@ -356,11 +338,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // No price impact on Liquidations
         state.impactedPrice = state.indexPrice;
 
-        state.collateralBaseUnit =
-            position.isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
+        state.collateralBaseUnit = position.isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
 
-        // Update the state of the market
-        _updateMarketState(market, state, position.assetId, position.positionSize, position.isLong, false);
         // liquidate the position
         try tradeStorage.liquidatePosition(state, _positionKey, msg.sender) {}
         catch {
@@ -477,34 +456,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Send Tokens + Fee to the Market (Will be Accounted for Separately)
         // Subtract Affiliate Rebate -> will go to Referral Storage
         IERC20(_collateralToken).safeTransfer(address(market), tokensPlusFee);
-    }
-
-    function _updateMarketState(
-        IMarket market,
-        Execution.State memory _state,
-        bytes32 _assetId,
-        uint256 _sizeDelta,
-        bool _isLong,
-        bool _isIncrease
-    ) internal {
-        market.updateMarketState(
-            _assetId,
-            _sizeDelta,
-            _state.indexPrice,
-            _state.impactedPrice,
-            _state.indexBaseUnit,
-            _state.collateralPrice,
-            _isLong,
-            _isIncrease
-        );
-    }
-
-    function _updateImpactPool(IMarket market, bytes32 _assetId, int256 _priceImpactUsd) internal {
-        // If Price Impact is Negative, add to the impact Pool
-        // If Price Impact is Positive, Subtract from the Impact Pool
-        // Impact Pool Delta = -1 * Price Impact
-        if (_priceImpactUsd == 0) return;
-        market.updateImpactPool(_assetId, -_priceImpactUsd);
     }
 
     /**

@@ -97,7 +97,7 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
         for (uint16 index = 0; index < assetLen;) {
             bytes32 assetId = _assetIds[index];
             Oracle.Asset memory asset = assets[assetId];
-            if (!asset.isValid) revert PriceFeed_InvalidToken(assetId);
+            if (asset.baseUnit == 0) revert PriceFeed_InvalidToken(assetId);
             // Add the Price to the Set
             bool success = assetsWithPrices.add(assetId);
             if (!success) revert PriceFeed_FailedToAddPrice();

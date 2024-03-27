@@ -94,7 +94,6 @@ contract TestPriceImpact is Test {
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 50 ether}();
         Oracle.Asset memory wethData = Oracle.Asset({
-            isValid: true,
             chainlinkPriceFeed: address(0),
             priceId: ethPriceId,
             baseUnit: 1e18,
@@ -102,29 +101,20 @@ contract TestPriceImpact is Test {
             maxPriceDeviation: 0.01e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            pool: Oracle.UniswapPool({
-                token0: weth,
-                token1: usdc,
-                poolAddress: address(0),
-                poolType: Oracle.PoolType.UNISWAP_V3
-            })
+            pool: Oracle.UniswapPool({token0: weth, token1: usdc, poolAddress: address(0), poolType: Oracle.PoolType.V3})
         });
-        IMarket.VaultConfig memory wethVaultDetails = IMarket.VaultConfig({
-            longToken: weth,
-            shortToken: usdc,
-            longBaseUnit: 1e18,
-            shortBaseUnit: 1e6,
-            feeScale: 0.03e18,
-            feePercentageToOwner: 0.2e18,
-            minTimeToExpiration: 1 minutes,
-            poolOwner: OWNER,
-            feeDistributor: feeDistributor,
-            name: "WETH/USDC",
-            symbol: "WETH/USDC"
+        IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
+            owner: msg.sender,
+            indexTokenTicker: "ETH",
+            marketTokenName: "BRRR",
+            marketTokenSymbol: "BRRR",
+            asset: wethData
         });
-        marketMaker.executeNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
+        marketMaker.requestNewMarket{value: 0.01 ether}(request);
+        bytes32 marketKey = marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker);
+        marketMaker.executeNewMarket(marketKey);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
+        address wethMarket = marketMaker.tokenToMarket(ethAssetId);
         market = Market(payable(wethMarket));
         tradeStorage = ITradeStorage(market.tradeStorage());
         // Call the deposit function with sufficient gas
@@ -158,7 +148,6 @@ contract TestPriceImpact is Test {
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 50 ether}();
         Oracle.Asset memory wethData = Oracle.Asset({
-            isValid: true,
             chainlinkPriceFeed: address(0),
             priceId: ethPriceId,
             baseUnit: 1e18,
@@ -166,29 +155,20 @@ contract TestPriceImpact is Test {
             maxPriceDeviation: 0.01e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            pool: Oracle.UniswapPool({
-                token0: weth,
-                token1: usdc,
-                poolAddress: address(0),
-                poolType: Oracle.PoolType.UNISWAP_V3
-            })
+            pool: Oracle.UniswapPool({token0: weth, token1: usdc, poolAddress: address(0), poolType: Oracle.PoolType.V3})
         });
-        IMarket.VaultConfig memory wethVaultDetails = IMarket.VaultConfig({
-            longToken: weth,
-            shortToken: usdc,
-            longBaseUnit: 1e18,
-            shortBaseUnit: 1e6,
-            feeScale: 0.03e18,
-            feePercentageToOwner: 0.2e18,
-            minTimeToExpiration: 1 minutes,
-            poolOwner: OWNER,
-            feeDistributor: feeDistributor,
-            name: "WETH/USDC",
-            symbol: "WETH/USDC"
+        IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
+            owner: msg.sender,
+            indexTokenTicker: "ETH",
+            marketTokenName: "BRRR",
+            marketTokenSymbol: "BRRR",
+            asset: wethData
         });
-        marketMaker.executeNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
+        marketMaker.requestNewMarket{value: 0.01 ether}(request);
+        bytes32 marketKey = marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker);
+        marketMaker.executeNewMarket(marketKey);
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
+        address wethMarket = marketMaker.tokenToMarket(ethAssetId);
         market = Market(payable(wethMarket));
         tradeStorage = ITradeStorage(market.tradeStorage());
 
@@ -289,8 +269,7 @@ contract TestPriceImpact is Test {
             address(market), abi.encodeWithSelector(market.getStorage.selector, ethAssetId), abi.encode(marketStorage)
         );
 
-        (orderState.impactedPrice, orderState.priceImpactUsd) =
-            PriceImpact.execute(market, priceFeed, request, orderState);
+        (orderState.impactedPrice, orderState.priceImpactUsd) = PriceImpact.execute(market, request, orderState);
     }
 
     function testPriceImpactValuesShallowLiquidity(uint256 _sizeDelta, uint256 _longOi, uint256 _shortOi)
@@ -356,7 +335,6 @@ contract TestPriceImpact is Test {
             address(market), abi.encodeWithSelector(market.getStorage.selector, ethAssetId), abi.encode(marketStorage)
         );
 
-        (orderState.impactedPrice, orderState.priceImpactUsd) =
-            PriceImpact.execute(market, priceFeed, request, orderState);
+        (orderState.impactedPrice, orderState.priceImpactUsd) = PriceImpact.execute(market, request, orderState);
     }
 }

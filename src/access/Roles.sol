@@ -30,4 +30,6 @@ library Roles {
     bytes32 public constant ADL_KEEPER = keccak256("ADL_KEEPER");
     // Global
     bytes32 public constant LIQUIDATOR = keccak256("LIQUIDATOR");
+    // Global
+    bytes32 public constant MARKET_KEEPER = keccak256("MARKET_KEEPER");
 }

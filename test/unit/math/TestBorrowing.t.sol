@@ -97,7 +97,6 @@ contract TestBorrowing is Test {
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 50 ether}();
         Oracle.Asset memory wethData = Oracle.Asset({
-            isValid: true,
             chainlinkPriceFeed: address(0),
             priceId: ethPriceId,
             baseUnit: 1e18,
@@ -105,48 +104,33 @@ contract TestBorrowing is Test {
             maxPriceDeviation: 0.01e18,
             primaryStrategy: Oracle.PrimaryStrategy.PYTH,
             secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            pool: Oracle.UniswapPool({
-                token0: weth,
-                token1: usdc,
-                poolAddress: address(0),
-                poolType: Oracle.PoolType.UNISWAP_V3
-            })
+            pool: Oracle.UniswapPool({token0: weth, token1: usdc, poolAddress: address(0), poolType: Oracle.PoolType.V3})
         });
-        IMarket.VaultConfig memory wethVaultDetails = IMarket.VaultConfig({
-            longToken: weth,
-            shortToken: usdc,
-            longBaseUnit: 1e18,
-            shortBaseUnit: 1e6,
-            feeScale: 0.03e18,
-            feePercentageToOwner: 0.2e18,
-            minTimeToExpiration: 1 minutes,
-            poolOwner: OWNER,
-            feeDistributor: feeDistributor,
-            name: "WETH/USDC",
-            symbol: "WETH/USDC"
+        IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
+            owner: msg.sender,
+            indexTokenTicker: "ETH",
+            marketTokenName: "BRRR",
+            marketTokenSymbol: "BRRR",
+            asset: wethData
         });
-        marketMaker.executeNewMarket(wethVaultDetails, ethAssetId, ethPriceId, wethData);
+        marketMaker.requestNewMarket{value: 0.01 ether}(request);
+        marketMaker.executeNewMarket(marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker));
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarkets(ethAssetId);
-        market = Market(payable(wethMarket));
+        market = Market(payable(marketMaker.tokenToMarket(ethAssetId)));
         tradeStorage = ITradeStorage(market.tradeStorage());
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-        bytes32 depositKey = market.getRequestAtIndex(0).key;
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-        depositKey = market.getRequestAtIndex(0).key;
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
-        uint256 allocation = 10000;
-        uint256 encodedAllocation = allocation << 240;
-        allocations.push(encodedAllocation);
+        allocations.push(10000 << 240);
         market.setAllocationsWithBits(allocations);
         assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
@@ -368,9 +352,7 @@ contract TestBorrowing is Test {
         vm.roll(block.number + 1);
         // expected value
 
-        uint256 currentCumulative = _lastCumulative + (1000 * _borrowingRate);
-
-        uint256 ev = _calculateEv(_prevAverageCumulative, currentCumulative, _sizeDelta, _openInterest);
+        uint256 ev = _calculateEv(mockedMarketStorage, _sizeDelta);
 
         // test calculation value vs expected
         uint256 nextAverageCumulative = Borrowing.getNextAverageCumulative(market, ethAssetId, _sizeDelta, true);
@@ -378,26 +360,30 @@ contract TestBorrowing is Test {
         assertEq(nextAverageCumulative, ev, "Unmatched Values");
     }
 
-    function _calculateEv(
-        uint256 _prevAverageCumulative,
-        uint256 _currentCumulative,
-        int256 _sizeDelta,
-        uint256 _openInterest
-    ) internal pure returns (uint256 ev) {
+    function _calculateEv(IMarket.MarketStorage memory mockedMarketStorage, int256 _sizeDelta)
+        internal
+        pure
+        returns (uint256 ev)
+    {
+        uint256 currentCumulative = mockedMarketStorage.borrowing.longCumulativeBorrowFees
+            + (1000 * mockedMarketStorage.borrowing.longBorrowingRate);
         uint256 absSizeDelta = _sizeDelta < 0 ? uint256(-_sizeDelta) : uint256(_sizeDelta);
-        if (_openInterest == 0 || _prevAverageCumulative == 0) {
-            ev = _currentCumulative;
-        } else if (_sizeDelta < 0 && absSizeDelta == _openInterest) {
+        if (
+            mockedMarketStorage.openInterest.longOpenInterest == 0
+                || mockedMarketStorage.borrowing.weightedAvgCumulativeLong == 0
+        ) {
+            ev = currentCumulative;
+        } else if (_sizeDelta < 0 && absSizeDelta == mockedMarketStorage.openInterest.longOpenInterest) {
             ev = 0;
         } else if (_sizeDelta < 0) {
-            ev = _prevAverageCumulative;
+            ev = mockedMarketStorage.borrowing.weightedAvgCumulativeLong;
         } else {
             // If this point in execution is reached -> calculate the next average cumulative
             // Get the percentage of the new position size relative to the total open interest
-            uint256 relativeSize = mulDiv(absSizeDelta, 1e18, _openInterest);
+            uint256 relativeSize = mulDiv(absSizeDelta, 1e18, mockedMarketStorage.openInterest.longOpenInterest);
             // Calculate the new weighted average entry cumulative fee
-            ev = mulDiv(_prevAverageCumulative, 1e18 - relativeSize, 1e18)
-                + mulDiv(_currentCumulative, relativeSize, 1e18);
+            ev = mulDiv(mockedMarketStorage.borrowing.weightedAvgCumulativeLong, 1e18 - relativeSize, 1e18)
+                + mulDiv(currentCumulative, relativeSize, 1e18);
         }
     }
 

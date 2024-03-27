@@ -10,6 +10,7 @@ interface IMarketMaker {
     event MarketCreated(address market, bytes32 assetId, bytes32 priceId);
     event TokenAddedToMarket(address market, bytes32 assetId, bytes32 priceId);
     event DefaultConfigSet(IMarket.Config defaultConfig);
+    event MarketRequested(bytes32 requestKey, string indexTokenTicker);
 
     error MarketMaker_AlreadyInitialized();
     error MarketMaker_InvalidAsset();
@@ -22,7 +23,6 @@ interface IMarketMaker {
     error MarketMaker_FailedToAddMarket();
     error MarketMaker_InvalidPoolOwner();
     error MarketMaker_InvalidFeeDistributor();
-    error MarketMaker_InvalidTimeToExpiration();
     error MarketMaker_InvalidTokensOrBaseUnits();
     error MarketMaker_InvalidFeeConfig();
     error MarketMaker_InvalidHeartbeatDuration();
@@ -33,32 +33,43 @@ interface IMarketMaker {
     error MarketMaker_InvalidPoolType();
     error MarketMaker_InvalidPoolTokens();
     error MarketMaker_InvalidPoolAddress();
+    error MarketMaker_InvalidOwner();
+    error MarketMaker_InvalidStringLength();
+    error MarketMaker_InvalidFee();
+
+    struct MarketRequest {
+        address owner;
+        string indexTokenTicker;
+        string marketTokenName;
+        string marketTokenSymbol;
+        Oracle.Asset asset;
+    }
 
     function initialize(
         IMarket.Config memory _defaultConfig,
         address _priceFeed,
         address _referralStorage,
-        address _feeDistributor,
         address _positionManager,
-        address _weth,
-        address _usdc
+        address _feeDistributor,
+        address _feeReceiver,
+        uint256 _marketCreationFee
     ) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
-    function requestNewMarket(
-        IMarket.VaultConfig memory _config,
-        bytes32 _assetId,
-        bytes32 _priceId,
-        Oracle.Asset memory _asset
-    ) external;
-    function executeNewMarket(
-        IMarket.VaultConfig memory _config,
-        bytes32 _assetId,
-        bytes32 _priceId,
-        Oracle.Asset memory _asset
-    ) external returns (address marketAddress);
-
-    function tokenToMarkets(bytes32 _assetId) external view returns (address market);
+    function requestNewMarket(MarketRequest calldata _request) external payable;
+    function executeNewMarket(bytes32 _requestKey) external returns (address);
+    function tokenToMarket(bytes32 _assetId) external view returns (address);
     function getMarkets() external view returns (address[] memory);
+    function requests(bytes32 _requestKey)
+        external
+        view
+        returns (
+            address owner,
+            string memory indexTokenTicker,
+            string memory marketTokenName,
+            string memory marketTokenSymbol,
+            Oracle.Asset memory asset
+        );
+    function marketCreationFee() external view returns (uint256);
     function isMarket(address _market) external view returns (bool);
 }

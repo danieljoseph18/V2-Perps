@@ -9,19 +9,6 @@ interface IMarket {
     /**
      * ================ Structs ================
      */
-    struct VaultConfig {
-        address longToken;
-        address shortToken;
-        uint64 longBaseUnit;
-        uint64 shortBaseUnit;
-        uint64 feeScale;
-        uint64 feePercentageToOwner;
-        uint48 minTimeToExpiration;
-        address poolOwner;
-        address feeDistributor;
-        string name;
-        string symbol;
-    }
 
     // For snapshotting state for invariant checks
     struct State {
@@ -40,6 +27,7 @@ interface IMarket {
         bool isDeposit;
         bytes32 key;
     }
+    // @audit - don't like the usage of the price struct. Should try to use strictly either max or min price
 
     struct ExecuteDeposit {
         IMarket market;
@@ -209,7 +197,6 @@ interface IMarket {
     error Market_InvalidKey();
     error Market_InvalidPoolOwner();
     error Market_InvalidFeeDistributor();
-    error Market_InvalidFeeScale();
     error Market_InvalidFeePercentage();
     error Market_InsufficientAvailableTokens();
     error Market_FailedToAddRequest();
@@ -225,6 +212,8 @@ interface IMarket {
     error Market_MaxAssetsReached();
     error Market_FailedToTransferETH();
     error Market_InvalidAmountIn();
+    error Market_RequestNotOwner();
+    error Market_RequestNotExpired();
 
     /**
      * ================ Events ================
@@ -243,11 +232,11 @@ interface IMarket {
     );
     event FeesAccumulated(uint256 amount, bool _isLong);
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
+    event RequestCanceled(bytes32 indexed key, address indexed caller);
 
     // Admin functions
 
-    function updateFees(address _poolOwner, address _feeDistributor, uint256 _feeScale, uint256 _feePercentageToOwner)
-        external;
+    function updateFees(address _poolOwner, address _feeDistributor) external;
 
     // Trading related functions
     function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external;
@@ -264,17 +253,18 @@ interface IMarket {
 
     function createRequest(
         address _owner,
-        address _tokenIn,
+        address _transferToken,
         uint256 _amountIn,
         uint256 _executionFee,
         bool _reverseWrap,
         bool _isDeposit
     ) external payable;
 
-    function deleteRequest(bytes32 _key) external;
+    function cancelRequest(bytes32 _key, address _caller)
+        external
+        returns (address tokenOut, uint256 amountOut, bool shouldUnwrap);
 
     // Getter
-    function feeScale() external view returns (uint256);
     function BASE_FEE() external view returns (uint64);
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total);
     function getRequest(bytes32 _key) external view returns (Input memory);
@@ -301,6 +291,7 @@ interface IMarket {
 
     function tradeStorage() external view returns (address);
     function MARKET_TOKEN() external view returns (IMarketToken);
+    function FEE_SCALE() external view returns (uint256);
     function getAssetIds() external view returns (bytes32[] memory);
     function getAssetsInMarket() external view returns (uint256);
     function getStorage(bytes32 _assetId) external view returns (MarketStorage memory);
@@ -308,6 +299,5 @@ interface IMarket {
     function shortTokenBalance() external view returns (uint256);
     function longTokensReserved() external view returns (uint256);
     function shortTokensReserved() external view returns (uint256);
-    function LONG_BASE_UNIT() external view returns (uint256);
-    function SHORT_BASE_UNIT() external view returns (uint256);
+    function isAssetInMarket(bytes32 _assetId) external view returns (bool);
 }

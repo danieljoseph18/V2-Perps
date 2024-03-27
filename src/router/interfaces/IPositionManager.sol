@@ -11,13 +11,8 @@ interface IPositionManager {
         uint256 indexed depositGasLimit, uint256 indexed withdrawalGasLimit, uint256 indexed positionGasLimit
     );
     event AdlExecuted(IMarket indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
-    event DepositRequestCancelled(
-        bytes32 indexed _depositKey, address indexed _owner, address indexed _token, uint256 _amount
-    );
-    event WithdrawalRequestCancelled(
-        bytes32 indexed _withdrawalKey, address indexed _owner, address indexed _token, uint256 _amount
-    );
     event AdlTargetRatioReached(IMarket indexed market, int256 newFactor, bool isLong);
+    event MarketRequestCancelled(bytes32 indexed _requestKey, address indexed _owner, address _token, uint256 _amount);
 
     error PositionManager_AccessDenied();
     error PositionManager_InvalidMarket();

@@ -134,6 +134,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (!Position.exists(positionBefore)) revert TradeStorage_PositionDoesNotExist();
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
+        // Update the Market State
+        _updateMarketState(
+            _state,
+            _params.request.input.assetId,
+            _params.request.input.collateralDelta,
+            _params.request.input.isLong,
+            true
+        );
         // Perform Execution in Library
         Position.Data memory positionAfter;
         (positionAfter, _state) = Execution.increaseCollateral(market, positionBefore, _params, _state);
@@ -171,6 +179,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (!Position.exists(positionBefore)) revert TradeStorage_PositionDoesNotExist();
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
+        // Update the Market State
+        _updateMarketState(
+            _state,
+            _params.request.input.assetId,
+            _params.request.input.collateralDelta,
+            _params.request.input.isLong,
+            false
+        );
         // Perform Execution in Library
         Position.Data memory positionAfter;
         (positionAfter, _state) =
@@ -224,6 +240,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (Position.exists(openPositions[positionKey])) revert TradeStorage_PositionExists();
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
+        // Update the Market State
+        _updateMarketState(
+            _state, _params.request.input.assetId, _params.request.input.sizeDelta, _params.request.input.isLong, true
+        );
         // Perform Execution in the Library
         Position.Data memory position;
         (position, _state) = Execution.createNewPosition(market, _params, _state, minCollateralUsd);
@@ -269,6 +289,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (!Position.exists(positionBefore)) revert TradeStorage_PositionDoesNotExist();
         // Delete the Order from Storage
         _deleteOrder(_params.orderKey, _params.request.input.isLimit);
+        // Update the Market State
+        _updateMarketState(
+            _state, _params.request.input.assetId, _params.request.input.sizeDelta, _params.request.input.isLong, true
+        );
         // Perform Execution in the Library
         Position.Data memory positionAfter;
         (positionAfter, _state) = Execution.increasePosition(market, positionBefore, _params, _state);
@@ -314,6 +338,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         } else if (_params.request.requestType == Position.RequestType.TAKE_PROFIT) {
             positionBefore.takeProfitKey = bytes32(0);
         }
+        // Update the Market State
+        _updateMarketState(
+            _state, _params.request.input.assetId, _params.request.input.sizeDelta, _params.request.input.isLong, false
+        );
         // Perform Execution in the Library
         Position.Data memory positionAfter;
         Execution.DecreaseState memory decreaseState;
@@ -380,6 +408,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         /* Update Initial Storage */
         Position.Data memory position = openPositions[_positionKey];
         if (!Position.exists(position)) revert TradeStorage_PositionDoesNotExist();
+
+        // Update the Market State
+        _updateMarketState(_state, position.assetId, position.positionSize, position.isLong, false);
 
         uint256 remainingCollateral = position.collateralAmount;
         // delete the position from storage
@@ -480,6 +511,31 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         market.updateLiquidityReservation(reserveDelta, _isLong, false);
         // Register the Collateral out
         market.updateCollateralAmount(_collateralDelta, _user, _isLong, false);
+    }
+
+    function _updateMarketState(
+        Execution.State memory _state,
+        bytes32 _assetId,
+        uint256 _sizeDelta,
+        bool _isLong,
+        bool _isIncrease
+    ) internal {
+        // If Price Impact is Negative, add to the impact Pool
+        // If Price Impact is Positive, Subtract from the Impact Pool
+        // Impact Pool Delta = -1 * Price Impact
+        if (_state.priceImpactUsd == 0) return;
+        market.updateImpactPool(_assetId, -_state.priceImpactUsd);
+        // Update the Market State
+        market.updateMarketState(
+            _assetId,
+            _sizeDelta,
+            _state.indexPrice,
+            _state.impactedPrice,
+            _state.indexBaseUnit,
+            _state.collateralPrice,
+            _isLong,
+            _isIncrease
+        );
     }
 
     function _payFees(

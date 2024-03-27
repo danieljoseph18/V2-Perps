@@ -59,16 +59,17 @@ library Execution {
         address referrer;
     }
 
+    uint256 private constant LONG_BASE_UNIT = 1e18;
+    uint256 private constant SHORT_BASE_UNIT = 1e6;
+
     /**
      * ========================= Construction Functions =========================
      */
-    function constructParams(
-        IMarket market,
-        IMarketMaker marketMaker,
-        IPriceFeed priceFeed,
-        bytes32 _orderKey,
-        address _feeReceiver
-    ) external view returns (State memory state, Position.Request memory request, ITradeStorage tradeStorage) {
+    function constructParams(IMarket market, IPriceFeed priceFeed, bytes32 _orderKey, address _feeReceiver)
+        external
+        view
+        returns (State memory state, Position.Request memory request, ITradeStorage tradeStorage)
+    {
         // Fetch and validate request from key
         tradeStorage = ITradeStorage(market.tradeStorage());
         request = tradeStorage.getOrder(_orderKey);
@@ -80,7 +81,7 @@ library Execution {
         state =
             cacheTokenPrices(priceFeed, state, request.input.assetId, request.input.isLong, request.input.isIncrease);
 
-        Position.validateRequest(market, marketMaker, request, state);
+        Position.validateRequest(market, request, state);
 
         // Check the Price for Limit orders
         if (request.input.isLimit) {
@@ -100,7 +101,7 @@ library Execution {
 
         if (request.input.sizeDelta != 0) {
             // Execute Price Impact
-            (state.impactedPrice, state.priceImpactUsd) = PriceImpact.execute(market, priceFeed, request, state);
+            (state.impactedPrice, state.priceImpactUsd) = PriceImpact.execute(market, request, state);
             // state Size Delta USD
 
             MarketUtils.validateAllocation(
@@ -328,7 +329,7 @@ library Execution {
             Oracle.getMarketTokenPrices(priceFeed, maximizePrice);
 
         _state.collateralPrice = _isLong ? _state.longMarketTokenPrice : _state.shortMarketTokenPrice;
-        _state.collateralBaseUnit = _isLong ? Oracle.getLongBaseUnit(priceFeed) : Oracle.getShortBaseUnit(priceFeed);
+        _state.collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
 
         _state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _assetId);
 

@@ -68,7 +68,7 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
     }
 
     function supportAsset(bytes32 _assetId, Oracle.Asset memory _asset) external onlyMarketMaker {
-        if (assets[_assetId].isValid) return; // Return if already supported
+        if (assets[_assetId].baseUnit != 0) return; // Return if already supported
         assets[_assetId] = _asset;
     }
 
@@ -119,7 +119,7 @@ contract PriceFeed is IPriceFeed, RoleValidation, ReentrancyGuard {
         for (uint16 index = 0; index < assetLen;) {
             bytes32 assetId = _assetIds[index];
             Oracle.Asset memory asset = assets[assetId];
-            if (!asset.isValid) revert PriceFeed_InvalidToken(assetId);
+            if (asset.baseUnit == 0) revert PriceFeed_InvalidToken(assetId);
             // Add the Price to the Set
             bool success = assetsWithPrices.add(assetId);
             if (!success) revert PriceFeed_FailedToAddPrice();

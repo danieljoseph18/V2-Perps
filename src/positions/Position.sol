@@ -492,17 +492,15 @@ library Position {
         return _conditionals;
     }
 
-    function validateRequest(
-        IMarket market,
-        IMarketMaker marketMaker,
-        Request memory _request,
-        Execution.State memory _state
-    ) external view returns (Request memory) {
-        // Get the Market from the Market Maker
-        address inputMarket = marketMaker.tokenToMarkets(_request.input.assetId);
+    function validateRequest(IMarket market, Request memory _request, Execution.State memory _state)
+        external
+        view
+        returns (Request memory)
+    {
+        // Check the Market contains the Asset
+        if (!market.isAssetInMarket(_request.input.assetId)) revert Position_MarketDoesNotExist();
         // Re-Validate the Input
-        validateInputParameters(_request.input, inputMarket);
-        if (inputMarket != address(market)) revert Position_UnmatchedMarkets();
+        validateInputParameters(_request.input, address(market));
         if (_request.user == address(0)) revert Position_ZeroAddress();
         if (_request.requestBlock > block.number) revert Position_InvalidRequestBlock();
         _request.input.conditionals =

@@ -32,7 +32,6 @@ contract HelperConfig is IHelperConfig, Script {
         bytes32 usdcPriceId = 0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a;
 
         Oracle.Asset memory wethAsset = Oracle.Asset({
-            isValid: true,
             chainlinkPriceFeed: 0x694AA1769357215DE4FAC081bf1f309aDC325306,
             priceId: ethPriceId,
             baseUnit: 1e18,
@@ -44,12 +43,11 @@ contract HelperConfig is IHelperConfig, Script {
                 token0: address(weth),
                 token1: address(mockUsdc),
                 poolAddress: address(0),
-                poolType: Oracle.PoolType.UNISWAP_V3
+                poolType: Oracle.PoolType.V3
             })
         });
 
         Oracle.Asset memory usdcAsset = Oracle.Asset({
-            isValid: true,
             chainlinkPriceFeed: 0xA2F78ab2355fe2f984D808B5CeE7FD0A93D5270E,
             priceId: usdcPriceId,
             baseUnit: 1e6,
@@ -61,7 +59,7 @@ contract HelperConfig is IHelperConfig, Script {
                 token0: address(mockUsdc),
                 token1: address(weth),
                 poolAddress: address(0),
-                poolType: Oracle.PoolType.UNISWAP_V3
+                poolType: Oracle.PoolType.V3
             })
         });
 
@@ -96,7 +94,6 @@ contract HelperConfig is IHelperConfig, Script {
          * )
          */
         Oracle.Asset memory wethAsset = Oracle.Asset({
-            isValid: true,
             chainlinkPriceFeed: address(0),
             priceId: ethPriceId,
             baseUnit: 1e18,
@@ -108,14 +105,13 @@ contract HelperConfig is IHelperConfig, Script {
                 token0: address(weth),
                 token1: address(mockUsdc),
                 poolAddress: address(0),
-                poolType: Oracle.PoolType.UNISWAP_V3
+                poolType: Oracle.PoolType.V3
             })
         });
         /**
          * [true,0x0000000000000000000000000000000000000000,0xcbfe203d5ee402604baaeb548f2857e5556bbaa4ae7c0ccbed0b091f2544dccc,1000000,60,10000000000000000,100000000000000000,0,0,[0x5A86858aA3b595FD6663c2296741eF4cd8BC4d01,0x93f8dddd876c7dBE3323723500e83E202A7C96CC,0x0000000000000000000000000000000000000000,0]]
          */
         Oracle.Asset memory usdcAsset = Oracle.Asset({
-            isValid: true,
             chainlinkPriceFeed: address(0),
             priceId: usdcPriceId,
             baseUnit: 1e6,
@@ -127,7 +123,7 @@ contract HelperConfig is IHelperConfig, Script {
                 token0: address(mockUsdc),
                 token1: address(weth),
                 poolAddress: address(0),
-                poolType: Oracle.PoolType.UNISWAP_V3
+                poolType: Oracle.PoolType.V3
             })
         });
 

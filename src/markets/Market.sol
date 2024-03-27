@@ -29,27 +29,28 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     uint64 private constant SCALING_FACTOR = 1e18;
     // Max 100 assets per market (could fit 12 more in last uint256, but 100 used for simplicity)
     // Fits 16 allocations per uint256
-    uint8 private constant MAX_ASSETS = 100;
+    uint8 private constant MAX_ASSETS = 100; // @audit - should we increase this?
     uint64 public constant BASE_FEE = 0.001e18; // 0.1%
+    // Value = Max Bonus Fee
+    // Users will be charged a % of this fee based on the skew of the market
+    uint256 public constant FEE_SCALE = 0.01e18; // 1%
 
-    address private immutable LONG_TOKEN;
-    address private immutable SHORT_TOKEN;
+    // The rest of the 80% of the fees go to the FeeDistributor to distribute to LPs
+    uint256 private constant FEES_TO_OWNER = 0.1e18; // 10% to Owner
+    uint256 private constant FEES_TO_PROTOCOL = 0.1e18; // 10% to Protocol
 
-    uint256 public immutable LONG_BASE_UNIT;
-    uint256 public immutable SHORT_BASE_UNIT;
+    address private immutable WETH;
+    address private immutable USDC;
+    uint48 private constant TIME_TO_EXPIRATION = 1 minutes;
+    uint256 private constant LONG_BASE_UNIT = 1e18;
+    uint256 private constant SHORT_BASE_UNIT = 1e6;
 
     EnumerableSet.Bytes32Set private assetIds;
     bool private isInitialized;
 
-    uint48 minTimeToExpiration;
-
     address private poolOwner;
     address private feeDistributor;
-
-    // Value = Max Bonus Fee
-    // Users will be charged a % of this fee based on the skew of the market
-    uint256 public feeScale; // 3% = 0.03e18
-    uint256 private feePercentageToOwner; // 50% = 0.5e18
+    address private feeReceiver;
 
     uint256 private longAccumulatedFees;
     uint256 private shortAccumulatedFees;
@@ -77,21 +78,21 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         // Cache the State Before
         State memory stateBefore = State({
             totalSupply: MARKET_TOKEN.totalSupply(),
-            wethBalance: IERC20(LONG_TOKEN).balanceOf(address(this)),
-            usdcBalance: IERC20(SHORT_TOKEN).balanceOf(address(this))
+            wethBalance: IERC20(WETH).balanceOf(address(this)),
+            usdcBalance: IERC20(USDC).balanceOf(address(this))
         });
         _;
         // Cache the state after
         State memory stateAfter = State({
             totalSupply: MARKET_TOKEN.totalSupply(),
-            wethBalance: IERC20(LONG_TOKEN).balanceOf(address(this)),
-            usdcBalance: IERC20(SHORT_TOKEN).balanceOf(address(this))
+            wethBalance: IERC20(WETH).balanceOf(address(this)),
+            usdcBalance: IERC20(USDC).balanceOf(address(this))
         });
         // Validate the Vault State Delta
         if (_isDeposit) {
             MarketUtils.validateDeposit(stateBefore, stateAfter, _amountIn, _isLongToken);
         } else {
-            MarketUtils.validateWithdrawal(stateBefore, stateAfter, _amountIn, _amountOut, feeScale, _isLongToken);
+            MarketUtils.validateWithdrawal(stateBefore, stateAfter, _amountIn, _amountOut, FEE_SCALE, _isLongToken);
         }
     }
 
@@ -99,22 +100,22 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      *  ========================= Constructor  =========================
      */
     constructor(
-        VaultConfig memory _vaultConfig,
         Config memory _tokenConfig,
+        address _poolOwner,
+        address _feeReceiver,
+        address _feeDistributor,
+        address _weth,
+        address _usdc,
         address _marketToken,
         bytes32 _assetId,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
-        LONG_TOKEN = _vaultConfig.longToken;
-        SHORT_TOKEN = _vaultConfig.shortToken;
-        LONG_BASE_UNIT = _vaultConfig.longBaseUnit;
-        SHORT_BASE_UNIT = _vaultConfig.shortBaseUnit;
+        WETH = _weth;
+        USDC = _usdc;
         MARKET_TOKEN = IMarketToken(_marketToken);
-        poolOwner = _vaultConfig.poolOwner;
-        feeDistributor = _vaultConfig.feeDistributor;
-        minTimeToExpiration = _vaultConfig.minTimeToExpiration;
-        feeScale = _vaultConfig.feeScale;
-        feePercentageToOwner = _vaultConfig.feePercentageToOwner;
+        poolOwner = _poolOwner;
+        feeDistributor = _feeDistributor;
+        feeReceiver = _feeReceiver;
         uint256[] memory allocations = new uint256[](1);
         allocations[0] = 10000 << 240;
         _addToken(_tokenConfig, _assetId, allocations);
@@ -129,6 +130,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Setter Functions  =========================
      */
+
+    // @audit - need a function for the pool owner to change ownership of the pool
 
     function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations)
         external
@@ -146,18 +149,11 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         emit TokenRemoved(_assetId);
     }
 
-    function updateFees(address _poolOwner, address _feeDistributor, uint256 _feeScale, uint256 _feePercentageToOwner)
-        external
-        onlyConfigurator(address(this))
-    {
+    function updateFees(address _poolOwner, address _feeDistributor) external onlyConfigurator(address(this)) {
         if (_poolOwner == address(0)) revert Market_InvalidPoolOwner();
         if (_feeDistributor == address(0)) revert Market_InvalidFeeDistributor();
-        if (_feeScale > 1e18) revert Market_InvalidFeeScale();
-        if (_feePercentageToOwner > 1e18) revert Market_InvalidFeePercentage();
         poolOwner = _poolOwner;
         feeDistributor = _feeDistributor;
-        feeScale = _feeScale;
-        feePercentageToOwner = _feePercentageToOwner;
     }
 
     function updateConfig(Config memory _config, bytes32 _assetId) external onlyAdmin {
@@ -211,15 +207,17 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         longAccumulatedFees = 0;
         shortAccumulatedFees = 0;
         // calculate percentages and distribute percentage to owner and feeDistributor
-        uint256 longOwnerFee = mulDiv(longFees, feePercentageToOwner, SCALING_FACTOR);
-        uint256 shortOwnerFee = mulDiv(shortFees, feePercentageToOwner, SCALING_FACTOR);
-        uint256 longDistributorFee = longFees - longOwnerFee;
-        uint256 shortDistributorFee = shortFees - shortOwnerFee;
+        uint256 longOwnerFees = mulDiv(longFees, FEES_TO_OWNER, SCALING_FACTOR);
+        uint256 shortOwnerFees = mulDiv(shortFees, FEES_TO_OWNER, SCALING_FACTOR);
+        uint256 longDistributorFee = longFees - (longOwnerFees * 2); // 2 because 10% to owner and 10% to protocol
+        uint256 shortDistributorFee = shortFees - (shortOwnerFees * 2);
         // send out fees
-        IERC20(LONG_TOKEN).safeTransfer(poolOwner, longOwnerFee);
-        IERC20(SHORT_TOKEN).safeTransfer(poolOwner, shortOwnerFee);
-        IERC20(LONG_TOKEN).safeTransfer(feeDistributor, longDistributorFee);
-        IERC20(SHORT_TOKEN).safeTransfer(feeDistributor, shortDistributorFee);
+        IERC20(WETH).safeTransfer(poolOwner, longOwnerFees);
+        IERC20(WETH).safeTransfer(feeReceiver, longOwnerFees);
+        IERC20(WETH).safeTransfer(feeDistributor, longDistributorFee);
+        IERC20(USDC).safeTransfer(poolOwner, shortOwnerFees);
+        IERC20(USDC).safeTransfer(feeReceiver, shortOwnerFees);
+        IERC20(USDC).safeTransfer(feeDistributor, shortDistributorFee);
 
         emit FeesWithdrawn(longFees, shortFees);
     }
@@ -278,7 +276,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function createRequest(
         address _owner,
-        address _tokenIn,
+        address _transferToken, // Token In for Deposits, Out for Withdrawals
         uint256 _amountIn,
         uint256 _executionFee,
         bool _reverseWrap,
@@ -288,15 +286,46 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             amountIn: _amountIn,
             executionFee: _executionFee,
             owner: _owner,
-            expirationTimestamp: uint48(block.timestamp) + minTimeToExpiration,
-            isLongToken: _tokenIn == LONG_TOKEN,
+            expirationTimestamp: uint48(block.timestamp) + TIME_TO_EXPIRATION,
+            isLongToken: _transferToken == WETH,
             reverseWrap: _reverseWrap,
             isDeposit: _isDeposit,
-            key: _generateKey(_owner, _tokenIn, _amountIn, _isDeposit)
+            key: _generateKey(_owner, _transferToken, _amountIn, _isDeposit)
         });
         if (!requestKeys.add(request.key)) revert Market_FailedToAddRequest();
         requests[request.key] = request;
-        emit RequestCreated(request.key, _owner, _tokenIn, _amountIn, _isDeposit);
+        emit RequestCreated(request.key, _owner, _transferToken, _amountIn, _isDeposit);
+    }
+
+    function cancelRequest(bytes32 _key, address _caller)
+        external
+        onlyPositionManager
+        returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
+    {
+        // Check the Request Exists
+        if (!requestKeys.contains(_key)) revert Market_InvalidKey();
+        // Check the caller owns the request
+        Input memory request = requests[_key];
+        if (request.owner != _caller) revert Market_RequestNotOwner();
+        // Ensure the request has passed the expiration time
+        if (request.expirationTimestamp > block.timestamp) revert Market_RequestNotExpired();
+        // Delete the request
+        _deleteRequest(_key);
+        // Remove the request key from the set
+        if (!requestKeys.remove(_key)) revert Market_FailedToRemoveRequest();
+        // Set Token Out and Should Unwrap
+        if (request.isDeposit) {
+            // If is deposit, token out is the token in
+            tokenOut = request.isLongToken ? WETH : USDC;
+            shouldUnwrap = request.reverseWrap;
+        } else {
+            // If is withdrawal, token out is market tokens
+            tokenOut = address(MARKET_TOKEN);
+            shouldUnwrap = false;
+        }
+        amountOut = request.amountIn;
+        // Fire event
+        emit RequestCanceled(_key, _caller);
     }
 
     function executeDeposit(ExecuteDeposit calldata _params)
@@ -307,7 +336,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         validAction(_params.deposit.amountIn, 0, _params.deposit.isLongToken, true)
     {
         // Transfer deposit tokens from msg.sender
-        address tokenIn = _params.deposit.isLongToken ? LONG_TOKEN : SHORT_TOKEN;
+        address tokenIn = _params.deposit.isLongToken ? WETH : USDC;
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), _params.deposit.amountIn);
         // Delete Deposit Request
         _deleteRequest(_params.key);
@@ -321,10 +350,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         emit DepositExecuted(_params.key, _params.deposit.owner, tokenIn, _params.deposit.amountIn, mintAmount);
         // mint tokens to user
         MARKET_TOKEN.mint(_params.deposit.owner, mintAmount);
-    }
-
-    function deleteRequest(bytes32 _key) external onlyTradeStorage(address(this)) {
-        _deleteRequest(_key);
     }
 
     function executeWithdrawal(ExecuteWithdrawal calldata _params)
@@ -358,7 +383,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         emit WithdrawalExecuted(
             _params.key,
             _params.withdrawal.owner,
-            _params.withdrawal.isLongToken ? LONG_TOKEN : SHORT_TOKEN,
+            _params.withdrawal.isLongToken ? WETH : USDC,
             _params.withdrawal.amountIn,
             transferAmountOut
         );
@@ -373,6 +398,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      */
     function getAssetIds() external view returns (bytes32[] memory) {
         return assetIds.values();
+    }
+
+    function isAssetInMarket(bytes32 _assetId) external view returns (bool) {
+        return assetIds.contains(_assetId);
     }
 
     function getAssetsInMarket() external view returns (uint256) {
@@ -518,14 +547,14 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     function _transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) internal {
         if (_isLongToken) {
             if (_shouldUnwrap) {
-                IWETH(LONG_TOKEN).withdraw(_amount);
+                IWETH(WETH).withdraw(_amount);
                 (bool success,) = _to.call{value: _amount}("");
                 if (!success) revert Market_FailedToTransferETH();
             } else {
-                IERC20(LONG_TOKEN).safeTransfer(_to, _amount);
+                IERC20(WETH).safeTransfer(_to, _amount);
             }
         } else {
-            IERC20(SHORT_TOKEN).safeTransfer(_to, _amount);
+            IERC20(USDC).safeTransfer(_to, _amount);
         }
     }
 
