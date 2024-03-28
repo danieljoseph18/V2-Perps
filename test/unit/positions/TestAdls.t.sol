@@ -113,13 +113,17 @@ contract TestADLs is Test {
             pool: Oracle.UniswapPool({token0: weth, token1: usdc, poolAddress: address(0), poolType: Oracle.PoolType.V3})
         });
         IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
-            owner: msg.sender,
+            owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
             asset: wethData
         });
         marketMaker.requestNewMarket{value: 0.01 ether}(request);
+        // Set primary prices for ref price
+        priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
+        // Clear them
+        priceFeed.clearPrimaryPrices();
         marketMaker.executeNewMarket(marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker));
         vm.stopPrank();
         market = Market(payable(marketMaker.tokenToMarket(ethAssetId)));
@@ -155,7 +159,7 @@ contract TestADLs is Test {
             assetId: ethAssetId,
             collateralToken: usdc,
             collateralDelta: 125_000e6,
-            sizeDelta: 2_500_000e30,
+            sizeDelta: 3_500_000e30,
             limitPrice: 0,
             maxSlippage: 0.9999e18,
             executionFee: 0.01 ether,
@@ -217,9 +221,9 @@ contract TestADLs is Test {
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(false);
         // adl it
         vm.prank(OWNER);
-        positionManager.executeAdl{value: 0.01 ether}(market, ethAssetId, 5000e30, positionKeys[0], false, ethPriceData);
+        positionManager.executeAdl{value: 0.01 ether}(market, ethAssetId, 5000e30, positionKeys[0], ethPriceData);
         // validate their size has been reduced
         Position.Data memory position = tradeStorage.getPosition(positionKeys[0]);
-        assertEq(position.positionSize, 2_495_000e30);
+        assertEq(position.positionSize, 3_495_000e30);
     }
 }

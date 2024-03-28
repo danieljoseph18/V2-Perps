@@ -65,13 +65,14 @@ library Execution {
     /**
      * ========================= Construction Functions =========================
      */
-    function constructParams(IMarket market, IPriceFeed priceFeed, bytes32 _orderKey, address _feeReceiver)
-        external
-        view
-        returns (State memory state, Position.Request memory request, ITradeStorage tradeStorage)
-    {
+    function constructParams(
+        IMarket market,
+        ITradeStorage tradeStorage,
+        IPriceFeed priceFeed,
+        bytes32 _orderKey,
+        address _feeReceiver
+    ) external view returns (State memory state, Position.Request memory request) {
         // Fetch and validate request from key
-        tradeStorage = ITradeStorage(market.tradeStorage());
         request = tradeStorage.getOrder(_orderKey);
         if (request.user == address(0)) revert Execution_InvalidRequestKey();
         if (_feeReceiver == address(0)) revert Execution_InvalidFeeReceiver();

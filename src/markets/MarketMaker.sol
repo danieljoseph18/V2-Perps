@@ -209,7 +209,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
             address(roleStorage)
         );
         // Create new TradeStorage contract
-        TradeStorage tradeStorage = new TradeStorage(market, referralStorage, address(roleStorage));
+        TradeStorage tradeStorage = new TradeStorage(market, referralStorage, priceFeed, address(roleStorage));
         // Initialize Market with TradeStorage
         market.initialize(address(tradeStorage));
         // Initialize TradeStorage with Default values
@@ -218,6 +218,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Add to Storage
         bool success = markets.add(address(market));
         if (!success) revert MarketMaker_FailedToAddMarket();
+        tokenToMarket[assetId] = address(market);
 
         // Set Up Roles -> Enable Caller to control Market
         roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender, msg.sender));
@@ -275,7 +276,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     }
 
     function generateAssetId(string memory _indexTokenTicker) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(_indexTokenTicker));
+        return keccak256(abi.encode(_indexTokenTicker));
     }
 
     function isMarket(address _market) external view returns (bool) {

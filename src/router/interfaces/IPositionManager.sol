@@ -40,6 +40,7 @@ interface IPositionManager {
     error PositionManager_InvalidTransferIn();
     error PositionManager_InvalidDeposit();
     error PositionManager_InvalidWithdrawal();
+    error PositionManager_AdlFailed();
 
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function transferDepositTokens(address _vault, address _token, uint256 _amount) external;

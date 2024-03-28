@@ -11,6 +11,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {Execution} from "../positions/Execution.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
+import {console} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -41,6 +42,20 @@ library Position {
     error Position_ZeroAddress();
     error Position_InvalidRequestBlock();
     error Position_NotLiquidatable();
+    error Position_CollateralDelta();
+    error Position_NewPosition();
+    error Position_IncreasePositionCollateral();
+    error Position_IncreasePositionSize();
+    error Position_InvalidIncreasePosition();
+    error Position_DecreasePositionCollateral();
+    error Position_DecreasePositionSize();
+    error Position_FundingTimestamp();
+    error Position_FundingRate();
+    error Position_FundingAccrual();
+    error Position_BorrowingTimestamp();
+    error Position_BorrowRateDelta();
+    error Position_CumulativeBorrowDelta();
+    error Position_OpenInterestDelta();
 
     uint256 public constant MIN_LEVERAGE = 100; // 1x
     uint256 public constant LEVERAGE_PRECISION = 100;
@@ -509,6 +524,112 @@ library Position {
         return _request;
     }
 
+    function validateMarketDelta(
+        IMarket.MarketStorage calldata _prevStorage,
+        IMarket.MarketStorage calldata _storage,
+        Position.Request calldata _request
+    ) external view {
+        _validateFundingValues(_prevStorage.funding, _storage.funding);
+        _validateBorrowingValues(
+            _prevStorage.borrowing, _storage.borrowing, _request.input.sizeDelta, _request.input.isLong
+        );
+        _validateOpenInterest(
+            _prevStorage.openInterest,
+            _storage.openInterest,
+            _request.input.sizeDelta,
+            _request.input.isLong,
+            _request.input.isIncrease
+        );
+        _validatePnlValues(_prevStorage.pnl, _storage.pnl, _request.input.isLong);
+    }
+
+    function validateCollateralIncrease(
+        Position.Data memory _positionBefore,
+        Position.Data memory _positionAfter,
+        uint256 _collateralDelta,
+        uint256 _positionFee,
+        uint256 _borrowFee,
+        uint256 _affiliateRebate
+    ) external pure {
+        // ensure the position collateral has changed by the correct amount
+        uint256 expectedCollateralDelta = _collateralDelta - _positionFee - _borrowFee - _affiliateRebate;
+        if (_positionAfter.collateralAmount != _positionBefore.collateralAmount + expectedCollateralDelta) {
+            revert Position_CollateralDelta();
+        }
+    }
+
+    function validateCollateralDecrease(
+        Position.Data memory _positionBefore,
+        Position.Data memory _positionAfter,
+        uint256 _collateralDelta,
+        uint256 _positionFee, // trading fee not charged on collateral delta
+        uint256 _borrowFee,
+        uint256 _affiliateRebate
+    ) external pure {
+        // ensure the position collateral has changed by the correct amount
+        uint256 expectedCollateralDelta = _collateralDelta + _positionFee + _borrowFee + _affiliateRebate;
+        if (_positionAfter.collateralAmount != _positionBefore.collateralAmount - expectedCollateralDelta) {
+            revert Position_CollateralDelta();
+        }
+    }
+
+    function validateNewPosition(
+        uint256 _collateralIn,
+        uint256 _positionCollateral,
+        uint256 _positionFee,
+        uint256 _affiliateRebate
+    ) external pure {
+        if (_collateralIn != _positionCollateral + _positionFee + _affiliateRebate) {
+            revert Position_NewPosition();
+        }
+    }
+
+    function validateIncreasePosition(
+        Position.Data memory _positionBefore,
+        Position.Data memory _positionAfter,
+        uint256 _collateralIn,
+        uint256 _positionFee,
+        uint256 _affiliateRebate,
+        uint256 _borrowFee,
+        uint256 _sizeDelta
+    ) external pure {
+        uint256 expectedCollateralDelta = _collateralIn - _positionFee - _affiliateRebate - _borrowFee;
+        if (_positionAfter.collateralAmount != _positionBefore.collateralAmount + expectedCollateralDelta) {
+            revert Position_IncreasePositionCollateral();
+        }
+        if (_positionAfter.positionSize != _positionBefore.positionSize + _sizeDelta) {
+            revert Position_IncreasePositionSize();
+        }
+    }
+
+    function validateDecreasePosition(
+        Position.Data memory _positionBefore,
+        Position.Data memory _positionAfter,
+        uint256 _collateralOut,
+        uint256 _positionFee,
+        uint256 _affiliateRebate,
+        int256 _pnl,
+        uint256 _borrowFee,
+        uint256 _sizeDelta
+    ) external pure {
+        // Amount out should = collateralDelta +- pnl += fundingFee - borrow fee - trading fee
+        /**
+         * collat before should = collat after + collateralDelta + fees + pnl
+         * feeDiscount / 2, as 1/2 is rebate to referrer
+         */
+        uint256 expectedCollateralDelta = _collateralOut + _positionFee + _affiliateRebate + _borrowFee;
+        // Account for funding / pnl paid out from collateral
+        if (_pnl < 0) expectedCollateralDelta += _pnl.abs();
+
+        if (_positionBefore.collateralAmount != _positionAfter.collateralAmount + expectedCollateralDelta) {
+            revert Position_DecreasePositionCollateral();
+        }
+
+        if (_positionBefore.positionSize != _positionAfter.positionSize + _sizeDelta) {
+            revert Position_DecreasePositionSize();
+        }
+    }
+
     function calculateFee(
         ITradeStorage tradeStorage,
         uint256 _tokenAmount,
@@ -623,5 +744,136 @@ library Position {
         // Convert from USD to collateral tokens
         decreasePositionPnl =
             mulDivSigned(realizedPnl, _collateralBaseUnit.toInt256(), _collateralTokenPrice.toInt256());
+    }
+
+    /**
+     * =========================== Internal Functions ============================
+     */
+    function _validateFundingValues(
+        IMarket.FundingValues calldata _prevFunding,
+        IMarket.FundingValues calldata _funding
+    ) internal view {
+        // Funding Rate should update to current block timestamp
+        if (_funding.lastFundingUpdate != block.timestamp) {
+            revert Position_FundingTimestamp();
+        }
+        // If Funding Rate Velocity was non 0, funding rate should change
+        if (_prevFunding.fundingRateVelocity != 0) {
+            int256 timeElapsed = (block.timestamp - _prevFunding.lastFundingUpdate).toInt256();
+            // currentFundingRate = prevRate + velocity * (timeElapsetd / 1 days)
+            int256 expectedRate =
+                _prevFunding.fundingRate + mulDivSigned(_prevFunding.fundingRateVelocity, timeElapsed, 1 days);
+            if (expectedRate != _funding.fundingRate) {
+                revert Position_FundingRate();
+            }
+        }
+        // If Funding Rate was non 0, accrued USD should change
+        if (_prevFunding.fundingRate != 0 && _prevFunding.fundingAccruedUsd == _funding.fundingAccruedUsd) {
+            revert Position_FundingAccrual();
+        }
+    }
+
+    function _validateBorrowingValues(
+        IMarket.BorrowingValues calldata _prevBorrowing,
+        IMarket.BorrowingValues calldata _borrowing,
+        uint256 _sizeDelta,
+        bool _isLong
+    ) internal view {
+        // Borrowing Rate should update to current block timestamp
+        if (_borrowing.lastBorrowUpdate != block.timestamp) {
+            revert Position_BorrowingTimestamp();
+        }
+        if (_isLong) {
+            // If Size Delta != 0 -> Borrow Rate should change due to updated OI
+            if (_sizeDelta != 0 && _borrowing.longBorrowingRate == _prevBorrowing.longBorrowingRate) {
+                revert Position_BorrowRateDelta();
+            }
+            // If Time elapsed = 0, Cumulative Fees should remain constant
+            if (_prevBorrowing.lastBorrowUpdate == block.timestamp) {
+                if (_borrowing.longCumulativeBorrowFees != _prevBorrowing.longCumulativeBorrowFees) {
+                    revert Position_CumulativeBorrowDelta();
+                }
+            } else {
+                // Else should change for side if rate not 0
+                if (
+                    _borrowing.longCumulativeBorrowFees == _prevBorrowing.longCumulativeBorrowFees
+                        && _prevBorrowing.longBorrowingRate != 0
+                ) {
+                    revert Position_CumulativeBorrowDelta();
+                }
+            }
+        } else {
+            // If Size Delta != 0 -> Borrow Rate should change due to updated OI
+            if (_sizeDelta != 0 && _borrowing.shortBorrowingRate == _prevBorrowing.shortBorrowingRate) {
+                revert Position_BorrowRateDelta();
+            }
+            // If Time elapsed = 0, Cumulative Fees should remain constant
+            if (_prevBorrowing.lastBorrowUpdate == block.timestamp) {
+                if (_borrowing.shortCumulativeBorrowFees != _prevBorrowing.shortCumulativeBorrowFees) {
+                    revert Position_CumulativeBorrowDelta();
+                }
+            } else {
+                // Else should change for side if rate not 0
+                if (
+                    _borrowing.shortCumulativeBorrowFees == _prevBorrowing.shortCumulativeBorrowFees
+                        && _prevBorrowing.shortBorrowingRate != 0
+                ) {
+                    revert Position_CumulativeBorrowDelta();
+                }
+            }
+        }
+    }
+
+    function _validateOpenInterest(
+        IMarket.OpenInterestValues calldata _prevOpenInterest,
+        IMarket.OpenInterestValues calldata _openInterest,
+        uint256 _sizeDelta,
+        bool _isLong,
+        bool _isIncrease
+    ) internal view {
+        console.log("Open Interest Before: ", _prevOpenInterest.shortOpenInterest);
+        console.log("Open Interest After: ", _openInterest.shortOpenInterest);
+        console.log("Size Delta: ", _sizeDelta);
+        if (_isLong) {
+            // If increase, long open interest should increase by size delta.
+            if (_isIncrease) {
+                if (_openInterest.longOpenInterest != _prevOpenInterest.longOpenInterest + _sizeDelta) {
+                    revert Position_OpenInterestDelta();
+                }
+            } else {
+                // If decrease, long open interest should decrease by size delta.
+                if (_openInterest.longOpenInterest != _prevOpenInterest.longOpenInterest - _sizeDelta) {
+                    revert Position_OpenInterestDelta();
+                }
+            }
+        } else {
+            // If increase, short open interest should increase by size delta.
+            if (_isIncrease) {
+                if (_openInterest.shortOpenInterest != _prevOpenInterest.shortOpenInterest + _sizeDelta) {
+                    revert Position_OpenInterestDelta();
+                }
+            } else {
+                // If decrease, short open interest should decrease by size delta.
+                if (_openInterest.shortOpenInterest != _prevOpenInterest.shortOpenInterest - _sizeDelta) {
+                    revert Position_OpenInterestDelta();
+                }
+            }
+        }
+    }
+
+    function _validatePnlValues(IMarket.PnlValues calldata _prevPnl, IMarket.PnlValues calldata _pnl, bool _isLong)
+        internal
+        pure
+    {
+        // WAEP for the Opposite side should never change
+        if (_isLong) {
+            if (_pnl.shortAverageEntryPriceUsd != _prevPnl.shortAverageEntryPriceUsd) {
+                revert Position_InvalidIncreasePosition();
+            }
+        } else {
+            if (_pnl.longAverageEntryPriceUsd != _prevPnl.longAverageEntryPriceUsd) {
+                revert Position_InvalidIncreasePosition();
+            }
+        }
     }
 }

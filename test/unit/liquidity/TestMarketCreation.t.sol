@@ -109,36 +109,34 @@ contract TestCreatingNewMarkets is Test {
             pool: Oracle.UniswapPool({token0: weth, token1: usdc, poolAddress: address(0), poolType: Oracle.PoolType.V3})
         });
         IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
-            owner: msg.sender,
+            owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
             asset: wethData
         });
         marketMaker.requestNewMarket{value: 0.01 ether}(request);
-        bytes32 marketKey = marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker);
-        marketMaker.executeNewMarket(marketKey);
+        // Set primary prices for ref price
+        priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
+        // Clear them
+        priceFeed.clearPrimaryPrices();
+        marketMaker.executeNewMarket(marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker));
         vm.stopPrank();
-        address wethMarket = marketMaker.tokenToMarket(ethAssetId);
-        market = Market(payable(wethMarket));
+        market = Market(payable(marketMaker.tokenToMarket(ethAssetId)));
         tradeStorage = ITradeStorage(market.tradeStorage());
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-        bytes32 depositKey = market.getRequestAtIndex(0).key;
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key, ethPriceData);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-        depositKey = market.getRequestAtIndex(0).key;
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey, ethPriceData);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key, ethPriceData);
         vm.stopPrank();
         vm.startPrank(OWNER);
-        uint256 allocation = 10000;
-        uint256 encodedAllocation = allocation << 240;
-        allocations.push(encodedAllocation);
+        allocations.push(10000 << 240);
         market.setAllocationsWithBits(allocations);
         assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
@@ -157,16 +155,21 @@ contract TestCreatingNewMarkets is Test {
             pool: Oracle.UniswapPool({token0: weth, token1: usdc, poolAddress: address(0), poolType: Oracle.PoolType.V3})
         });
         IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
-            owner: msg.sender,
-            indexTokenTicker: "ETH",
-            marketTokenName: "BRRR",
-            marketTokenSymbol: "BRRR",
+            owner: OWNER,
+            indexTokenTicker: "RANDOM_ASSET",
+            marketTokenName: "BRRR2",
+            marketTokenSymbol: "BRRR2",
             asset: randomData
         });
         marketMaker.requestNewMarket{value: 0.01 ether}(request);
         bytes32 marketKey = marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker);
         bytes32 randomAssetId = keccak256(abi.encode("RANDOM_ASSET"));
+        // Set primary prices for ref price
+        priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
+        // Clear them
+        priceFeed.clearPrimaryPrices();
         marketMaker.executeNewMarket(marketKey);
+
         address wethMarket = marketMaker.tokenToMarket(randomAssetId);
         Market newMarket = Market(payable(wethMarket));
         ITradeStorage newTradeStorage = ITradeStorage(newMarket.tradeStorage());

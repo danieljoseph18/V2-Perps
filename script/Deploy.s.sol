@@ -156,6 +156,7 @@ contract Deploy is Script {
         contracts.roleStorage.grantRole(Roles.ADL_KEEPER, contracts.owner);
         contracts.roleStorage.grantRole(Roles.KEEPER, contracts.owner);
         contracts.roleStorage.grantRole(Roles.LIQUIDATOR, contracts.owner);
+        contracts.roleStorage.grantRole(Roles.MARKET_KEEPER, contracts.owner);
 
         vm.stopBroadcast();
 

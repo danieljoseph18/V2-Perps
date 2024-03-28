@@ -104,7 +104,7 @@ contract TestPriceImpact is Test {
             pool: Oracle.UniswapPool({token0: weth, token1: usdc, poolAddress: address(0), poolType: Oracle.PoolType.V3})
         });
         IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
-            owner: msg.sender,
+            owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
@@ -112,8 +112,13 @@ contract TestPriceImpact is Test {
         });
         marketMaker.requestNewMarket{value: 0.01 ether}(request);
         bytes32 marketKey = marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker);
+        // Set primary prices for ref price
+        priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
+        // Clear them
+        priceFeed.clearPrimaryPrices();
         marketMaker.executeNewMarket(marketKey);
         vm.stopPrank();
+
         address wethMarket = marketMaker.tokenToMarket(ethAssetId);
         market = Market(payable(wethMarket));
         tradeStorage = ITradeStorage(market.tradeStorage());
@@ -158,7 +163,7 @@ contract TestPriceImpact is Test {
             pool: Oracle.UniswapPool({token0: weth, token1: usdc, poolAddress: address(0), poolType: Oracle.PoolType.V3})
         });
         IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
-            owner: msg.sender,
+            owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
@@ -166,8 +171,13 @@ contract TestPriceImpact is Test {
         });
         marketMaker.requestNewMarket{value: 0.01 ether}(request);
         bytes32 marketKey = marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker);
+        // Set primary prices for ref price
+        priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
+        // Clear them
+        priceFeed.clearPrimaryPrices();
         marketMaker.executeNewMarket(marketKey);
         vm.stopPrank();
+
         address wethMarket = marketMaker.tokenToMarket(ethAssetId);
         market = Market(payable(wethMarket));
         tradeStorage = ITradeStorage(market.tradeStorage());

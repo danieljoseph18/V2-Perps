@@ -214,6 +214,7 @@ interface IMarket {
     error Market_InvalidAmountIn();
     error Market_RequestNotOwner();
     error Market_RequestNotExpired();
+    error Market_InvalidETHTransfer();
 
     /**
      * ================ Events ================

@@ -25,7 +25,6 @@ import {Roles} from "../access/Roles.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
-import {PositionInvariants} from "../positions/PositionInvariants.sol";
 
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
@@ -243,48 +242,11 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Sign the Latest Oracle Prices
         _signOraclePrices(_priceUpdateData);
 
-        (Execution.State memory state, Position.Request memory request, ITradeStorage tradeStorage) =
-            Execution.constructParams(market, priceFeed, _orderKey, _feeReceiver);
-        // Fetch the State of the Market Before the Position
-        IMarket.MarketStorage memory marketBefore = market.getStorage(request.input.assetId);
-
-        // Calculate Fee
-        state.fee = Position.calculateFee(
-            tradeStorage,
-            request.input.sizeDelta,
-            request.input.collateralDelta,
-            state.collateralPrice,
-            state.collateralBaseUnit
-        );
-
-        // Calculate & Apply Fee Discount for Referral Code
-        (state.fee, state.affiliateRebate, state.referrer) =
-            Referral.applyFeeDiscount(referralStorage, request.user, state.fee);
-
-        // Execute Trade
-        if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            tradeStorage.createNewPosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
-        } else if (request.requestType == Position.RequestType.POSITION_DECREASE) {
-            tradeStorage.decreaseExistingPosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
-        } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
-            tradeStorage.increaseExistingPosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
-        } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
-            tradeStorage.executeCollateralDecrease(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
-        } else if (request.requestType == Position.RequestType.COLLATERAL_INCREASE) {
-            tradeStorage.executeCollateralIncrease(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
-        } else if (request.requestType == Position.RequestType.TAKE_PROFIT) {
-            tradeStorage.decreaseExistingPosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
-        } else if (request.requestType == Position.RequestType.STOP_LOSS) {
-            tradeStorage.decreaseExistingPosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
-        } else {
-            revert PositionManager_InvalidRequestType();
-        }
-
-        // Fetch the State of the Market After the Position
-        IMarket.MarketStorage memory marketAfter = market.getStorage(request.input.assetId);
-
-        // Invariant Check
-        PositionInvariants.validateMarketDeltaPosition(marketBefore, marketAfter, request);
+        // Get the Trade Storage
+        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
+        // Execute the Request
+        (Execution.State memory state, Position.Request memory request) =
+            tradeStorage.executePositionRequest(_orderKey, _feeReceiver);
 
         if (request.input.isIncrease) {
             _transferTokensForIncrease(
@@ -316,32 +278,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     {
         // Sign the Latest Oracle Prices
         _signOraclePrices(_priceUpdateData);
-        // Construct ExecutionState
-        Execution.State memory state;
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
-        // fetch position
-        Position.Data memory position = tradeStorage.getPosition(_positionKey);
-
-        if (position.isLong) {
-            // Min Price -> rounds in favour of the protocol
-            state.indexPrice = Oracle.getMinPrice(priceFeed, position.assetId);
-            (state.longMarketTokenPrice, state.shortMarketTokenPrice) = Oracle.getMarketTokenPrices(priceFeed, false);
-            state.collateralPrice = state.longMarketTokenPrice;
-        } else {
-            // Max Price -> rounds in favour of the protocol
-            state.indexPrice = Oracle.getMaxPrice(priceFeed, position.assetId);
-            (state.longMarketTokenPrice, state.shortMarketTokenPrice) = Oracle.getMarketTokenPrices(priceFeed, true);
-            state.collateralPrice = state.shortMarketTokenPrice;
-        }
-
-        state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, position.assetId);
-        // No price impact on Liquidations
-        state.impactedPrice = state.indexPrice;
-
-        state.collateralBaseUnit = position.isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
-
         // liquidate the position
-        try tradeStorage.liquidatePosition(state, _positionKey, msg.sender) {}
+        try tradeStorage.liquidatePosition(_positionKey, msg.sender) {}
         catch {
             revert PositionManager_LiquidationFailed();
         }
@@ -350,6 +289,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         _clearOraclePrices();
     }
 
+    /// @dev - Only callable from Keeper or Request Owner
     function cancelOrderRequest(IMarket market, bytes32 _key, bool _isLimit) external payable nonReentrant {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Fetch the Request
@@ -379,50 +319,17 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         bytes32 _assetId,
         uint256 _sizeDelta,
         bytes32 _positionKey,
-        bool _isLong,
         Oracle.PriceUpdateData calldata _priceUpdateData
     ) external payable onlyAdlKeeper {
         // Sign the Latest Oracle Prices
         _signOraclePrices(_priceUpdateData);
-        Execution.State memory state;
-        IMarket.AdlConfig memory adl = MarketUtils.getAdlConfig(market, _assetId);
-        // Get the storage
+
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
-        // Check the position in question is active
-        Position.Data memory position = tradeStorage.getPosition(_positionKey);
-        if (position.positionSize == 0) revert PositionManager_PositionNotActive();
-        // state the market
-        market = market;
-        // Get current MarketUtils and token data
-        state = Execution.cacheTokenPrices(priceFeed, state, position.assetId, position.isLong, false);
-
-        // Set the impacted price to the index price => 0 price impact on ADLs
-        state.impactedPrice = state.indexPrice;
-        state.priceImpactUsd = 0;
-        // Get starting PNL Factor
-        int256 startingPnlFactor = _getPnlFactor(market, state, _assetId, _isLong);
-        // fetch max pnl to pool ratio
-        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market, _assetId);
-
-        // Check the PNL Factor is greater than the max PNL Factor
-        if (startingPnlFactor.abs() <= maxPnlFactor || startingPnlFactor < 0) {
-            revert PositionManager_PnlToPoolRatioNotExceeded(startingPnlFactor, maxPnlFactor);
+        // Execute the ADL
+        try tradeStorage.executeAdl(_positionKey, _assetId, _sizeDelta) {}
+        catch {
+            revert PositionManager_AdlFailed();
         }
-
-        // Construct an ADL Order
-        Position.Settlement memory request = Position.createAdlOrder(position, _sizeDelta);
-        // Execute the order
-        tradeStorage.decreaseExistingPosition(request, state);
-        // Get the new PNL to pool ratio
-        int256 newPnlFactor = _getPnlFactor(market, state, _assetId, _isLong);
-        // PNL to pool has reduced
-        if (newPnlFactor >= startingPnlFactor) revert PositionManager_PNLFactorNotReduced();
-        // Check if the new PNL to pool ratio is below the threshold
-        // Fire event to alert the keepers
-        if (newPnlFactor.abs() <= adl.targetPnlFactor) {
-            emit AdlTargetRatioReached(market, newPnlFactor, _isLong);
-        }
-        emit AdlExecuted(market, _positionKey, _sizeDelta, _isLong);
 
         // Clear all previously signed prices
         _clearOraclePrices();
@@ -456,24 +363,5 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Send Tokens + Fee to the Market (Will be Accounted for Separately)
         // Subtract Affiliate Rebate -> will go to Referral Storage
         IERC20(_collateralToken).safeTransfer(address(market), tokensPlusFee);
-    }
-
-    /**
-     * Extrapolated into an internal function to prevent STD Errors
-     */
-    function _getPnlFactor(IMarket market, Execution.State memory _state, bytes32 _assetId, bool _isLong)
-        internal
-        view
-        returns (int256 pnlFactor)
-    {
-        pnlFactor = MarketUtils.getPnlFactor(
-            market,
-            _assetId,
-            _state.indexPrice,
-            _state.indexBaseUnit,
-            _state.collateralPrice,
-            _state.collateralBaseUnit,
-            _isLong
-        );
     }
 }

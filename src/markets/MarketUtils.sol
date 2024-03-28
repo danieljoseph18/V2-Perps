@@ -8,6 +8,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {console, console2} from "forge-std/Test.sol";
 
 library MarketUtils {
     using SignedMath for int256;
@@ -18,6 +19,8 @@ library MarketUtils {
     uint256 public constant MAX_ALLOCATION = 10000;
     uint256 constant LONG_BASE_UNIT = 1e18;
     uint256 constant SHORT_BASE_UNIT = 1e6;
+    uint256 constant LONG_CONVERSION_FACTOR = 1e30;
+    uint256 constant SHORT_CONVERSION_FACTOR = 1e18;
 
     error MarketUtils_MaxOiExceeded();
     error MarketUtils_TokenBurnFailed();
@@ -269,6 +272,7 @@ library MarketUtils {
         }
     }
 
+    // @audit - why do we only minmize?
     function calculateMintAmount(
         IMarket market,
         IMarketToken marketToken,
@@ -289,14 +293,19 @@ library MarketUtils {
             _shortBorrowFeesUsd,
             _cumulativePnl
         );
+        // $50M should be 50_000_000e18. Currently has 30 Decimal Places due to Price
+        // Need a divisor for long and short
+        // Long divisor -> (18dp * 30dp / x dp) should = 18dp -> dp = 30
+        // Short divisor -> (6dp * 30dp / x dp) should = 18dp -> dp = 18
         if (marketTokenPrice == 0) {
             marketTokenAmount = _isLongToken
-                ? mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, SHORT_BASE_UNIT)
-                : mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, LONG_BASE_UNIT);
+                ? mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, LONG_CONVERSION_FACTOR)
+                : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, SHORT_CONVERSION_FACTOR);
         } else {
             uint256 valueUsd = _isLongToken
                 ? mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, LONG_BASE_UNIT)
                 : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, SHORT_BASE_UNIT);
+            // (30dp * 18dp / 30dp) = 18dp
             marketTokenAmount = mulDiv(valueUsd, SCALAR, marketTokenPrice);
         }
     }
@@ -566,7 +575,11 @@ library MarketUtils {
         // get pnl
         int256 pnl = getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, _isLong);
 
+        console.log("Pool USD: ", poolUsd);
+        console2.log("PNL: ", pnl);
+
         uint256 factor = mulDiv(pnl.abs(), SCALAR, poolUsd);
+        console.log("Factor: ", factor);
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;
     }
 

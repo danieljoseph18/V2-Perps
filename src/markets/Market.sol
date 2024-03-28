@@ -121,6 +121,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         _addToken(_tokenConfig, _assetId, allocations);
     }
 
+    receive() external payable {
+        if (msg.sender != WETH) revert Market_InvalidETHTransfer();
+    }
+
     function initialize(address _tradeStorage) external onlyMarketMaker {
         if (isInitialized) revert Market_AlreadyInitialized();
         tradeStorage = _tradeStorage;
@@ -185,7 +189,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             // Use Impacted Price for Entry
             // 2. Relies on Open Interest Delta
             _updateWeightedAverages(
-                _assetId, _impactedPrice, _isIncrease ? int256(_sizeDelta) : -int256(_sizeDelta), _isLong
+                _assetId,
+                _impactedPrice == 0 ? _indexPrice : _impactedPrice, // If no price impact, set to the index price
+                _isIncrease ? int256(_sizeDelta) : -int256(_sizeDelta),
+                _isLong
             );
             // 3. Updated pre-borrowing rate if size delta > 0
             _updateOpenInterest(_assetId, _sizeDelta, _isLong, _isIncrease);
@@ -330,7 +337,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function executeDeposit(ExecuteDeposit calldata _params)
         external
-        onlyTradeStorage(address(this))
+        onlyPositionManager
         orderExists(_params.key)
         nonReentrant
         validAction(_params.deposit.amountIn, 0, _params.deposit.isLongToken, true)
@@ -354,7 +361,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function executeWithdrawal(ExecuteWithdrawal calldata _params)
         external
-        onlyTradeStorage(address(this))
+        onlyPositionManager
         orderExists(_params.key)
         nonReentrant
         validAction(_params.withdrawal.amountIn, _params.amountOut, _params.withdrawal.isLongToken, false)
