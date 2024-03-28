@@ -8,7 +8,6 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {console, console2} from "forge-std/Test.sol";
 
 library MarketUtils {
     using SignedMath for int256;
@@ -575,11 +574,7 @@ library MarketUtils {
         // get pnl
         int256 pnl = getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, _isLong);
 
-        console.log("Pool USD: ", poolUsd);
-        console2.log("PNL: ", pnl);
-
         uint256 factor = mulDiv(pnl.abs(), SCALAR, poolUsd);
-        console.log("Factor: ", factor);
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;
     }
 

@@ -21,14 +21,10 @@ library Execution {
     using SignedMath for int256;
     using SafeCast for uint256;
 
-    error Execution_RefPriceGreaterThanLimitPrice();
-    error Execution_RefPriceLessThanLimitPrice();
-    error Execution_InvalidRequestType();
     error Execution_FeeExceedsDelta();
     error Execution_MinCollateralThreshold();
     error Execution_LiquidatablePosition();
     error Execution_FeesExceedCollateralDelta();
-    error Execution_LossesExceedPrinciple();
     error Execution_InvalidPriceRetrieval();
     error Execution_InvalidRequestKey();
     error Execution_InvalidFeeReceiver();

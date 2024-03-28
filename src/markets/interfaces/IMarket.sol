@@ -196,7 +196,6 @@ interface IMarket {
     error Market_InvalidKey();
     error Market_InvalidPoolOwner();
     error Market_InvalidFeeDistributor();
-    error Market_InvalidFeePercentage();
     error Market_InsufficientAvailableTokens();
     error Market_FailedToAddRequest();
     error Market_FailedToRemoveRequest();
@@ -210,7 +209,6 @@ interface IMarket {
     error Market_AlreadyInitialized();
     error Market_MaxAssetsReached();
     error Market_FailedToTransferETH();
-    error Market_InvalidAmountIn();
     error Market_RequestNotOwner();
     error Market_RequestNotExpired();
     error Market_InvalidETHTransfer();

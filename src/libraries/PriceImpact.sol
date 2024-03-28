@@ -42,6 +42,7 @@ library PriceImpact {
     /**
      * PriceImpact = sizeDeltaUsd * skewScalar((skewBefore/totalOiBefore) - (skewAfter/totalOiAfter)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
      */
+    // @audit - I think we can make this more efficient.
     function execute(IMarket market, Position.Request memory _request, Execution.State memory _orderState)
         external
         view
@@ -124,6 +125,10 @@ library PriceImpact {
             _checkSlippage(impactedPrice, _orderState.indexPrice, _request.input.maxSlippage);
         }
     }
+
+    /**
+     * ========================= Internal Functions =========================
+     */
 
     // Function to handle the case where open interest before/after is 0
     /**
@@ -229,10 +234,6 @@ library PriceImpact {
         // return the positive expresion - the negative expression
         priceImpactUsd = positiveImpact - negativeImpact;
     }
-
-    ///////////////////////////////
-    // INTERNAL HELPER FUNCTIONS //
-    ///////////////////////////////
 
     function _checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) internal pure {
         uint256 impactDelta =

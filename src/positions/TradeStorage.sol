@@ -15,10 +15,7 @@ import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {Oracle} from "../oracle/Oracle.sol";
 
-/// @dev Needs TradeStorage Role & Fee Accumulator
-/// @dev Need to add liquidity reservation for positions
 contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SignedMath for int256;
@@ -27,11 +24,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
 
-    uint256 constant PRECISION = 1e18;
-    uint256 constant MAX_LIQUIDATION_FEE = 0.5e18; // 50%
-    uint256 constant MAX_TRADING_FEE = 0.01e18; // 1%
-    uint256 constant ADJUSTMENT_FEE = 0.001e18; // 0.1%
-    uint256 constant MIN_COLLATERAL = 1000;
+    uint256 private constant PRECISION = 1e18;
+    uint256 private constant MAX_LIQUIDATION_FEE = 0.5e18; // 50%
+    uint256 private constant MAX_TRADING_FEE = 0.01e18; // 1%
+    uint256 private constant ADJUSTMENT_FEE = 0.001e18; // 0.1%
+    uint256 private constant MIN_COLLATERAL = 1000;
     uint256 private constant LONG_BASE_UNIT = 1e18;
     uint256 private constant SHORT_BASE_UNIT = 1e6;
 
@@ -43,9 +40,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     mapping(bool _isLong => EnumerableSet.Bytes32Set _positionKeys) internal openPositionKeys;
 
     bool private isInitialized;
+    uint256 private liquidationFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
+    uint256 private minCollateralUsd;
 
-    uint256 public liquidationFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
-    uint256 public minCollateralUsd;
     uint256 public tradingFee;
     uint256 public minBlockDelay;
 
@@ -216,7 +213,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         Position.validateMarketDelta(marketBefore, marketAfter, request);
     }
 
-    function liquidatePosition(bytes32 _positionKey, address _liquidator) external onlyPositionManager {
+    function liquidatePosition(bytes32 _positionKey, address _liquidator) external onlyPositionManager nonReentrant {
         // Fetch the Position
         Position.Data memory position = openPositions[_positionKey];
         // Check the Position Exists
@@ -247,8 +244,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Check the position in question is active
         Position.Data memory position = openPositions[_positionKey];
         if (position.positionSize == 0) revert TradeStorage_PositionNotActive();
-        // state the market
-        market = market;
         // Get current MarketUtils and token data
         state = Execution.cacheTokenPrices(priceFeed, state, position.assetId, position.isLong, false);
 
@@ -445,6 +440,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
         // Update Final Storage
         openPositions[_positionKey] = positionAfter;
+        // Fire event
+        emit IncreasePosition(_positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
     function _decreaseExistingPosition(
@@ -673,11 +670,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     function getOrderKeys(bool _isLimit) external view returns (bytes32[] memory orderKeys) {
         orderKeys = _isLimit ? limitOrderKeys.values() : marketOrderKeys.values();
-    }
-
-    function getRequestQueueLengths() external view returns (uint256 marketLen, uint256 limitLen) {
-        marketLen = marketOrderKeys.length();
-        limitLen = limitOrderKeys.length();
     }
 
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory) {

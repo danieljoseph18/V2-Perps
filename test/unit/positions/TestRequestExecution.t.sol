@@ -18,6 +18,7 @@ import {Position} from "../../../src/positions/Position.sol";
 import {Gas} from "../../../src/libraries/Gas.sol";
 import {Funding} from "../../../src/libraries/Funding.sol";
 import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 
 contract TestRequestExecution is Test {
     RoleStorage roleStorage;
@@ -536,7 +537,7 @@ contract TestRequestExecution is Test {
         router.createPositionRequest{value: 0.51 ether}(input);
         // predict the fee owed
         uint256 feeUsd = (10_000e30 * 0.001e18) / 1e18;
-        uint256 predictedFee = Position.convertUsdToCollateral(feeUsd, 2500e30, 1e18);
+        uint256 predictedFee = mulDiv(feeUsd, 1e18, 2500e30);
         // compare it with the fee owed from the contract
         uint256 fee = Position.calculateFee(tradeStorage, 10_000e30, 0.5 ether, 2500e30, 1e18);
         assertEq(predictedFee, fee);
