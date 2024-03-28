@@ -27,7 +27,6 @@ interface IMarket {
         bool isDeposit;
         bytes32 key;
     }
-    // @audit - don't like the usage of the price struct. Should try to use strictly either max or min price
 
     struct ExecuteDeposit {
         IMarket market;

@@ -54,8 +54,9 @@ library Oracle {
     }
 
     struct Price {
-        uint256 price;
-        uint256 confidence;
+        uint256 max;
+        uint256 med;
+        uint256 min;
     }
 
     enum PrimaryStrategy {
@@ -66,8 +67,7 @@ library Oracle {
     enum SecondaryStrategy {
         CHAINLINK,
         AMM,
-        NONE // High Risk Pools -> @audit - how can we ensure that the price is not manipulated?
-
+        NONE
     }
 
     enum PoolType {
@@ -108,7 +108,10 @@ library Oracle {
     }
 
     function parsePythData(PythStructs.Price memory _priceData) external pure returns (Price memory data) {
-        (data.price, data.confidence) = convertPythParams(_priceData);
+        (uint256 price, uint256 confidence) = convertPythParams(_priceData);
+        data.max = price + confidence;
+        data.min = price - confidence;
+        data.med = price;
     }
 
     function unpackAndReturnPrice(uint256 _compactedPriceData, uint256 _startingBit)
@@ -122,7 +125,7 @@ library Oracle {
         // Calculte the Price from the Extracted Data
         uint256 price = compactedPrice * (10 ** (PRICE_DECIMALS - decimals));
         // Return the Price with 100% Confidence
-        return Price(price, 0);
+        return Price(price, price, price);
     }
 
     // Data passed in as 32 bytes - uint64, uint64, uint64, uint8
@@ -137,9 +140,12 @@ library Oracle {
         (uint64 signedIndexPrice, uint64 signedLongPrice, uint64 signedShortPrice, uint8 decimals) =
             abi.decode(_priceData, (uint64, uint64, uint64, uint8));
         // 100% Confidence
-        indexPrice = Price(signedIndexPrice * (10 ** (PRICE_DECIMALS - decimals)), 0);
-        longPrice = Price(signedLongPrice * (10 ** (PRICE_DECIMALS - decimals)), 0);
-        shortPrice = Price(signedShortPrice * (10 ** (PRICE_DECIMALS - decimals)), 0);
+        uint256 parsedIndexPrice = signedIndexPrice * (10 ** (PRICE_DECIMALS - decimals));
+        indexPrice = Price(parsedIndexPrice, parsedIndexPrice, parsedIndexPrice);
+        uint256 parsedLongPrice = signedLongPrice * (10 ** (PRICE_DECIMALS - decimals));
+        longPrice = Price(parsedLongPrice, parsedLongPrice, parsedLongPrice);
+        uint256 parsedShortPrice = signedShortPrice * (10 ** (PRICE_DECIMALS - decimals));
+        shortPrice = Price(parsedShortPrice, parsedShortPrice, parsedShortPrice);
     }
 
     function convertPythParams(PythStructs.Price memory _priceData)
@@ -154,19 +160,17 @@ library Oracle {
     }
 
     function getPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 price) {
-        price = priceFeed.getPrimaryPrice(_assetId).price;
+        price = priceFeed.getPrimaryPrice(_assetId).med;
         if (price == 0) revert Oracle_PriceNotSet();
     }
 
     function getMaxPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 maxPrice) {
-        Price memory priceData = priceFeed.getPrimaryPrice(_assetId);
-        maxPrice = priceData.price + priceData.confidence;
+        maxPrice = priceFeed.getPrimaryPrice(_assetId).max;
         if (maxPrice == 0) revert Oracle_PriceNotSet();
     }
 
     function getMinPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 minPrice) {
-        Price memory priceData = priceFeed.getPrimaryPrice(_assetId);
-        minPrice = priceData.price - priceData.confidence;
+        minPrice = priceFeed.getPrimaryPrice(_assetId).min;
         if (minPrice == 0) revert Oracle_PriceNotSet();
     }
 
@@ -177,11 +181,11 @@ library Oracle {
     {
         (Price memory longPrices, Price memory shortPrices) = getMarketTokenPrices(priceFeed);
         if (_maximise) {
-            longPrice = longPrices.price + longPrices.confidence;
-            shortPrice = shortPrices.price + shortPrices.confidence;
+            longPrice = longPrices.max;
+            shortPrice = shortPrices.max;
         } else {
-            longPrice = longPrices.price - longPrices.confidence;
-            shortPrice = shortPrices.price - shortPrices.confidence;
+            longPrice = longPrices.min;
+            shortPrice = shortPrices.min;
         }
         if (longPrice == 0 || shortPrice == 0) revert Oracle_InvalidTokenPrices();
     }
@@ -224,11 +228,11 @@ library Oracle {
     }
 
     function validatePriceRange(Asset memory _asset, Price memory _priceData, uint256 _refPrice) external pure {
-        if (_priceData.price == 0) revert Oracle_PriceNotSet();
+        if (_priceData.med == 0) revert Oracle_PriceNotSet();
         // check the price is within the range
         uint256 maxPriceDeviation = mulDiv(_refPrice, _asset.maxPriceDeviation, MAX_PERCENTAGE);
-        if (_priceData.price + _priceData.confidence > _refPrice + maxPriceDeviation) revert Oracle_PriceTooHigh();
-        if (_priceData.price - _priceData.confidence < _refPrice - maxPriceDeviation) revert Oracle_PriceTooLow();
+        if (_priceData.max > _refPrice + maxPriceDeviation) revert Oracle_PriceTooHigh();
+        if (_priceData.min < _refPrice - maxPriceDeviation) revert Oracle_PriceTooLow();
     }
 
     function getReferencePrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 referencePrice) {
@@ -270,7 +274,7 @@ library Oracle {
     function priceWasSigned(IPriceFeed priceFeed, bool _isLong) external view returns (bool) {
         // If long, get the long asset price, else short asset price
         bytes32 assetId = _isLong ? priceFeed.longAssetId() : priceFeed.shortAssetId();
-        return priceFeed.getPrimaryPrice(assetId).price != 0;
+        return priceFeed.getPrimaryPrice(assetId).med != 0;
     }
 
     /// @dev _baseUnit is the base unit of the token0

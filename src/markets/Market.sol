@@ -29,7 +29,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     uint64 private constant SCALING_FACTOR = 1e18;
     // Max 100 assets per market (could fit 12 more in last uint256, but 100 used for simplicity)
     // Fits 16 allocations per uint256
-    uint8 private constant MAX_ASSETS = 100; // @audit - should we increase this?
+    uint8 private constant MAX_ASSETS = 100;
     uint64 public constant BASE_FEE = 0.001e18; // 0.1%
     // Value = Max Bonus Fee
     // Users will be charged a % of this fee based on the skew of the market
@@ -135,7 +135,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      * ========================= Setter Functions  =========================
      */
 
-    // @audit - need a function for the pool owner to change ownership of the pool
+    function transferPoolOwnership(address _newOwner) external {
+        if (msg.sender != poolOwner || _newOwner == address(0)) revert Market_InvalidPoolOwner();
+        poolOwner = _newOwner;
+    }
 
     function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations)
         external
@@ -168,7 +171,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Market State Functions  =========================
      */
-    // @audit - need to use a mapping to set market specific state keepers
     function setAllocationsWithBits(uint256[] memory _allocations) external onlyStateKeeper {
         _setAllocationsWithBits(_allocations);
     }

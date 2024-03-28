@@ -70,9 +70,11 @@ library MarketUtils {
         state.baseFee = mulDiv(_tokenAmount, market.BASE_FEE(), SCALAR);
 
         // Convert skew to USD values and calculate amountUsd once
+        // Maximize to make the fee as large as possible
+        // @audit - correct to maximize here?
         state.amountUsd = _isLongToken
-            ? mulDiv(_tokenAmount, _longPrices.price + _longPrices.confidence, LONG_BASE_UNIT)
-            : mulDiv(_tokenAmount, _shortPrices.price + _shortPrices.confidence, SHORT_BASE_UNIT);
+            ? mulDiv(_tokenAmount, _longPrices.max, LONG_BASE_UNIT)
+            : mulDiv(_tokenAmount, _shortPrices.max, SHORT_BASE_UNIT);
 
         // If Size Delta * Price < Base Unit -> Action has no effect on skew
         if (state.amountUsd == 0) {
@@ -80,9 +82,9 @@ library MarketUtils {
         }
 
         // Calculate pool balances before and minimise value of pool to maximise the effect on the skew
-        state.longTokenValue = mulDiv(_longTokenBalance, _longPrices.price - _longPrices.confidence, LONG_BASE_UNIT);
-        state.shortTokenValue =
-            mulDiv(_shortTokenBalance, _shortPrices.price - _shortPrices.confidence, SHORT_BASE_UNIT);
+        // @audit - correct to minimize here?
+        state.longTokenValue = mulDiv(_longTokenBalance, _longPrices.min, LONG_BASE_UNIT);
+        state.shortTokenValue = mulDiv(_shortTokenBalance, _shortPrices.min, SHORT_BASE_UNIT);
 
         // Don't want to disincentivise deposits on empty pool
         if (state.longTokenValue == 0 && state.shortTokenValue == 0) {
@@ -128,9 +130,10 @@ library MarketUtils {
             );
 
             // Convert the additional fee to index tokens
+            // @audit - correct to maximize here?
             state.indexFee = _isLongToken
-                ? mulDiv(state.feeAdditionUsd, LONG_BASE_UNIT, _longPrices.price + _longPrices.confidence)
-                : mulDiv(state.feeAdditionUsd, SHORT_BASE_UNIT, _shortPrices.price + _shortPrices.confidence);
+                ? mulDiv(state.feeAdditionUsd, LONG_BASE_UNIT, _longPrices.max)
+                : mulDiv(state.feeAdditionUsd, SHORT_BASE_UNIT, _shortPrices.max);
 
             // Return base fee + additional fee
             return state.baseFee + state.indexFee;
@@ -146,6 +149,7 @@ library MarketUtils {
         returns (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount)
     {
         // Calculate Fee (Internal Function to avoid STD)
+        // Maximize
         fee = calculateFee(
             _params.market,
             _params.deposit.amountIn,
@@ -161,6 +165,7 @@ library MarketUtils {
         afterFeeAmount = _params.deposit.amountIn - fee;
 
         // Calculate Mint amount with the remaining amount
+        // Minimize
         mintAmount = calculateMintAmount(
             _params.market,
             _params.marketToken,
@@ -272,7 +277,7 @@ library MarketUtils {
         }
     }
 
-    // @audit - why do we only minmize?
+    /// @dev - Calculate the Mint Amount to 18 decimal places
     function calculateMintAmount(
         IMarket market,
         IMarketToken marketToken,
@@ -284,27 +289,27 @@ library MarketUtils {
         int256 _cumulativePnl,
         bool _isLongToken
     ) public view returns (uint256 marketTokenAmount) {
+        // Maximize the AUM
         uint256 marketTokenPrice = getMarketTokenPrice(
             market,
             marketToken,
-            _longPrices.price + _longPrices.confidence,
+            _longPrices.max,
             _longBorrowFeesUsd,
-            _shortPrices.price + _shortPrices.confidence,
+            _shortPrices.max,
             _shortBorrowFeesUsd,
             _cumulativePnl
         );
-        // $50M should be 50_000_000e18. Currently has 30 Decimal Places due to Price
-        // Need a divisor for long and short
         // Long divisor -> (18dp * 30dp / x dp) should = 18dp -> dp = 30
         // Short divisor -> (6dp * 30dp / x dp) should = 18dp -> dp = 18
+        // Minimize the Value of the Amount In
         if (marketTokenPrice == 0) {
             marketTokenAmount = _isLongToken
-                ? mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, LONG_CONVERSION_FACTOR)
-                : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, SHORT_CONVERSION_FACTOR);
+                ? mulDiv(_amountIn, _longPrices.min, LONG_CONVERSION_FACTOR)
+                : mulDiv(_amountIn, _shortPrices.min, SHORT_CONVERSION_FACTOR);
         } else {
             uint256 valueUsd = _isLongToken
-                ? mulDiv(_amountIn, _longPrices.price - _longPrices.confidence, LONG_BASE_UNIT)
-                : mulDiv(_amountIn, _shortPrices.price - _shortPrices.confidence, SHORT_BASE_UNIT);
+                ? mulDiv(_amountIn, _longPrices.min, LONG_BASE_UNIT)
+                : mulDiv(_amountIn, _shortPrices.min, SHORT_BASE_UNIT);
             // (30dp * 18dp / 30dp) = 18dp
             marketTokenAmount = mulDiv(valueUsd, SCALAR, marketTokenPrice);
         }
@@ -321,19 +326,21 @@ library MarketUtils {
         int256 _cumulativePnl,
         bool _isLongToken
     ) public view returns (uint256 tokenAmount) {
+        // Minimize the AUM
         uint256 marketTokenPrice = getMarketTokenPrice(
             market,
             marketToken,
-            _longPrices.price - _longPrices.confidence,
+            _longPrices.min,
             _longBorrowFeesUsd,
-            _shortPrices.price - _shortPrices.confidence,
+            _shortPrices.min,
             _shortBorrowFeesUsd,
             _cumulativePnl
         );
         uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALAR);
+        // Minimize the Value of the Amount Out
         tokenAmount = _isLongToken
-            ? mulDiv(valueUsd, LONG_BASE_UNIT, _longPrices.price + _longPrices.confidence)
-            : mulDiv(valueUsd, SHORT_BASE_UNIT, _shortPrices.price + _shortPrices.confidence);
+            ? mulDiv(valueUsd, LONG_BASE_UNIT, _longPrices.max)
+            : mulDiv(valueUsd, SHORT_BASE_UNIT, _shortPrices.max);
     }
 
     function getMarketTokenPrice(
@@ -368,19 +375,15 @@ library MarketUtils {
         int256 _cumulativePnl
     ) public view returns (uint256 aum) {
         // Get Values in USD -> Subtract reserved amounts from AUM
-        uint256 longTokenValue =
-            mulDiv(market.longTokenBalance() - market.longTokensReserved(), _longTokenPrice, LONG_BASE_UNIT);
-        uint256 shortTokenValue =
-            mulDiv(market.shortTokenBalance() - market.shortTokensReserved(), _shortTokenPrice, SHORT_BASE_UNIT);
+        aum += mulDiv(market.longTokenBalance() - market.longTokensReserved(), _longTokenPrice, LONG_BASE_UNIT);
+        aum += mulDiv(market.shortTokenBalance() - market.shortTokensReserved(), _shortTokenPrice, SHORT_BASE_UNIT);
 
         // Add Borrow Fees
-        longTokenValue += _longBorrowFeesUsd;
-        shortTokenValue += _shortBorrowFeesUsd;
+        aum += _longBorrowFeesUsd;
+        aum += _shortBorrowFeesUsd;
 
-        // Calculate AUM
-        aum = _cumulativePnl >= 0
-            ? longTokenValue + shortTokenValue + _cumulativePnl.abs()
-            : longTokenValue + shortTokenValue - _cumulativePnl.abs();
+        // Subtract any Negative Pnl -> Unrealized Positive Pnl not added to minimize AUM
+        if (_cumulativePnl < 0) aum -= _cumulativePnl.abs();
     }
 
     /**
@@ -432,9 +435,8 @@ library MarketUtils {
         view
         returns (int256 cumulativePnl)
     {
-        // Get an array of Asset Ids within the market
         /**
-         * For each token:
+         * For each token in the market:
          * 1. Get the current price of the token
          * 2. Get the current open interest of the token
          * 3. Get the average entry price of the token
@@ -442,8 +444,8 @@ library MarketUtils {
          * 5. Add the PNL to the cumulative PNL
          */
         bytes32[] memory assetIds = market.getAssetIds();
-        // Max 10,000 Loops, so uint16 sufficient
-        for (uint16 i = 0; i < assetIds.length;) {
+        // Max 100 Loops, so uint8 sufficient
+        for (uint8 i = 0; i < assetIds.length;) {
             bytes32 assetId = assetIds[i];
             uint256 indexPrice =
                 _maximise ? Oracle.getMaxPrice(priceFeed, assetId) : Oracle.getMinPrice(priceFeed, assetId);

@@ -18,24 +18,17 @@ interface IMarketMaker {
     error MarketMaker_InvalidBaseUnit();
     error MarketMaker_MarketExists();
     error MarketMaker_InvalidPriceFeed();
-    error MarketMaker_InvalidPositionManager();
     error MarketMaker_MarketDoesNotExist();
     error MarketMaker_FailedToAddMarket();
-    error MarketMaker_InvalidPoolOwner();
-    error MarketMaker_InvalidFeeDistributor();
-    error MarketMaker_InvalidTokensOrBaseUnits();
-    error MarketMaker_InvalidFeeConfig();
-    error MarketMaker_InvalidHeartbeatDuration();
     error MarketMaker_InvalidMaxPriceDeviation();
-    error MarketMaker_InvalidPriceSpread();
     error MarketMaker_InvalidPrimaryStrategy();
     error MarketMaker_InvalidSecondaryStrategy();
     error MarketMaker_InvalidPoolType();
     error MarketMaker_InvalidPoolTokens();
     error MarketMaker_InvalidPoolAddress();
     error MarketMaker_InvalidOwner();
-    error MarketMaker_InvalidStringLength();
     error MarketMaker_InvalidFee();
+    error MarketMaker_RequestDoesNotExist();
 
     struct MarketRequest {
         address owner;

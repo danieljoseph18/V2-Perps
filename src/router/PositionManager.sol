@@ -227,9 +227,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         IERC20(_token).safeTransfer(_market, _amount);
     }
 
-    /// @dev Only Keeper
-    // @audit - move everything we can into trade storage
-    // this should just be the access point, all important execution should be done in trade storage
     function executePosition(
         IMarket market,
         bytes32 _orderKey,

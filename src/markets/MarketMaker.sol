@@ -35,8 +35,6 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     EnumerableSet.AddressSet private markets;
     EnumerableSet.Bytes32Set private requestKeys;
     mapping(bytes32 requestKey => MarketRequest) public requests;
-    // An asset can be supported by multiple markets
-    // @audit - is this really permissionless? How else could we do this?
     mapping(bytes32 assetId => address market) public tokenToMarket;
     uint256[] private defaultAllocation;
 
@@ -93,9 +91,12 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         positionManager = IPositionManager(_positionManager);
     }
 
-    // @audit - need to add execution fee / gas rebates
-    // probably add a timeout so people can't spam request markets
-    // maybe users need to pay a fee to create a new market?
+    /**
+     * @dev - A user can pass in a spoofed price strategy. Requests should be reviewed by the executor
+     * pre-execution to ensure the validity of these strategies. The payment of the non-refundable fee
+     * is designed to disincentivize bad actors from creating invalid requests.
+     * Illiquid AMM pools, incorrect price feeds, and other invalid inputs should be rejected.
+     */
     function requestNewMarket(MarketRequest calldata _request) external payable nonReentrant {
         /* Validate the Inputs */
         // 1. Msg.value should be > marketCreationFee
@@ -114,7 +115,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         if (_request.asset.secondaryStrategy == Oracle.SecondaryStrategy.CHAINLINK) {
             if (_request.asset.chainlinkPriceFeed == address(0)) revert MarketMaker_InvalidPriceFeed();
         } else if (_request.asset.secondaryStrategy == Oracle.SecondaryStrategy.AMM) {
-            // 6. If secondary strategy is AMM, Uniswap Pool should be correctly configured -> @audit what if they try to use the illiquid v of a pool?
+            // 6. If secondary strategy is AMM, Uniswap Pool should be correctly configured.
             if (
                 _request.asset.pool.poolType != Oracle.PoolType.V3 && _request.asset.pool.poolType != Oracle.PoolType.V2
             ) {
@@ -124,7 +125,13 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
             if (_request.asset.pool.token0 == address(0) || _request.asset.pool.token1 == address(0)) {
                 revert MarketMaker_InvalidPoolTokens();
             }
-        } else if (_request.asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
+        } else if (_request.asset.secondaryStrategy == Oracle.SecondaryStrategy.NONE) {
+            // If secondary strategy is NONE, caller has to have Admin role
+            // For permissionless markets, users can't request a market with no secondary strategy
+            if (!roleStorage.hasRole(Roles.DEFAULT_ADMIN_ROLE, msg.sender)) {
+                revert MarketMaker_InvalidSecondaryStrategy();
+            }
+        } else {
             revert MarketMaker_InvalidSecondaryStrategy();
         }
         // 7. Max Price Deviation should be within bounds
@@ -149,11 +156,8 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     }
 
     /// @dev - Before calling this function, the request's input should be cross-referenced with EVs.
-    /// This function could potentially pass on a malicious input.
-    // @audit - set the max price deviation based on the secondary strategy?
-    // If AMM - set it higher. If Chainlink - set it lower. If none, set to 0?
     /// @dev - using chainlink functions or similar, we can eventually open this up to the public by implementing off-chain validation
-    /// @dev - never reverts. If the request is invalid, it's deleted and the function returns;
+    /// @dev - never reverts. If the request is invalid, it's deleted and the function returns address(0);
     function executeNewMarket(bytes32 _requestKey) external nonReentrant onlyMarketKeeper returns (address) {
         // Get the Request
         MarketRequest memory request = requests[_requestKey];
@@ -175,7 +179,6 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         }
         // 3. If price id is set, make a call to check it returns a non 0 value from pyth
         if (request.asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
-            // @audit - someone can pass in the wrong price feed
             (uint256 price,) = priceFeed.getPriceUnsafe(request.asset);
             if (price == 0) {
                 _deleteMarketRequest(_requestKey);
@@ -184,7 +187,6 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         }
         // 4. If secondary strategy is set, make a call to check it returns a non 0 value
         if (request.asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
-            // @audit - someone can spoof a return value here
             if (Oracle.getReferencePrice(request.asset) == 0) {
                 _deleteMarketRequest(_requestKey);
                 return address(0);
@@ -231,6 +233,13 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         emit MarketCreated(address(market), assetId, request.asset.priceId);
 
         return address(market);
+    }
+
+    function deleteInvalidRequest(bytes32 _requestKey) external onlyMarketKeeper {
+        // Check the Request exists
+        if (!requestKeys.contains(_requestKey)) revert MarketMaker_RequestDoesNotExist();
+        // Delete the Request
+        _deleteMarketRequest(_requestKey);
     }
 
     /// @dev - Only the Admin can create multi-asset markets
