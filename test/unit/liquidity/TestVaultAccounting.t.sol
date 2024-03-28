@@ -137,7 +137,7 @@ contract TestVaultAccounting is Test {
         vm.stopPrank();
         vm.startPrank(OWNER);
         allocations.push(10000 << 240);
-        market.setAllocationsWithBits(allocations);
+
         assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;

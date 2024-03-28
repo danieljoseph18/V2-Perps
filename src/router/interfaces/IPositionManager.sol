@@ -43,7 +43,6 @@ interface IPositionManager {
     error PositionManager_AdlFailed();
 
     function updatePriceFeed(IPriceFeed _priceFeed) external;
-    function transferDepositTokens(address _vault, address _token, uint256 _amount) external;
     function averageDepositCost() external view returns (uint256);
     function averageWithdrawalCost() external view returns (uint256);
     function averagePositionCost() external view returns (uint256);

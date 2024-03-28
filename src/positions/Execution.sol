@@ -40,6 +40,10 @@ library Execution {
     struct DecreaseState {
         int256 decreasePnl;
         uint256 afterFeeAmount;
+        bool isLiquidation;
+        uint256 feesOwedToUser;
+        uint256 feesToAccumulate;
+        uint256 liqFee;
     }
 
     // stated Values for Execution
@@ -61,6 +65,7 @@ library Execution {
 
     uint256 private constant LONG_BASE_UNIT = 1e18;
     uint256 private constant SHORT_BASE_UNIT = 1e6;
+    uint256 private constant PRECISION = 1e18;
 
     /**
      * ========================= Construction Functions =========================
@@ -245,7 +250,7 @@ library Execution {
         Position.Settlement memory _params,
         State memory _state,
         uint256 _minCollateralUsd,
-        uint256 _liquidationFeeUsd
+        uint256 _liquidationFee
     ) external view returns (Position.Data memory, DecreaseState memory decreaseState, State memory) {
         // Handle case where user wants to close the entire position, but size / collateral aren't proportional
         bool isFullDecrease;
@@ -260,14 +265,14 @@ library Execution {
         // Process any Outstanding Borrow Fees
         (_position, _state.borrowFee) = _processBorrowFees(market, _position, _params, _state);
         // Process any Outstanding Funding Fees
-        (_position) = _processFundingFees(market, _position, _params, _state);
-
+        _position = _processFundingFees(market, _position, _params, _state);
+        // Calculate Pnl for decrease
         decreaseState.decreasePnl = _calculatePnl(_state, _position, _params.request.input.sizeDelta);
 
         _position = _editPosition(
             _position, _state, _params.request.input.collateralDelta, _params.request.input.sizeDelta, false
         );
-
+        // @audit - should we be adding fee here? Is it already accounted for?
         uint256 losses = _state.borrowFee + _state.fee;
 
         /**
@@ -278,23 +283,34 @@ library Execution {
             losses += decreaseState.decreasePnl.abs();
         }
 
-        if (losses >= _params.request.input.collateralDelta) revert Execution_LossesExceedPrinciple();
+        // Liquidation Case
+        // @audit - check insolvency case -> E.g if liq fee can't be paid etc.
+        if (losses >= _params.request.input.collateralDelta) {
+            // 1. Calculate the Fees Owed to the User
+            decreaseState.feesOwedToUser = _position.fundingParams.fundingOwed > 0
+                ? mulDiv(_position.fundingParams.fundingOwed.abs(), _state.collateralBaseUnit, _state.collateralPrice)
+                : 0;
+            if (decreaseState.decreasePnl > 0) decreaseState.feesOwedToUser += decreaseState.decreasePnl.abs();
+            // 2. Calculate the Fees to Accumulate
+            decreaseState.feesToAccumulate = _state.borrowFee;
+            // 3. Calculate the Liquidation Fee
+            decreaseState.liqFee = mulDiv(_position.collateralAmount, _liquidationFee, PRECISION);
+            // 4. Set the Liquidation Flag
+            decreaseState.isLiquidation = true;
+        } else {
+            // Calculate the amount of collateral left after fees
+            decreaseState.afterFeeAmount = _params.request.input.collateralDelta - losses;
 
-        // Calculate the amount of collateral left after fees
-        decreaseState.afterFeeAmount = _params.request.input.collateralDelta - losses;
+            // Get remaining collateral in USD
+            uint256 remainingCollateralUsd =
+                mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
 
-        // Get remaining collateral in USD
-        uint256 remainingCollateralUsd =
-            mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
-
-        // Check if the Decrease puts the position below the min collateral threshold
-        // Only check these if it's not a full decrease
-        if (!isFullDecrease) {
-            if (!_checkMinCollateral(remainingCollateralUsd, _minCollateralUsd)) {
-                revert Execution_MinCollateralThreshold();
-            }
-            if (_checkIsLiquidatable(market, _position, _state, _liquidationFeeUsd)) {
-                revert Execution_LiquidatablePosition();
+            // Check if the Decrease puts the position below the min collateral threshold
+            // Only check these if it's not a full decrease
+            if (!isFullDecrease) {
+                if (!_checkMinCollateral(remainingCollateralUsd, _minCollateralUsd)) {
+                    revert Execution_MinCollateralThreshold();
+                }
             }
         }
 
@@ -373,7 +389,6 @@ library Execution {
         return _position;
     }
 
-    // @gas - duplicate in position
     function _checkIsLiquidatable(
         IMarket market,
         Position.Data memory _position,

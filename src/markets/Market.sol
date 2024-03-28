@@ -45,6 +45,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     uint256 private constant LONG_BASE_UNIT = 1e18;
     uint256 private constant SHORT_BASE_UNIT = 1e6;
 
+    bool public isMultiAssetMarket;
+
     EnumerableSet.Bytes32Set private assetIds;
     bool private isInitialized;
 
@@ -92,7 +94,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         if (_isDeposit) {
             MarketUtils.validateDeposit(stateBefore, stateAfter, _amountIn, _isLongToken);
         } else {
-            MarketUtils.validateWithdrawal(stateBefore, stateAfter, _amountIn, _amountOut, FEE_SCALE, _isLongToken);
+            MarketUtils.validateWithdrawal(stateBefore, stateAfter, _amountIn, _amountOut, _isLongToken);
         }
     }
 
@@ -145,13 +147,26 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         onlyMarketMaker
     {
         if (assetIds.length() >= MAX_ASSETS) revert Market_MaxAssetsReached();
+        if (!isMultiAssetMarket) isMultiAssetMarket = true;
         _addToken(_config, _assetId, _newAllocations);
     }
 
     function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external onlyAdmin {
         if (!assetIds.contains(_assetId)) revert Market_TokenDoesNotExist();
+        uint256 len = assetIds.length();
+        if (len == 1) revert Market_MinimumAssetsReached();
         if (!assetIds.remove(_assetId)) revert Market_FailedToRemoveAssetId();
-        _setAllocationsWithBits(_newAllocations);
+
+        // If length after removal is 1, set isMultiAssetMarket to false
+        if (len == 2) {
+            isMultiAssetMarket = false;
+            uint256[] memory allocations = new uint256[](1);
+            allocations[0] = 10000 << 240;
+            _setAllocationsWithBits(allocations);
+        } else {
+            _setAllocationsWithBits(_newAllocations);
+        }
+
         delete marketStorage[_assetId];
         emit TokenRemoved(_assetId);
     }
@@ -172,6 +187,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      * ========================= Market State Functions  =========================
      */
     function setAllocationsWithBits(uint256[] memory _allocations) external onlyStateKeeper {
+        if (!isMultiAssetMarket) revert Market_SingleAssetMarket();
         _setAllocationsWithBits(_allocations);
     }
 

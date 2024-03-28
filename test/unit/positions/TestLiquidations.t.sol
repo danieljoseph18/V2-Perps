@@ -136,13 +136,59 @@ contract TestLiquidations is Test {
         vm.stopPrank();
         vm.startPrank(OWNER);
         allocations.push(10000 << 240);
-        market.setAllocationsWithBits(allocations);
         assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;
     }
 
     function testLiquidatingAPositionThatGoesUnder() public setUpMarkets {
+        // create a position
+        Position.Input memory input = Position.Input({
+            assetId: ethAssetId,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 10_000e30,
+            limitPrice: 0,
+            maxSlippage: 0.4e18,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            reverseWrap: true,
+            conditionals: Position.Conditionals({
+                stopLossSet: false,
+                takeProfitSet: false,
+                stopLossPrice: 0,
+                takeProfitPrice: 0,
+                stopLossPercentage: 0,
+                takeProfitPercentage: 0
+            })
+        });
+        vm.prank(OWNER);
+        router.createPositionRequest{value: 0.51 ether}(input);
+        // Execute the Position
+        bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
+
+        vm.prank(OWNER);
+        positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER, ethPriceData);
+
+        vm.warp(block.timestamp + 10);
+        vm.roll(block.number + 10);
+
+        // set the price so it's liquidatable
+        bytes memory wethUpdateData = priceFeed.createPriceFeedUpdateData(
+            ethPriceId, 200000, 50, -2, 200000, 50, uint64(block.timestamp), uint64(block.timestamp)
+        );
+        tokenUpdateData[0] = wethUpdateData;
+        ethPriceData.pythData = tokenUpdateData;
+
+        // liquidate it
+        bytes32 positionKey = tradeStorage.getOpenPositionKeys(true)[0];
+        vm.prank(OWNER);
+        positionManager.liquidatePosition{value: 0.0001 ether}(market, positionKey, ethPriceData);
+    }
+
+    function testUpdatedLiquidation() public setUpMarkets {
         // create a position
         Position.Input memory input = Position.Input({
             assetId: ethAssetId,

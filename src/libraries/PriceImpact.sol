@@ -169,7 +169,6 @@ library PriceImpact {
         priceImpact = mulDivSigned(_sizeDelta.toInt256(), totalImpact, SIGNED_PRICE_PRECISION);
     }
 
-    // @gas - probably more efficient to use PRB Math here
     /**
      * PriceImpact = sizeDeltaUsd * skewScalar((skewBefore/totalOiBefore) - (skewAfter/totalOiAfter)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
      */

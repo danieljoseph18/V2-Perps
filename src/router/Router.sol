@@ -131,7 +131,6 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     function createPositionRequest(Position.Input memory _trade) external payable nonReentrant {
         // Get the market to direct the user to
-        // @gas - can we cache the market and tradestorage within the request?
         address market = marketMaker.tokenToMarket(_trade.assetId);
 
         /**

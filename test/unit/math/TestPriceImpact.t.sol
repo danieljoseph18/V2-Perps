@@ -139,7 +139,6 @@ contract TestPriceImpact is Test {
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
-        market.setAllocationsWithBits(allocations);
         assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;
@@ -199,7 +198,6 @@ contract TestPriceImpact is Test {
         uint256 allocation = 10000;
         uint256 encodedAllocation = allocation << 240;
         allocations.push(encodedAllocation);
-        market.setAllocationsWithBits(allocations);
         assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;

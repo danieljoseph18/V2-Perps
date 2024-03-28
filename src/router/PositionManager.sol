@@ -121,7 +121,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.marketToken = market.MARKET_TOKEN();
 
         // Approve the Market to spend the Collateral
-        // @audit - could someone front-run?
         if (params.deposit.isLongToken) WETH.approve(address(market), params.deposit.amountIn);
         else USDC.approve(address(market), params.deposit.amountIn);
 
@@ -183,7 +182,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         );
 
         // Approve the Market to spend deposit tokens
-        // @audit - could someone front-run?
         IERC20(params.marketToken).approve(address(market), params.withdrawal.amountIn);
 
         // Execute the Withdrawal
@@ -218,13 +216,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
             IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
         }
         emit MarketRequestCancelled(_requestKey, msg.sender, tokenOut, amountOut);
-    }
-
-    // Used to transfer intermediary tokens to the market from deposits
-    // @audit - permissions -> could someone create a malicious market and transfer tokens from it?
-    // how do we make sure only the intended market can call this?
-    function transferDepositTokens(address _market, address _token, uint256 _amount) external onlyMarket {
-        IERC20(_token).safeTransfer(_market, _amount);
     }
 
     function executePosition(

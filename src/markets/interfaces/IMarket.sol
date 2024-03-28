@@ -214,6 +214,8 @@ interface IMarket {
     error Market_RequestNotOwner();
     error Market_RequestNotExpired();
     error Market_InvalidETHTransfer();
+    error Market_MinimumAssetsReached();
+    error Market_SingleAssetMarket();
 
     /**
      * ================ Events ================
@@ -265,7 +267,6 @@ interface IMarket {
         returns (address tokenOut, uint256 amountOut, bool shouldUnwrap);
 
     // Getter
-    function BASE_FEE() external view returns (uint64);
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total);
     function getRequest(bytes32 _key) external view returns (Input memory);
     function getRequestAtIndex(uint256 _index) external view returns (Input memory);
@@ -291,7 +292,6 @@ interface IMarket {
 
     function tradeStorage() external view returns (address);
     function MARKET_TOKEN() external view returns (IMarketToken);
-    function FEE_SCALE() external view returns (uint256);
     function getAssetIds() external view returns (bytes32[] memory);
     function getAssetsInMarket() external view returns (uint256);
     function getStorage(bytes32 _assetId) external view returns (MarketStorage memory);

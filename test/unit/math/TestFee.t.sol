@@ -136,7 +136,6 @@ contract TestFee is Test {
         vm.stopPrank();
         vm.startPrank(OWNER);
         allocations.push(10000 << 240);
-        market.setAllocationsWithBits(allocations);
         assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
         vm.stopPrank();
         _;
@@ -158,14 +157,118 @@ contract TestFee is Test {
         assertEq(fee, expectedFee);
     }
 
-    function testCalculatingFeesForAMarketAction(uint256 _tokenAmount) public setUpMarkets {
-        // _tokenAmount = bound(_tokenAmount, 1000, 1_000_000_000e18);
-        // (Oracle.Price memory longPrices, Oracle.Price memory shortPrices) = Oracle.getLastMarketTokenPrices(priceFeed);
-        // MarketUtils.FeeParams memory feeParams = Fee.constructFeeParams(market, _tokenAmount, true, longPrices, shortPrices, true);
+    function testCalculatingDepositFees(
+        uint256 _tokenAmount,
+        uint256 _longTokenBalance,
+        uint256 _shortTokenBalance,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice,
+        bool _isLong
+    ) public setUpMarkets {
+        // Bound inputs to realistic ranges
+        if (_isLong) {
+            _tokenAmount = bound(_tokenAmount, 1, 1_000_000_000_000e18); // 1 Tn Ether
+        } else {
+            _tokenAmount = bound(_tokenAmount, 1, 1_000_000_000_000e6); // 1 Tn USDC
+        }
+        vm.assume(_longTokenBalance < 1_000_000_000_000 ether); // 1Tn Ether
+        vm.assume(_shortTokenBalance < 1_000_000_000_000e6); // 1Tn USDC
+        _longTokenPrice = bound(_longTokenPrice, 1e30, 1_000_000e30);
+        _shortTokenPrice = bound(_shortTokenPrice, 0.9e30, 1000e30);
 
-        // uint256 fee =
-        //     Fee.calculateFee(feeParams, market.longTokenBalance(), 1e18, market.shortTokenBalance(), 1e6);
-        // console.log("Fee: ", fee);
-        // require(fee >= 0, "Invalid Fee");
+        // Calculate Fee
+        uint256 fee = MarketUtils.calculateDepositFee(
+            Oracle.Price({max: _longTokenPrice, med: _longTokenPrice, min: _longTokenPrice}),
+            Oracle.Price({max: _shortTokenPrice, med: _shortTokenPrice, min: _shortTokenPrice}),
+            _longTokenBalance,
+            _shortTokenBalance,
+            _tokenAmount,
+            _isLong
+        );
+        // Calculate Expected Fee Range
+        uint256 baseFee = mulDiv(_tokenAmount, MarketUtils.BASE_FEE, MarketUtils.SCALAR);
+        uint256 maxFeeAddition = mulDiv(_tokenAmount, MarketUtils.FEE_SCALE, MarketUtils.SCALAR);
+        // Validate Fee is within range
+        assertLe(baseFee, fee, "Fee below base fee");
+        assertGe(maxFeeAddition + baseFee, fee, "Fee above max fee");
+    }
+
+    /**
+     * function calculateWithdrawalFee(
+     *     uint256 _longPrice,
+     *     uint256 _shortPrice,
+     *     uint256 _longTokenBalance,
+     *     uint256 _shortTokenBalance,
+     *     uint256 _tokenAmount,
+     *     bool _isLongToken
+     * ) public pure returns (uint256) {
+     *     uint256 baseFee = mulDiv(_tokenAmount, BASE_FEE, SCALAR);
+     *
+     *     // It is possible that the opposite side has 0 balance. How do we handle this?
+     *
+     *     // Maximize to increase the impact on the skew
+     *     uint256 amountUsd = _isLongToken
+     *         ? mulDiv(_tokenAmount, _longPrice, LONG_BASE_UNIT)
+     *         : mulDiv(_tokenAmount, _shortPrice, SHORT_BASE_UNIT);
+     *     if (amountUsd == 0) revert MarketUtils_AmountTooSmall();
+     *     // Minimize value of pool to maximise the effect on the skew
+     *     uint256 longValue = mulDiv(_longTokenBalance, _longPrice, LONG_BASE_UNIT);
+     *     uint256 shortValue = mulDiv(_shortTokenBalance, _shortPrice, SHORT_BASE_UNIT);
+     *
+     *     int256 skewBefore = longValue.toInt256() - shortValue.toInt256();
+     *     _isLongToken ? longValue -= amountUsd : shortValue -= amountUsd;
+     *     int256 skewAfter = longValue.toInt256() - shortValue.toInt256();
+     *
+     *     if (longValue + shortValue == 0) {
+     *         // Charge the maximium possible fee for full withdrawals
+     *         return baseFee + mulDiv(_tokenAmount, FEE_SCALE, SCALAR);
+     *     }
+     *
+     *     // Check for a Skew Flip
+     *     bool skewFlip = skewBefore ^ skewAfter < 0;
+     *
+     *     // Skew Improve Same Side - Charge the Base fee
+     *     if (skewAfter.abs() < skewBefore.abs() && !skewFlip) return baseFee;
+     *     // If Flip, charge full Skew After, else charge the delta
+     *     uint256 negativeSkewAccrued = skewFlip ? skewAfter.abs() : amountUsd;
+     *     // Calculate the relative impact on Market Skew
+     *     // Re-add amount to get the initial net pool value
+     *     uint256 feeFactor = mulDiv(negativeSkewAccrued, FEE_SCALE, longValue + shortValue + amountUsd);
+     *     // Calculate the additional fee
+     *     uint256 feeAddition = mulDiv(feeFactor, _tokenAmount, SCALAR);
+     *     // Return base fee + fee addition
+     *     return baseFee + feeAddition;
+     * }
+     */
+    function testCalculatingWithdrawalFees(
+        uint256 _tokenAmount,
+        uint256 _longTokenBalance,
+        uint256 _shortTokenBalance,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice,
+        bool _isLong
+    ) public setUpMarkets {
+        // Bound inputs to realistic ranges
+        _longTokenBalance = bound(_longTokenBalance, 1, 1_000_000_000_000 ether); // 1Tn Ether
+        _shortTokenBalance = bound(_shortTokenBalance, 1, 1_000_000_000_000e6); // 1Tn USDC
+        if (_isLong) {
+            _tokenAmount = bound(_tokenAmount, 1, _longTokenBalance); // 1 Tn Ether
+        } else {
+            _tokenAmount = bound(_tokenAmount, 1, _shortTokenBalance); // 1 Tn USDC
+        }
+        _longTokenPrice = bound(_longTokenPrice, 1e30, 1_000_000e30);
+        _shortTokenPrice = bound(_shortTokenPrice, 0.9e30, 1000e30);
+
+        // Calculate Fee
+        uint256 fee = MarketUtils.calculateWithdrawalFee(
+            _longTokenPrice, _shortTokenPrice, _longTokenBalance, _shortTokenBalance, _tokenAmount, _isLong
+        );
+
+        // Calculate Expected Fee Range
+        uint256 baseFee = mulDiv(_tokenAmount, MarketUtils.BASE_FEE, MarketUtils.SCALAR);
+        uint256 maxFeeAddition = mulDiv(_tokenAmount, MarketUtils.FEE_SCALE, MarketUtils.SCALAR);
+        // Validate Fee is within range
+        assertLe(baseFee, fee, "Fee below base fee");
+        assertGe(maxFeeAddition + baseFee, fee, "Fee above max fee");
     }
 }

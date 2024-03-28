@@ -372,12 +372,42 @@ library Position {
         }
     }
 
-    function liquidate(
-        IMarket market,
-        Position.Data memory _position,
-        Execution.State memory _state,
-        uint256 liquidationFee
-    ) external view returns (uint256 feesOwedToUser, uint256 feesToAccumulate, uint256 liqFeeInCollateral) {
+    function constructLiquidationOrder(Data memory _position, address _liquidator)
+        external
+        view
+        returns (Settlement memory order)
+    {
+        order = Settlement({
+            request: Request({
+                input: Input({
+                    assetId: _position.assetId,
+                    collateralToken: _position.collateralToken,
+                    collateralDelta: _position.collateralAmount,
+                    sizeDelta: _position.positionSize,
+                    limitPrice: 0,
+                    maxSlippage: MAX_SLIPPAGE,
+                    executionFee: 0,
+                    isLong: _position.isLong,
+                    isLimit: false,
+                    isIncrease: false,
+                    reverseWrap: false,
+                    conditionals: Conditionals(false, false, 0, 0, 0, 0)
+                }),
+                user: _position.user,
+                requestBlock: block.number,
+                requestType: RequestType.POSITION_DECREASE
+            }),
+            orderKey: bytes32(0),
+            feeReceiver: _liquidator,
+            isAdl: false
+        });
+    }
+
+    function liquidate(IMarket market, Data memory _position, Execution.State memory _state, uint256 liquidationFee)
+        external
+        view
+        returns (uint256 feesOwedToUser, uint256 feesToAccumulate, uint256 liqFeeInCollateral)
+    {
         // Get the value of all collateral remaining in the position
         uint256 collateralValueUsd =
             mulDiv(_position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit);
@@ -544,8 +574,8 @@ library Position {
     }
 
     function validateCollateralIncrease(
-        Position.Data memory _positionBefore,
-        Position.Data memory _positionAfter,
+        Data memory _positionBefore,
+        Data memory _positionAfter,
         uint256 _collateralDelta,
         uint256 _positionFee,
         uint256 _borrowFee,
@@ -559,8 +589,8 @@ library Position {
     }
 
     function validateCollateralDecrease(
-        Position.Data memory _positionBefore,
-        Position.Data memory _positionAfter,
+        Data memory _positionBefore,
+        Data memory _positionAfter,
         uint256 _collateralDelta,
         uint256 _positionFee, // trading fee not charged on collateral delta
         uint256 _borrowFee,
@@ -585,8 +615,8 @@ library Position {
     }
 
     function validateIncreasePosition(
-        Position.Data memory _positionBefore,
-        Position.Data memory _positionAfter,
+        Data memory _positionBefore,
+        Data memory _positionAfter,
         uint256 _collateralIn,
         uint256 _positionFee,
         uint256 _affiliateRebate,
@@ -603,8 +633,8 @@ library Position {
     }
 
     function validateDecreasePosition(
-        Position.Data memory _positionBefore,
-        Position.Data memory _positionAfter,
+        Data memory _positionBefore,
+        Data memory _positionAfter,
         uint256 _collateralOut,
         uint256 _positionFee,
         uint256 _affiliateRebate,

@@ -14,13 +14,16 @@ library MarketUtils {
     using SignedMath for int256;
     using SafeCast for uint256;
 
-    uint256 constant SCALAR = 1e18;
-    uint256 constant BASE_FEE = 0.001e18; // 0.1%
-    uint256 public constant MAX_ALLOCATION = 10000;
-    uint256 constant LONG_BASE_UNIT = 1e18;
-    uint256 constant SHORT_BASE_UNIT = 1e6;
+    uint64 constant SCALAR = 1e18;
+    uint64 constant BASE_FEE = 0.001e18; // 0.1%
+    uint64 public constant FEE_SCALE = 0.01e18; // 1%
+    uint64 constant LONG_BASE_UNIT = 1e18;
+
+    uint16 public constant MAX_ALLOCATION = 10000;
+    uint32 constant SHORT_BASE_UNIT = 1e6;
+    uint64 constant SHORT_CONVERSION_FACTOR = 1e18;
+
     uint256 constant LONG_CONVERSION_FACTOR = 1e30;
-    uint256 constant SHORT_CONVERSION_FACTOR = 1e18;
 
     error MarketUtils_MaxOiExceeded();
     error MarketUtils_TokenBurnFailed();
@@ -54,93 +57,94 @@ library MarketUtils {
         uint256 indexFee;
     }
 
-    // @gas
-    function calculateFee(
-        IMarket market,
-        uint256 _tokenAmount,
-        bool _isLongToken,
+    // @audit - check for cases with 0 values
+    // @audit - can skew harmony also incentivize 0 on both sides?
+    function calculateDepositFee(
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
-        bool _isDeposit,
         uint256 _longTokenBalance,
-        uint256 _shortTokenBalance
-    ) public view returns (uint256) {
-        FeeState memory state;
-        // get the base fee
-        state.baseFee = mulDiv(_tokenAmount, market.BASE_FEE(), SCALAR);
-
-        // Convert skew to USD values and calculate amountUsd once
-        // Maximize to make the fee as large as possible
-        // @audit - correct to maximize here?
-        state.amountUsd = _isLongToken
+        uint256 _shortTokenBalance,
+        uint256 _tokenAmount,
+        bool _isLongToken
+    ) public pure returns (uint256) {
+        uint256 baseFee = mulDiv(_tokenAmount, BASE_FEE, SCALAR);
+        // If long / short token balance = 0 return Base Fee
+        if (_longTokenBalance == 0 || _shortTokenBalance == 0) return baseFee;
+        // Maximize to increase the impact on the skew
+        uint256 amountUsd = _isLongToken
             ? mulDiv(_tokenAmount, _longPrices.max, LONG_BASE_UNIT)
             : mulDiv(_tokenAmount, _shortPrices.max, SHORT_BASE_UNIT);
-
-        // If Size Delta * Price < Base Unit -> Action has no effect on skew
-        if (state.amountUsd == 0) {
-            revert MarketUtils_AmountTooSmall();
-        }
-
-        // Calculate pool balances before and minimise value of pool to maximise the effect on the skew
-        // @audit - correct to minimize here?
-        state.longTokenValue = mulDiv(_longTokenBalance, _longPrices.min, LONG_BASE_UNIT);
-        state.shortTokenValue = mulDiv(_shortTokenBalance, _shortPrices.min, SHORT_BASE_UNIT);
+        if (amountUsd == 0) revert MarketUtils_AmountTooSmall();
+        // Minimize value of pool to maximise the effect on the skew
+        uint256 longValue = mulDiv(_longTokenBalance, _longPrices.min, LONG_BASE_UNIT);
+        uint256 shortValue = mulDiv(_shortTokenBalance, _shortPrices.min, SHORT_BASE_UNIT);
 
         // Don't want to disincentivise deposits on empty pool
-        if (state.longTokenValue == 0 && state.shortTokenValue == 0) {
-            return state.baseFee;
+        if (longValue == 0 && _isLongToken) return baseFee;
+        if (shortValue == 0 && !_isLongToken) return baseFee;
+
+        int256 skewBefore = longValue.toInt256() - shortValue.toInt256();
+        _isLongToken ? longValue += amountUsd : shortValue += amountUsd;
+        int256 skewAfter = longValue.toInt256() - shortValue.toInt256();
+
+        // Check for a Skew Flip
+        bool skewFlip = skewBefore ^ skewAfter < 0;
+
+        // Skew Improve Same Side - Charge the Base fee
+        if (skewAfter.abs() < skewBefore.abs() && !skewFlip) return baseFee;
+        // If Flip, charge full Skew After, else charge the delta
+        uint256 negativeSkewAccrued = skewFlip ? skewAfter.abs() : amountUsd;
+        // Calculate the relative impact on Market Skew
+        uint256 feeFactor = mulDiv(negativeSkewAccrued, FEE_SCALE, longValue + shortValue);
+        // Calculate the additional fee
+        uint256 feeAddition = mulDiv(feeFactor, _tokenAmount, SCALAR);
+        // Return base fee + fee addition
+        return baseFee + feeAddition;
+    }
+
+    /// @dev - Med price used, as in the case of a full withdrawal, a spread between max / min could cause amount to be > pool value
+    function calculateWithdrawalFee(
+        uint256 _longPrice,
+        uint256 _shortPrice,
+        uint256 _longTokenBalance,
+        uint256 _shortTokenBalance,
+        uint256 _tokenAmount,
+        bool _isLongToken
+    ) public pure returns (uint256) {
+        uint256 baseFee = mulDiv(_tokenAmount, BASE_FEE, SCALAR);
+
+        // Maximize to increase the impact on the skew
+        uint256 amountUsd = _isLongToken
+            ? mulDiv(_tokenAmount, _longPrice, LONG_BASE_UNIT)
+            : mulDiv(_tokenAmount, _shortPrice, SHORT_BASE_UNIT);
+        if (amountUsd == 0) revert MarketUtils_AmountTooSmall();
+        // Minimize value of pool to maximise the effect on the skew
+        uint256 longValue = mulDiv(_longTokenBalance, _longPrice, LONG_BASE_UNIT);
+        uint256 shortValue = mulDiv(_shortTokenBalance, _shortPrice, SHORT_BASE_UNIT);
+
+        int256 skewBefore = longValue.toInt256() - shortValue.toInt256();
+        _isLongToken ? longValue -= amountUsd : shortValue -= amountUsd;
+        int256 skewAfter = longValue.toInt256() - shortValue.toInt256();
+
+        if (longValue + shortValue == 0) {
+            // Charge the maximium possible fee for full withdrawals
+            return baseFee + mulDiv(_tokenAmount, FEE_SCALE, SCALAR);
         }
 
-        // get the skew of the market
-        if (state.longTokenValue > state.shortTokenValue) {
-            state.longSkewBefore = true;
-            state.skewBefore = state.longTokenValue - state.shortTokenValue;
-        } else {
-            state.longSkewBefore = false;
-            state.skewBefore = state.shortTokenValue - state.longTokenValue;
-        }
+        // Check for a Skew Flip
+        bool skewFlip = skewBefore ^ skewAfter < 0;
 
-        // Adjust long or short token value based on the operation
-        if (_isLongToken) {
-            state.longTokenValue =
-                _isDeposit ? state.longTokenValue += state.amountUsd : state.longTokenValue -= state.amountUsd;
-        } else {
-            state.shortTokenValue =
-                _isDeposit ? state.shortTokenValue += state.amountUsd : state.shortTokenValue -= state.amountUsd;
-        }
-
-        if (state.longTokenValue > state.shortTokenValue) {
-            state.longSkewAfter = true;
-            state.skewAfter = state.longTokenValue - state.shortTokenValue;
-        } else {
-            state.longSkewAfter = false;
-            state.skewAfter = state.shortTokenValue - state.longTokenValue;
-        }
-        state.skewFlip = state.longSkewAfter != state.longSkewBefore;
-
-        // Calculate the additional fee if necessary
-        if (state.skewFlip || state.skewAfter > state.skewBefore) {
-            // Get the Delta to Charge the Fee on
-            // For Skew Flips, the delta is the skew after the flip -> skew before improved market balance
-            state.skewDelta = state.skewFlip ? state.skewAfter : state.amountUsd;
-            // Calculate the additional fee
-            // Uses the original value for LTV + STV so SkewDelta is never > LTV + STV
-            state.feeAdditionUsd = mulDiv(
-                state.skewDelta, market.FEE_SCALE(), state.longTokenValue + state.shortTokenValue + state.amountUsd
-            );
-
-            // Convert the additional fee to index tokens
-            // @audit - correct to maximize here?
-            state.indexFee = _isLongToken
-                ? mulDiv(state.feeAdditionUsd, LONG_BASE_UNIT, _longPrices.max)
-                : mulDiv(state.feeAdditionUsd, SHORT_BASE_UNIT, _shortPrices.max);
-
-            // Return base fee + additional fee
-            return state.baseFee + state.indexFee;
-        }
-
-        // If no skew flip and skew improved, return base fee
-        return state.baseFee;
+        // Skew Improve Same Side - Charge the Base fee
+        if (skewAfter.abs() < skewBefore.abs() && !skewFlip) return baseFee;
+        // If Flip, charge full Skew After, else charge the delta
+        uint256 negativeSkewAccrued = skewFlip ? skewAfter.abs() : amountUsd;
+        // Calculate the relative impact on Market Skew
+        // Re-add amount to get the initial net pool value
+        uint256 feeFactor = mulDiv(negativeSkewAccrued, FEE_SCALE, longValue + shortValue + amountUsd);
+        // Calculate the additional fee
+        uint256 feeAddition = mulDiv(feeFactor, _tokenAmount, SCALAR);
+        // Return base fee + fee addition
+        return baseFee + feeAddition;
     }
 
     function calculateDepositAmounts(IMarket.ExecuteDeposit calldata _params)
@@ -149,16 +153,13 @@ library MarketUtils {
         returns (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount)
     {
         // Calculate Fee (Internal Function to avoid STD)
-        // Maximize
-        fee = calculateFee(
-            _params.market,
-            _params.deposit.amountIn,
-            _params.deposit.isLongToken,
+        fee = calculateDepositFee(
             _params.longPrices,
             _params.shortPrices,
-            true,
             _params.market.longTokenBalance(),
-            _params.market.shortTokenBalance()
+            _params.market.shortTokenBalance(),
+            _params.deposit.amountIn,
+            _params.deposit.isLongToken
         );
 
         // Calculate remaining after fee
@@ -200,15 +201,13 @@ library MarketUtils {
         if (_params.amountOut != expectedOut) revert MarketUtils_InvalidAmountOut(_params.amountOut, expectedOut);
 
         // Calculate Fee on the Amount Out
-        fee = calculateFee(
-            _params.market,
-            _params.amountOut,
-            _params.withdrawal.isLongToken,
-            _params.longPrices,
-            _params.shortPrices,
-            false,
+        fee = calculateWithdrawalFee(
+            _params.longPrices.med,
+            _params.shortPrices.med,
             _params.market.longTokenBalance(),
-            _params.market.shortTokenBalance()
+            _params.market.shortTokenBalance(),
+            _params.amountOut,
+            _params.withdrawal.isLongToken
         );
 
         // Calculate the Token Amount Out
@@ -248,11 +247,10 @@ library MarketUtils {
         IMarket.State calldata _stateAfter,
         uint256 _marketTokenAmountIn,
         uint256 _amountOut,
-        uint256 _feeScale,
         bool _isLongToken
     ) external pure {
         uint256 minFee = mulDiv(_amountOut, BASE_FEE, SCALAR);
-        uint256 maxFee = mulDiv(_amountOut, BASE_FEE + _feeScale, SCALAR);
+        uint256 maxFee = mulDiv(_amountOut, BASE_FEE + FEE_SCALE, SCALAR);
         if (_stateBefore.totalSupply != _stateAfter.totalSupply + _marketTokenAmountIn) {
             revert MarketUtils_TokenBurnFailed();
         }
