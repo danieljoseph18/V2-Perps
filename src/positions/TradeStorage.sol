@@ -179,11 +179,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
             _createNewPosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state, positionKey);
         } else if (request.requestType == Position.RequestType.POSITION_DECREASE) {
-            _decreaseExistingPosition(
+            _decreasePosition(
                 Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
             );
         } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
-            _increaseExistingPosition(
+            _increasePosition(
                 Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
             );
         } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
@@ -195,11 +195,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
                 Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
             );
         } else if (request.requestType == Position.RequestType.TAKE_PROFIT) {
-            _decreaseExistingPosition(
+            _decreasePosition(
                 Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
             );
         } else if (request.requestType == Position.RequestType.STOP_LOSS) {
-            _decreaseExistingPosition(
+            _decreasePosition(
                 Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
             );
         } else {
@@ -229,7 +229,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Construct Liquidation Order
         Position.Settlement memory params = Position.constructLiquidationOrder(position, _liquidator);
         // Execute the Liquidation
-        _decreaseExistingPosition(params, state, position, _positionKey);
+        _decreasePosition(params, state, position, _positionKey);
         // Fire Event
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }
@@ -273,7 +273,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
 
         // Execute the order
-        _decreaseExistingPosition(params, state, position, _positionKey);
+        _decreasePosition(params, state, position, _positionKey);
 
         // Get the new PNL to pool ratio
         int256 newPnlFactor = _getPnlFactor(state, _assetId, position.isLong);
@@ -305,6 +305,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             positionAfter,
             _params.request.input.collateralDelta,
             _state.fee,
+            _state.fundingFee,
             _state.borrowFee,
             _state.affiliateRebate
         );
@@ -315,7 +316,17 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.isLong,
             true
         );
-
+        // Account for any Funding
+        if (_state.fundingFee < 0) {
+            // User Paid Funding
+            uint256 absFundingFee = _state.fundingFee.abs();
+            market.updatePoolBalance(absFundingFee, _positionBefore.isLong, true);
+        } else if (_state.fundingFee > 0) {
+            // User got Paid Funding
+            uint256 absFundingFee = _state.fundingFee.abs();
+            market.updatePoolBalance(absFundingFee, _positionBefore.isLong, false);
+        }
+        // Pay Fees
         _payFees(_state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
         // Update Final Storage
         openPositions[_positionKey] = positionAfter;
@@ -335,9 +346,27 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Transfer Tokens to User
         uint256 amountOut =
             _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee;
+        // Add / Subtract funding fees
+        if (_state.fundingFee < 0) {
+            // User Paid Funding
+            uint256 absFundingFee = _state.fundingFee.abs();
+            amountOut -= absFundingFee;
+            market.updatePoolBalance(absFundingFee, _positionBefore.isLong, true);
+        } else if (_state.fundingFee > 0) {
+            // User got Paid Funding
+            uint256 absFundingFee = _state.fundingFee.abs();
+            amountOut += absFundingFee;
+            market.updatePoolBalance(absFundingFee, _positionBefore.isLong, false);
+        }
         // Validate the Position Change
         Position.validateCollateralDecrease(
-            _positionBefore, positionAfter, amountOut, _state.fee, _state.borrowFee, _state.affiliateRebate
+            _positionBefore,
+            positionAfter,
+            amountOut,
+            _state.fee,
+            _state.fundingFee,
+            _state.borrowFee,
+            _state.affiliateRebate
         );
         // Check Market has enough available liquidity for payout
         if (
@@ -408,7 +437,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit PositionCreated(_positionKey, position);
     }
 
-    function _increaseExistingPosition(
+    function _increasePosition(
         Position.Settlement memory _params,
         Execution.State memory _state,
         Position.Data memory _positionBefore,
@@ -424,6 +453,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.collateralDelta,
             _state.fee,
             _state.affiliateRebate,
+            _state.fundingFee,
             _state.borrowFee,
             _params.request.input.sizeDelta
         );
@@ -438,13 +468,20 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _positionBefore.user,
             _params.request.input.isLong
         );
+        // If user's position has increased with positive funding, need to subtract from the pool
+        if (_state.fundingFee > 0) {
+            market.updatePoolBalance(_state.fundingFee.abs(), _positionBefore.isLong, false);
+        } else if (_state.fundingFee < 0) {
+            // If user's position has decreased with negative funding, need to add to the pool
+            market.updatePoolBalance(_state.fundingFee.abs(), _positionBefore.isLong, true);
+        }
         // Update Final Storage
         openPositions[_positionKey] = positionAfter;
         // Fire event
         emit IncreasePosition(_positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
-    function _decreaseExistingPosition(
+    function _decreasePosition(
         Position.Settlement memory _params,
         Execution.State memory _state,
         Position.Data memory _positionBefore,
@@ -464,6 +501,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
         uint256 amountOut;
 
+        // @audit - state changes correct?
         if (decreaseState.isLiquidation) {
             // Remanining collateral after fees is added to the relevant pool
             market.updatePoolBalance(_positionBefore.collateralAmount, _positionBefore.isLong, true);
@@ -471,18 +509,13 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             market.accumulateFees(decreaseState.feesToAccumulate, _positionBefore.isLong);
             // Set amount out
             amountOut = decreaseState.feesOwedToUser;
+            // Decrease the pool amount by the amount being payed out to the user
+            if (amountOut > 0) {
+                market.updatePoolBalance(amountOut, _positionBefore.isLong, false);
+            }
         } else {
             // Validate the Position Change
-            Position.validateDecreasePosition(
-                _positionBefore,
-                positionAfter,
-                decreaseState.afterFeeAmount,
-                _state.fee,
-                _state.affiliateRebate,
-                decreaseState.decreasePnl,
-                _state.borrowFee,
-                _params.request.input.sizeDelta
-            );
+            _validateDecrease(_positionBefore, positionAfter, decreaseState, _state, _params.request.input.sizeDelta);
             // Pay Fees
             _payFees(
                 _state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong
@@ -491,6 +524,12 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             amountOut = decreaseState.decreasePnl > 0
                 ? decreaseState.afterFeeAmount + decreaseState.decreasePnl.abs() // Profit Case
                 : decreaseState.afterFeeAmount; // Loss / Break Even Case -> Losses already deducted in Execution if any
+            // Pay any positive funding accrued. Negative Funding Deducted in Execution
+            amountOut += _state.fundingFee > 0 ? _state.fundingFee.abs() : 0;
+            // If profit being payed out, need to decrease the pool amount by the profit
+            if (amountOut > decreaseState.afterFeeAmount) {
+                market.updatePoolBalance(amountOut - decreaseState.afterFeeAmount, _positionBefore.isLong, false);
+            }
         }
 
         // Unreserve Liquidity
@@ -640,6 +679,27 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (_affiliateRebate > 0) {
             referralStorage.accumulateAffiliateRewards(address(market), _referrer, _isLong, _affiliateRebate);
         }
+    }
+
+    /// @dev Internal function to prevent STD Err
+    function _validateDecrease(
+        Position.Data memory _positionBefore,
+        Position.Data memory _positionAfter,
+        Execution.DecreaseState memory _decreaseState,
+        Execution.State memory _state,
+        uint256 _sizeDelta
+    ) internal pure {
+        Position.validateDecreasePosition(
+            _positionBefore,
+            _positionAfter,
+            _decreaseState.afterFeeAmount,
+            _state.fee,
+            _state.affiliateRebate,
+            _decreaseState.decreasePnl,
+            _state.fundingFee,
+            _state.borrowFee,
+            _sizeDelta
+        );
     }
 
     /**

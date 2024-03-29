@@ -209,11 +209,16 @@ library Position {
         Data memory _positionAfter,
         uint256 _collateralDelta,
         uint256 _positionFee,
+        int256 _fundingFee,
         uint256 _borrowFee,
         uint256 _affiliateRebate
     ) external pure {
         // ensure the position collateral has changed by the correct amount
         uint256 expectedCollateralDelta = _collateralDelta - _positionFee - _borrowFee - _affiliateRebate;
+        // Account for funding
+        if (_fundingFee < 0) expectedCollateralDelta -= _fundingFee.abs();
+        else if (_fundingFee > 0) expectedCollateralDelta += _fundingFee.abs();
+        // Validate Position Delta
         if (_positionAfter.collateralAmount != _positionBefore.collateralAmount + expectedCollateralDelta) {
             revert Position_CollateralDelta();
         }
@@ -224,11 +229,16 @@ library Position {
         Data memory _positionAfter,
         uint256 _collateralDelta,
         uint256 _positionFee, // trading fee not charged on collateral delta
+        int256 _fundingFee,
         uint256 _borrowFee,
         uint256 _affiliateRebate
     ) external pure {
         // ensure the position collateral has changed by the correct amount
         uint256 expectedCollateralDelta = _collateralDelta + _positionFee + _borrowFee + _affiliateRebate;
+        // Account for funding
+        if (_fundingFee < 0) expectedCollateralDelta += _fundingFee.abs();
+        else if (_fundingFee > 0) expectedCollateralDelta -= _fundingFee.abs();
+        // Validate Position Delta
         if (_positionAfter.collateralAmount != _positionBefore.collateralAmount - expectedCollateralDelta) {
             revert Position_CollateralDelta();
         }
@@ -251,10 +261,14 @@ library Position {
         uint256 _collateralIn,
         uint256 _positionFee,
         uint256 _affiliateRebate,
+        int256 _fundingFee,
         uint256 _borrowFee,
         uint256 _sizeDelta
     ) external pure {
         uint256 expectedCollateralDelta = _collateralIn - _positionFee - _affiliateRebate - _borrowFee;
+        // @audit - is this correct?
+        if (_fundingFee < 0) expectedCollateralDelta -= _fundingFee.abs();
+        else if (_fundingFee > 0) expectedCollateralDelta += _fundingFee.abs();
         if (_positionAfter.collateralAmount != _positionBefore.collateralAmount + expectedCollateralDelta) {
             revert Position_IncreasePositionCollateral();
         }
@@ -270,6 +284,7 @@ library Position {
         uint256 _positionFee,
         uint256 _affiliateRebate,
         int256 _pnl,
+        int256 _fundingFee,
         uint256 _borrowFee,
         uint256 _sizeDelta
     ) external pure {
@@ -280,7 +295,9 @@ library Position {
          */
         uint256 expectedCollateralDelta = _collateralOut + _positionFee + _affiliateRebate + _borrowFee;
         // Account for funding / pnl paid out from collateral
+        // @audit - is this correct?
         if (_pnl < 0) expectedCollateralDelta += _pnl.abs();
+        if (_fundingFee < 0) expectedCollateralDelta += _fundingFee.abs();
 
         if (_positionBefore.collateralAmount != _positionAfter.collateralAmount + expectedCollateralDelta) {
             revert Position_DecreasePositionCollateral();

@@ -54,6 +54,7 @@ library Execution {
         uint256 collateralPrice;
         uint256 collateralBaseUnit;
         uint256 borrowFee;
+        int256 fundingFee;
         uint256 fee;
         uint256 affiliateRebate;
         address referrer;
@@ -134,9 +135,14 @@ library Execution {
         }
         // Process any Outstanding Borrow Fees
         (_position, _state.borrowFee) = _processBorrowFees(market, _position, _params, _state);
+        // Process any Outstanding Funding Fees
+        (_position, _state.fundingFee) = _processFundingFees(market, _position, _params, _state);
         // Calculate the amount of collateral left after fees
         if (_state.borrowFee >= _params.request.input.collateralDelta) revert Execution_FeeExceedsDelta();
         uint256 afterFeeAmount = _params.request.input.collateralDelta - _state.borrowFee;
+        // Account for Funding
+        if (_state.fundingFee < 0) afterFeeAmount -= _state.fundingFee.abs();
+        else if (_state.fundingFee > 0) afterFeeAmount += _state.fundingFee.abs();
         // Edit the Position for Increase
         _position = _editPosition(_position, _state, afterFeeAmount, 0, true);
         // Check the Leverage
@@ -159,6 +165,8 @@ library Execution {
     ) external view returns (Position.Data memory, State memory) {
         // Process any Outstanding Borrow  Fees
         (_position, _state.borrowFee) = _processBorrowFees(market, _position, _params, _state);
+        // Process any Outstanding Funding Fees
+        (_position, _state.fundingFee) = _processFundingFees(market, _position, _params, _state);
         // Edit the Position (subtract full collateral delta)
         _position = _editPosition(_position, _state, _params.request.input.collateralDelta, 0, false);
         // Get remaining collateral in USD
@@ -207,6 +215,7 @@ library Execution {
 
     // Realise all previous funding and borrowing fees
     // For funding - reset the earnings after charging the previous amount
+    // @audit - if we're settling a funding fee, where in storage do we have to update?
     function increasePosition(
         IMarket market,
         Position.Data memory _position,
@@ -218,13 +227,19 @@ library Execution {
         // Process any Outstanding Borrow Fees
         (_position, _state.borrowFee) = _processBorrowFees(market, _position, _params, _state);
         // Process any Outstanding Funding Fees
-        (_position) = _processFundingFees(market, _position, _params, _state);
+        (_position, _state.fundingFee) = _processFundingFees(market, _position, _params, _state);
         // Settle outstanding fees
-        uint256 feesToSettle = _state.borrowFee;
-
-        if (feesToSettle >= _params.request.input.collateralDelta) revert Execution_FeesExceedCollateralDelta();
+        if (_state.borrowFee >= _params.request.input.collateralDelta) revert Execution_FeesExceedCollateralDelta();
         // Subtract fees from collateral delta
-        _params.request.input.collateralDelta -= feesToSettle;
+        _params.request.input.collateralDelta -= _state.borrowFee;
+        // Process the Funding Fee
+        if (_state.fundingFee < 0) {
+            // User Owes Funding
+            _params.request.input.collateralDelta -= _state.fundingFee.abs();
+        } else {
+            // User has earned funding
+            _params.request.input.collateralDelta += _state.fundingFee.abs();
+        }
         // Update the Existing Position
         _position = _editPosition(
             _position, _state, _params.request.input.collateralDelta, _params.request.input.sizeDelta, true
@@ -261,30 +276,33 @@ library Execution {
         // Process any Outstanding Borrow Fees
         (_position, _state.borrowFee) = _processBorrowFees(market, _position, _params, _state);
         // Process any Outstanding Funding Fees
-        _position = _processFundingFees(market, _position, _params, _state);
+        (_position, _state.fundingFee) = _processFundingFees(market, _position, _params, _state);
         // Calculate Pnl for decrease
         decreaseState.decreasePnl = _calculatePnl(_state, _position, _params.request.input.sizeDelta);
 
         _position = _editPosition(
             _position, _state, _params.request.input.collateralDelta, _params.request.input.sizeDelta, false
         );
-        // @audit - should we be adding fee here? Is it already accounted for?
+
         uint256 losses = _state.borrowFee + _state.fee;
 
         /**
          * Subtract any losses owed from the position.
-         * Positive PNL is paid from LP, so has no effect on position's collateral
+         * Positive PNL / Funding is paid from LP, so has no effect on position's collateral
          */
         if (decreaseState.decreasePnl < 0) {
             losses += decreaseState.decreasePnl.abs();
+        }
+        if (_state.fundingFee < 0) {
+            losses += _state.fundingFee.abs();
         }
 
         // Liquidation Case
         // @audit - check insolvency case -> E.g if liq fee can't be paid etc.
         if (losses >= _params.request.input.collateralDelta) {
             // 1. Calculate the Fees Owed to the User
-            decreaseState.feesOwedToUser = _position.fundingParams.fundingOwed > 0
-                ? mulDiv(_position.fundingParams.fundingOwed.abs(), _state.collateralBaseUnit, _state.collateralPrice)
+            decreaseState.feesOwedToUser = _state.fundingFee > 0
+                ? mulDiv(_state.fundingFee.abs(), _state.collateralBaseUnit, _state.collateralPrice)
                 : 0;
             if (decreaseState.decreasePnl > 0) decreaseState.feesOwedToUser += decreaseState.decreasePnl.abs();
             // 2. Calculate the Fees to Accumulate
@@ -295,6 +313,7 @@ library Execution {
             decreaseState.isLiquidation = true;
         } else {
             // Calculate the amount of collateral left after fees
+            // = Collateral Delta - Borrow Fees - Fee - Losses
             decreaseState.afterFeeAmount = _params.request.input.collateralDelta - losses;
 
             // Get remaining collateral in USD
@@ -431,8 +450,6 @@ library Execution {
             _state.collateralBaseUnit,
             _position.isLong
         );
-        // Combine funding and pnl
-        pnl += _position.fundingParams.fundingOwed;
     }
 
     function _processFundingFees(
@@ -440,7 +457,7 @@ library Execution {
         Position.Data memory _position,
         Position.Settlement memory _params,
         State memory _state
-    ) internal view returns (Position.Data memory) {
+    ) internal view returns (Position.Data memory, int256 fundingFee) {
         // Calculate and subtract the funding fee
         (int256 fundingFeeUsd, int256 nextFundingAccrued) = Position.getFundingFeeDelta(
             market,
@@ -452,11 +469,13 @@ library Execution {
         // Reset the last funding accrued
         _position.fundingParams.lastFundingAccrued = nextFundingAccrued;
         // Store Funding Fees in Collateral Tokens -> Will be Paid out / Settled as PNL with Decrease
-        _position.fundingParams.fundingOwed += fundingFeeUsd < 0
+        fundingFee += fundingFeeUsd < 0
             ? -_convertValueToCollateral(fundingFeeUsd.abs(), _state.collateralPrice, _state.collateralBaseUnit).toInt256()
             : _convertValueToCollateral(fundingFeeUsd.abs(), _state.collateralPrice, _state.collateralBaseUnit).toInt256();
+        // Reset the funding owed
+        _position.fundingParams.fundingOwed = 0;
 
-        return (_position);
+        return (_position, fundingFee);
     }
 
     function _processBorrowFees(

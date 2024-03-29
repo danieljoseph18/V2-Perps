@@ -56,8 +56,6 @@ library MarketUtils {
         uint256 indexFee;
     }
 
-    // @audit - check for cases with 0 values
-    // @audit - can skew harmony also incentivize 0 on both sides?
     function calculateDepositFee(
         Oracle.Price memory _longPrices,
         Oracle.Price memory _shortPrices,
