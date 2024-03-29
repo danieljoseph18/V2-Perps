@@ -32,7 +32,6 @@ library Position {
     error Position_InvalidSizeDelta();
     error Position_ZeroAddress();
     error Position_InvalidRequestBlock();
-    error Position_NotLiquidatable();
     error Position_CollateralDelta();
     error Position_NewPosition();
     error Position_IncreasePositionCollateral();
@@ -48,10 +47,10 @@ library Position {
     error Position_CumulativeBorrowDelta();
     error Position_OpenInterestDelta();
 
-    uint256 public constant MIN_LEVERAGE = 100; // 1x
-    uint256 public constant LEVERAGE_PRECISION = 100;
-    uint256 public constant PRECISION = 1e18;
-    int256 public constant PRICE_PRECISION = 1e30;
+    uint256 private constant MIN_LEVERAGE = 100; // 1x
+    uint256 private constant LEVERAGE_PRECISION = 100;
+    uint256 private constant PRECISION = 1e18;
+    int256 private constant PRICE_PRECISION = 1e30;
     uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
     uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
     uint256 private constant MIN_COLLATERAL = 1000;
@@ -164,10 +163,6 @@ library Position {
         if (_trade.conditionals.takeProfitPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
     }
 
-    function exists(Data memory _position) external pure returns (bool) {
-        return _position.user != address(0);
-    }
-
     function validateRequest(IMarket market, Request memory _request, Execution.State memory _state)
         external
         view
@@ -205,28 +200,28 @@ library Position {
     }
 
     function validateCollateralIncrease(
-        Data memory _positionBefore,
-        Data memory _positionAfter,
-        uint256 _collateralDelta,
+        Data memory _position,
+        uint256 _initialCollateral,
+        uint256 _collateralIn,
         uint256 _positionFee,
         int256 _fundingFee,
         uint256 _borrowFee,
         uint256 _affiliateRebate
     ) external pure {
         // ensure the position collateral has changed by the correct amount
-        uint256 expectedCollateralDelta = _collateralDelta - _positionFee - _borrowFee - _affiliateRebate;
+        uint256 expectedCollateralDelta = _collateralIn - _positionFee - _borrowFee - _affiliateRebate;
         // Account for funding
         if (_fundingFee < 0) expectedCollateralDelta -= _fundingFee.abs();
         else if (_fundingFee > 0) expectedCollateralDelta += _fundingFee.abs();
         // Validate Position Delta
-        if (_positionAfter.collateralAmount != _positionBefore.collateralAmount + expectedCollateralDelta) {
+        if (_position.collateralAmount != _initialCollateral + expectedCollateralDelta) {
             revert Position_CollateralDelta();
         }
     }
 
     function validateCollateralDecrease(
-        Data memory _positionBefore,
-        Data memory _positionAfter,
+        Data memory _position,
+        uint256 _initialCollateral,
         uint256 _collateralDelta,
         uint256 _positionFee, // trading fee not charged on collateral delta
         int256 _fundingFee,
@@ -239,7 +234,7 @@ library Position {
         if (_fundingFee < 0) expectedCollateralDelta += _fundingFee.abs();
         else if (_fundingFee > 0) expectedCollateralDelta -= _fundingFee.abs();
         // Validate Position Delta
-        if (_positionAfter.collateralAmount != _positionBefore.collateralAmount - expectedCollateralDelta) {
+        if (_position.collateralAmount != _initialCollateral - expectedCollateralDelta) {
             revert Position_CollateralDelta();
         }
     }
@@ -256,8 +251,9 @@ library Position {
     }
 
     function validateIncreasePosition(
-        Data memory _positionBefore,
-        Data memory _positionAfter,
+        Data memory _position,
+        uint256 _initialCollateral,
+        uint256 _initialSize,
         uint256 _collateralIn,
         uint256 _positionFee,
         uint256 _affiliateRebate,
@@ -266,20 +262,21 @@ library Position {
         uint256 _sizeDelta
     ) external pure {
         uint256 expectedCollateralDelta = _collateralIn - _positionFee - _affiliateRebate - _borrowFee;
-        // @audit - is this correct?
+        // Account for funding paid out from / to the user
         if (_fundingFee < 0) expectedCollateralDelta -= _fundingFee.abs();
         else if (_fundingFee > 0) expectedCollateralDelta += _fundingFee.abs();
-        if (_positionAfter.collateralAmount != _positionBefore.collateralAmount + expectedCollateralDelta) {
+        if (_position.collateralAmount != _initialCollateral + expectedCollateralDelta) {
             revert Position_IncreasePositionCollateral();
         }
-        if (_positionAfter.positionSize != _positionBefore.positionSize + _sizeDelta) {
+        if (_position.positionSize != _initialSize + _sizeDelta) {
             revert Position_IncreasePositionSize();
         }
     }
 
     function validateDecreasePosition(
-        Data memory _positionBefore,
-        Data memory _positionAfter,
+        Data memory _position,
+        uint256 _initialCollateral,
+        uint256 _initialSize,
         uint256 _collateralOut,
         uint256 _positionFee,
         uint256 _affiliateRebate,
@@ -295,15 +292,14 @@ library Position {
          */
         uint256 expectedCollateralDelta = _collateralOut + _positionFee + _affiliateRebate + _borrowFee;
         // Account for funding / pnl paid out from collateral
-        // @audit - is this correct?
         if (_pnl < 0) expectedCollateralDelta += _pnl.abs();
         if (_fundingFee < 0) expectedCollateralDelta += _fundingFee.abs();
 
-        if (_positionBefore.collateralAmount != _positionAfter.collateralAmount + expectedCollateralDelta) {
+        if (_initialCollateral != _position.collateralAmount + expectedCollateralDelta) {
             revert Position_DecreasePositionCollateral();
         }
 
-        if (_positionBefore.positionSize != _positionAfter.positionSize + _sizeDelta) {
+        if (_initialSize != _position.positionSize + _sizeDelta) {
             revert Position_DecreasePositionSize();
         }
     }
@@ -511,6 +507,7 @@ library Position {
         });
     }
 
+    // @audit - can structure like above for more efficiency
     function createAdlOrder(Data memory _position, uint256 _sizeDelta)
         external
         view

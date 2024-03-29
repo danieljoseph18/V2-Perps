@@ -16,7 +16,6 @@ interface ITradeStorage {
     event FeesSet(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
     event CollateralEdited(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, bool indexed _isIncrease);
     event PositionCreated(bytes32 indexed _positionKey, Position.Data indexed _position);
-    event AdlTargetRatioReached(address _market, int256 _newPnlFactor, bool _isLong);
     event AdlExecuted(address _market, bytes32 _positionKey, uint256 _sizeDelta, bool _isLong);
     event IncreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
     event DecreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
@@ -26,20 +25,14 @@ interface ITradeStorage {
     error TradeStorage_InvalidTradingFee();
     error TradeStorage_OrderAlreadyExists();
     error TradeStorage_PositionDoesNotExist();
-    error TradeStorage_OrderDoesNotExist();
-    error TradeStorage_PositionExists();
     error TradeStorage_OrderAdditionFailed();
     error TradeStorage_PositionAdditionFailed();
-    error TradeStorage_KeyAdditionFailed();
     error TradeStorage_InsufficientFreeLiquidity();
     error TradeStorage_OrderRemovalFailed();
     error TradeStorage_PositionRemovalFailed();
     error TradeStorage_StopLossAlreadySet();
     error TradeStorage_TakeProfitAlreadySet();
     error TradeStorage_InvalidRequestType();
-    error TradeStorage_PositionNotActive();
-    error TradeStorage_PnlToPoolRatioNotExceeded(int256 startingFactor, uint256 maxFactor);
-    error TradeStorage_PNLFactorNotReduced();
 
     function initialize(
         uint256 _liquidationFee,

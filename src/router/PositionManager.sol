@@ -218,6 +218,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         emit MarketRequestCancelled(_requestKey, msg.sender, tokenOut, amountOut);
     }
 
+    // @audit - we need to financially compensate the executor of the trade.
+    // whether this be through a percentage of the fee charged on the position or other.
+    // we essentially need a way to incentivize users to run their own keeper nodes.
     function executePosition(
         IMarket market,
         bytes32 _orderKey,

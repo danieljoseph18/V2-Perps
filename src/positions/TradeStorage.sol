@@ -24,13 +24,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
 
-    uint256 private constant PRECISION = 1e18;
     uint256 private constant MAX_LIQUIDATION_FEE = 0.5e18; // 50%
     uint256 private constant MAX_TRADING_FEE = 0.01e18; // 1%
-    uint256 private constant ADJUSTMENT_FEE = 0.001e18; // 0.1%
-    uint256 private constant MIN_COLLATERAL = 1000;
-    uint256 private constant LONG_BASE_UNIT = 1e18;
-    uint256 private constant SHORT_BASE_UNIT = 1e6;
 
     mapping(bytes32 _key => Position.Request _order) private orders;
     EnumerableSet.Bytes32Set private marketOrderKeys;
@@ -60,7 +55,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     function initialize(
         uint256 _liquidationFee, // 0.05e18 = 5%
         uint256 _positionFee, // 0.001e18 = 0.1%
-        uint256 _minCollateralUsd, // 2e18 = 2 USD
+        uint256 _minCollateralUsd, // 2e30 = 2 USD
         uint256 _minBlockDelay // e.g 1 minutes
     ) external onlyMarketMaker {
         if (isInitialized) revert TradeStorage_AlreadyInitialized();
@@ -92,16 +87,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     /// @dev Adds Order to EnumerableSet
     function createOrderRequest(Position.Request calldata _request) external onlyRouter {
-        // Generate the Key
-        bytes32 orderKey = Position.generateOrderKey(_request);
-        // Create a Storage Pointer to the Order Set
-        EnumerableSet.Bytes32Set storage orderSet = _request.input.isLimit ? limitOrderKeys : marketOrderKeys;
-        // Check if the Order already exists
-        if (orderSet.contains(orderKey)) revert TradeStorage_OrderAlreadyExists();
-        // Add the Order to the Set
-        bool success = orderSet.add(orderKey);
-        if (!success) revert TradeStorage_OrderAdditionFailed();
-        orders[orderKey] = _request;
+        // Create the order
+        bytes32 orderKey = _createOrder(_request);
         // If SL / TP, tie to the position
         if (_request.requestType == Position.RequestType.STOP_LOSS) {
             bytes32 positionKey = Position.generateKey(_request);
@@ -121,14 +108,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyPositionManager {
-        // Create a Storage Pointer to the Order Set
-        EnumerableSet.Bytes32Set storage orderKeys = _isLimit ? limitOrderKeys : marketOrderKeys;
-        // Check if the Order exists
-        if (!orderKeys.contains(_orderKey)) revert TradeStorage_OrderDoesNotExist();
-        // Remove the Order from the Set
-        delete orders[_orderKey];
-        bool success = orderKeys.remove(_orderKey);
-        if (!success) revert TradeStorage_OrderRemovalFailed();
+        // Delete the order
+        _deleteOrder(_orderKey, _isLimit);
         // Fire Event
         emit OrderRequestCancelled(_orderKey);
     }
@@ -142,30 +123,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         nonReentrant
         returns (Execution.State memory state, Position.Request memory request)
     {
-        (state, request) = Execution.constructParams(market, this, priceFeed, _orderKey, _feeReceiver);
+        (state, request) = Execution.constructParams(market, this, priceFeed, referralStorage, _orderKey, _feeReceiver);
         // Fetch the State of the Market Before the Position
         IMarket.MarketStorage memory marketBefore = market.getStorage(request.input.assetId);
-
-        // Calculate Fee
-        state.fee = Position.calculateFee(
-            this,
-            request.input.sizeDelta,
-            request.input.collateralDelta,
-            state.collateralPrice,
-            state.collateralBaseUnit
-        );
-
-        // Calculate & Apply Fee Discount for Referral Code
-        (state.fee, state.affiliateRebate, state.referrer) =
-            Referral.applyFeeDiscount(referralStorage, request.user, state.fee);
-
-        bytes32 positionKey = Position.generateKey(request);
-        Position.Data memory position = openPositions[positionKey];
-        if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            if (Position.exists(position)) revert TradeStorage_PositionExists();
-        } else {
-            if (!Position.exists(position)) revert TradeStorage_PositionDoesNotExist();
-        }
 
         // Delete the Order from Storage
         _deleteOrder(_orderKey, request.input.isLimit);
@@ -177,31 +137,19 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
         // Execute Trade
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            _createNewPosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state, positionKey);
-        } else if (request.requestType == Position.RequestType.POSITION_DECREASE) {
-            _decreasePosition(
-                Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
-            );
+            _createNewPosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
         } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
-            _increasePosition(
-                Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
-            );
+            _increasePosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
+        } else if (
+            request.requestType == Position.RequestType.POSITION_DECREASE
+                || request.requestType == Position.RequestType.TAKE_PROFIT
+                || request.requestType == Position.RequestType.STOP_LOSS
+        ) {
+            _decreasePosition(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
         } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
-            _executeCollateralDecrease(
-                Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
-            );
+            _executeCollateralDecrease(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
         } else if (request.requestType == Position.RequestType.COLLATERAL_INCREASE) {
-            _executeCollateralIncrease(
-                Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
-            );
-        } else if (request.requestType == Position.RequestType.TAKE_PROFIT) {
-            _decreasePosition(
-                Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
-            );
-        } else if (request.requestType == Position.RequestType.STOP_LOSS) {
-            _decreasePosition(
-                Position.Settlement(request, _orderKey, _feeReceiver, false), state, position, positionKey
-            );
+            _executeCollateralIncrease(Position.Settlement(request, _orderKey, _feeReceiver, false), state);
         } else {
             revert TradeStorage_InvalidRequestType();
         }
@@ -217,7 +165,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Fetch the Position
         Position.Data memory position = openPositions[_positionKey];
         // Check the Position Exists
-        if (!Position.exists(position)) revert TradeStorage_PositionDoesNotExist();
+        if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
         // Construct the Execution State
         Execution.State memory state;
         // @audit - is this the right price returned ? (min vs max vs med)
@@ -229,39 +177,27 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Construct Liquidation Order
         Position.Settlement memory params = Position.constructLiquidationOrder(position, _liquidator);
         // Execute the Liquidation
-        _decreasePosition(params, state, position, _positionKey);
+        _decreasePosition(params, state);
         // Fire Event
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }
 
+    // @audit - as we scale, may become hard to keep on top of so many markets
+    // need to consider how this would function if permissionless
+    // probably need to add incentives for keepers to execute, similar to liquidations
     function executeAdl(bytes32 _positionKey, bytes32 _assetId, uint256 _sizeDelta)
         external
         onlyPositionManager
         nonReentrant
     {
-        Execution.State memory state;
-        IMarket.AdlConfig memory adl = MarketUtils.getAdlConfig(market, _assetId);
-        // Check the position in question is active
-        Position.Data memory position = openPositions[_positionKey];
-        if (position.positionSize == 0) revert TradeStorage_PositionNotActive();
-        // Get current MarketUtils and token data
-        state = Execution.cacheTokenPrices(priceFeed, state, position.assetId, position.isLong, false);
-
-        // Set the impacted price to the index price => 0 price impact on ADLs
-        state.impactedPrice = state.indexPrice;
-        state.priceImpactUsd = 0;
-        // Get starting PNL Factor
-        int256 startingPnlFactor = _getPnlFactor(state, _assetId, position.isLong);
-        // fetch max pnl to pool ratio
-        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market, _assetId);
-
-        // Check the PNL Factor is greater than the max PNL Factor
-        if (startingPnlFactor.abs() <= maxPnlFactor || startingPnlFactor < 0) {
-            revert TradeStorage_PnlToPoolRatioNotExceeded(startingPnlFactor, maxPnlFactor);
-        }
-
-        // Construct an ADL Order
-        Position.Settlement memory params = Position.createAdlOrder(position, _sizeDelta);
+        // Construct the Adl order
+        (
+            Execution.State memory state,
+            Position.Settlement memory params,
+            Position.Data memory position,
+            uint256 targetPnlFactor,
+            int256 startingPnlFactor
+        ) = Execution.constructAdlOrder(market, this, priceFeed, _positionKey, _sizeDelta);
 
         // Update the Market State
         _updateMarketState(
@@ -273,42 +209,23 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
 
         // Execute the order
-        _decreasePosition(params, state, position, _positionKey);
+        _decreasePosition(params, state);
 
-        // Get the new PNL to pool ratio
-        int256 newPnlFactor = _getPnlFactor(state, _assetId, position.isLong);
-        // PNL to pool has reduced
-        if (newPnlFactor >= startingPnlFactor) revert TradeStorage_PNLFactorNotReduced();
-        // Check if the new PNL to pool ratio is below the threshold
-        // Fire event to alert the keepers
-        if (newPnlFactor.abs() <= adl.targetPnlFactor) {
-            emit AdlTargetRatioReached(address(market), newPnlFactor, position.isLong);
-        }
+        // Validate the Adl
+        Execution.validateAdl(market, state, startingPnlFactor, targetPnlFactor, _assetId, position.isLong);
+
         emit AdlExecuted(address(market), _positionKey, _sizeDelta, position.isLong);
     }
 
     /**
      * ===================================== Internal Functions =====================================
      */
-    function _executeCollateralIncrease(
-        Position.Settlement memory _params,
-        Execution.State memory _state,
-        Position.Data memory _positionBefore,
-        bytes32 _positionKey
-    ) internal {
+    function _executeCollateralIncrease(Position.Settlement memory _params, Execution.State memory _state) internal {
+        // Get the Position Key
+        bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in Library
         Position.Data memory positionAfter;
-        (positionAfter, _state) = Execution.increaseCollateral(market, _positionBefore, _params, _state);
-        // Validate the Position Change
-        Position.validateCollateralIncrease(
-            _positionBefore,
-            positionAfter,
-            _params.request.input.collateralDelta,
-            _state.fee,
-            _state.fundingFee,
-            _state.borrowFee,
-            _state.affiliateRebate
-        );
+        (positionAfter, _state) = Execution.increaseCollateral(market, this, _params, _state, positionKey);
         // Add Value to Stored Collateral Amount in Market
         market.updateCollateralAmount(
             _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee,
@@ -320,54 +237,34 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (_state.fundingFee < 0) {
             // User Paid Funding
             uint256 absFundingFee = _state.fundingFee.abs();
-            market.updatePoolBalance(absFundingFee, _positionBefore.isLong, true);
+            market.updatePoolBalance(absFundingFee, positionAfter.isLong, true);
         } else if (_state.fundingFee > 0) {
             // User got Paid Funding
             uint256 absFundingFee = _state.fundingFee.abs();
-            market.updatePoolBalance(absFundingFee, _positionBefore.isLong, false);
+            market.updatePoolBalance(absFundingFee, positionAfter.isLong, false);
         }
         // Pay Fees
         _payFees(_state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
         // Update Final Storage
-        openPositions[_positionKey] = positionAfter;
-        emit CollateralEdited(_positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
+        openPositions[positionKey] = positionAfter;
+        emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    function _executeCollateralDecrease(
-        Position.Settlement memory _params,
-        Execution.State memory _state,
-        Position.Data memory _positionBefore,
-        bytes32 _positionKey
-    ) internal {
+    function _executeCollateralDecrease(Position.Settlement memory _params, Execution.State memory _state) internal {
+        // Get the Position Key
+        bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in Library
         Position.Data memory positionAfter;
-        (positionAfter, _state) =
-            Execution.decreaseCollateral(market, _positionBefore, _params, _state, minCollateralUsd, liquidationFee);
-        // Transfer Tokens to User
-        uint256 amountOut =
-            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee;
-        // Add / Subtract funding fees
+        uint256 amountOut;
+        (positionAfter, _state, amountOut) =
+            Execution.decreaseCollateral(market, this, _params, _state, minCollateralUsd, liquidationFee, positionKey);
         if (_state.fundingFee < 0) {
             // User Paid Funding
-            uint256 absFundingFee = _state.fundingFee.abs();
-            amountOut -= absFundingFee;
-            market.updatePoolBalance(absFundingFee, _positionBefore.isLong, true);
+            market.updatePoolBalance(_state.fundingFee.abs(), positionAfter.isLong, true);
         } else if (_state.fundingFee > 0) {
             // User got Paid Funding
-            uint256 absFundingFee = _state.fundingFee.abs();
-            amountOut += absFundingFee;
-            market.updatePoolBalance(absFundingFee, _positionBefore.isLong, false);
+            market.updatePoolBalance(_state.fundingFee.abs(), positionAfter.isLong, false);
         }
-        // Validate the Position Change
-        Position.validateCollateralDecrease(
-            _positionBefore,
-            positionAfter,
-            amountOut,
-            _state.fee,
-            _state.fundingFee,
-            _state.borrowFee,
-            _state.affiliateRebate
-        );
         // Check Market has enough available liquidity for payout
         if (
             MarketUtils.getPoolBalance(market, _params.request.input.assetId, _params.request.input.isLong)
@@ -382,7 +279,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Pay Fees
         _payFees(_state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
         // Update Final Storage
-        openPositions[_positionKey] = positionAfter;
+        openPositions[positionKey] = positionAfter;
         // Transfer Tokens to User
         market.transferOutTokens(
             _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.reverseWrap
@@ -397,27 +294,25 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             );
         }
         // Fire Event
-        emit CollateralEdited(_positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
+        emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
 
-    function _createNewPosition(Position.Settlement memory _params, Execution.State memory _state, bytes32 _positionKey)
-        internal
-    {
+    function _createNewPosition(Position.Settlement memory _params, Execution.State memory _state) internal {
+        // Get the Position Key
+        bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in the Library
         Position.Data memory position;
-        (position, _state) = Execution.createNewPosition(market, _params, _state, minCollateralUsd);
-        // Validate the New Position
-        Position.validateNewPosition(
-            _params.request.input.collateralDelta, position.collateralAmount, _state.fee, _state.affiliateRebate
-        );
+        (position, _state) = Execution.createNewPosition(market, this, _params, _state, minCollateralUsd, positionKey);
         // If Request has conditionals, create the SL / TP
         (Position.Request memory stopLoss, Position.Request memory takeProfit) = Position.constructConditionalOrders(
             position, _params.request.input.conditionals, _params.request.input.executionFee
         );
         // If stop loss set, create and store the order
-        if (_params.request.input.conditionals.stopLossSet) position.stopLossKey = _createStopLoss(stopLoss);
+        if (_params.request.input.conditionals.stopLossSet) position.stopLossKey = _createOrder(stopLoss);
         // If take profit set, create and store the order
-        if (_params.request.input.conditionals.takeProfitSet) position.takeProfitKey = _createTakeProfit(takeProfit);
+        if (_params.request.input.conditionals.takeProfitSet) {
+            position.takeProfitKey = _createOrder(takeProfit);
+        }
         // Pay fees
         _payFees(0, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
         // Reserve Liquidity Equal to the Position Size
@@ -430,33 +325,19 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.isLong
         );
         // Update Final Storage
-        openPositions[_positionKey] = position;
-        bool success = openPositionKeys[position.isLong].add(_positionKey);
+        openPositions[positionKey] = position;
+        bool success = openPositionKeys[position.isLong].add(positionKey);
         if (!success) revert TradeStorage_PositionAdditionFailed();
         // Fire Event
-        emit PositionCreated(_positionKey, position);
+        emit PositionCreated(positionKey, position);
     }
 
-    function _increasePosition(
-        Position.Settlement memory _params,
-        Execution.State memory _state,
-        Position.Data memory _positionBefore,
-        bytes32 _positionKey
-    ) internal {
+    function _increasePosition(Position.Settlement memory _params, Execution.State memory _state) internal {
+        // Get the Position Key
+        bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in the Library
-        Position.Data memory positionAfter;
-        (positionAfter, _state) = Execution.increasePosition(market, _positionBefore, _params, _state);
-        // Validate the Position Change
-        Position.validateIncreasePosition(
-            _positionBefore,
-            positionAfter,
-            _params.request.input.collateralDelta,
-            _state.fee,
-            _state.affiliateRebate,
-            _state.fundingFee,
-            _state.borrowFee,
-            _params.request.input.sizeDelta
-        );
+        Position.Data memory position;
+        (position, _state) = Execution.increasePosition(market, this, _params, _state, positionKey);
         // Pay Fees
         _payFees(_state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
         // Reserve Liquidity Equal to the Position Size
@@ -465,57 +346,43 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee,
             _state.collateralPrice,
             _state.collateralBaseUnit,
-            _positionBefore.user,
+            position.user,
             _params.request.input.isLong
         );
         // If user's position has increased with positive funding, need to subtract from the pool
-        if (_state.fundingFee > 0) {
-            market.updatePoolBalance(_state.fundingFee.abs(), _positionBefore.isLong, false);
-        } else if (_state.fundingFee < 0) {
-            // If user's position has decreased with negative funding, need to add to the pool
-            market.updatePoolBalance(_state.fundingFee.abs(), _positionBefore.isLong, true);
-        }
+        // If user's position has decreased with negative funding, need to add to the pool
+        if (_state.fundingFee > 0) market.updatePoolBalance(_state.fundingFee.abs(), position.isLong, false);
+        else if (_state.fundingFee < 0) market.updatePoolBalance(_state.fundingFee.abs(), position.isLong, true);
         // Update Final Storage
-        openPositions[_positionKey] = positionAfter;
+        openPositions[positionKey] = position;
         // Fire event
-        emit IncreasePosition(_positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
+        emit IncreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
-    function _decreasePosition(
-        Position.Settlement memory _params,
-        Execution.State memory _state,
-        Position.Data memory _positionBefore,
-        bytes32 _positionKey
-    ) internal {
-        // If SL / TP, clear from the position
-        if (_params.request.requestType == Position.RequestType.STOP_LOSS) {
-            _positionBefore.stopLossKey = bytes32(0);
-        } else if (_params.request.requestType == Position.RequestType.TAKE_PROFIT) {
-            _positionBefore.takeProfitKey = bytes32(0);
-        }
+    function _decreasePosition(Position.Settlement memory _params, Execution.State memory _state) internal {
+        // Get the Position Key
+        bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in the Library
         Position.Data memory positionAfter;
         Execution.DecreaseState memory decreaseState;
         (positionAfter, decreaseState, _state) =
-            Execution.decreasePosition(market, _positionBefore, _params, _state, minCollateralUsd, liquidationFee);
+            Execution.decreasePosition(market, this, _params, _state, minCollateralUsd, liquidationFee, positionKey);
 
         uint256 amountOut;
 
         // @audit - state changes correct?
         if (decreaseState.isLiquidation) {
             // Remanining collateral after fees is added to the relevant pool
-            market.updatePoolBalance(_positionBefore.collateralAmount, _positionBefore.isLong, true);
+            market.updatePoolBalance(positionAfter.collateralAmount, positionAfter.isLong, true);
             // Accumulate the fees to accumulate
-            market.accumulateFees(decreaseState.feesToAccumulate, _positionBefore.isLong);
+            market.accumulateFees(decreaseState.feesToAccumulate, positionAfter.isLong);
             // Set amount out
             amountOut = decreaseState.feesOwedToUser;
             // Decrease the pool amount by the amount being payed out to the user
             if (amountOut > 0) {
-                market.updatePoolBalance(amountOut, _positionBefore.isLong, false);
+                market.updatePoolBalance(amountOut, positionAfter.isLong, false);
             }
         } else {
-            // Validate the Position Change
-            _validateDecrease(_positionBefore, positionAfter, decreaseState, _state, _params.request.input.sizeDelta);
             // Pay Fees
             _payFees(
                 _state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong
@@ -528,7 +395,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             amountOut += _state.fundingFee > 0 ? _state.fundingFee.abs() : 0;
             // If profit being payed out, need to decrease the pool amount by the profit
             if (amountOut > decreaseState.afterFeeAmount) {
-                market.updatePoolBalance(amountOut - decreaseState.afterFeeAmount, _positionBefore.isLong, false);
+                market.updatePoolBalance(amountOut - decreaseState.afterFeeAmount, positionAfter.isLong, false);
             }
         }
 
@@ -538,16 +405,16 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.collateralDelta,
             _state.collateralPrice,
             _state.collateralBaseUnit,
-            _positionBefore.user,
+            positionAfter.user,
             _params.request.input.isLong
         );
 
         // Delete the Position if Full Decrease
         if (positionAfter.positionSize == 0 || positionAfter.collateralAmount == 0) {
-            _deletePosition(_positionKey, _params.request.input.isLong);
+            _deletePosition(positionKey, _params.request.input.isLong);
         } else {
             // Update Final Storage
-            openPositions[_positionKey] = positionAfter;
+            openPositions[positionKey] = positionAfter;
         }
 
         // Check Market has enough available liquidity for payout
@@ -560,7 +427,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             market.transferOutTokens(
                 _params.feeReceiver, // Liquidator
                 decreaseState.liqFee,
-                _positionBefore.isLong,
+                positionAfter.isLong,
                 true // Unwrap by default
             );
         }
@@ -580,21 +447,20 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             );
         }
         // Fire Event
-        emit DecreasePosition(_positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
+        emit DecreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
-    function _createStopLoss(Position.Request memory _stopLoss) internal returns (bytes32 stopLossKey) {
-        stopLossKey = Position.generateOrderKey(_stopLoss);
-        bool success = limitOrderKeys.add(stopLossKey);
-        if (!success) revert TradeStorage_KeyAdditionFailed();
-        orders[stopLossKey] = _stopLoss;
-    }
-
-    function _createTakeProfit(Position.Request memory _takeProfit) internal returns (bytes32 takeProfitKey) {
-        takeProfitKey = Position.generateOrderKey(_takeProfit);
-        bool success = limitOrderKeys.add(takeProfitKey);
-        if (!success) revert TradeStorage_KeyAdditionFailed();
-        orders[takeProfitKey] = _takeProfit;
+    function _createOrder(Position.Request memory _request) internal returns (bytes32 orderKey) {
+        // Generate the Key
+        orderKey = Position.generateOrderKey(_request);
+        // Create a Storage Pointer to the Order Set
+        EnumerableSet.Bytes32Set storage orderSet = _request.input.isLimit ? limitOrderKeys : marketOrderKeys;
+        // Check if the Order already exists
+        if (orderSet.contains(orderKey)) revert TradeStorage_OrderAlreadyExists();
+        // Add the Order to the Set
+        bool success = orderSet.add(orderKey);
+        if (!success) revert TradeStorage_OrderAdditionFailed();
+        orders[orderKey] = _request;
     }
 
     function _deletePosition(bytes32 _positionKey, bool _isLong) internal {
@@ -679,46 +545,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (_affiliateRebate > 0) {
             referralStorage.accumulateAffiliateRewards(address(market), _referrer, _isLong, _affiliateRebate);
         }
-    }
-
-    /// @dev Internal function to prevent STD Err
-    function _validateDecrease(
-        Position.Data memory _positionBefore,
-        Position.Data memory _positionAfter,
-        Execution.DecreaseState memory _decreaseState,
-        Execution.State memory _state,
-        uint256 _sizeDelta
-    ) internal pure {
-        Position.validateDecreasePosition(
-            _positionBefore,
-            _positionAfter,
-            _decreaseState.afterFeeAmount,
-            _state.fee,
-            _state.affiliateRebate,
-            _decreaseState.decreasePnl,
-            _state.fundingFee,
-            _state.borrowFee,
-            _sizeDelta
-        );
-    }
-
-    /**
-     * Extrapolated into an internal function to prevent STD Errors
-     */
-    function _getPnlFactor(Execution.State memory _state, bytes32 _assetId, bool _isLong)
-        internal
-        view
-        returns (int256 pnlFactor)
-    {
-        pnlFactor = MarketUtils.getPnlFactor(
-            market,
-            _assetId,
-            _state.indexPrice,
-            _state.indexBaseUnit,
-            _state.collateralPrice,
-            _state.collateralBaseUnit,
-            _isLong
-        );
     }
 
     /**
