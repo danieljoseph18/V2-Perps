@@ -12,22 +12,12 @@ library Borrowing {
     using SignedMath for int256;
 
     uint256 private constant PRECISION = 1e18;
-
-    struct BorrowingState {
-        IMarket.BorrowingConfig config;
-        UD60x18 openInterestUsd;
-        UD60x18 poolBalance;
-        UD60x18 adjustedOiExponent;
-        UD60x18 borrowingFactor;
-        int256 pendingPnl;
-    }
+    uint256 private constant SECONDS_PER_DAY = 86400;
 
     function updateState(
         IMarket market,
         IMarket.BorrowingValues memory borrowing,
         bytes32 _assetId,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
@@ -35,15 +25,11 @@ library Borrowing {
         if (_isLong) {
             borrowing.longCumulativeBorrowFees +=
                 calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.longBorrowingRate = calculateRate(
-                market, _assetId, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, true
-            );
+            borrowing.longBorrowingRate = calculateRate(market, _assetId, _collateralPrice, _collateralBaseUnit, true);
         } else {
             borrowing.shortCumulativeBorrowFees +=
                 calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.shortBorrowingRate = calculateRate(
-                market, _assetId, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, false
-            );
+            borrowing.shortBorrowingRate = calculateRate(market, _assetId, _collateralPrice, _collateralBaseUnit, false);
         }
 
         borrowing.lastBorrowUpdate = uint48(block.timestamp);
@@ -52,58 +38,32 @@ library Borrowing {
     }
 
     /**
-     * Borrowing Fees are paid from open positions to liquidity providers in exchange
-     * for reserving liquidity for their position.
-     *
-     * Long Fee Calculation: borrowing factor * (open interest in usd + pending pnl) ^ (borrowing exponent factor) / (pool usd)
-     * Short Fee Calculation: borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
+     * We need a configured borrow scale. This scale represents the maximium possible borrowing fee.
+     * Can be a daily max fee, or a max fee per second.
+     * We will then apply a factor to the scale to get the actual borrowing fee.
+     * The factor will be determined by the scareceness of available liquidity.
+     * The calculation for the factor is simply (open interest usd / max open interest usd).
+     * If OI is low, fee will be low, if OI is close to max, fee will be close to max.
      */
-    // @audit - can we make this more efficient?
     function calculateRate(
         IMarket market,
         bytes32 _assetId,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) public view returns (uint256 rate) {
-        BorrowingState memory state;
-        // Calculate the new Borrowing Rate
-        state.config = MarketUtils.getBorrowingConfig(market, _assetId);
-        state.borrowingFactor = ud(state.config.factor);
-        if (_isLong) {
-            // get the long open interest
-            state.openInterestUsd = ud(MarketUtils.getOpenInterest(market, _assetId, true));
-            // get the long pending pnl
-            state.pendingPnl = MarketUtils.getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, true);
-            // get the long pool balance
-            state.poolBalance =
-                ud(MarketUtils.getPoolBalanceUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, true));
-            // Adjust the OI by the Pending PNL
-            if (state.pendingPnl > 0) {
-                state.openInterestUsd = state.openInterestUsd.add(ud(uint256(state.pendingPnl)));
-            } else if (state.pendingPnl < 0) {
-                state.openInterestUsd = state.openInterestUsd.sub(ud(state.pendingPnl.abs()));
-            }
-            state.adjustedOiExponent = state.openInterestUsd.powu(state.config.exponent);
-            // calculate the long rate
-            rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
-        } else {
-            // get the short open interest
-            state.openInterestUsd = ud(MarketUtils.getOpenInterest(market, _assetId, false));
-            // get the short pool balance
-            state.poolBalance =
-                ud(MarketUtils.getPoolBalanceUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, false));
-            // calculate the short rate
-            state.adjustedOiExponent = state.openInterestUsd.powu(state.config.exponent);
-            rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
-        }
+    ) public view returns (uint256 borrowRatePerDay) {
+        uint256 factor = mulDiv(
+            MarketUtils.getOpenInterest(market, _assetId, _isLong),
+            PRECISION,
+            MarketUtils.getAvailableOiUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, _isLong)
+        );
+        borrowRatePerDay = mulDiv(market.borrowScale(), factor, PRECISION);
     }
 
     function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) public view returns (uint256 fee) {
         uint256 timeElapsed = block.timestamp - _lastUpdate;
-        fee = _rate * timeElapsed;
+        if (timeElapsed == 0) return 0;
+        fee = mulDiv(_rate, timeElapsed, SECONDS_PER_DAY);
     }
 
     function getTotalFeesOwedByMarkets(IMarket market, bool _isLong) external view returns (uint256 totalFeeUsd) {

@@ -134,10 +134,6 @@ interface IMarket {
          */
         FundingConfig funding;
         /**
-         * Borrowing Config Values
-         */
-        BorrowingConfig borrowing;
-        /**
          * Price Impact Config Values
          */
         ImpactConfig impact;
@@ -174,11 +170,6 @@ interface IMarket {
          * Units: % Per Day
          */
         uint256 fundingVelocityClamp;
-    }
-
-    struct BorrowingConfig {
-        uint256 factor;
-        uint256 exponent;
     }
 
     // Used to scale price impact per market
@@ -234,6 +225,7 @@ interface IMarket {
     error Market_InvalidETHTransfer();
     error Market_MinimumAssetsReached();
     error Market_SingleAssetMarket();
+    error Market_InvalidBorrowScale();
 
     /**
      * ================ Events ================
@@ -292,7 +284,7 @@ interface IMarket {
     /**
      * ================ Functions ================
      */
-    function initialize(address _tradeStorage) external;
+    function initialize(address _tradeStorage, uint256 _borrowScale) external;
     function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations) external;
     function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external;
     function updateMarketState(
@@ -300,8 +292,7 @@ interface IMarket {
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
-        uint256 _longPrice,
-        uint256 _shortPrice,
+        uint256 _collateralPrice,
         bool _isLong,
         bool _isIncrease
     ) external;
@@ -310,6 +301,7 @@ interface IMarket {
 
     function tradeStorage() external view returns (address);
     function MARKET_TOKEN() external view returns (IMarketToken);
+    function borrowScale() external view returns (uint256);
     function getAssetIds() external view returns (bytes32[] memory);
     function getAssetsInMarket() external view returns (uint256);
     function getStorage(bytes32 _assetId) external view returns (MarketStorage memory);

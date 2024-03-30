@@ -212,8 +212,8 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         );
         // Create new TradeStorage contract
         TradeStorage tradeStorage = new TradeStorage(market, referralStorage, priceFeed, address(roleStorage));
-        // Initialize Market with TradeStorage
-        market.initialize(address(tradeStorage));
+        // Initialize Market with TradeStorage and 0.3% Borrow Scale
+        market.initialize(address(tradeStorage), 0.003e18);
         // Initialize TradeStorage with Default values
         tradeStorage.initialize(0.05e18, 0.001e18, 2e30, 10);
 

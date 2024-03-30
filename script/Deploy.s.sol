@@ -117,10 +117,6 @@ contract Deploy is Script {
                 skewScale: 1_000_000e30, // 1 Mil USD
                 fundingVelocityClamp: 0.00001e18 // 0.001% per day
             }),
-            borrowing: IMarket.BorrowingConfig({
-                factor: 0.000000035e18, // 0.0000035% per second
-                exponent: 1
-            }),
             // Should never be 0
             // All are percentages between 1 (1e-30) and 1e30 (100%)
             impact: IMarket.ImpactConfig({

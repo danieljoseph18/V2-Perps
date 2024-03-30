@@ -622,15 +622,6 @@ library MarketUtils {
         return marketStorage.config;
     }
 
-    function getBorrowingConfig(IMarket market, bytes32 _assetId)
-        external
-        view
-        returns (IMarket.BorrowingConfig memory)
-    {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
-        return marketStorage.config.borrowing;
-    }
-
     function getFundingConfig(IMarket market, bytes32 _assetId) external view returns (IMarket.FundingConfig memory) {
         IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
         return marketStorage.config.funding;

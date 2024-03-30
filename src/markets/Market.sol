@@ -26,10 +26,12 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     uint256 private constant BITMASK_16 = type(uint256).max >> (256 - 16);
     uint16 private constant TOTAL_ALLOCATION = 10000;
-    uint64 private constant SCALING_FACTOR = 1e18;
     // Max 100 assets per market (could fit 12 more in last uint256, but 100 used for simplicity)
     // Fits 16 allocations per uint256
     uint8 private constant MAX_ASSETS = 100;
+    uint64 private constant SCALING_FACTOR = 1e18;
+    uint64 private constant MIN_BORROW_SCALE = 0.0001e18; // 0.01% per day
+    uint64 private constant MAX_BORROW_SCALE = 0.01e18; // 1% per day
     uint64 public constant BASE_FEE = 0.001e18; // 0.1%
     // Value = Max Bonus Fee
     // Users will be charged a % of this fee based on the skew of the market
@@ -61,6 +63,12 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     uint256 public shortTokenBalance;
     uint256 public longTokensReserved;
     uint256 public shortTokensReserved;
+    /**
+     * Maximum borrowing fee per day as a percentage.
+     * The current borrowing fee will fluctuate along this scale,
+     * based on the open interest to max open interest ratio.
+     */
+    uint256 public borrowScale;
 
     // Store the Collateral Amount for each User
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
@@ -127,9 +135,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         if (msg.sender != WETH) revert Market_InvalidETHTransfer();
     }
 
-    function initialize(address _tradeStorage) external onlyMarketMaker {
+    function initialize(address _tradeStorage, uint256 _borrowScale) external onlyMarketMaker {
         if (isInitialized) revert Market_AlreadyInitialized();
         tradeStorage = _tradeStorage;
+        borrowScale = _borrowScale;
         isInitialized = true;
         emit Market_Initialzied();
     }
@@ -178,6 +187,16 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         feeDistributor = _feeDistributor;
     }
 
+    function updateBorrowScale(uint256 _borrowScale) external onlyConfigurator(address(this)) {
+        if (_borrowScale < MIN_BORROW_SCALE || _borrowScale > MAX_BORROW_SCALE) revert Market_InvalidBorrowScale();
+        borrowScale = _borrowScale;
+    }
+
+    /**
+     * @dev Sensitive Function. Config must be validated before calling this function.
+     * Unrealistic values may lead to unexpected behavior in the system.
+     * Permissions restricted to only a super-user.
+     */
     function updateConfig(Config memory _config, bytes32 _assetId) external onlyAdmin {
         marketStorage[_assetId].config = _config;
         emit MarketConfigUpdated(_assetId, _config);
@@ -196,7 +215,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
-        uint256 _indexBaseUnit,
         uint256 _collateralPrice,
         bool _isLong,
         bool _isIncrease
@@ -216,9 +234,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             _updateOpenInterest(_assetId, _sizeDelta, _isLong, _isIncrease);
         }
         // 4. Relies on Updated Open interest
-        _updateBorrowingRate(
-            _assetId, _indexPrice, _indexBaseUnit, _collateralPrice, _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT, _isLong
-        );
+        _updateBorrowingRate(_assetId, _collateralPrice, _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT, _isLong);
         // Fire Event
         emit MarketStateUpdated(_assetId, _isLong);
     }
@@ -457,18 +473,12 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         marketStorage[_assetId].funding = Funding.updateState(this, funding, _assetId, _indexPrice);
     }
 
-    function _updateBorrowingRate(
-        bytes32 _assetId,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit,
-        bool _isLong
-    ) internal {
+    function _updateBorrowingRate(bytes32 _assetId, uint256 _collateralPrice, uint256 _collateralBaseUnit, bool _isLong)
+        internal
+    {
         BorrowingValues memory borrowing = marketStorage[_assetId].borrowing;
-        marketStorage[_assetId].borrowing = Borrowing.updateState(
-            this, borrowing, _assetId, _indexPrice, _indexBaseUnit, _collateralPrice, _collateralBaseUnit, _isLong
-        );
+        marketStorage[_assetId].borrowing =
+            Borrowing.updateState(this, borrowing, _assetId, _collateralPrice, _collateralBaseUnit, _isLong);
     }
 
     /**
