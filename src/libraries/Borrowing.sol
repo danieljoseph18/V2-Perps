@@ -3,7 +3,6 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
@@ -38,10 +37,8 @@ library Borrowing {
     }
 
     /**
-     * We need a configured borrow scale. This scale represents the maximium possible borrowing fee.
-     * Can be a daily max fee, or a max fee per second.
-     * We will then apply a factor to the scale to get the actual borrowing fee.
-     * The factor will be determined by the scareceness of available liquidity.
+     * Borrow scale represents the maximium possible borrowing fee per day.
+     * We then apply a factor to the scale to get the actual borrowing fee.
      * The calculation for the factor is simply (open interest usd / max open interest usd).
      * If OI is low, fee will be low, if OI is close to max, fee will be close to max.
      */

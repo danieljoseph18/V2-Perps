@@ -141,19 +141,14 @@ contract TestBorrowing is Test {
         _;
     }
 
-    /**
-     * Config:
-     * - Factor: 0.000000035e18 or 0.0000035% per second
-     * - Exponent: 1
-     */
     function testCalculateBorrowFeesSinceUpdateForDifferentDistances(uint256 _distance) public {
         _distance = bound(_distance, 1, 3650000 days); // 10000 years
-        uint256 rate = 0.000000035e18;
+        uint256 rate = 0.001e18;
         vm.warp(block.timestamp + _distance);
         vm.roll(block.number + 1);
         uint256 lastUpdate = block.timestamp - _distance;
         uint256 computedVal = Borrowing.calculateFeesSinceUpdate(rate, lastUpdate);
-        assertEq(computedVal, rate * _distance);
+        assertEq(computedVal, (rate * _distance) / 86400, "Unmatched Values");
     }
 
     function testCalculatingTotalFeesOwedInCollateralTokensNoExistingCumulative(uint256 _collateral, uint256 _leverage)
@@ -168,7 +163,7 @@ contract TestBorrowing is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -284,46 +279,57 @@ contract TestBorrowing is Test {
         assertEq(feesOwed, expectedFees);
     }
 
-    function testBorrowingRateCalculationBasic() public setUpMarkets {
-        // Open a position to alter the borrowing rate
-        Position.Input memory input = Position.Input({
-            assetId: ethAssetId,
-            collateralToken: weth,
-            collateralDelta: 0.5 ether,
-            sizeDelta: 10_000e30,
-            limitPrice: 0,
-            maxSlippage: 0.4e18,
-            executionFee: 0.01 ether,
-            isLong: true,
-            isLimit: false,
-            isIncrease: true,
-            reverseWrap: true,
-            conditionals: Position.Conditionals({
-                stopLossSet: false,
-                takeProfitSet: false,
-                stopLossPrice: 0,
-                takeProfitPrice: 0,
-                stopLossPercentage: 0,
-                takeProfitPercentage: 0
-            })
-        });
-        vm.prank(USER);
-        router.createPositionRequest{value: 0.51 ether}(input);
+    /**
+     * function calculateRate(
+     *     IMarket market,
+     *     bytes32 _assetId,
+     *     uint256 _collateralPrice,
+     *     uint256 _collateralBaseUnit,
+     *     bool _isLong
+     * ) public view returns (uint256 borrowRatePerDay) {
+     *     uint256 factor = mulDiv(
+     *         MarketUtils.getOpenInterest(market, _assetId, _isLong),
+     *         PRECISION,
+     *         MarketUtils.getAvailableOiUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, _isLong)
+     *     );
+     *     borrowRatePerDay = mulDiv(market.borrowScale(), factor, PRECISION);
+     * }
+     */
+    function testBorrowingRateCalculation(uint256 _openInterest, uint256 _poolBalance, bool _isLong)
+        public
+        setUpMarkets
+    {
+        vm.assume(_poolBalance < 100_000 ether);
+        uint256 collateralPrice = _isLong ? 2500e30 : 1e30;
+        uint256 collateralBaseUnit = _isLong ? 1e18 : 1e6;
+        uint256 maxOi = mulDiv(mulDiv(_poolBalance, collateralPrice, collateralBaseUnit), 8, 10);
+        vm.assume(_openInterest < maxOi);
 
-        vm.prank(OWNER);
-        positionManager.executePosition{value: 0.01 ether}(
-            market, tradeStorage.getOrderAtIndex(0, false), OWNER, ethPriceData
+        // Mock the open interest and available open interest on the market
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
+        if (_isLong) {
+            mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
+        } else {
+            mockedMarketStorage.openInterest.shortOpenInterest = _openInterest;
+        }
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
+            abi.encode(mockedMarketStorage) // Mock return value
         );
-
-        // Fetch the borrowing rate
-        uint256 borrowingRate = MarketUtils.getBorrowingRate(market, ethAssetId, true);
-        // Cross check
-        assertGt(borrowingRate, 0);
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.totalAvailableLiquidity.selector, _isLong),
+            abi.encode(_poolBalance)
+        );
+        // calculate the expected rate
+        uint256 expectedRate = mulDiv(market.borrowScale(), _openInterest, maxOi);
+        // compare with the actual rate
+        uint256 actualRate = Borrowing.calculateRate(market, ethAssetId, collateralPrice, collateralBaseUnit, _isLong);
+        // Check off by 1 for round down
+        assertApproxEqAbs(actualRate, expectedRate, 1, "Unmatched Values");
     }
 
-    /**
-     * ========================= New Tests =========================
-     */
     function testGetNextAverageCumulativeCalculationLong(
         uint256 _lastCumulative,
         uint256 _prevAverageCumulative,

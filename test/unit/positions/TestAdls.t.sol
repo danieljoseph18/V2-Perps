@@ -160,7 +160,7 @@ contract TestADLs is Test {
             collateralDelta: 125_000e6,
             sizeDelta: 3_500_000e30,
             limitPrice: 0,
-            maxSlippage: 0.9999e18,
+            maxSlippage: 0.9999e30,
             executionFee: 0.01 ether,
             isLong: false,
             isLimit: false,

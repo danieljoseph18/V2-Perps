@@ -23,6 +23,7 @@ library PriceImpact {
     error PriceImpact_NoAvailableLiquidity();
     error PriceImpact_InvalidState();
     error PriceImpact_SlippageExceedsMax();
+    error PriceImpact_InvalidDecrease();
 
     uint256 private constant PRICE_PRECISION = 1e30;
     int256 private constant SIGNED_PRICE_PRECISION = 1e30;
@@ -37,7 +38,7 @@ library PriceImpact {
         int256 skewAfter;
         int256 priceImpactUsd;
         int256 oiPercentage;
-        uint256 availableOi;
+        int256 availableOi;
     }
 
     /**
@@ -57,23 +58,26 @@ library PriceImpact {
         // Get long / short Oi -> used to calculate skew
         state.longOi = MarketUtils.getOpenInterest(market, _request.input.assetId, true);
         state.shortOi = MarketUtils.getOpenInterest(market, _request.input.assetId, false);
-        // Used to alculate the impact on available liquidity
+        // Used to calculate the impact on available liquidity
         state.availableOi = MarketUtils.getTotalAvailableOiUsd(
             market, _request.input.assetId, _orderState.longMarketTokenPrice, _orderState.shortMarketTokenPrice
-        );
+        ).toInt256();
         if (state.availableOi == 0) revert PriceImpact_NoAvailableLiquidity();
 
         state.totalOiBefore = state.longOi + state.shortOi;
+
         int256 sizeDeltaUsd;
         if (_request.input.isIncrease) {
             sizeDeltaUsd = _request.input.sizeDelta.toInt256();
             state.totalOiAfter = state.totalOiBefore + _request.input.sizeDelta;
         } else {
+            if (_request.input.sizeDelta > state.totalOiBefore) revert PriceImpact_InvalidDecrease();
             sizeDeltaUsd = -_request.input.sizeDelta.toInt256();
             state.totalOiAfter = state.totalOiBefore - _request.input.sizeDelta;
         }
         state.skewBefore = state.longOi.toInt256() - state.shortOi.toInt256();
-        state.skewAfter = state.longOi.toInt256() - state.shortOi.toInt256() + sizeDeltaUsd;
+        _request.input.isLong ? state.longOi += _request.input.sizeDelta : state.shortOi += _request.input.sizeDelta;
+        state.skewAfter = state.longOi.toInt256() - state.shortOi.toInt256();
 
         // Compare the MSBs to determine whether a skew flip has occurred
         if ((state.skewBefore ^ state.skewAfter) < 0) {
@@ -86,8 +90,8 @@ library PriceImpact {
             // Calculate positive impact before the sign flips
             int256 positiveImpact = _calculateImpact(
                 sizeDeltaUsd,
-                state.skewBefore,
                 0,
+                state.skewBefore,
                 state.impact.positiveSkewScalar,
                 state.impact.positiveLiquidityScalar,
                 state.totalOiBefore,
@@ -97,8 +101,8 @@ library PriceImpact {
             // Calculate negative impact after the sign flips
             int256 negativeImpact = _calculateImpact(
                 sizeDeltaUsd,
-                0,
                 state.skewAfter,
+                0,
                 state.impact.negativeSkewScalar,
                 state.impact.negativeLiquidityScalar,
                 state.totalOiBefore,
@@ -141,12 +145,18 @@ library PriceImpact {
             priceImpactUsd = _validateImpactDelta(market, _request.input.assetId, priceImpactUsd);
         }
         // calculate the impacted price
-        impactedPrice = _calculateImpactedPrice(_request.input.sizeDelta, _orderState.indexPrice, priceImpactUsd);
+        impactedPrice = _calculateImpactedPrice(
+            _request.input.sizeDelta, _orderState.indexPrice, priceImpactUsd, _request.input.isLong
+        );
         // check the slippage if negative
         if (priceImpactUsd < 0) {
             _checkSlippage(impactedPrice, _orderState.indexPrice, _request.input.maxSlippage);
         }
     }
+
+    /**
+     * ========================= Internal Functions =========================
+     */
 
     /**
      * PriceImpact = sizeDeltaUsd * skewScalar((skewBefore/totalOiBefore) - (skewAfter/totalOiAfter)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
@@ -160,28 +170,29 @@ library PriceImpact {
         int256 _liquidityScalar,
         uint256 _totalOiBefore,
         uint256 _totalOiAfter,
-        uint256 _availableOi
+        int256 _availableOi
     ) internal pure returns (int256 priceImpactUsd) {
         /**
          * If totalOiBefore is 0, the (skewBefore/totalOiBefore) term is cancelled out.
+         * Price impact will always be negative when total oi before is 0.
          * In this case, skewFactor = skewScalar * (skewAfter/totalOiAfter)
          */
         int256 skewFactor = _totalOiBefore == 0
-            ? mulDivSigned(_skewAfter, _skewScalar, _totalOiAfter.toInt256())
+            ? -mulDivSigned(_skewAfter, _skewScalar, _totalOiAfter.toInt256())
             : mulDivSigned(_skewBefore, _skewScalar, _totalOiBefore.toInt256())
                 - mulDivSigned(_skewAfter, _skewScalar, _totalOiAfter.toInt256());
-        // availableOi != 0, and sizeDelta is always <= availableOi.
-        int256 liquidityFactor = mulDivSigned(_sizeDeltaUsd, _liquidityScalar, _availableOi.toInt256());
+
+        if (_sizeDeltaUsd > _availableOi) revert PriceImpact_InvalidState();
+        int256 liquidityFactor = mulDivSigned(_sizeDeltaUsd, _liquidityScalar, _availableOi);
+
         // Calculates the cumulative impact on both skew, and liquidity as a percentage.
         int256 cumulativeImpact = mulDivSigned(skewFactor, liquidityFactor, SIGNED_PRICE_PRECISION);
+
         // Calculate the Price Impact
         priceImpactUsd = mulDivSigned(_sizeDeltaUsd, cumulativeImpact, SIGNED_PRICE_PRECISION);
     }
 
-    /**
-     * ========================= Internal Functions =========================
-     */
-    function _calculateImpactedPrice(uint256 _sizeDeltaUsd, uint256 _indexPrice, int256 _priceImpactUsd)
+    function _calculateImpactedPrice(uint256 _sizeDeltaUsd, uint256 _indexPrice, int256 _priceImpactUsd, bool _isLong)
         internal
         pure
         returns (uint256 impactedPrice)
@@ -190,10 +201,19 @@ library PriceImpact {
         uint256 percentageImpact = mulDiv(_priceImpactUsd.abs(), PRICE_PRECISION, _sizeDeltaUsd);
         // Impact the price by the same percentage
         uint256 impactToPrice = mulDiv(percentageImpact, _indexPrice, PRICE_PRECISION);
-        if (_priceImpactUsd < 0) {
-            impactedPrice = _indexPrice - impactToPrice;
+
+        if (_isLong) {
+            if (_priceImpactUsd < 0) {
+                impactedPrice = _indexPrice + impactToPrice;
+            } else {
+                impactedPrice = _indexPrice - impactToPrice;
+            }
         } else {
-            impactedPrice = _indexPrice + impactToPrice;
+            if (_priceImpactUsd < 0) {
+                impactedPrice = _indexPrice - impactToPrice;
+            } else {
+                impactedPrice = _indexPrice + impactToPrice;
+            }
         }
     }
 

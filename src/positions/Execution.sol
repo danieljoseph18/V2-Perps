@@ -17,7 +17,7 @@ import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
-import {console} from "forge-std/Test.sol";
+import {console, console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -116,6 +116,8 @@ library Execution {
         if (request.input.sizeDelta != 0) {
             // Execute Price Impact
             (state.impactedPrice, state.priceImpactUsd) = PriceImpact.execute(market, request, state);
+            console2.log("Price impact after execution: ", state.priceImpactUsd);
+            console.log("Impacted Price after execution: ", state.impactedPrice);
             // state Size Delta USD
 
             MarketUtils.validateAllocation(

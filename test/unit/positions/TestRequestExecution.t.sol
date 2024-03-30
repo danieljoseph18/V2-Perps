@@ -143,7 +143,7 @@ contract TestRequestExecution is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -181,10 +181,10 @@ contract TestRequestExecution is Test {
         Position.Input memory input = Position.Input({
             assetId: ethAssetId,
             collateralToken: weth,
-            collateralDelta: 0.5 ether,
-            sizeDelta: 10_000e30,
+            collateralDelta: 5 ether,
+            sizeDelta: 100_000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -200,7 +200,7 @@ contract TestRequestExecution is Test {
             })
         });
         vm.prank(OWNER);
-        router.createPositionRequest{value: 0.51 ether}(input);
+        router.createPositionRequest{value: 5.01 ether}(input);
         // Execute the Position
         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
 
@@ -211,7 +211,7 @@ contract TestRequestExecution is Test {
         // Get the size of the impact pool after the position is executed
         uint256 impactPoolAfter = MarketUtils.getImpactPool(IMarket(marketMaker.tokenToMarket(ethAssetId)), ethAssetId);
         // Check that the impact pool has been updated
-        assertGt(impactPoolAfter, impactPoolBefore);
+        assertGt(impactPoolAfter, impactPoolBefore, "Impact Pool should be increased");
     }
 
     function testPnlParamsAreBasedOnPriceAtTheRequestBlock() public setUpMarkets {
@@ -222,7 +222,7 @@ contract TestRequestExecution is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -277,7 +277,7 @@ contract TestRequestExecution is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -325,7 +325,7 @@ contract TestRequestExecution is Test {
             collateralDelta: position.collateralAmount,
             sizeDelta: 10_000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -361,7 +361,7 @@ contract TestRequestExecution is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -410,7 +410,7 @@ contract TestRequestExecution is Test {
             collateralDelta: position.collateralAmount,
             sizeDelta: 10_000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -450,7 +450,7 @@ contract TestRequestExecution is Test {
             collateralDelta: 0.04 ether,
             sizeDelta: 1000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -518,7 +518,7 @@ contract TestRequestExecution is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 10_000e30,
             limitPrice: 0,
-            maxSlippage: 0.4e18,
+            maxSlippage: 0.4e30,
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,

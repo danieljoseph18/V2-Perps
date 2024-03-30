@@ -15,6 +15,7 @@ import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {console, console2} from "forge-std/Test.sol";
 
 contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -124,6 +125,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         returns (Execution.State memory state, Position.Request memory request)
     {
         (state, request) = Execution.constructParams(market, this, priceFeed, referralStorage, _orderKey, _feeReceiver);
+        console2.log("Price Impact in TradeStorage: ", state.priceImpactUsd);
+        console.log("Impacted Price in TradeStorage: ", state.impactedPrice);
         // Fetch the State of the Market Before the Position
         IMarket.MarketStorage memory marketBefore = market.getStorage(request.input.assetId);
 
@@ -521,6 +524,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // If Price Impact is Negative, add to the impact Pool
         // If Price Impact is Positive, Subtract from the Impact Pool
         // Impact Pool Delta = -1 * Price Impact
+        console2.log("Price Impact: ", _state.priceImpactUsd);
         if (_state.priceImpactUsd == 0) return;
         market.updateImpactPool(_assetId, -_state.priceImpactUsd);
     }

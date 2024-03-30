@@ -547,7 +547,9 @@ library MarketUtils {
         // get the allocation and subtract by the markets reserveFactor
         uint256 remainingAllocationUsd =
             getPoolBalanceUsd(market, _assetId, _collateralTokenPrice, _collateralBaseUnit, _isLong);
+
         uint256 reserveFactor = getReserveFactor(market, _assetId);
+
         availableOi = remainingAllocationUsd - mulDiv(remainingAllocationUsd, reserveFactor, SCALAR);
     }
 

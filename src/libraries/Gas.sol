@@ -24,7 +24,6 @@ library Gas {
     error Gas_InsufficientExecutionFee(uint256 executionFee, uint256 minExecutionFee);
     error Gas_InvalidActionType();
 
-    // @add -> If stop loss and take profit, add gas price for each that exists
     function validateExecutionFee(
         IPriceFeed priceFeed,
         IPositionManager positionManager,

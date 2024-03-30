@@ -140,7 +140,7 @@ contract TestPositions is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -166,7 +166,7 @@ contract TestPositions is Test {
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: false,
             isLimit: false,
@@ -194,7 +194,7 @@ contract TestPositions is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -223,7 +223,7 @@ contract TestPositions is Test {
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: false,
             isLimit: false,
@@ -253,7 +253,7 @@ contract TestPositions is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -286,7 +286,7 @@ contract TestPositions is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -318,7 +318,7 @@ contract TestPositions is Test {
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: false,
             isLimit: false,
@@ -352,7 +352,7 @@ contract TestPositions is Test {
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: false,
             isLimit: false,
@@ -379,7 +379,7 @@ contract TestPositions is Test {
             collateralDelta: 500e6,
             sizeDelta: 0, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: false,
             isLimit: false,
@@ -407,7 +407,7 @@ contract TestPositions is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -433,7 +433,7 @@ contract TestPositions is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 0, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -461,7 +461,7 @@ contract TestPositions is Test {
             collateralDelta: 500e6,
             sizeDelta: 5000e30, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: false,
             isLimit: false,
@@ -488,7 +488,7 @@ contract TestPositions is Test {
             collateralDelta: 50e6,
             sizeDelta: 0, // 10x leverage -> 2 eth ~ $5000
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: false,
             isLimit: false,
@@ -516,7 +516,7 @@ contract TestPositions is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -544,7 +544,7 @@ contract TestPositions is Test {
             collateralDelta: position.collateralAmount,
             sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -575,7 +575,7 @@ contract TestPositions is Test {
             collateralDelta: 0.5 ether,
             sizeDelta: 5000e30, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,
@@ -601,7 +601,7 @@ contract TestPositions is Test {
             collateralDelta: 0.25 ether,
             sizeDelta: 2500e30, // 4x leverage
             limitPrice: 0, // Market Order
-            maxSlippage: 0.43e18, // 0.3%
+            maxSlippage: 0.43e30, // 0.3%
             executionFee: 0.01 ether,
             isLong: true,
             isLimit: false,

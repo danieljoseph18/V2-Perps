@@ -47,13 +47,14 @@ library Position {
     error Position_CumulativeBorrowDelta();
     error Position_OpenInterestDelta();
 
-    uint256 private constant MIN_LEVERAGE = 100; // 1x
-    uint256 private constant LEVERAGE_PRECISION = 100;
-    uint256 private constant PRECISION = 1e18;
+    uint8 private constant MIN_LEVERAGE = 100; // 1x
+    uint8 private constant LEVERAGE_PRECISION = 100;
+    uint64 private constant PRECISION = 1e18;
+    uint64 private constant MIN_COLLATERAL = 1000;
     int256 private constant PRICE_PRECISION = 1e30;
-    uint256 private constant MIN_SLIPPAGE = 0.0001e18; // 0.01%
-    uint256 private constant MAX_SLIPPAGE = 0.9999e18; // 99.99%
-    uint256 private constant MIN_COLLATERAL = 1000;
+    // Max and Min Price Slippage
+    uint256 private constant MIN_SLIPPAGE = 0.0001e30; // 0.01%
+    uint256 private constant MAX_SLIPPAGE = 0.9999e30; // 99.99%
 
     // Data for an Open Position
     struct Data {
@@ -103,7 +104,7 @@ library Position {
         uint256 collateralDelta;
         uint256 sizeDelta; // USD
         uint256 limitPrice;
-        uint256 maxSlippage;
+        uint256 maxSlippage; // % with 30 D.P
         uint256 executionFee;
         bool isLong;
         bool isLimit;
@@ -523,7 +524,7 @@ library Position {
                 collateralDelta: collateralDelta,
                 sizeDelta: _sizeDelta,
                 limitPrice: 0,
-                maxSlippage: 0.33e18,
+                maxSlippage: MAX_SLIPPAGE,
                 executionFee: 0,
                 isLong: _position.isLong,
                 isLimit: false,
