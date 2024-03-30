@@ -242,7 +242,7 @@ contract TestMarketUtils is Test {
         assertEq(actualWaep, expectedWaep, "Calculated WAEP does not match expected WAEP");
     }
 
-    // MarketUtils.getOpenInterestUsd
+    // MarketUtils.getOpenInterest
     // MarketUtils.getTotalEntryValueUsd
 
     function testGettingThePnlForAnEntireMarketLong(

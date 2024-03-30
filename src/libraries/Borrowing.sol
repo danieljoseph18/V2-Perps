@@ -58,6 +58,7 @@ library Borrowing {
      * Long Fee Calculation: borrowing factor * (open interest in usd + pending pnl) ^ (borrowing exponent factor) / (pool usd)
      * Short Fee Calculation: borrowing factor * (open interest in usd) ^ (borrowing exponent factor) / (pool usd)
      */
+    // @audit - can we make this more efficient?
     function calculateRate(
         IMarket market,
         bytes32 _assetId,
@@ -73,7 +74,7 @@ library Borrowing {
         state.borrowingFactor = ud(state.config.factor);
         if (_isLong) {
             // get the long open interest
-            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _assetId, true));
+            state.openInterestUsd = ud(MarketUtils.getOpenInterest(market, _assetId, true));
             // get the long pending pnl
             state.pendingPnl = MarketUtils.getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, true);
             // get the long pool balance
@@ -90,7 +91,7 @@ library Borrowing {
             rate = unwrap(state.borrowingFactor.mul(state.adjustedOiExponent).div(state.poolBalance));
         } else {
             // get the short open interest
-            state.openInterestUsd = ud(MarketUtils.getOpenInterestUsd(market, _assetId, false));
+            state.openInterestUsd = ud(MarketUtils.getOpenInterest(market, _assetId, false));
             // get the short pool balance
             state.poolBalance =
                 ud(MarketUtils.getPoolBalanceUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, false));
@@ -124,7 +125,7 @@ library Borrowing {
     {
         uint256 accumulatedFees = MarketUtils.getCumulativeBorrowFee(market, _assetId, _isLong)
             - MarketUtils.getAverageCumulativeBorrowFee(market, _assetId, _isLong);
-        uint256 openInterest = MarketUtils.getOpenInterestUsd(market, _assetId, _isLong);
+        uint256 openInterest = MarketUtils.getOpenInterest(market, _assetId, _isLong);
         totalFeesOwedUsd = mulDiv(accumulatedFees, openInterest, PRECISION);
     }
 
@@ -148,7 +149,7 @@ library Borrowing {
         // Get the abs size delta
         uint256 absSizeDelta = _sizeDeltaUsd.abs();
         // Get the Open Interest
-        uint256 openInterestUsd = MarketUtils.getOpenInterestUsd(market, _assetId, _isLong);
+        uint256 openInterestUsd = MarketUtils.getOpenInterest(market, _assetId, _isLong);
         // Get the current cumulative fee on the market
         uint256 currentCumulative = MarketUtils.getCumulativeBorrowFee(market, _assetId, _isLong)
             + calculatePendingFees(market, _assetId, _isLong);

@@ -184,9 +184,29 @@ interface IMarket {
     // Used to scale price impact per market
     // Both values lower for less volatile markets
     struct ImpactConfig {
+        /**
+         * Dampening factor for the effect of skew in positive price impact.
+         * Value as a percentage, with 30 d.p of precision, as it deals with USD values.
+         * 100% = 1e30
+         */
         int256 positiveSkewScalar;
+        /**
+         * Dampening factor for the effect of skew in negative price impact.
+         * Value as a percentage, with 30 d.p of precision, as it deals with USD values.
+         * 100% = 1e30
+         */
         int256 negativeSkewScalar;
+        /**
+         * Dampening factor for the effect of liquidity in positive price impact.
+         * Value as a percentage, with 30 d.p of precision, as it deals with USD values.
+         * 100% = 1e30
+         */
         int256 positiveLiquidityScalar;
+        /**
+         * Dampening factor for the effect of liquidity in negative price impact.
+         * Value as a percentage, with 30 d.p of precision, as it deals with USD values.
+         * 100% = 1e30
+         */
         int256 negativeLiquidityScalar;
     }
 

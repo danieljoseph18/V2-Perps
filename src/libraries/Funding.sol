@@ -38,8 +38,8 @@ library Funding {
     }
 
     function calculateSkewUsd(IMarket market, bytes32 _assetId) public view returns (int256 skewUsd) {
-        uint256 longOI = MarketUtils.getOpenInterestUsd(market, _assetId, true);
-        uint256 shortOI = MarketUtils.getOpenInterestUsd(market, _assetId, false);
+        uint256 longOI = MarketUtils.getOpenInterest(market, _assetId, true);
+        uint256 shortOI = MarketUtils.getOpenInterest(market, _assetId, false);
 
         skewUsd = longOI.toInt256() - shortOI.toInt256();
     }

@@ -478,10 +478,6 @@ library MarketUtils {
         return totalOi;
     }
 
-    function getOpenInterestUsd(IMarket market, bytes32 _assetId, bool _isLong) external view returns (uint256) {
-        return getOpenInterest(market, _assetId, _isLong);
-    }
-
     function getTotalPoolBalanceUsd(IMarket market, bytes32 _assetId, uint256 _longTokenPrice, uint256 _shortTokenPrice)
         external
         view
@@ -529,6 +525,7 @@ library MarketUtils {
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 
+    // @audit - probably issues here. what about price fluctuations etc?
     function getTotalAvailableOiUsd(IMarket market, bytes32 _assetId, uint256 _longTokenPrice, uint256 _shortTokenPrice)
         external
         view

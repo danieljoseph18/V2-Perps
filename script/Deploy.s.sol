@@ -122,11 +122,12 @@ contract Deploy is Script {
                 exponent: 1
             }),
             // Should never be 0
+            // All are percentages between 1 (1e-30) and 1e30 (100%)
             impact: IMarket.ImpactConfig({
-                positiveSkewScalar: 1e18,
-                negativeSkewScalar: 1e18,
-                positiveLiquidityScalar: 1e18,
-                negativeLiquidityScalar: 1e18
+                positiveSkewScalar: 1e30,
+                negativeSkewScalar: 1e30,
+                positiveLiquidityScalar: 1e30,
+                negativeLiquidityScalar: 1e30
             }),
             adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18})
         });
