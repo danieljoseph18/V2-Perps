@@ -215,9 +215,9 @@ contract TestFee is Test {
      *     uint256 longValue = mulDiv(_longTokenBalance, _longPrice, LONG_BASE_UNIT);
      *     uint256 shortValue = mulDiv(_shortTokenBalance, _shortPrice, SHORT_BASE_UNIT);
      *
-     *     int256 skewBefore = longValue.toInt256() - shortValue.toInt256();
+     *     int256 initialSkew = longValue.toInt256() - shortValue.toInt256();
      *     _isLongToken ? longValue -= amountUsd : shortValue -= amountUsd;
-     *     int256 skewAfter = longValue.toInt256() - shortValue.toInt256();
+     *     int256 updatedSkew = longValue.toInt256() - shortValue.toInt256();
      *
      *     if (longValue + shortValue == 0) {
      *         // Charge the maximium possible fee for full withdrawals
@@ -225,12 +225,12 @@ contract TestFee is Test {
      *     }
      *
      *     // Check for a Skew Flip
-     *     bool skewFlip = skewBefore ^ skewAfter < 0;
+     *     bool skewFlip = initialSkew ^ updatedSkew < 0;
      *
      *     // Skew Improve Same Side - Charge the Base fee
-     *     if (skewAfter.abs() < skewBefore.abs() && !skewFlip) return baseFee;
+     *     if (updatedSkew.abs() < initialSkew.abs() && !skewFlip) return baseFee;
      *     // If Flip, charge full Skew After, else charge the delta
-     *     uint256 negativeSkewAccrued = skewFlip ? skewAfter.abs() : amountUsd;
+     *     uint256 negativeSkewAccrued = skewFlip ? updatedSkew.abs() : amountUsd;
      *     // Calculate the relative impact on Market Skew
      *     // Re-add amount to get the initial net pool value
      *     uint256 feeFactor = mulDiv(negativeSkewAccrued, FEE_SCALE, longValue + shortValue + amountUsd);

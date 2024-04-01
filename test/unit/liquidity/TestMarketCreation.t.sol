@@ -53,8 +53,6 @@ contract TestCreatingNewMarkets is Test {
     bytes32[] assetIds;
     uint256[] compactedPrices;
 
-    Oracle.PriceUpdateData ethPriceData;
-
     address USER = makeAddr("USER");
 
     function setUp() public {
@@ -84,9 +82,6 @@ contract TestCreatingNewMarkets is Test {
         tokenUpdateData.push(usdcUpdateData);
         assetIds.push(ethAssetId);
         assetIds.push(usdcAssetId);
-
-        ethPriceData =
-            Oracle.PriceUpdateData({assetIds: assetIds, pythData: tokenUpdateData, compactedPrices: compactedPrices});
     }
 
     receive() external payable {}
@@ -98,28 +93,13 @@ contract TestCreatingNewMarkets is Test {
         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 50 ether}();
-        Oracle.Asset memory wethData = Oracle.Asset({
-            chainlinkPriceFeed: address(0),
-            priceId: ethPriceId,
-            baseUnit: 1e18,
-            heartbeatDuration: 1 minutes,
-            maxPriceDeviation: 0.01e18,
-            primaryStrategy: Oracle.PrimaryStrategy.PYTH,
-            secondaryStrategy: Oracle.SecondaryStrategy.NONE,
-            pool: Oracle.UniswapPool({token0: weth, token1: usdc, poolAddress: address(0), poolType: Oracle.PoolType.V3})
-        });
         IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
             owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
-            marketTokenSymbol: "BRRR",
-            asset: wethData
+            marketTokenSymbol: "BRRR"
         });
         marketMaker.requestNewMarket{value: 0.01 ether}(request);
-        // Set primary prices for ref price
-        priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
-        // Clear them
-        priceFeed.clearPrimaryPrices();
         marketMaker.executeNewMarket(marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker));
         vm.stopPrank();
         market = Market(payable(marketMaker.tokenToMarket(ethAssetId)));
@@ -128,12 +108,12 @@ contract TestCreatingNewMarkets is Test {
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key, ethPriceData);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key, ethPriceData);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
         vm.stopPrank();
         vm.startPrank(OWNER);
         allocations.push(10000 << 240);

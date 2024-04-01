@@ -35,7 +35,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     EnumerableSet.AddressSet private markets;
     EnumerableSet.Bytes32Set private requestKeys;
     mapping(bytes32 requestKey => MarketRequest) public requests;
-    mapping(bytes32 assetId => address market) public tokenToMarket;
+    mapping(string ticker => address market) public tokenToMarket;
     uint256[] private defaultAllocation;
 
     bool private isInitialized;
@@ -139,7 +139,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
             revert MarketMaker_InvalidMaxPriceDeviation();
         }
         // 8. Market shouldn't already exist for that asset
-        if (tokenToMarket[generateAssetId(_request.indexTokenTicker)] != address(0)) {
+        if (tokenToMarket[_request.indexTokenTicker] != address(0)) {
             revert MarketMaker_MarketExists();
         }
 
@@ -162,13 +162,10 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Get the Request
         MarketRequest memory request = requests[_requestKey];
 
-        // Generate the Asset ID
-        bytes32 assetId = generateAssetId(request.indexTokenTicker);
-
         /* Validate and Update the Request */
 
         // 1. If asset already has a market, delete request and return
-        if (tokenToMarket[assetId] != address(0)) {
+        if (tokenToMarket[request.indexTokenTicker] != address(0)) {
             _deleteMarketRequest(_requestKey);
             return address(0);
         }
@@ -194,7 +191,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         }
 
         // Set Up Price Oracle
-        priceFeed.supportAsset(assetId, request.asset);
+        priceFeed.supportAsset(request.indexTokenTicker, request.asset);
         // Create new Market Token
         MarketToken marketToken =
             new MarketToken(request.marketTokenName, request.marketTokenSymbol, address(roleStorage));
@@ -207,7 +204,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
             WETH,
             USDC,
             address(marketToken),
-            assetId,
+            request.indexTokenTicker,
             address(roleStorage)
         );
         // Create new TradeStorage contract
@@ -220,7 +217,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Add to Storage
         bool success = markets.add(address(market));
         if (!success) revert MarketMaker_FailedToAddMarket();
-        tokenToMarket[assetId] = address(market);
+        tokenToMarket[request.indexTokenTicker] = address(market);
 
         // Set Up Roles -> Enable Caller to control Market
         roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender, msg.sender));
@@ -230,7 +227,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         payable(msg.sender).transfer(marketCreationFee);
 
         // Fire Event
-        emit MarketCreated(address(market), assetId, request.asset.priceId);
+        emit MarketCreated(address(market), request.indexTokenTicker, request.asset.priceId);
 
         return address(market);
     }
@@ -245,24 +242,24 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     /// @dev - Only the Admin can create multi-asset markets
     function addTokenToMarket(
         IMarket market,
-        bytes32 _assetId,
+        string memory _ticker,
         bytes32 _priceId,
-        Oracle.Asset memory _asset,
         uint256[] calldata _newAllocations
     ) external onlyAdmin nonReentrant {
-        if (_assetId == bytes32(0)) revert MarketMaker_InvalidAsset();
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        if (assetId == bytes32(0)) revert MarketMaker_InvalidAsset();
         if (_priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
         if (!markets.contains(address(market))) revert MarketMaker_MarketDoesNotExist();
 
         // Set Up Price Oracle
-        priceFeed.supportAsset(_assetId, _asset);
+        priceFeed.supportAsset(_ticker);
         // Cache
         address marketAddress = address(market);
         // Add to Market
-        market.addToken(defaultConfig, _assetId, _newAllocations);
+        market.addToken(defaultConfig, _ticker, _newAllocations);
 
         // Fire Event
-        emit TokenAddedToMarket(marketAddress, _assetId, _priceId);
+        emit TokenAddedToMarket(marketAddress, _ticker, _priceId);
     }
 
     /**

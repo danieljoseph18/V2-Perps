@@ -92,17 +92,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
-    function executeDeposit(IMarket market, bytes32 _key, Oracle.PriceUpdateData calldata _priceUpdateData)
-        external
-        payable
-        nonReentrant
-        onlyKeeper
-    {
+    function executeDeposit(IMarket market, bytes32 _key) external payable nonReentrant onlyKeeper {
         // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
-
-        // Sign the Latest Oracle Prices
-        _signOraclePrices(_priceUpdateData);
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
@@ -127,9 +119,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Execute the Deposit
         market.executeDeposit(params);
 
-        // Clear all previously signed prices
-        _clearOraclePrices();
-
         // Gas Used + Fee Buffer
         uint256 feeForExecutor = ((initialGas - gasleft()) * tx.gasprice) + ((GAS_BUFFER + 21000) * tx.gasprice);
         uint256 feeToRefund;
@@ -141,17 +130,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         if (feeToRefund > 0) payable(msg.sender).sendValue(feeToRefund);
     }
 
-    function executeWithdrawal(IMarket market, bytes32 _key, Oracle.PriceUpdateData calldata _priceUpdateData)
-        external
-        payable
-        nonReentrant
-        onlyKeeper
-    {
+    function executeWithdrawal(IMarket market, bytes32 _key) external payable nonReentrant onlyKeeper {
         // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
-
-        // Sign the Latest Oracle Prices
-        _signOraclePrices(_priceUpdateData);
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
@@ -187,9 +168,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Execute the Withdrawal
         market.executeWithdrawal(params);
 
-        // Clear all previously signed prices
-        _clearOraclePrices();
-
         // Send Execution Fee + Rebate
         uint256 feeForExecutor = (initialGas - gasleft()) * tx.gasprice;
 
@@ -221,17 +199,15 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     // @audit - we need to financially compensate the executor of the trade.
     // whether this be through a percentage of the fee charged on the position or other.
     // we essentially need a way to incentivize users to run their own keeper nodes.
-    function executePosition(
-        IMarket market,
-        bytes32 _orderKey,
-        address _feeReceiver,
-        Oracle.PriceUpdateData calldata _priceUpdateData
-    ) external payable nonReentrant onlyKeeper {
+    // @audit - need to consider pricing updates for limit orders
+    function executePosition(IMarket market, bytes32 _orderKey, address _feeReceiver)
+        external
+        payable
+        nonReentrant
+        onlyKeeper
+    {
         // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
-
-        // Sign the Latest Oracle Prices
-        _signOraclePrices(_priceUpdateData);
 
         // Get the Trade Storage
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
@@ -248,9 +224,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Emit Trade Executed Event
         emit ExecutePosition(_orderKey, request, state.fee, state.affiliateRebate);
 
-        // Clear all previously signed prices
-        _clearOraclePrices();
-
         // Send Execution Fee + Rebate
         // Execution Fee reduced to account for value sent to update Pyth prices
         uint256 executionCost = (initialGas - gasleft()) * tx.gasprice;
@@ -262,22 +235,13 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function liquidatePosition(IMarket market, bytes32 _positionKey, Oracle.PriceUpdateData calldata _priceUpdateData)
-        external
-        payable
-        onlyLiquidationKeeper
-    {
-        // Sign the Latest Oracle Prices
-        _signOraclePrices(_priceUpdateData);
+    function liquidatePosition(IMarket market, bytes32 _positionKey) external payable onlyLiquidationKeeper {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // liquidate the position
         try tradeStorage.liquidatePosition(_positionKey, msg.sender) {}
         catch {
             revert PositionManager_LiquidationFailed();
         }
-
-        // Clear all previously signed prices
-        _clearOraclePrices();
     }
 
     /// @dev - Only callable from Keeper or Request Owner
@@ -305,37 +269,17 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         payable(msg.sender).sendValue(refundAmount);
     }
 
-    function executeAdl(
-        IMarket market,
-        bytes32 _assetId,
-        uint256 _sizeDelta,
-        bytes32 _positionKey,
-        Oracle.PriceUpdateData calldata _priceUpdateData
-    ) external payable onlyAdlKeeper {
-        // Sign the Latest Oracle Prices
-        _signOraclePrices(_priceUpdateData);
-
+    function executeAdl(IMarket market, bytes32 _assetId, uint256 _sizeDelta, bytes32 _positionKey)
+        external
+        payable
+        onlyAdlKeeper
+    {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the ADL
         try tradeStorage.executeAdl(_positionKey, _assetId, _sizeDelta) {}
         catch {
             revert PositionManager_AdlFailed();
         }
-
-        // Clear all previously signed prices
-        _clearOraclePrices();
-    }
-
-    function _signOraclePrices(Oracle.PriceUpdateData calldata _priceUpdateData) internal {
-        uint256 updateFee = priceFeed.updateFee(_priceUpdateData.pythData);
-        if (msg.value < updateFee) revert PositionManager_PriceUpdateFee();
-        priceFeed.setPrimaryPrices{value: msg.value}(
-            _priceUpdateData.assetIds, _priceUpdateData.pythData, _priceUpdateData.compactedPrices
-        );
-    }
-
-    function _clearOraclePrices() internal {
-        priceFeed.clearPrimaryPrices();
     }
 
     function _transferTokensForIncrease(

@@ -36,8 +36,8 @@ library MarketUtils {
         IMarket market;
         uint256 tokenAmount;
         bool isLongToken;
-        Oracle.Price longPrices;
-        Oracle.Price shortPrices;
+        IPriceFeed.Price longPrices;
+        IPriceFeed.Price shortPrices;
         bool isDeposit;
     }
 
@@ -46,19 +46,19 @@ library MarketUtils {
         uint256 amountUsd;
         uint256 longTokenValue;
         uint256 shortTokenValue;
-        bool longSkewBefore;
-        uint256 skewBefore;
-        bool longSkewAfter;
+        bool initSkewLong;
+        uint256 initSkew;
+        bool updatedSkewLong;
         bool skewFlip;
-        uint256 skewAfter;
+        uint256 updatedSkew;
         uint256 skewDelta;
         uint256 feeAdditionUsd;
         uint256 indexFee;
     }
 
     function calculateDepositFee(
-        Oracle.Price memory _longPrices,
-        Oracle.Price memory _shortPrices,
+        IPriceFeed.Price memory _longPrices,
+        IPriceFeed.Price memory _shortPrices,
         uint256 _longTokenBalance,
         uint256 _shortTokenBalance,
         uint256 _tokenAmount,
@@ -80,17 +80,17 @@ library MarketUtils {
         if (longValue == 0 && _isLongToken) return baseFee;
         if (shortValue == 0 && !_isLongToken) return baseFee;
 
-        int256 skewBefore = longValue.toInt256() - shortValue.toInt256();
+        int256 initSkew = longValue.toInt256() - shortValue.toInt256();
         _isLongToken ? longValue += amountUsd : shortValue += amountUsd;
-        int256 skewAfter = longValue.toInt256() - shortValue.toInt256();
+        int256 updatedSkew = longValue.toInt256() - shortValue.toInt256();
 
         // Check for a Skew Flip
-        bool skewFlip = skewBefore ^ skewAfter < 0;
+        bool skewFlip = initSkew ^ updatedSkew < 0;
 
         // Skew Improve Same Side - Charge the Base fee
-        if (skewAfter.abs() < skewBefore.abs() && !skewFlip) return baseFee;
+        if (updatedSkew.abs() < initSkew.abs() && !skewFlip) return baseFee;
         // If Flip, charge full Skew After, else charge the delta
-        uint256 negativeSkewAccrued = skewFlip ? skewAfter.abs() : amountUsd;
+        uint256 negativeSkewAccrued = skewFlip ? updatedSkew.abs() : amountUsd;
         // Calculate the relative impact on Market Skew
         uint256 feeFactor = mulDiv(negativeSkewAccrued, FEE_SCALE, longValue + shortValue);
         // Calculate the additional fee
@@ -119,9 +119,9 @@ library MarketUtils {
         uint256 longValue = mulDiv(_longTokenBalance, _longPrice, LONG_BASE_UNIT);
         uint256 shortValue = mulDiv(_shortTokenBalance, _shortPrice, SHORT_BASE_UNIT);
 
-        int256 skewBefore = longValue.toInt256() - shortValue.toInt256();
+        int256 initSkew = longValue.toInt256() - shortValue.toInt256();
         _isLongToken ? longValue -= amountUsd : shortValue -= amountUsd;
-        int256 skewAfter = longValue.toInt256() - shortValue.toInt256();
+        int256 updatedSkew = longValue.toInt256() - shortValue.toInt256();
 
         if (longValue + shortValue == 0) {
             // Charge the maximium possible fee for full withdrawals
@@ -129,12 +129,12 @@ library MarketUtils {
         }
 
         // Check for a Skew Flip
-        bool skewFlip = skewBefore ^ skewAfter < 0;
+        bool skewFlip = initSkew ^ updatedSkew < 0;
 
         // Skew Improve Same Side - Charge the Base fee
-        if (skewAfter.abs() < skewBefore.abs() && !skewFlip) return baseFee;
+        if (updatedSkew.abs() < initSkew.abs() && !skewFlip) return baseFee;
         // If Flip, charge full Skew After, else charge the delta
-        uint256 negativeSkewAccrued = skewFlip ? skewAfter.abs() : amountUsd;
+        uint256 negativeSkewAccrued = skewFlip ? updatedSkew.abs() : amountUsd;
         // Calculate the relative impact on Market Skew
         // Re-add amount to get the initial net pool value
         uint256 feeFactor = mulDiv(negativeSkewAccrued, FEE_SCALE, longValue + shortValue + amountUsd);
@@ -212,23 +212,23 @@ library MarketUtils {
     }
 
     function validateDeposit(
-        IMarket.State calldata _stateBefore,
-        IMarket.State calldata _stateAfter,
+        IMarket.State calldata _initialState,
+        IMarket.State calldata _updatedState,
         uint256 _amountIn,
         bool _isLongToken
     ) external pure {
         if (_isLongToken) {
             // Market's WETH Balance should increase by AmountIn
-            if (_stateAfter.wethBalance != _stateBefore.wethBalance + _amountIn) {
+            if (_updatedState.wethBalance != _initialState.wethBalance + _amountIn) {
                 revert MarketUtils_DepositAmountIn();
             }
         } else {
             // Market's USDC Balance should increase by AmountIn
-            if (_stateAfter.usdcBalance != _stateBefore.usdcBalance + _amountIn) {
+            if (_updatedState.usdcBalance != _initialState.usdcBalance + _amountIn) {
                 revert MarketUtils_DepositAmountIn();
             }
         }
-        if (_stateAfter.totalSupply <= _stateBefore.totalSupply) {
+        if (_updatedState.totalSupply <= _initialState.totalSupply) {
             revert MarketUtils_TokenMintFailed();
         }
     }
@@ -240,23 +240,23 @@ library MarketUtils {
      * - The vault balance should decrease by the amount out
      */
     function validateWithdrawal(
-        IMarket.State calldata _stateBefore,
-        IMarket.State calldata _stateAfter,
+        IMarket.State calldata _initialState,
+        IMarket.State calldata _updatedState,
         uint256 _marketTokenAmountIn,
         uint256 _amountOut,
         bool _isLongToken
     ) external pure {
         uint256 minFee = mulDiv(_amountOut, BASE_FEE, SCALAR);
         uint256 maxFee = mulDiv(_amountOut, BASE_FEE + FEE_SCALE, SCALAR);
-        if (_stateBefore.totalSupply != _stateAfter.totalSupply + _marketTokenAmountIn) {
+        if (_initialState.totalSupply != _updatedState.totalSupply + _marketTokenAmountIn) {
             revert MarketUtils_TokenBurnFailed();
         }
         if (_isLongToken) {
             // WETH Balance should decrease by (AmountOut - Fee)
             // WETH balance after is between (Before - AmountOut + MinFee) and (Before - AmountOut + MaxFee)
             if (
-                _stateAfter.wethBalance < _stateBefore.wethBalance - _amountOut + minFee
-                    || _stateAfter.wethBalance > _stateBefore.wethBalance - _amountOut + maxFee
+                _updatedState.wethBalance < _initialState.wethBalance - _amountOut + minFee
+                    || _updatedState.wethBalance > _initialState.wethBalance - _amountOut + maxFee
             ) {
                 revert MarketUtils_WithdrawalAmountOut();
             }
@@ -264,8 +264,8 @@ library MarketUtils {
             // USDC Balance should decrease by (AmountOut - Fee)
             // USDC balance after is between (Before - AmountOut + MinFee) and (Before - AmountOut + MaxFee)
             if (
-                _stateAfter.usdcBalance < _stateBefore.usdcBalance - _amountOut + minFee
-                    || _stateAfter.usdcBalance > _stateBefore.usdcBalance - _amountOut + maxFee
+                _updatedState.usdcBalance < _initialState.usdcBalance - _amountOut + minFee
+                    || _updatedState.usdcBalance > _initialState.usdcBalance - _amountOut + maxFee
             ) {
                 revert MarketUtils_WithdrawalAmountOut();
             }
@@ -276,8 +276,8 @@ library MarketUtils {
     function calculateMintAmount(
         IMarket market,
         IMarketToken marketToken,
-        Oracle.Price memory _longPrices,
-        Oracle.Price memory _shortPrices,
+        IPriceFeed.Price memory _longPrices,
+        IPriceFeed.Price memory _shortPrices,
         uint256 _amountIn,
         uint256 _longBorrowFeesUsd,
         uint256 _shortBorrowFeesUsd,
@@ -313,8 +313,8 @@ library MarketUtils {
     function calculateWithdrawalAmount(
         IMarket market,
         IMarketToken marketToken,
-        Oracle.Price memory _longPrices,
-        Oracle.Price memory _shortPrices,
+        IPriceFeed.Price memory _longPrices,
+        IPriceFeed.Price memory _shortPrices,
         uint256 _marketTokenAmountIn,
         uint256 _longBorrowFeesUsd,
         uint256 _shortBorrowFeesUsd,
@@ -425,6 +425,7 @@ library MarketUtils {
         }
     }
 
+    // @audit - move to external computation
     function calculateCumulativeMarketPnl(IMarket market, IPriceFeed priceFeed, bool _isLong, bool _maximise)
         external
         view
@@ -683,5 +684,9 @@ library MarketUtils {
     function getImpactPool(IMarket market, bytes32 _assetId) external view returns (uint256) {
         IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
         return marketStorage.impactPool;
+    }
+
+    function generateAssetId(string memory _ticker) external pure returns (bytes32) {
+        return keccak256(abi.encode(_ticker));
     }
 }

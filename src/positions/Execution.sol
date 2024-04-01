@@ -198,7 +198,7 @@ library Execution {
         // Fetch and Validate the Position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_PositionNotActive();
-        uint256 collateralBefore = position.collateralAmount;
+        uint256 initialCollateral = position.collateralAmount;
         uint256 collateralIn = _params.request.input.collateralDelta;
 
         // Subtract fee from collateral delta
@@ -230,7 +230,7 @@ library Execution {
         // Validate the Position Change
         Position.validateCollateralIncrease(
             position,
-            collateralBefore,
+            initialCollateral,
             collateralIn,
             _state.fee,
             _state.fundingFee,
@@ -252,7 +252,7 @@ library Execution {
         // Fetch and Validate the Position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_PositionNotActive();
-        uint256 collateralBefore = position.collateralAmount;
+        uint256 initialCollateral = position.collateralAmount;
 
         // Process any Outstanding Borrow  Fees
         (position, _state.borrowFee) = _processBorrowFees(market, position, _params, _state);
@@ -281,7 +281,7 @@ library Execution {
             amountOut += _state.fundingFee.abs();
         }
         // Validate the Position Change
-        _validateCollateralDecrease(position, _state, amountOut, collateralBefore);
+        _validateCollateralDecrease(position, _state, amountOut, initialCollateral);
 
         return (position, _state, amountOut);
     }
@@ -331,8 +331,8 @@ library Execution {
     ) external view returns (Position.Data memory, State memory) {
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_PositionNotActive();
-        uint256 collateralBefore = position.collateralAmount;
-        uint256 sizeBefore = position.positionSize;
+        uint256 initialCollateral = position.collateralAmount;
+        uint256 initialSize = position.positionSize;
         uint256 collateralIn = _params.request.input.collateralDelta;
         // Subtract Fee from Collateral Delta
         _params.request.input.collateralDelta -= _state.fee;
@@ -366,7 +366,7 @@ library Execution {
 
         // Validate the Position Change
         _validatePositionIncrease(
-            position, _state, collateralBefore, sizeBefore, collateralIn, _params.request.input.sizeDelta
+            position, _state, initialCollateral, initialSize, collateralIn, _params.request.input.sizeDelta
         );
 
         return (position, _state);
@@ -384,8 +384,8 @@ library Execution {
         // Fetch and Validate the Position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_PositionNotActive();
-        uint256 collateralBefore = position.collateralAmount;
-        uint256 sizeBefore = position.positionSize;
+        uint256 initialCollateral = position.collateralAmount;
+        uint256 initialSize = position.positionSize;
         // If SL / TP, clear from the position
         if (_params.request.requestType == Position.RequestType.STOP_LOSS) {
             position.stopLossKey = bytes32(0);
@@ -445,7 +445,7 @@ library Execution {
             decreaseState.afterFeeAmount = _params.request.input.collateralDelta - losses;
 
             _validatePositionDecrease(
-                position, decreaseState, _state, _params.request.input.sizeDelta, collateralBefore, sizeBefore
+                position, decreaseState, _state, _params.request.input.sizeDelta, initialCollateral, initialSize
             );
 
             // Check if the Decrease puts the position below the min collateral threshold

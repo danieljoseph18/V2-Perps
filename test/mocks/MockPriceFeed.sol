@@ -7,53 +7,72 @@ import {Oracle} from "../../src/oracle/Oracle.sol";
 import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {IMarketMaker} from "../../../src/markets/interfaces/IMarketMaker.sol";
+import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
+import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
+import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
 
-contract MockPriceFeed is MockPyth, IPriceFeed {
+/// @dev - Needs LINK / subscription to fulfill requests -> need to put this cost onto users
+// @audit - how do we estimate the cost of fulfilling requests?
+// @audit - what happens if a price expires? How do you update the price once again to execute the request?
+// @audit - needs to be upgradeable for new releases of Chainlink Functions
+contract MockPriceFeed is FunctionsClient, IPriceFeed {
+    using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSet for EnumerableSet.Bytes32Set;
-
-    uint256 public constant PRICE_PRECISION = 1e30;
 
     uint256 public constant PRICE_DECIMALS = 30;
 
-    uint256 public constant DEFAULT_SPREAD = 0.001e18; // 0.1%
+    IMarketMaker public marketMaker;
 
-    bytes32 public longAssetId;
-    bytes32 public shortAssetId;
+    // Router address - Hardcoded for Sepolia
+    // Check to get the router address for your supported network https://docs.chain.link/chainlink-functions/supported-networks
+    address router = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0;
+    address public sequencerUptimeFeed;
+    uint64 subscriptionId;
+
+    // JavaScript source code
+    // Fetch character name from the Star Wars API.
+    // Documentation: https://swapi.info/people
+    // Hard code the javascript source code here for each request's execution function
+    string priceUpdateSource = "";
+    string cumulativePnlSource = "";
+
     uint256 public averagePriceUpdateCost;
     uint256 public additionalCostPerAsset;
-    address public sequencerUptimeFeed;
-    // Asset ID is the Hash of the ticker symbol -> e.g keccak256(abi.encode("ETH"));
-    mapping(bytes32 assetId => Oracle.Asset asset) private assets;
-    // To Store Price Data
-    mapping(bytes32 assetId => Oracle.Price price) public prices;
-    // Keep track of assets with prices set to clear them post-execution
-    EnumerableSet.Bytes32Set private assetsWithPrices;
+    bytes32 public constant LONG_ASSET_ID = keccak256(abi.encode("ETH"));
+    bytes32 public constant SHORT_ASSET_ID = keccak256(abi.encode("USDC"));
 
-    constructor(
-        uint256 _validTimePeriod,
-        uint256 _singleUpdateFeeInWei,
-        bytes32 _longAssetId,
-        bytes32 _shortAssetId,
-        Oracle.Asset memory _longAsset,
-        Oracle.Asset memory _shortAsset
-    ) MockPyth(_validTimePeriod, _singleUpdateFeeInWei) {
-        longAssetId = _longAssetId;
-        assets[_longAssetId] = _longAsset;
-        priceFeeds[_longAsset.priceId] = PythStructs.PriceFeed({
-            id: _longAsset.priceId,
-            price: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0}),
-            emaPrice: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0})
-        });
-        shortAssetId = _shortAssetId;
-        assets[_shortAssetId] = _shortAsset;
-        priceFeeds[_shortAsset.priceId] = PythStructs.PriceFeed({
-            id: _shortAsset.priceId,
-            price: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0}),
-            emaPrice: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0})
-        });
+    //Callback gas limit
+    uint32 priceGasLimit = 300000;
+    uint32 cumulativePnlGasLimit = 600000;
+
+    // donID - Hardcoded for Sepolia
+    // Check to get the donID for your supported network https://docs.chain.link/chainlink-functions/supported-networks
+    bytes32 donID = 0x66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000;
+
+    // State variable to store the returned character information
+    mapping(bytes32 assetId => Price) private prices;
+    mapping(address market => int256 lastCumulativePnl) public cumulativePnl;
+    mapping(bytes32 requestId => RequestType requestType) public requestTypes;
+    EnumerableSet.Bytes32Set private requestIds;
+    EnumerableSet.Bytes32Set private assetIds;
+
+    /**
+     * @notice Initializes the contract with the Chainlink router address and sets the contract owner
+     */
+    constructor(address _marketMaker, uint64 _subId) FunctionsClient(router) {
+        subscriptionId = _subId;
+        marketMaker = IMarketMaker(_marketMaker);
     }
 
-    receive() external payable {}
+    function updateSubscriptionId(uint64 _subId) external {
+        subscriptionId = _subId;
+    }
+
+    function updateGasLimits(uint32 _priceGasLimit, uint32 _cumulativePnlGasLimit) external {
+        priceGasLimit = _priceGasLimit;
+        cumulativePnlGasLimit = _cumulativePnlGasLimit;
+    }
 
     function setAverageGasParameters(uint256 _averagePriceUpdateCost, uint256 _additionalCostPerAsset) external {
         if (_averagePriceUpdateCost == 0 || _additionalCostPerAsset == 0) revert PriceFeed_InvalidGasParams();
@@ -61,157 +80,141 @@ contract MockPriceFeed is MockPyth, IPriceFeed {
         additionalCostPerAsset = _additionalCostPerAsset;
     }
 
-    function supportAsset(bytes32 _assetId, Oracle.Asset memory _asset) external {
-        assets[_assetId] = _asset;
-        priceFeeds[_asset.priceId] = PythStructs.PriceFeed({
-            id: _asset.priceId,
-            price: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0}),
-            emaPrice: PythStructs.Price({price: 0, conf: 0, expo: 0, publishTime: 0})
-        });
+    function supportAsset(string memory _ticker) external {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        if (assetIds.contains(assetId)) return; // Return if already supported
+        bool success = assetIds.add(assetId);
+        if (!success) revert PriceFeed_AssetSupportFailed();
     }
 
-    function unsupportAsset(bytes32 _assetId) external {
-        delete assets[_assetId];
+    function unsupportAsset(string memory _ticker) external {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        if (!assetIds.contains(assetId)) return; // Return if not supported
+        bool success = assetIds.remove(assetId);
+        if (!success) revert PriceFeed_AssetRemovalFailed();
     }
 
     function updateSequencerUptimeFeed(address _sequencerUptimeFeed) external {
         sequencerUptimeFeed = _sequencerUptimeFeed;
     }
 
-    function setPrimaryPrices(
-        bytes32[] calldata _assetIds,
-        bytes[] calldata _pythPriceData,
-        uint256[] calldata _compactedPriceData
-    ) external payable {
-        // If any Pyth price array contains data
-        if (_pythPriceData.length != 0) {
-            // Get the Update Fee
-            uint256 pythFee = getUpdateFee(_pythPriceData);
-            if (msg.value < pythFee) revert PriceFeed_InsufficientFee();
-            // Update the Price Fees with the Data
-            updatePriceFeeds(_pythPriceData);
-        }
-        // Loop through assets and set prices
-        uint256 assetLen = _assetIds.length;
-        // Use Uint16, as max is 10,000 assets
-        for (uint16 index = 0; index < assetLen;) {
-            bytes32 assetId = _assetIds[index];
-            Oracle.Asset memory asset = assets[assetId];
-            if (asset.baseUnit == 0) revert PriceFeed_InvalidToken(assetId);
-            // Add the Price to the Set
-            bool success = assetsWithPrices.add(assetId);
-            if (!success) revert PriceFeed_FailedToAddPrice();
-            // Set Prices based on strategy
-            if (asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
-                // Get the Pyth Price Data
-                PythStructs.Price memory data = queryPriceFeed(asset.priceId).price;
-                // Parse the Data
-                Oracle.Price memory price = Oracle.parsePythData(data);
-                // Validate the Price
-                if (asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
-                    uint256 refPrice = Oracle.getReferencePrice(asset);
-                    Oracle.validatePriceRange(asset, price, refPrice);
-                }
-                // Set the Price
-                prices[assetId] = price;
-            } else if (asset.primaryStrategy == Oracle.PrimaryStrategy.OFFCHAIN) {
-                // Get the starting bit index
-                uint256 startingBit = index * 64;
-                // Get the uint256 containing the compacted price
-                uint256 priceData = _compactedPriceData[startingBit / 256];
-                // Unpack and get the price
-                Oracle.Price memory price = Oracle.unpackAndReturnPrice(priceData, startingBit);
-                // Validate and Set the Price
-                if (asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
-                    uint256 refPrice = Oracle.getReferencePrice(asset);
-                    Oracle.validatePriceRange(asset, price, refPrice);
-                }
-                // Set the Price
-                prices[assetId] = price;
-            } else {
-                revert PriceFeed_InvalidPrimaryStrategy();
-            }
-            // Increment the Loop Counter
-            unchecked {
-                ++index;
-            }
-        }
-        emit PrimaryPricesSet(_assetIds);
+    /**
+     * @notice Sends an HTTP request for character information
+     * @param args The arguments to pass to the HTTP request -> should be the tickers for which pricing is requested
+     * @return requestId The ID of the request
+     */
+    // @audit - contract needs a way to differentiate between different types of requests
+    // @audit - permissions?
+    function requestPriceUpdate(string[] calldata args) external returns (bytes32 requestId) {
+        if (args.length != 1) revert PriceFeed_PriceUpdateLength();
+        // If ticker not supported, revert
+        bytes32 assetId = keccak256(abi.encode(args[0]));
+        if (!assetIds.contains(assetId)) revert PriceFeed_AssetSupportFailed();
+        // Initialize the request
+        FunctionsRequest.Request memory req;
+        // req.initializeRequestForInlineJavaScript(priceUpdateSource); // Initialize the request with JS code
+        // req.setArgs(args); // Set the arguments for the request
+
+        // Send the request and store the request ID
+        // requestId = _sendRequest(req.encodeCBOR(), subscriptionId, priceGasLimit, donID);
+
+        // Generate arbitrary request ID
+        requestId = keccak256(abi.encode(args[0], block.timestamp, block.number, block.difficulty));
+
+        requestTypes[requestId] = RequestType.PRICE_UPDATE;
+
+        requestIds.add(requestId);
+
+        return requestId;
     }
 
-    function clearPrimaryPrices() external {
-        bytes32[] memory keys = assetsWithPrices.values();
-        uint256 len = keys.length;
-        for (uint256 i = 0; i < len;) {
-            delete prices[keys[i]];
-            bool success = assetsWithPrices.remove(keys[i]);
-            if (!success) revert PriceFeed_FailedToRemovePrice();
+    // @audit - for this, we need to copy the function calculateCumulativeMarketPnl but offchain
+    function requestGetCumulativeMarketPnl(IMarket market) external returns (bytes32 requestId) {
+        // Need to check the market is valid
+        // If the market is not valid, revert
+        if (!marketMaker.isMarket(address(market))) revert PriceFeed_InvalidMarket();
+
+        // get all of the assets from the market
+        // pass the assets to the request as args
+        // convert assets to a string
+        string[] memory tickers = market.getTickers();
+
+        FunctionsRequest.Request memory req;
+        // req.initializeRequestForInlineJavaScript(cumulativePnlSource); // Initialize the request with JS code
+        // if (tickers.length > 0) req.setArgs(tickers); // Set the arguments for the request
+
+        // Send the request and store the request ID
+        // requestId = _sendRequest(req.encodeCBOR(), subscriptionId, cumulativePnlGasLimit, donID);
+
+        // Generate arbitrary request ID
+        requestId = keccak256(abi.encode(tickers[0], block.timestamp, block.number, block.difficulty));
+
+        requestTypes[requestId] = RequestType.CUMULATIVE_PNL;
+
+        requestIds.add(requestId);
+
+        return requestId;
+    }
+
+    // Used to Manually Set Prices for Testing
+    function updatePrices(string[] calldata _tickers, Price[] calldata _prices) external {
+        if (_tickers.length != _prices.length) revert PriceFeed_PriceUpdateLength();
+        for (uint256 i = 0; i < _tickers.length;) {
+            bytes32 assetId = keccak256(abi.encode(_tickers[i]));
+            prices[assetId] = _prices[i];
             unchecked {
                 ++i;
             }
         }
-        if (assetsWithPrices.length() != 0) revert PriceFeed_FailedToClearPrices();
-        emit PriceFeed_PricesCleared();
     }
 
-    function getPriceUnsafe(Oracle.Asset memory _asset) external view returns (uint256 price, uint256 confidence) {
-        PythStructs.Price memory data = queryPriceFeed(_asset.priceId).price;
-        (price, confidence) = Oracle.convertPythParams(data);
+    /**
+     * @notice Callback function for fulfilling a request
+     * @param requestId The ID of the request to fulfill
+     * @param response The HTTP response data
+     * @param err Any errors from the Functions request
+     */
+    // Decode the response, according to the structure of the request
+    // @audit - need to check the response's validity
+    function fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
+        if (!requestIds.contains(requestId)) revert UnexpectedRequestID(requestId); // Check if request IDs match
+        // Remove the request ID if there are no errors
+        if (err.length == 0) requestIds.remove(requestId);
+        else revert FulfillmentFailed(string(err));
+        // Get the request type of the request
+        RequestType requestType = requestTypes[requestId];
+        if (requestType == RequestType.PRICE_UPDATE) {
+            // Fulfill the price update request
+            UnpackedPriceResponse[] memory unpackedResponse = abi.decode(response, (UnpackedPriceResponse[]));
+            uint256 len = unpackedResponse.length;
+            for (uint256 i = 0; i < len;) {
+                uint256 compactedPriceData = unpackedResponse[i].compactedPrices;
+
+                Price storage price = prices[keccak256(abi.encode(unpackedResponse[i].ticker))];
+
+                // Prices compacted as: uint64 minPrice, uint64 medPrice, uint64 maxPrice, uint8 priceDecimals
+                // use bitshifting to unpack the prices
+                uint256 decimals = (compactedPriceData >> 192) & 0xFF;
+                price.minPrice = (compactedPriceData & 0xFFFFFFFF) * (10 ** (PRICE_DECIMALS - decimals));
+                price.medPrice = ((compactedPriceData >> 64) & 0xFFFFFFFF) * (10 ** (PRICE_DECIMALS - decimals));
+                price.maxPrice = ((compactedPriceData >> 128) & 0xFFFFFFFF) * (10 ** (PRICE_DECIMALS - decimals));
+                price.timestamp = block.timestamp;
+
+                unchecked {
+                    ++i;
+                }
+            }
+        } else {
+            // Fulfill the cumulative pnl request
+            UnpackedPnlResponse memory unpackedResponse = abi.decode(response, (UnpackedPnlResponse));
+            cumulativePnl[unpackedResponse.market] = unpackedResponse.cumulativePnl;
+        }
+
+        // Emit an event to log the response
+        emit Response(requestId, requestType, response, err);
     }
 
-    function getAssetPricesUnsafe()
-        external
-        view
-        returns (Oracle.Price memory longPrice, Oracle.Price memory shortPrice)
-    {
-        PythStructs.Price memory longData = queryPriceFeed(assets[longAssetId].priceId).price;
-        PythStructs.Price memory shortData = queryPriceFeed(assets[shortAssetId].priceId).price;
-        longPrice = Oracle.parsePythData(longData);
-        shortPrice = Oracle.parsePythData(shortData);
-    }
-
-    function createPriceFeedUpdateData(
-        bytes32 id,
-        int64 price,
-        uint64 conf,
-        int32 expo,
-        int64 emaPrice,
-        uint64 emaConf,
-        uint64 publishTime,
-        uint64 prevPublishTime
-    ) public pure override(IPriceFeed, MockPyth) returns (bytes memory priceFeedData) {
-        PythStructs.PriceFeed memory priceFeed;
-
-        priceFeed.id = id;
-
-        priceFeed.price.price = price;
-        priceFeed.price.conf = conf;
-        priceFeed.price.expo = expo;
-        priceFeed.price.publishTime = publishTime;
-
-        priceFeed.emaPrice.price = emaPrice;
-        priceFeed.emaPrice.conf = emaConf;
-        priceFeed.emaPrice.expo = expo;
-        priceFeed.emaPrice.publishTime = publishTime;
-
-        priceFeedData = abi.encode(priceFeed, prevPublishTime);
-    }
-
-    function packPriceData(uint8[] calldata _indexes, uint256[] calldata _prices, uint256[] calldata _decimals)
-        external
-        pure
-        returns (uint256[] memory packedPrices)
-    {}
-
-    function getAsset(bytes32 _assetId) external view returns (Oracle.Asset memory) {
-        return assets[_assetId];
-    }
-
-    function getPrimaryPrice(bytes32 _assetId) external view returns (Oracle.Price memory) {
+    function getPrices(bytes32 _assetId) public view returns (Price memory) {
         return prices[_assetId];
-    }
-
-    function updateFee(bytes[] calldata _priceUpdateData) external view returns (uint256) {
-        return getUpdateFee(_priceUpdateData);
     }
 }

@@ -73,6 +73,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         priceFeed = _priceFeed;
     }
 
+    // @audit - add price update request / cumulative pnl update request
     function createDeposit(
         IMarket market,
         address _owner,
@@ -102,6 +103,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
     }
 
+    // @audit - add price update request / cumulative pnl update request
     function createWithdrawal(
         IMarket market,
         address _owner,
@@ -129,6 +131,8 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
     }
 
+    // @audit - can we create a trailing stop loss?
+    // @audit - add price update request
     function createPositionRequest(Position.Input memory _trade) external payable nonReentrant {
         // Get the market to direct the user to
         address market = marketMaker.tokenToMarket(_trade.assetId);

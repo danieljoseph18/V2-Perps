@@ -13,6 +13,8 @@
 - There is an issue of inconsistent prices being used in some places (specifically testAdl test case).
 When index token == collateral token, the prices used should also be the same but they are not.
 
+- Need to update the code license to a suitable one. GPL? GNU?
+
 ### Additions Required
 
 - Handle case for Insolvent Liquidations

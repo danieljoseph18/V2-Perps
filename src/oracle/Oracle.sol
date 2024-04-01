@@ -2,49 +2,18 @@
 pragma solidity 0.8.23;
 
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
-import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IChainlinkFeed} from "./interfaces/IChainlinkFeed.sol";
 import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
 import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol";
+import {ERC20, IERC20, IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
-import {ERC20, IERC20, IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 library Oracle {
-    using SignedMath for int64;
-    using SignedMath for int32;
-
-    error Oracle_PriceNotSet();
     error Oracle_SequencerDown();
-    error Oracle_InvalidTokenPrices();
-    error Oracle_PriceTooHigh();
-    error Oracle_PriceTooLow();
-    error Oracle_InvalidChainlinkPrice();
-    error Oracle_StaleChainlinkPrice();
-    error Oracle_InvalidRefPrice();
-    error Oracle_InvalidIndexPrice();
-    error Oracle_InvalidPoolType();
-    error Oracle_InvalidChainlinkFeed();
+    error Oracle_PriceNotSet();
     error Oracle_InvalidAmmDecimals();
-
-    struct PriceUpdateData {
-        bytes32[] assetIds;
-        bytes[] pythData;
-        uint256[] compactedPrices;
-    }
-
-    struct Asset {
-        address chainlinkPriceFeed; // Chainlink Price Feed Address
-        bytes32 priceId; // Pyth Price ID
-        uint64 baseUnit; // 1 Unit of the Token e.g 1e18 for ETH
-        uint32 heartbeatDuration; // Duration after which the price is considered stale
-        uint256 maxPriceDeviation; // Max Price Deviation from Reference Price
-        PrimaryStrategy primaryStrategy; // Strategy for fetching the Primary Price
-        SecondaryStrategy secondaryStrategy; // Strategy for fetching the Secondary Price
-        UniswapPool pool; // Uniswap Pool
-    }
+    error Oracle_InvalidPoolType();
 
     struct UniswapPool {
         address token0;
@@ -53,34 +22,9 @@ library Oracle {
         PoolType poolType;
     }
 
-    struct Price {
-        uint256 max;
-        uint256 med;
-        uint256 min;
-    }
-
-    enum PrimaryStrategy {
-        PYTH,
-        OFFCHAIN
-    }
-
-    enum SecondaryStrategy {
-        CHAINLINK,
-        AMM,
-        NONE
-    }
-
     enum PoolType {
         V3,
         V2
-    }
-
-    uint64 private constant MAX_PERCENTAGE = 1e18; // 100%
-    uint8 private constant PRICE_DECIMALS = 30;
-    uint8 private constant CHAINLINK_PRICE_DECIMALS = 8;
-
-    function isValidAsset(IPriceFeed priceFeed, bytes32 _assetId) external view returns (bool) {
-        return priceFeed.getAsset(_assetId).baseUnit != 0;
     }
 
     function isSequencerUp(IPriceFeed priceFeed) external view {
@@ -107,70 +51,18 @@ library Oracle {
         }
     }
 
-    function parsePythData(PythStructs.Price memory _priceData) external pure returns (Price memory data) {
-        (uint256 price, uint256 confidence) = convertPythParams(_priceData);
-        data.max = price + confidence;
-        data.min = price - confidence;
-        data.med = price;
-    }
-
-    function unpackAndReturnPrice(uint256 _compactedPriceData, uint256 _startingBit)
-        external
-        pure
-        returns (Price memory)
-    {
-        // Use bit manipulation to extract the price and decimals
-        uint256 compactedPrice = (_compactedPriceData >> (_startingBit % 256)) & ((1 << 56) - 1);
-        uint256 decimals = (_compactedPriceData >> ((_startingBit % 256) + 56)) & ((1 << 8) - 1);
-        // Calculte the Price from the Extracted Data
-        uint256 price = compactedPrice * (10 ** (PRICE_DECIMALS - decimals));
-        // Return the Price with 100% Confidence
-        return Price(price, price, price);
-    }
-
-    // Data passed in as 32 bytes - uint64, uint64, uint64, uint8
-    // Deconstruct the data and return the values
-    // Prices should have 30 decimals
-    // Decimals just a regular uint
-    function parsePriceData(bytes memory _priceData)
-        external
-        pure
-        returns (Price memory indexPrice, Price memory longPrice, Price memory shortPrice)
-    {
-        (uint64 signedIndexPrice, uint64 signedLongPrice, uint64 signedShortPrice, uint8 decimals) =
-            abi.decode(_priceData, (uint64, uint64, uint64, uint8));
-        // 100% Confidence
-        uint256 parsedIndexPrice = signedIndexPrice * (10 ** (PRICE_DECIMALS - decimals));
-        indexPrice = Price(parsedIndexPrice, parsedIndexPrice, parsedIndexPrice);
-        uint256 parsedLongPrice = signedLongPrice * (10 ** (PRICE_DECIMALS - decimals));
-        longPrice = Price(parsedLongPrice, parsedLongPrice, parsedLongPrice);
-        uint256 parsedShortPrice = signedShortPrice * (10 ** (PRICE_DECIMALS - decimals));
-        shortPrice = Price(parsedShortPrice, parsedShortPrice, parsedShortPrice);
-    }
-
-    function convertPythParams(PythStructs.Price memory _priceData)
-        public
-        pure
-        returns (uint256 price, uint256 confidence)
-    {
-        uint256 absPrice = _priceData.price.abs();
-        uint256 absExponent = _priceData.expo.abs();
-        price = absPrice * (10 ** (PRICE_DECIMALS - absExponent));
-        confidence = _priceData.conf * (10 ** (PRICE_DECIMALS - absExponent));
-    }
-
     function getPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 price) {
-        price = priceFeed.getPrimaryPrice(_assetId).med;
+        price = priceFeed.getPrices(_assetId).med;
         if (price == 0) revert Oracle_PriceNotSet();
     }
 
     function getMaxPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 maxPrice) {
-        maxPrice = priceFeed.getPrimaryPrice(_assetId).max;
+        maxPrice = priceFeed.getPrices(_assetId).max;
         if (maxPrice == 0) revert Oracle_PriceNotSet();
     }
 
     function getMinPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 minPrice) {
-        minPrice = priceFeed.getPrimaryPrice(_assetId).min;
+        minPrice = priceFeed.getPrices(_assetId).min;
         if (minPrice == 0) revert Oracle_PriceNotSet();
     }
 
@@ -179,7 +71,7 @@ library Oracle {
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
-        (Price memory longPrices, Price memory shortPrices) = getMarketTokenPrices(priceFeed);
+        (IPriceFeed.Price memory longPrices, IPriceFeed.Price memory shortPrices) = getMarketTokenPrices(priceFeed);
         if (_maximise) {
             longPrice = longPrices.max;
             shortPrice = shortPrices.max;
@@ -187,95 +79,21 @@ library Oracle {
             longPrice = longPrices.min;
             shortPrice = shortPrices.min;
         }
-        if (longPrice == 0 || shortPrice == 0) revert Oracle_InvalidTokenPrices();
+        if (longPrice == 0 || shortPrice == 0) revert Oracle_PriceNotSet();
     }
 
     function getMarketTokenPrices(IPriceFeed priceFeed)
         public
         view
-        returns (Price memory _longPrices, Price memory _shortPrices)
+        returns (IPriceFeed.Price memory _longPrices, IPriceFeed.Price memory _shortPrices)
     {
-        _longPrices = priceFeed.getPrimaryPrice(priceFeed.longAssetId());
-        _shortPrices = priceFeed.getPrimaryPrice(priceFeed.shortAssetId());
+        _longPrices = priceFeed.getPrices(priceFeed.LONG_ASSET_ID());
+        _shortPrices = priceFeed.getPrices(priceFeed.SHORT_ASSET_ID());
     }
 
-    function getLastMarketTokenPrices(IPriceFeed priceFeed)
-        external
-        view
-        returns (Price memory longPrices, Price memory shortPrices)
-    {
-        return priceFeed.getAssetPricesUnsafe();
-    }
-
-    // Can just use getPriceUnsafe - where do we get the confidence interval?
-    function getLastMarketTokenPrices(IPriceFeed priceFeed, bool _maximise)
-        external
-        view
-        returns (uint256 longPrice, uint256 shortPrice)
-    {
-        Asset memory longToken = priceFeed.getAsset(priceFeed.longAssetId());
-        Asset memory shortToken = priceFeed.getAsset(priceFeed.shortAssetId());
-        (uint256 longBasePrice, uint256 longConfidence) = priceFeed.getPriceUnsafe(longToken);
-        (uint256 shortBasePrice, uint256 shortConfidence) = priceFeed.getPriceUnsafe(shortToken);
-        if (_maximise) {
-            longPrice = longBasePrice + longConfidence;
-            shortPrice = shortBasePrice + shortConfidence;
-        } else {
-            longPrice = longBasePrice - longConfidence;
-            shortPrice = shortBasePrice - shortConfidence;
-        }
-        if (longPrice == 0 || shortPrice == 0) revert Oracle_InvalidTokenPrices();
-    }
-
-    function validatePriceRange(Asset memory _asset, Price memory _priceData, uint256 _refPrice) external pure {
-        if (_priceData.med == 0) revert Oracle_PriceNotSet();
-        // check the price is within the range
-        uint256 maxPriceDeviation = mulDiv(_refPrice, _asset.maxPriceDeviation, MAX_PERCENTAGE);
-        if (_priceData.max > _refPrice + maxPriceDeviation) revert Oracle_PriceTooHigh();
-        if (_priceData.min < _refPrice - maxPriceDeviation) revert Oracle_PriceTooLow();
-    }
-
-    function getReferencePrice(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256 referencePrice) {
-        Asset memory asset = priceFeed.getAsset(_assetId);
-        return getReferencePrice(asset);
-    }
-
-    function getLongReferencePrice(IPriceFeed priceFeed) external view returns (uint256 referencePrice) {
-        return getReferencePrice(priceFeed, priceFeed.longAssetId());
-    }
-
-    function getShortReferencePrice(IPriceFeed priceFeed) external view returns (uint256 referencePrice) {
-        return getReferencePrice(priceFeed, priceFeed.shortAssetId());
-    }
-
-    function getReferencePrice(Asset memory _asset) public view returns (uint256 referencePrice) {
-        if (_asset.secondaryStrategy == SecondaryStrategy.CHAINLINK) {
-            if (_asset.chainlinkPriceFeed == address(0)) revert Oracle_InvalidChainlinkFeed();
-            IChainlinkFeed chainlinkFeed = IChainlinkFeed(_asset.chainlinkPriceFeed);
-            (, int256 price,, uint256 timestamp,) = chainlinkFeed.latestRoundData();
-            if (price <= 0) revert Oracle_InvalidChainlinkPrice();
-            if (timestamp <= block.timestamp - _asset.heartbeatDuration && block.timestamp > timestamp) {
-                revert Oracle_StaleChainlinkPrice();
-            }
-            referencePrice = uint256(price) * (10 ** (PRICE_DECIMALS - CHAINLINK_PRICE_DECIMALS));
-        } else if (_asset.secondaryStrategy == SecondaryStrategy.AMM) {
-            referencePrice = getAmmPrice(_asset.pool);
-        } else if (_asset.secondaryStrategy == SecondaryStrategy.NONE) {
-            return 0;
-        } else {
-            revert Oracle_InvalidRefPrice();
-        }
-    }
-
-    function getBaseUnit(IPriceFeed priceFeed, bytes32 _assetId) public view returns (uint256) {
-        return priceFeed.getAsset(_assetId).baseUnit;
-    }
-
-    function priceWasSigned(IPriceFeed priceFeed, bool _isLong) external view returns (bool) {
-        // If long, get the long asset price, else short asset price
-        bytes32 assetId = _isLong ? priceFeed.longAssetId() : priceFeed.shortAssetId();
-        return priceFeed.getPrimaryPrice(assetId).med != 0;
-    }
+    /**
+     * ====================================== In case I want to implement Ref Price ======================================
+     */
 
     /// @dev _baseUnit is the base unit of the token0
     // ONLY EVER USED FOR REFERENCE PRICE -> PRICE IS MANIPULATABLE

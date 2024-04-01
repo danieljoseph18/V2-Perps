@@ -128,7 +128,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         console2.log("Price Impact in TradeStorage: ", state.priceImpactUsd);
         console.log("Impacted Price in TradeStorage: ", state.impactedPrice);
         // Fetch the State of the Market Before the Position
-        IMarket.MarketStorage memory marketBefore = market.getStorage(request.input.assetId);
+        IMarket.MarketStorage memory initialMarket = market.getStorage(request.input.assetId);
 
         // Delete the Order from Storage
         _deleteOrder(_orderKey, request.input.isLimit);
@@ -158,10 +158,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         }
 
         // Fetch the State of the Market After the Position
-        IMarket.MarketStorage memory marketAfter = market.getStorage(request.input.assetId);
+        IMarket.MarketStorage memory updatedMarket = market.getStorage(request.input.assetId);
 
         // Invariant Check
-        Position.validateMarketDelta(marketBefore, marketAfter, request);
+        Position.validateMarketDelta(initialMarket, updatedMarket, request);
     }
 
     function liquidatePosition(bytes32 _positionKey, address _liquidator) external onlyPositionManager nonReentrant {
@@ -188,6 +188,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     // @audit - as we scale, may become hard to keep on top of so many markets
     // need to consider how this would function if permissionless
     // probably need to add incentives for keepers to execute, similar to liquidations
+    // @audit - make sure that the funds are going to the position owner, not the ADLer
     function executeAdl(bytes32 _positionKey, bytes32 _assetId, uint256 _sizeDelta)
         external
         onlyPositionManager

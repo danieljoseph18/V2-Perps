@@ -9,8 +9,6 @@ interface IHelperConfig {
         address usdc;
         bytes32 ethPriceId;
         bytes32 usdcPriceId;
-        Oracle.Asset wethAsset;
-        Oracle.Asset usdcAsset;
         bool mockFeed;
         address sequencerUptimeFeed;
     }

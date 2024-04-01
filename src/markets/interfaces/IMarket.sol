@@ -3,6 +3,7 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "./IMarket.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
+import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {IMarketToken} from "./IMarketToken.sol";
 
 interface IMarket {
@@ -32,8 +33,8 @@ interface IMarket {
         IMarket market;
         IMarketToken marketToken;
         Input deposit;
-        Oracle.Price longPrices;
-        Oracle.Price shortPrices;
+        IPriceFeed.Price longPrices;
+        IPriceFeed.Price shortPrices;
         bytes32 key;
         uint256 longBorrowFeesUsd;
         uint256 shortBorrowFeesUsd;
@@ -44,8 +45,8 @@ interface IMarket {
         IMarket market;
         IMarketToken marketToken;
         Input withdrawal;
-        Oracle.Price longPrices;
-        Oracle.Price shortPrices;
+        IPriceFeed.Price longPrices;
+        IPriceFeed.Price shortPrices;
         bytes32 key;
         uint256 longBorrowFeesUsd;
         uint256 shortBorrowFeesUsd;
@@ -285,8 +286,8 @@ interface IMarket {
      * ================ Functions ================
      */
     function initialize(address _tradeStorage, uint256 _borrowScale) external;
-    function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations) external;
-    function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external;
+    function addToken(Config memory _config, string memory _ticker, uint256[] calldata _newAllocations) external;
+    function removeToken(string memory _ticker, uint256[] calldata _newAllocations) external;
     function updateMarketState(
         bytes32 _assetId,
         uint256 _sizeDelta,
@@ -310,4 +311,5 @@ interface IMarket {
     function longTokensReserved() external view returns (uint256);
     function shortTokensReserved() external view returns (uint256);
     function isAssetInMarket(bytes32 _assetId) external view returns (bool);
+    function getTickers() external view returns (string[] memory);
 }

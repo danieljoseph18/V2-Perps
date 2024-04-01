@@ -70,6 +70,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      */
     uint256 public borrowScale;
 
+    string[] private tickers;
+
     // Store the Collateral Amount for each User
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
@@ -86,23 +88,23 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     modifier validAction(uint256 _amountIn, uint256 _amountOut, bool _isLongToken, bool _isDeposit) {
         // Cache the State Before
-        State memory stateBefore = State({
+        State memory initialState = State({
             totalSupply: MARKET_TOKEN.totalSupply(),
             wethBalance: IERC20(WETH).balanceOf(address(this)),
             usdcBalance: IERC20(USDC).balanceOf(address(this))
         });
         _;
         // Cache the state after
-        State memory stateAfter = State({
+        State memory updatedState = State({
             totalSupply: MARKET_TOKEN.totalSupply(),
             wethBalance: IERC20(WETH).balanceOf(address(this)),
             usdcBalance: IERC20(USDC).balanceOf(address(this))
         });
         // Validate the Vault State Delta
         if (_isDeposit) {
-            MarketUtils.validateDeposit(stateBefore, stateAfter, _amountIn, _isLongToken);
+            MarketUtils.validateDeposit(initialState, updatedState, _amountIn, _isLongToken);
         } else {
-            MarketUtils.validateWithdrawal(stateBefore, stateAfter, _amountIn, _amountOut, _isLongToken);
+            MarketUtils.validateWithdrawal(initialState, updatedState, _amountIn, _amountOut, _isLongToken);
         }
     }
 
@@ -117,7 +119,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         address _weth,
         address _usdc,
         address _marketToken,
-        bytes32 _assetId,
+        string memory _ticker,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         WETH = _weth;
@@ -128,7 +130,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         feeReceiver = _feeReceiver;
         uint256[] memory allocations = new uint256[](1);
         allocations[0] = 10000 << 240;
-        _addToken(_tokenConfig, _assetId, allocations);
+        _addToken(_tokenConfig, _ticker, allocations);
     }
 
     receive() external payable {
@@ -151,20 +153,21 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         poolOwner = _newOwner;
     }
 
-    function addToken(Config memory _config, bytes32 _assetId, uint256[] calldata _newAllocations)
+    function addToken(Config memory _config, string memory _ticker, uint256[] calldata _newAllocations)
         external
         onlyMarketMaker
     {
         if (assetIds.length() >= MAX_ASSETS) revert Market_MaxAssetsReached();
         if (!isMultiAssetMarket) isMultiAssetMarket = true;
-        _addToken(_config, _assetId, _newAllocations);
+        _addToken(_config, _ticker, _newAllocations);
     }
 
-    function removeToken(bytes32 _assetId, uint256[] calldata _newAllocations) external onlyAdmin {
-        if (!assetIds.contains(_assetId)) revert Market_TokenDoesNotExist();
+    function removeToken(string memory _ticker, uint256[] calldata _newAllocations) external onlyAdmin {
+        bytes32 assetId = MarketUtils.generateAssetId(_ticker);
+        if (!assetIds.contains(assetId)) revert Market_TokenDoesNotExist();
         uint256 len = assetIds.length();
         if (len == 1) revert Market_MinimumAssetsReached();
-        if (!assetIds.remove(_assetId)) revert Market_FailedToRemoveAssetId();
+        if (!assetIds.remove(assetId)) revert Market_FailedToRemoveAssetId();
 
         // If length after removal is 1, set isMultiAssetMarket to false
         if (len == 2) {
@@ -176,8 +179,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             _setAllocationsWithBits(_newAllocations);
         }
 
-        delete marketStorage[_assetId];
-        emit TokenRemoved(_assetId);
+        delete marketStorage[assetId];
+        emit TokenRemoved(assetId);
     }
 
     function updateFees(address _poolOwner, address _feeDistributor) external onlyConfigurator(address(this)) {
@@ -197,6 +200,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      * Unrealistic values may lead to unexpected behavior in the system.
      * Permissions restricted to only a super-user.
      */
+    // @audit - should we make this configurable by users, then just contrain the inputs?
     function updateConfig(Config memory _config, bytes32 _assetId) external onlyAdmin {
         marketStorage[_assetId].config = _config;
         emit MarketConfigUpdated(_assetId, _config);
@@ -205,6 +209,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Market State Functions  =========================
      */
+    // @audit - need to make it so users can't lower allocation below current Oi
     function setAllocationsWithBits(uint256[] memory _allocations) external onlyStateKeeper {
         if (!isMultiAssetMarket) revert Market_SingleAssetMarket();
         _setAllocationsWithBits(_allocations);
@@ -465,6 +470,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         total = _isLong ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
     }
 
+    function getTickers() external view returns (string[] memory) {
+        return tickers;
+    }
+
     /**
      *  ========================= Internal Functions  =========================
      */
@@ -552,14 +561,15 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         if (total != TOTAL_ALLOCATION) revert Market_InvalidCumulativeAllocation();
     }
 
-    function _addToken(Config memory _config, bytes32 _assetId, uint256[] memory _newAllocations) internal {
-        if (assetIds.contains(_assetId)) revert Market_TokenAlreadyExists();
-        if (!assetIds.add(_assetId)) revert Market_FailedToAddAssetId();
+    function _addToken(Config memory _config, string memory _ticker, uint256[] memory _newAllocations) internal {
+        bytes32 assetId = MarketUtils.generateAssetId(_ticker);
+        if (assetIds.contains(assetId)) revert Market_TokenAlreadyExists();
+        if (!assetIds.add(assetId)) revert Market_FailedToAddAssetId();
         _setAllocationsWithBits(_newAllocations);
-        marketStorage[_assetId].config = _config;
-        marketStorage[_assetId].funding.lastFundingUpdate = uint48(block.timestamp);
-        marketStorage[_assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
-        emit TokenAdded(_assetId, _config);
+        marketStorage[assetId].config = _config;
+        marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
+        marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
+        emit TokenAdded(assetId, _config);
     }
 
     function _deleteRequest(bytes32 _key) internal {

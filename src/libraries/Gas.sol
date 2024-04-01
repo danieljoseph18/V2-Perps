@@ -7,6 +7,8 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 
+// @audit - update for new price feed structure
+// @audit - can use lib/chainlink/contracts/src/v0.8/functions/v1_1_0/libraries/ChainSpecificUtil.sol
 library Gas {
     uint256 private constant CANCELLATION_PENALTY = 0.2e18; // 20%
     uint256 private constant SCALING_FACTOR = 1e18;

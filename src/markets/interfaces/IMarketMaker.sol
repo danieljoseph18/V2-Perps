@@ -2,13 +2,12 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "./IMarket.sol";
-import {Oracle} from "../../oracle/Oracle.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface IMarketMaker {
     event MarketMakerInitialized(address priceStorage);
-    event MarketCreated(address market, bytes32 assetId, bytes32 priceId);
-    event TokenAddedToMarket(address market, bytes32 assetId, bytes32 priceId);
+    event MarketCreated(address market, string ticker, bytes32 priceId);
+    event TokenAddedToMarket(address market, string ticker, bytes32 priceId);
     event DefaultConfigSet(IMarket.Config defaultConfig);
     event MarketRequested(bytes32 requestKey, string indexTokenTicker);
 
@@ -35,7 +34,6 @@ interface IMarketMaker {
         string indexTokenTicker;
         string marketTokenName;
         string marketTokenSymbol;
-        Oracle.Asset asset;
     }
 
     function initialize(
@@ -51,7 +49,7 @@ interface IMarketMaker {
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function requestNewMarket(MarketRequest calldata _request) external payable;
     function executeNewMarket(bytes32 _requestKey) external returns (address);
-    function tokenToMarket(bytes32 _assetId) external view returns (address);
+    function tokenToMarket(string memory ticker) external view returns (address);
     function getMarkets() external view returns (address[] memory);
     function requests(bytes32 _requestKey)
         external
@@ -60,8 +58,7 @@ interface IMarketMaker {
             address owner,
             string memory indexTokenTicker,
             string memory marketTokenName,
-            string memory marketTokenSymbol,
-            Oracle.Asset memory asset
+            string memory marketTokenSymbol
         );
     function marketCreationFee() external view returns (uint256);
     function isMarket(address _market) external view returns (bool);

@@ -8,8 +8,6 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Execution} from "../positions/Execution.sol";
-import {Oracle} from "../oracle/Oracle.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 
 // library responsible for handling all price impact calculations
@@ -32,10 +30,10 @@ library PriceImpact {
         IMarket.ImpactConfig impact;
         uint256 longOi;
         uint256 shortOi;
-        uint256 totalOiBefore;
-        uint256 totalOiAfter;
-        int256 skewBefore;
-        int256 skewAfter;
+        uint256 initialTotalOi;
+        uint256 updatedTotalOi;
+        int256 initialSkew;
+        int256 updatedSkew;
         int256 priceImpactUsd;
         int256 oiPercentage;
         int256 availableOi;
@@ -64,23 +62,23 @@ library PriceImpact {
         ).toInt256();
         if (state.availableOi == 0) revert PriceImpact_NoAvailableLiquidity();
 
-        state.totalOiBefore = state.longOi + state.shortOi;
+        state.initialTotalOi = state.longOi + state.shortOi;
 
         int256 sizeDeltaUsd;
         if (_request.input.isIncrease) {
             sizeDeltaUsd = _request.input.sizeDelta.toInt256();
-            state.totalOiAfter = state.totalOiBefore + _request.input.sizeDelta;
+            state.updatedTotalOi = state.initialTotalOi + _request.input.sizeDelta;
         } else {
-            if (_request.input.sizeDelta > state.totalOiBefore) revert PriceImpact_InvalidDecrease();
+            if (_request.input.sizeDelta > state.initialTotalOi) revert PriceImpact_InvalidDecrease();
             sizeDeltaUsd = -_request.input.sizeDelta.toInt256();
-            state.totalOiAfter = state.totalOiBefore - _request.input.sizeDelta;
+            state.updatedTotalOi = state.initialTotalOi - _request.input.sizeDelta;
         }
-        state.skewBefore = state.longOi.toInt256() - state.shortOi.toInt256();
+        state.initialSkew = state.longOi.toInt256() - state.shortOi.toInt256();
         _request.input.isLong ? state.longOi += _request.input.sizeDelta : state.shortOi += _request.input.sizeDelta;
-        state.skewAfter = state.longOi.toInt256() - state.shortOi.toInt256();
+        state.updatedSkew = state.longOi.toInt256() - state.shortOi.toInt256();
 
         // Compare the MSBs to determine whether a skew flip has occurred
-        if ((state.skewBefore ^ state.skewAfter) < 0) {
+        if ((state.initialSkew ^ state.updatedSkew) < 0) {
             /**
              * If Skew has flipped, the market initially goes to perfect harmony, then skews in the opposite direction.
              * As a result, the size delta that takes the market to skew = 0, is coutned as positive impact, and
@@ -91,22 +89,22 @@ library PriceImpact {
             int256 positiveImpact = _calculateImpact(
                 sizeDeltaUsd,
                 0,
-                state.skewBefore,
+                state.initialSkew,
                 state.impact.positiveSkewScalar,
                 state.impact.positiveLiquidityScalar,
-                state.totalOiBefore,
-                state.totalOiAfter,
+                state.initialTotalOi,
+                state.updatedTotalOi,
                 state.availableOi
             );
             // Calculate negative impact after the sign flips
             int256 negativeImpact = _calculateImpact(
                 sizeDeltaUsd,
-                state.skewAfter,
+                state.updatedSkew,
                 0,
                 state.impact.negativeSkewScalar,
                 state.impact.negativeLiquidityScalar,
-                state.totalOiBefore,
-                state.totalOiAfter,
+                state.initialTotalOi,
+                state.updatedTotalOi,
                 state.availableOi
             );
             // priceImpactUsd = positive expression - the negative expression
@@ -116,11 +114,11 @@ library PriceImpact {
              * Fully reducing the open interest technically brings the market to perfect harmony.
              * To avoid incentivizing this case with positive impact, the price impact is set to 0.
              */
-            if (state.totalOiAfter == 0) return (_orderState.indexPrice, 0);
+            if (state.updatedTotalOi == 0) return (_orderState.indexPrice, 0);
             // Get the skew scalar and liquidity scalar, depending on direction of price impact
             int256 skewScalar;
             int256 liquidityScalar;
-            if (state.skewAfter.abs() < state.skewBefore.abs()) {
+            if (state.updatedSkew.abs() < state.initialSkew.abs()) {
                 skewScalar = state.impact.positiveSkewScalar;
                 liquidityScalar = state.impact.positiveLiquidityScalar;
             } else {
@@ -130,12 +128,12 @@ library PriceImpact {
             // Calculate the impact within bounds
             priceImpactUsd = _calculateImpact(
                 sizeDeltaUsd,
-                state.skewAfter,
-                state.skewBefore,
+                state.updatedSkew,
+                state.initialSkew,
                 skewScalar,
                 liquidityScalar,
-                state.totalOiBefore,
-                state.totalOiAfter,
+                state.initialTotalOi,
+                state.updatedTotalOi,
                 state.availableOi
             );
         }
@@ -159,28 +157,29 @@ library PriceImpact {
      */
 
     /**
-     * PriceImpact = sizeDeltaUsd * skewScalar((skewBefore/totalOiBefore) - (skewAfter/totalOiAfter)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
+     * PriceImpact = sizeDeltaUsd * skewScalar((initialSkew/initialTotalOi) - (updatedSkew/updatedTotalOi)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
      * @dev - Only calculates impact within bounds. Does not handle skew flip case.
      */
+    // @audit - remove skewScalar
     function _calculateImpact(
         int256 _sizeDeltaUsd,
-        int256 _skewAfter,
-        int256 _skewBefore,
+        int256 _updatedSkew,
+        int256 _initialSkew,
         int256 _skewScalar,
         int256 _liquidityScalar,
-        uint256 _totalOiBefore,
-        uint256 _totalOiAfter,
+        uint256 _initialTotalOi,
+        uint256 _updatedTotalOi,
         int256 _availableOi
     ) internal pure returns (int256 priceImpactUsd) {
         /**
-         * If totalOiBefore is 0, the (skewBefore/totalOiBefore) term is cancelled out.
+         * If initialTotalOi is 0, the (initialSkew/initialTotalOi) term is cancelled out.
          * Price impact will always be negative when total oi before is 0.
-         * In this case, skewFactor = skewScalar * (skewAfter/totalOiAfter)
+         * In this case, skewFactor = skewScalar * (updatedSkew/updatedTotalOi)
          */
-        int256 skewFactor = _totalOiBefore == 0
-            ? -mulDivSigned(_skewAfter, _skewScalar, _totalOiAfter.toInt256())
-            : mulDivSigned(_skewBefore, _skewScalar, _totalOiBefore.toInt256())
-                - mulDivSigned(_skewAfter, _skewScalar, _totalOiAfter.toInt256());
+        int256 skewFactor = _initialTotalOi == 0
+            ? -mulDivSigned(_updatedSkew, _skewScalar, _updatedTotalOi.toInt256())
+            : mulDivSigned(_initialSkew, _skewScalar, _initialTotalOi.toInt256())
+                - mulDivSigned(_updatedSkew, _skewScalar, _updatedTotalOi.toInt256());
 
         if (_sizeDeltaUsd > _availableOi) revert PriceImpact_InvalidState();
         int256 liquidityFactor = mulDivSigned(_sizeDeltaUsd, _liquidityScalar, _availableOi);
