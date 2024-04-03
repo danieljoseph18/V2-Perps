@@ -195,7 +195,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         _addToken(_config, _ticker, _newAllocations, _priceRequestId);
     }
 
-    // @audit - need to add pricing here and open up to the pool owner too.
     function removeToken(string memory _ticker, uint256[] calldata _newAllocations, bytes32 _priceRequestId)
         external
         onlyConfigurator(address(this))
@@ -218,9 +217,9 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             isMultiAssetMarket = false;
             uint256[] memory allocations = new uint256[](1);
             allocations[0] = 10000 << 240;
-            _reallocate(allocations, longTokenPrice, shortTokenPrice);
+            _reallocate(allocations, longTokenPrice, shortTokenPrice, _priceRequestId);
         } else {
-            _reallocate(_newAllocations, longTokenPrice, shortTokenPrice);
+            _reallocate(_newAllocations, longTokenPrice, shortTokenPrice, _priceRequestId);
         }
         // Clear the prices
         priceFeed.clearSignedPrices(this, _priceRequestId);
@@ -267,7 +266,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert Market_InvalidPriceRequest();
         uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
         uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
-        _reallocate(_allocations, longTokenPrice, shortTokenPrice);
+        _reallocate(_allocations, longTokenPrice, shortTokenPrice, _priceRequestId);
         // Clear the prices
         priceFeed.clearSignedPrices(this, _priceRequestId);
     }
@@ -278,6 +277,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         uint256 _indexPrice,
         uint256 _impactedPrice,
         uint256 _collateralPrice,
+        uint256 _indexBaseUnit,
         bool _isLong,
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
@@ -296,7 +296,9 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             _updateOpenInterest(_ticker, _sizeDelta, _isLong, _isIncrease);
         }
         // 4. Relies on Updated Open interest
-        _updateBorrowingRate(_ticker, _collateralPrice, _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT, _isLong);
+        _updateBorrowingRate(
+            _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT, _isLong
+        );
         // Fire Event
         emit MarketStateUpdated(_ticker, _isLong);
     }
@@ -558,14 +560,17 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function _updateBorrowingRate(
         string calldata _ticker,
+        uint256 _indexPrice,
         uint256 _collateralPrice,
+        uint256 _indexBaseUnit,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) internal {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         BorrowingValues memory borrowing = marketStorage[assetId].borrowing;
-        marketStorage[assetId].borrowing =
-            Borrowing.updateState(this, borrowing, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+        marketStorage[assetId].borrowing = Borrowing.updateState(
+            this, borrowing, _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _collateralBaseUnit, _isLong
+        );
     }
 
     /**
@@ -625,7 +630,13 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             : marketStorage[assetId].impactPool -= _priceImpactUsd.abs();
     }
 
-    function _reallocate(uint256[] memory _allocations, uint256 _longSignedPrice, uint256 _shortSignedPrice) internal {
+    /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
+    function _reallocate(
+        uint256[] memory _allocations,
+        uint256 _longSignedPrice,
+        uint256 _shortSignedPrice,
+        bytes32 _priceRequestId
+    ) internal {
         // Copy tickers to memory
         string[] memory assetTickers = tickers;
         uint256 assetLen = assetTickers.length;
@@ -642,7 +653,9 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
                 bytes32 assetId = keccak256(abi.encode(assetTickers[i * 16 + j]));
                 marketStorage[assetId].allocationPercentage = allocationValue;
                 // Check the allocation value -> new max open interest must be > current open interest
-                _validateOpenInterest(assetTickers[i * 16 + j], assetId, _longSignedPrice, _shortSignedPrice);
+                _validateOpenInterest(
+                    assetTickers[i * 16 + j], assetId, _priceRequestId, _longSignedPrice, _shortSignedPrice
+                );
                 // Iterate
                 unchecked {
                     ++j;
@@ -675,7 +688,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
         uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
         // Reallocate
-        _reallocate(_newAllocations, longTokenPrice, shortTokenPrice);
+        _reallocate(_newAllocations, longTokenPrice, shortTokenPrice, _priceRequestId);
         // Clear the prices
         priceFeed.clearSignedPrices(this, _priceRequestId);
         // Initialize Storage
@@ -727,16 +740,25 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     function _validateOpenInterest(
         string memory _ticker,
         bytes32 _assetId,
+        bytes32 _priceRequestId,
         uint256 _longSignedPrice,
         uint256 _shortSignedPrice
     ) internal view {
+        // Get the index price and the index base unit
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        uint256 indexPrice = priceFeed.getPrices(_priceRequestId, _ticker).med;
+        uint256 indexBaseUnit = priceFeed.baseUnits(_ticker);
         // Get the Long Max Oi
-        uint256 longMaxOi = MarketUtils.getAvailableOiUsd(this, _ticker, _longSignedPrice, LONG_BASE_UNIT, true);
+        uint256 longMaxOi = MarketUtils.getAvailableOiUsd(
+            this, _ticker, indexPrice, _longSignedPrice, indexBaseUnit, LONG_BASE_UNIT, true
+        );
         // Get the Current oi
         uint256 longCurrentOi = marketStorage[_assetId].openInterest.longOpenInterest;
         if (longMaxOi < longCurrentOi) revert Market_InvalidAllocation();
         // Get the Short Max Oi
-        uint256 shortMaxOi = MarketUtils.getAvailableOiUsd(this, _ticker, _shortSignedPrice, SHORT_BASE_UNIT, false);
+        uint256 shortMaxOi = MarketUtils.getAvailableOiUsd(
+            this, _ticker, indexPrice, _shortSignedPrice, indexBaseUnit, SHORT_BASE_UNIT, false
+        );
         // Get the Current oi
         uint256 shortCurrentOi = marketStorage[_assetId].openInterest.shortOpenInterest;
         if (shortMaxOi < shortCurrentOi) revert Market_InvalidAllocation();

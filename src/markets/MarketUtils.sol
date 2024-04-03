@@ -526,43 +526,58 @@ library MarketUtils {
         IMarket market,
         string calldata _ticker,
         uint256 _sizeDeltaUsd,
+        uint256 _indexPrice,
         uint256 _collateralTokenPrice,
+        uint256 _indexBaseUnit,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external view {
         // Get Max OI for side
-        uint256 availableUsd = getAvailableOiUsd(market, _ticker, _collateralTokenPrice, _collateralBaseUnit, _isLong);
+        uint256 availableUsd = getAvailableOiUsd(
+            market, _ticker, _indexPrice, _collateralTokenPrice, _indexBaseUnit, _collateralBaseUnit, _isLong
+        );
         // Check SizeDelta USD won't push the OI over the max
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 
-    // @audit - probably issues here. what about price fluctuations etc?
     function getTotalAvailableOiUsd(
         IMarket market,
         string calldata _ticker,
+        uint256 _indexPrice,
         uint256 _longTokenPrice,
-        uint256 _shortTokenPrice
+        uint256 _shortTokenPrice,
+        uint256 _indexBaseUnit
     ) external view returns (uint256 totalAvailableOiUsd) {
-        uint256 longOiUsd = getAvailableOiUsd(market, _ticker, _longTokenPrice, LONG_BASE_UNIT, true);
-        uint256 shortOiUsd = getAvailableOiUsd(market, _ticker, _shortTokenPrice, SHORT_BASE_UNIT, false);
+        uint256 longOiUsd =
+            getAvailableOiUsd(market, _ticker, _indexPrice, _longTokenPrice, _indexBaseUnit, LONG_BASE_UNIT, true);
+        uint256 shortOiUsd =
+            getAvailableOiUsd(market, _ticker, _indexPrice, _shortTokenPrice, _indexBaseUnit, SHORT_BASE_UNIT, false);
         totalAvailableOiUsd = longOiUsd + shortOiUsd;
     }
 
     /// @notice returns the available remaining open interest for a side in USD
+    // @audit - should use the relative values of all positions
+    // need to get the market pnl. If it's positive (side is in profit) subtract the profit from the available oi
+    // if it's in net loss, do nothing to the available oi.
     function getAvailableOiUsd(
         IMarket market,
         string calldata _ticker,
+        uint256 _indexPrice,
         uint256 _collateralTokenPrice,
+        uint256 _indexBaseUnit,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 availableOi) {
         // get the allocation and subtract by the markets reserveFactor
         uint256 remainingAllocationUsd =
             getPoolBalanceUsd(market, _ticker, _collateralTokenPrice, _collateralBaseUnit, _isLong);
-
-        uint256 reserveFactor = getReserveFactor(market, _ticker);
-
-        availableOi = remainingAllocationUsd - mulDiv(remainingAllocationUsd, reserveFactor, SCALAR);
+        availableOi = remainingAllocationUsd - mulDiv(remainingAllocationUsd, getReserveFactor(market, _ticker), SCALAR);
+        // get the pnl
+        int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
+        // if the pnl is positive, subtract it from the available oi
+        if (pnl > 0) {
+            availableOi -= pnl.abs();
+        }
     }
 
     // The pnl factor is the ratio of the pnl to the pool usd

@@ -58,7 +58,7 @@ library PriceImpact {
         state.shortOi = MarketUtils.getOpenInterest(market, _request.input.ticker, false);
         // Used to calculate the impact on available liquidity
         state.availableOi = MarketUtils.getTotalAvailableOiUsd(
-            market, _request.input.ticker, _orderState.longMarketTokenPrice, _orderState.shortMarketTokenPrice
+            market, _request.input.ticker, _orderState.indexPrice, _orderState.longMarketTokenPrice, _orderState.shortMarketTokenPrice, _orderState.indexBaseUnit
         ).toInt256();
         if (state.availableOi == 0) revert PriceImpact_NoAvailableLiquidity();
 

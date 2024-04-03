@@ -594,7 +594,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     ) internal {
         // Update the Market State
         market.updateMarketState(
-            _ticker, _sizeDelta, _state.indexPrice, _state.impactedPrice, _state.collateralPrice, _isLong, _isIncrease
+            _ticker,
+            _sizeDelta,
+            _state.indexPrice,
+            _state.impactedPrice,
+            _state.collateralPrice,
+            _state.indexBaseUnit,
+            _isLong,
+            _isIncrease
         );
         // If Price Impact is Negative, add to the impact Pool
         // If Price Impact is Positive, Subtract from the Impact Pool

@@ -17,18 +17,23 @@ library Borrowing {
         IMarket market,
         IMarket.BorrowingValues memory borrowing,
         string calldata _ticker,
+        uint256 _indexPrice,
         uint256 _collateralPrice,
+        uint256 _indexBaseUnit,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external view returns (IMarket.BorrowingValues memory) {
         if (_isLong) {
             borrowing.longCumulativeBorrowFees +=
                 calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.longBorrowingRate = calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, true);
+            borrowing.longBorrowingRate =
+                calculateRate(market, _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _collateralBaseUnit, true);
         } else {
             borrowing.shortCumulativeBorrowFees +=
                 calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.shortBorrowingRate = calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, false);
+            borrowing.shortBorrowingRate = calculateRate(
+                market, _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _collateralBaseUnit, false
+            );
         }
 
         borrowing.lastBorrowUpdate = uint48(block.timestamp);
@@ -45,14 +50,18 @@ library Borrowing {
     function calculateRate(
         IMarket market,
         string calldata _ticker,
+        uint256 _indexPrice,
         uint256 _collateralPrice,
+        uint256 _indexBaseUnit,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 borrowRatePerDay) {
         uint256 factor = mulDiv(
             MarketUtils.getOpenInterest(market, _ticker, _isLong),
             PRECISION,
-            MarketUtils.getAvailableOiUsd(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong)
+            MarketUtils.getAvailableOiUsd(
+                market, _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _collateralBaseUnit, _isLong
+            )
         );
         borrowRatePerDay = mulDiv(market.borrowScale(), factor, PRECISION);
     }

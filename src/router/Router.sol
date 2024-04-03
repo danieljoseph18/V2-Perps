@@ -273,6 +273,19 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     /**
+     * @dev - Used for requesting pricing before calling:
+     * 1. market.addToken
+     * 2. market.removeToken
+     * 3. market.reallocate
+     */
+    function requestPricingForMarket(IMarket market) external payable onlyKeeper returns (bytes32 priceRequestId) {
+        string[] memory tickers = market.getTickers();
+        uint256 priceUpdateFee = priceFeed.estimateRequestCost();
+        if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();
+        priceRequestId = priceFeed.requestPriceUpdate{value: msg.value}(tickers, msg.sender);
+    }
+
+    /**
      * ========================================= Internal Functions =========================================
      */
     function _requestPriceUpdate(uint256 _fee, string memory _ticker) private returns (bytes32 requestId) {

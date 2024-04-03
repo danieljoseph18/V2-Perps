@@ -143,7 +143,9 @@ library Execution {
                 market,
                 request.input.ticker,
                 request.input.sizeDelta,
+                state.indexPrice,
                 state.collateralPrice,
+                state.indexBaseUnit,
                 state.collateralBaseUnit,
                 request.input.isLong
             );

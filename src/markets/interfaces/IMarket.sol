@@ -286,11 +286,12 @@ interface IMarket {
     function removeToken(string memory _ticker, uint256[] calldata _newAllocations, bytes32 _priceRequestId)
         external;
     function updateMarketState(
-        string memory _ticker,
+        string calldata _ticker,
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
         uint256 _collateralPrice,
+        uint256 _indexBaseUnit,
         bool _isLong,
         bool _isIncrease
     ) external;
