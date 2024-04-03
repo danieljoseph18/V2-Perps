@@ -5,7 +5,7 @@
 // import {Deploy} from "../../script/Deploy.s.sol";
 // import {RoleStorage} from "../../src/access/RoleStorage.sol";
 // import {Market, IMarket} from "../../../src/markets/Market.sol";
-// import {MarketMaker} from "../../src/markets/MarketMaker.sol";
+// import {MarketFactory} from "../../src/markets/MarketFactory.sol";
 // import {IPriceFeed} from "../../src/oracle/interfaces/IPriceFeed.sol";
 // import {TradeStorage} from "../../src/positions/TradeStorage.sol";
 // import {ReferralStorage} from "../../src/referrals/ReferralStorage.sol";
@@ -14,7 +14,7 @@
 
 // contract TestDeployment is Test {
 //     RoleStorage roleStorage;
-//     MarketMaker marketMaker;
+//     MarketFactory marketFactory;
 //     IPriceFeed priceFeed; // Deployed in Helper Config
 //     ReferralStorage referralStorage;
 //     PositionManager positionManager;
@@ -25,7 +25,7 @@
 //         Deploy deploy = new Deploy();
 //         Deploy.Contracts memory contracts = deploy.run();
 //         roleStorage = contracts.roleStorage;
-//         marketMaker = contracts.marketMaker;
+//         marketFactory = contracts.marketFactory;
 //         priceFeed = contracts.priceFeed;
 //         referralStorage = contracts.referralStorage;
 //         positionManager = contracts.positionManager;
@@ -35,7 +35,7 @@
 
 //     function testDeployment() public {
 //         assertNotEq(address(roleStorage), address(0));
-//         assertNotEq(address(marketMaker), address(0));
+//         assertNotEq(address(marketFactory), address(0));
 //         assertNotEq(address(priceFeed), address(0));
 //         assertNotEq(address(referralStorage), address(0));
 //         assertNotEq(address(positionManager), address(0));

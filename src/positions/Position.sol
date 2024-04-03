@@ -2,7 +2,6 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
@@ -489,7 +488,7 @@ library Position {
         }
     }
 
-    function constructLiquidationOrder(Data memory _position, address _liquidator)
+    function constructLiquidationOrder(Data memory _position, address _liquidator, bytes32 _requestId)
         external
         view
         returns (Settlement memory order)
@@ -513,7 +512,7 @@ library Position {
                 user: _position.user,
                 requestTimestamp: uint64(block.timestamp),
                 requestType: RequestType.POSITION_DECREASE,
-                requestId: bytes32(0)
+                requestId: _requestId
             }),
             orderKey: bytes32(0),
             feeReceiver: _liquidator,
@@ -521,38 +520,36 @@ library Position {
         });
     }
 
-    // @audit - can structure like above for more efficiency
-    // @audit - fee receiver - need to incentivize
-    function createAdlOrder(Data memory _position, uint256 _sizeDelta)
+    function createAdlOrder(Data memory _position, uint256 _sizeDelta, address _feeReceiver, bytes32 _requestId)
         external
         view
-        returns (Settlement memory settlement)
+        returns (Settlement memory order)
     {
-        // calculate collateral delta from size delta
-        uint256 collateralDelta = mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize);
-
-        Request memory request = Request({
-            input: Input({
-                ticker: _position.ticker,
-                collateralToken: _position.collateralToken,
-                collateralDelta: collateralDelta,
-                sizeDelta: _sizeDelta,
-                limitPrice: 0,
-                maxSlippage: MAX_SLIPPAGE,
-                executionFee: 0,
-                isLong: _position.isLong,
-                isLimit: false,
-                isIncrease: false,
-                reverseWrap: false,
-                conditionals: Conditionals(false, false, 0, 0, 0, 0)
+        order = Settlement({
+            request: Request({
+                input: Input({
+                    ticker: _position.ticker,
+                    collateralToken: _position.collateralToken,
+                    collateralDelta: mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize),
+                    sizeDelta: _sizeDelta,
+                    limitPrice: 0,
+                    maxSlippage: MAX_SLIPPAGE,
+                    executionFee: 0,
+                    isLong: _position.isLong,
+                    isLimit: false,
+                    isIncrease: false,
+                    reverseWrap: false,
+                    conditionals: Conditionals(false, false, 0, 0, 0, 0)
+                }),
+                user: _position.user,
+                requestTimestamp: uint64(block.timestamp),
+                requestType: RequestType.POSITION_DECREASE,
+                requestId: _requestId
             }),
-            user: _position.user,
-            requestTimestamp: uint64(block.timestamp),
-            requestType: RequestType.POSITION_DECREASE,
-            requestId: bytes32(0)
+            orderKey: bytes32(0),
+            feeReceiver: _feeReceiver,
+            isAdl: true
         });
-        settlement =
-            Settlement({request: request, orderKey: generateOrderKey(request), feeReceiver: address(0), isAdl: true});
     }
 
     /**
@@ -564,15 +561,20 @@ library Position {
         uint256 _collateralDelta,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit
-    ) external view returns (uint256 fee) {
+    ) external view returns (uint256 positionFee, uint256 feeForExecutor) {
         uint256 feePercentage = tradeStorage.tradingFee();
+        uint256 executorPercentage = tradeStorage.feeForExecution();
         // convert index amount to collateral amount
         if (_tokenAmount != 0) {
             uint256 sizeInCollateral = mulDiv(_tokenAmount, _collateralBaseUnit, _collateralPrice);
             // calculate fee
-            fee = mulDiv(sizeInCollateral, feePercentage, PRECISION);
+            positionFee = mulDiv(sizeInCollateral, feePercentage, PRECISION);
+            feeForExecutor = mulDiv(positionFee, executorPercentage, PRECISION);
+            positionFee -= feeForExecutor;
         } else {
-            fee = mulDiv(_collateralDelta, feePercentage, PRECISION);
+            positionFee = mulDiv(_collateralDelta, feePercentage, PRECISION);
+            feeForExecutor = mulDiv(positionFee, executorPercentage, PRECISION);
+            positionFee -= feeForExecutor;
         }
     }
 

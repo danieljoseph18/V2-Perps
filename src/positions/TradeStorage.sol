@@ -36,9 +36,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     bool private isInitialized;
     uint256 private liquidationFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
+    uint256 private adlFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
     uint256 private minCollateralUsd;
 
     uint256 public tradingFee;
+    uint256 public feeForExecution; // Percentage of the Trading Fee, 18 D.P
     // @gas - consider changing to uint64
     uint256 public minCancellationTime;
     // Minimum time a keeper must execute their reserved transaction before it is
@@ -59,16 +61,20 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     function initialize(
         uint256 _liquidationFee, // 0.05e18 = 5%
         uint256 _positionFee, // 0.001e18 = 0.1%
+        uint256 _adlFee,
+        uint256 _feeForExecution,
         uint256 _minCollateralUsd, // 2e30 = 2 USD
         uint256 _minCancellationTime, // e.g 1 minutes
         uint256 _minTimeForExecution // e.g 1 minutes
-    ) external onlyMarketMaker {
+    ) external onlyMarketFactory {
         if (isInitialized) revert TradeStorage_AlreadyInitialized();
         liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
         minCollateralUsd = _minCollateralUsd;
         minCancellationTime = _minCancellationTime;
         minTimeForExecution = _minTimeForExecution;
+        adlFee = _adlFee;
+        feeForExecution = _feeForExecution;
         isInitialized = true;
         emit TradeStorageInitialized(_liquidationFee, _positionFee);
     }
@@ -83,13 +89,19 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         minTimeForExecution = _minTimeForExecution;
     }
 
-    function setFees(uint256 _liquidationFee, uint256 _positionFee) external onlyConfigurator(address(market)) {
+    // @audit - add boundaries for all fees or hardode them
+    function setFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
+        external
+        onlyConfigurator(address(market))
+    {
         if (!(_liquidationFee <= MAX_LIQUIDATION_FEE && _liquidationFee != 0)) {
             revert TradeStorage_InvalidLiquidationFee();
         }
         if (!(_positionFee <= MAX_TRADING_FEE && _positionFee != 0)) revert TradeStorage_InvalidTradingFee();
         liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
+        adlFee = _adlFee;
+        feeForExecution = _feeForExecution;
         emit FeesSet(_liquidationFee, _positionFee);
     }
 
@@ -123,8 +135,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     /**
      * ===================================== Execution Functions =====================================
      */
-    // @audit - needs to accept request id for limit order cases
-    // the request id at request time won't be the same as the request id at execution time
+
+    /// @dev needs to accept request id for limit order cases
+    /// the request id at request time won't be the same as the request id at execution time
     function executePositionRequest(bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
         external
         onlyPositionManager
@@ -191,7 +204,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Update the Market State
         _updateMarketState(state, position.ticker, position.positionSize, position.isLong, false);
         // Construct Liquidation Order
-        Position.Settlement memory params = Position.constructLiquidationOrder(position, _liquidator);
+        Position.Settlement memory params = Position.constructLiquidationOrder(position, _liquidator, _requestId);
         // Execute the Liquidation
         _decreasePosition(params, state);
         // Clear Signed Prices
@@ -201,11 +214,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }
 
-    // @audit - as we scale, may become hard to keep on top of so many markets
-    // need to consider how this would function if permissionless
-    // probably need to add incentives for keepers to execute, similar to liquidations
-    // @audit - make sure that the funds are going to the position owner, not the ADLer
-    function executeAdl(bytes32 _positionKey, bytes32 _requestId, uint256 _sizeDelta)
+    // @audit - needs more constraints before we can make permissionless
+    // e.g max percentage to adl a position by
+    // e.g only allow adl on profitable positions above a threshold
+    // e.g only allow reduction of the pnl factor by so much
+    function executeAdl(bytes32 _positionKey, bytes32 _requestId, uint256 _sizeDelta, address _feeReceiver)
         external
         onlyPositionManager
         nonReentrant
@@ -217,7 +230,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             Position.Data memory position,
             uint256 targetPnlFactor,
             int256 startingPnlFactor
-        ) = Execution.constructAdlOrder(market, this, priceFeed, _positionKey, _requestId, _sizeDelta);
+        ) = Execution.constructAdlOrder(
+            market, this, priceFeed, _positionKey, _requestId, _sizeDelta, adlFee, _feeReceiver
+        );
 
         // Update the Market State
         _updateMarketState(
@@ -253,7 +268,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         (positionAfter, _state) = Execution.increaseCollateral(market, this, _params, _state, positionKey);
         // Add Value to Stored Collateral Amount in Market
         market.updateCollateralAmount(
-            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee,
+            _params.request.input.collateralDelta - _state.positionFee - _state.feeForExecutor - _state.affiliateRebate
+                - _state.borrowFee,
             _params.request.user,
             _params.request.input.isLong,
             true
@@ -269,7 +285,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             market.updatePoolBalance(absFundingFee, positionAfter.isLong, false);
         }
         // Pay Fees
-        _payFees(_state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
+        _payFees(
+            _state.borrowFee, _state.positionFee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong
+        );
         // Update Final Storage
         openPositions[positionKey] = positionAfter;
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
@@ -302,13 +320,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             _params.request.input.collateralDelta, _params.request.user, _params.request.input.isLong, false
         );
         // Pay Fees
-        _payFees(_state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
+        _payFees(
+            _state.borrowFee, _state.positionFee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong
+        );
         // Update Final Storage
         openPositions[positionKey] = positionAfter;
-        // Transfer Tokens to User
-        market.transferOutTokens(
-            _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.reverseWrap
-        );
         // Transfer Rebate to Referrer
         if (_state.affiliateRebate > 0) {
             market.transferOutTokens(
@@ -318,6 +334,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
                 false // Leave unwrapped by default
             );
         }
+        // Transfer Execution Fee to Executor
+        if (_state.feeForExecutor > 0) {
+            market.transferOutTokens(_params.feeReceiver, _state.feeForExecutor, _params.request.input.isLong, true);
+        }
+        // Transfer Tokens to User
+        market.transferOutTokens(
+            _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.reverseWrap
+        );
         // Fire Event
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
@@ -339,7 +363,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             position.takeProfitKey = _createOrder(takeProfit);
         }
         // Pay fees
-        _payFees(0, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
+        _payFees(0, _state.positionFee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(
             _params.request.input.sizeDelta,
@@ -364,11 +388,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         Position.Data memory position;
         (position, _state) = Execution.increasePosition(market, this, _params, _state, positionKey);
         // Pay Fees
-        _payFees(_state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong);
+        _payFees(
+            _state.borrowFee, _state.positionFee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong
+        );
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(
             _params.request.input.sizeDelta,
-            _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee,
+            _params.request.input.collateralDelta - _state.positionFee - _state.feeForExecutor - _state.affiliateRebate
+                - _state.borrowFee,
             _state.collateralPrice,
             _state.collateralBaseUnit,
             position.user,
@@ -395,7 +422,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
         uint256 amountOut;
 
-        // @audit - state changes correct?
         if (decreaseState.isLiquidation) {
             // Remanining collateral after fees is added to the relevant pool
             market.updatePoolBalance(positionAfter.collateralAmount, positionAfter.isLong, true);
@@ -410,7 +436,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         } else {
             // Pay Fees
             _payFees(
-                _state.borrowFee, _state.fee, _state.affiliateRebate, _state.referrer, _params.request.input.isLong
+                _state.borrowFee,
+                _state.positionFee,
+                _state.affiliateRebate,
+                _state.referrer,
+                _params.request.input.isLong
             );
             // Set Amount Out
             amountOut = decreaseState.decreasePnl > 0
@@ -455,12 +485,12 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
                 positionAfter.isLong,
                 true // Unwrap by default
             );
-        }
-        // Transfer Tokens to User
-        if (amountOut > 0) {
-            market.transferOutTokens(
-                _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.reverseWrap
-            );
+        } else {
+            // Transfer the Fee to the Executor
+            // Liquidations don't receive additional execution fees as they are already paid out in the liquidation fee
+            if (_state.feeForExecutor > 0) {
+                market.transferOutTokens(_params.feeReceiver, _state.feeForExecutor, _params.request.input.isLong, true);
+            }
         }
         // Transfer Rebate to Referrer
         if (_state.affiliateRebate > 0) {
@@ -469,6 +499,12 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
                 _state.affiliateRebate,
                 _params.request.input.isLong,
                 false // Leave unwrapped by default
+            );
+        }
+        // Transfer Tokens to User
+        if (amountOut > 0) {
+            market.transferOutTokens(
+                _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.reverseWrap
             );
         }
         // Fire Event

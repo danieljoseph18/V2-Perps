@@ -5,7 +5,7 @@ import {Roles} from "./Roles.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 contract RoleStorage is AccessControl {
-    error RoleStorage_OnlyMarketMaker();
+    error RoleStorage_OnlyMarketFactory();
     error RoleStorage_InvalidSuperAdmin();
 
     mapping(address market => Roles.MarketRoles) marketRoles;
@@ -18,13 +18,13 @@ contract RoleStorage is AccessControl {
     /// @dev - Market Maker is able to set up the market roles and reconfigure them.
     function setMarketRoles(address _market, Roles.MarketRoles memory _roles) external {
         // Only the Market Maker can call
-        if (!hasRole(Roles.MARKET_MAKER, msg.sender)) revert RoleStorage_OnlyMarketMaker();
+        if (!hasRole(Roles.MARKET_FACTORY, msg.sender)) revert RoleStorage_OnlyMarketFactory();
         marketRoles[_market] = _roles;
     }
 
     function setMinter(address _marketToken, address _minter) external {
         // Only the Market Maker can call
-        if (!hasRole(Roles.MARKET_MAKER, msg.sender)) revert RoleStorage_OnlyMarketMaker();
+        if (!hasRole(Roles.MARKET_FACTORY, msg.sender)) revert RoleStorage_OnlyMarketFactory();
         minters[_marketToken] = _minter;
     }
 

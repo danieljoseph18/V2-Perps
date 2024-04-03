@@ -4,7 +4,7 @@
 // import {Script} from "forge-std/Script.sol";
 // import {HelperConfig, IHelperConfig} from "./HelperConfig.s.sol";
 // import {RoleStorage} from "../src/access/RoleStorage.sol";
-// import {MarketMaker} from "../src/markets/MarketMaker.sol";
+// import {MarketFactory} from "../src/markets/MarketFactory.sol";
 // import {PriceFeed, IPriceFeed} from "../src/oracle/PriceFeed.sol";
 // import {MockPriceFeed} from "../test/mocks/MockPriceFeed.sol";
 // import {TradeStorage} from "../src/positions/TradeStorage.sol";
@@ -21,7 +21,7 @@
 
 //     struct Contracts {
 //         RoleStorage roleStorage;
-//         MarketMaker marketMaker;
+//         MarketFactory marketFactory;
 //         IPriceFeed priceFeed; // Deployed in Helper Config
 //         ReferralStorage referralStorage;
 //         PositionManager positionManager;
@@ -43,7 +43,7 @@
 
 //         contracts = Contracts(
 //             RoleStorage(address(0)),
-//             MarketMaker(address(0)),
+//             MarketFactory(address(0)),
 //             priceFeed,
 //             ReferralStorage(payable(address(0))),
 //             PositionManager(payable(address(0))),
@@ -58,7 +58,7 @@
 //         contracts.roleStorage = new RoleStorage();
 
 //         if (activeNetworkConfig.mockFeed) {
-//             // @audit - args = (address _marketMaker, uint64 _subId, address _roleStorage)
+//             // @audit - args = (address _marketFactory, uint64 _subId, address _roleStorage)
 //             //     contracts.priceFeed = new MockPriceFeed(
 //             //         10,
 //             //         1,
@@ -75,15 +75,15 @@
 //             //     );
 //         }
 
-//         contracts.marketMaker =
-//             new MarketMaker(activeNetworkConfig.weth, activeNetworkConfig.usdc, address(contracts.roleStorage));
+//         contracts.marketFactory =
+//             new MarketFactory(activeNetworkConfig.weth, activeNetworkConfig.usdc, address(contracts.roleStorage));
 
 //         contracts.referralStorage = new ReferralStorage(
 //             activeNetworkConfig.weth, activeNetworkConfig.usdc, activeNetworkConfig.weth, address(contracts.roleStorage)
 //         );
 
 //         contracts.positionManager = new PositionManager(
-//             address(contracts.marketMaker),
+//             address(contracts.marketFactory),
 //             address(contracts.referralStorage),
 //             address(contracts.priceFeed),
 //             activeNetworkConfig.weth,
@@ -92,7 +92,7 @@
 //         );
 
 //         contracts.router = new Router(
-//             address(contracts.marketMaker),
+//             address(contracts.marketFactory),
 //             address(contracts.priceFeed),
 //             activeNetworkConfig.usdc,
 //             activeNetworkConfig.weth,
@@ -125,7 +125,7 @@
 //             adl: IMarket.AdlConfig({maxPnlFactor: 0.4e18, targetPnlFactor: 0.2e18})
 //         });
 
-//         contracts.marketMaker.initialize(
+//         contracts.marketFactory.initialize(
 //             defaultMarketConfig,
 //             address(contracts.priceFeed),
 //             address(contracts.referralStorage),
@@ -142,7 +142,7 @@
 //         contracts.referralStorage.setTier(2, 0.15e18);
 
 //         // Set Up Roles
-//         contracts.roleStorage.grantRole(Roles.MARKET_MAKER, address(contracts.marketMaker));
+//         contracts.roleStorage.grantRole(Roles.MARKET_MAKER, address(contracts.marketFactory));
 //         contracts.roleStorage.grantRole(Roles.POSITION_MANAGER, address(contracts.positionManager));
 //         contracts.roleStorage.grantRole(Roles.ROUTER, address(contracts.router));
 //         contracts.roleStorage.grantRole(Roles.DEFAULT_ADMIN_ROLE, contracts.owner);

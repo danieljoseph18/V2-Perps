@@ -5,7 +5,7 @@
 // import {Deploy} from "../../../script/Deploy.s.sol";
 // import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 // import {Market, IMarket} from "../../../src/markets/Market.sol";
-// import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
+// import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
 // import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 // import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 // import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
@@ -30,7 +30,7 @@
 
 //     RoleStorage roleStorage;
 
-//     MarketMaker marketMaker;
+//     MarketFactory marketFactory;
 //     IPriceFeed priceFeed; // Deployed in Helper Config
 //     ITradeStorage tradeStorage;
 //     ReferralStorage referralStorage;
@@ -60,7 +60,7 @@
 //         Deploy.Contracts memory contracts = deploy.run();
 //         roleStorage = contracts.roleStorage;
 
-//         marketMaker = contracts.marketMaker;
+//         marketFactory = contracts.marketFactory;
 //         priceFeed = contracts.priceFeed;
 //         referralStorage = contracts.referralStorage;
 //         positionManager = contracts.positionManager;
@@ -84,18 +84,18 @@
 //         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
 //         vm.startPrank(OWNER);
 //         WETH(weth).deposit{value: 50 ether}();
-//         IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
+//         IMarketFactory.MarketRequest memory request = IMarketFactory.MarketRequest({
 //             owner: OWNER,
 //             indexTokenTicker: "ETH",
 //             marketTokenName: "BRRR",
 //             marketTokenSymbol: "BRRR",
 //             baseUnit: 1e18
 //         });
-//         marketMaker.requestNewMarket{value: 0.01 ether}(request);
-//         marketMaker.executeNewMarket(marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker));
+//         marketFactory.requestNewMarket{value: 0.01 ether}(request);
+//         marketFactory.executeNewMarket(marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker));
 //         vm.stopPrank();
 //         // @audit - eth ticker
-//         // market = Market(payable(marketMaker.tokenToMarket(ethAssetId)));
+//         // market = Market(payable(marketFactory.tokenToMarket(ethAssetId)));
 //         tradeStorage = ITradeStorage(market.tradeStorage());
 //         // Call the deposit function with sufficient gas
 //         vm.prank(OWNER);
@@ -123,7 +123,7 @@
 //      *     - Testing data storage for different assets within the same market
 //      */
 //     function testCreatingMultipleAssetsUnderTheSameMarket() public {
-//         // IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
+//         // IMarketFactory.MarketRequest memory request = IMarketFactory.MarketRequest({
 //         //     owner: OWNER,
 //         //     indexTokenTicker: "ETH",
 //         //     marketTokenName: "BRRR",
@@ -131,14 +131,14 @@
 //         //     baseUnit: 1e18
 //         // });
 
-//         // marketMaker.requestNewMarket{value: 0.01 ether}(request);
+//         // marketFactory.requestNewMarket{value: 0.01 ether}(request);
 
-//         // bytes32 marketKey = marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker);
+//         // bytes32 marketKey = marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker);
 //         // Set primary prices for ref price
 //         // priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
 //         // Clear them
 //         // priceFeed.clearPrimaryPrices();
-//         // IMarket marketInterface = IMarket(marketMaker.executeNewMarket(marketKey));
+//         // IMarket marketInterface = IMarket(marketFactory.executeNewMarket(marketKey));
 
 //         // uint256 firstAllocation = 5000;
 //         // uint256 secondAllocation = 5000;
@@ -151,7 +151,7 @@
 //         // allocations.push(encodedAllocation);
 
 //         // // split the allocation between the markets
-//         // marketMaker.addTokenToMarket(marketInterface, keccak256(abi.encode("RANDOM_ERC")), ethPriceId, allocations);
+//         // marketFactory.addTokenToMarket(marketInterface, keccak256(abi.encode("RANDOM_ERC")), ethPriceId, allocations);
 
 //         // assertEq(MarketUtils.getAllocation(marketInterface, keccak256(abi.encode("RANDOM_ERC"))), 5000);
 
@@ -164,7 +164,7 @@
 
 //         // delete allocations;
 //         // allocations.push(encodedAllocation);
-//         // marketMaker.addTokenToMarket(marketInterface, keccak256(abi.encode("RANDOM_ERC_2")), ethPriceId, allocations);
+//         // marketFactory.addTokenToMarket(marketInterface, keccak256(abi.encode("RANDOM_ERC_2")), ethPriceId, allocations);
 
 //         // assertEq(MarketUtils.getAllocation(marketInterface, keccak256(abi.encode("RANDOM_ERC_2"))), 3333);
 
@@ -177,6 +177,6 @@
 
 //         // delete allocations;
 //         // allocations.push(encodedAllocation);
-//         // marketMaker.addTokenToMarket(marketInterface, keccak256(abi.encode("RANDOM_ERC_3")), ethPriceId, allocations);
+//         // marketFactory.addTokenToMarket(marketInterface, keccak256(abi.encode("RANDOM_ERC_3")), ethPriceId, allocations);
 //     }
 // }

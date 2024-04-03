@@ -13,7 +13,7 @@ library Roles {
     // Global
     bytes32 public constant MODERATOR = keccak256("MODERATOR");
     // Global
-    bytes32 public constant MARKET_MAKER = keccak256("MARKET_MAKER");
+    bytes32 public constant MARKET_FACTORY = keccak256("MARKET_FACTORY");
     // Global
     bytes32 public constant POSITION_MANAGER = keccak256("POSITION_MANAGER");
     // Local

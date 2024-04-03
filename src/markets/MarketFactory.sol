@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IMarketMaker} from "./interfaces/IMarketMaker.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Market, IMarket} from "./Market.sol";
@@ -15,8 +15,8 @@ import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {Roles} from "../access/Roles.sol";
 
-/// @dev Needs MarketMaker Role
-contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
+/// @dev Needs MarketFactory Role
+contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
     using EnumerableSet for EnumerableSet.Bytes32Set;
 
@@ -58,7 +58,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         address _feeReceiver,
         uint256 _marketCreationFee
     ) external onlyAdmin {
-        if (isInitialized) revert MarketMaker_AlreadyInitialized();
+        if (isInitialized) revert MarketFactory_AlreadyInitialized();
         priceFeed = IPriceFeed(_priceFeed);
         referralStorage = IReferralStorage(_referralStorage);
         feeDistributor = IFeeDistributor(_feeDistributor);
@@ -67,7 +67,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         feeReceiver = _feeReceiver;
         marketCreationFee = _marketCreationFee;
         isInitialized = true;
-        emit MarketMakerInitialized(_priceFeed);
+        emit MarketFactoryInitialized(_priceFeed);
     }
 
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external onlyAdmin {
@@ -100,14 +100,14 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     function requestNewMarket(MarketRequest calldata _request) external payable nonReentrant {
         /* Validate the Inputs */
         // 1. Msg.value should be > marketCreationFee
-        if (msg.value != marketCreationFee) revert MarketMaker_InvalidFee();
+        if (msg.value != marketCreationFee) revert MarketFactory_InvalidFee();
         // 2. Owner should be msg.sender
-        if (_request.owner != msg.sender) revert MarketMaker_InvalidOwner();
+        if (_request.owner != msg.sender) revert MarketFactory_InvalidOwner();
         // 3. Base Unit should be non-zero
-        if (_request.baseUnit == 0) revert MarketMaker_InvalidBaseUnit();
+        if (_request.baseUnit == 0) revert MarketFactory_InvalidBaseUnit();
         // 8. Market shouldn't already exist for that asset
         if (tokenToMarket[_request.indexTokenTicker] != address(0)) {
-            revert MarketMaker_MarketExists();
+            revert MarketFactory_MarketExists();
         }
 
         /* Generate a differentiated Request Key based on the inputs */
@@ -164,11 +164,11 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
         market.initialize(address(tradeStorage), 0.003e18);
         // Initialize TradeStorage with Default values
-        tradeStorage.initialize(0.05e18, 0.001e18, 2e30, 10 seconds, 1 minutes);
+        tradeStorage.initialize(0.05e18, 0.001e18, 0.005e18, 0.1e18, 2e30, 10 seconds, 1 minutes);
 
         // Add to Storage
         bool success = markets.add(address(market));
-        if (!success) revert MarketMaker_FailedToAddMarket();
+        if (!success) revert MarketFactory_FailedToAddMarket();
         tokenToMarket[request.indexTokenTicker] = address(market);
 
         // Set Up Roles -> Enable Caller to control Market
@@ -186,13 +186,12 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
 
     function deleteInvalidRequest(bytes32 _requestKey) external onlyMarketKeeper {
         // Check the Request exists
-        if (!requestKeys.contains(_requestKey)) revert MarketMaker_RequestDoesNotExist();
+        if (!requestKeys.contains(_requestKey)) revert MarketFactory_RequestDoesNotExist();
         // Delete the Request
         _deleteMarketRequest(_requestKey);
     }
 
     /// @dev - Only the Admin can create multi-asset markets
-    // @audit - remove price id
     function addTokenToMarket(
         IMarket market,
         string memory _ticker,
@@ -200,9 +199,9 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         uint256[] calldata _newAllocations
     ) external onlyAdmin nonReentrant {
         bytes32 assetId = keccak256(abi.encode(_ticker));
-        if (assetId == bytes32(0)) revert MarketMaker_InvalidAsset();
-        if (_baseUnit == 0) revert MarketMaker_InvalidBaseUnit();
-        if (!markets.contains(address(market))) revert MarketMaker_MarketDoesNotExist();
+        if (assetId == bytes32(0)) revert MarketFactory_InvalidAsset();
+        if (_baseUnit == 0) revert MarketFactory_InvalidBaseUnit();
+        if (!markets.contains(address(market))) revert MarketFactory_MarketDoesNotExist();
 
         // Set Up Price Oracle
         priceFeed.supportAsset(_ticker, _baseUnit);

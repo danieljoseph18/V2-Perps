@@ -160,7 +160,6 @@ library PriceImpact {
      * PriceImpact = sizeDeltaUsd * skewScalar((initialSkew/initialTotalOi) - (updatedSkew/updatedTotalOi)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
      * @dev - Only calculates impact within bounds. Does not handle skew flip case.
      */
-    // @audit - remove skewScalar
     function _calculateImpact(
         int256 _sizeDeltaUsd,
         int256 _updatedSkew,

@@ -2,7 +2,6 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
 import {Position} from "./Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
@@ -67,7 +66,8 @@ library Execution {
         uint256 collateralBaseUnit;
         uint256 borrowFee;
         int256 fundingFee;
-        uint256 fee;
+        uint256 positionFee;
+        uint256 feeForExecutor;
         uint256 affiliateRebate;
         address referrer;
     }
@@ -148,8 +148,8 @@ library Execution {
             );
         }
 
-        // Calculate Fee
-        state.fee = Position.calculateFee(
+        // Calculate Fee + Fee for executor
+        (state.positionFee, state.feeForExecutor) = Position.calculateFee(
             tradeStorage,
             request.input.sizeDelta,
             request.input.collateralDelta,
@@ -158,8 +158,8 @@ library Execution {
         );
 
         // Calculate & Apply Fee Discount for Referral Code
-        (state.fee, state.affiliateRebate, state.referrer) =
-            Referral.applyFeeDiscount(referralStorage, request.user, state.fee);
+        (state.positionFee, state.affiliateRebate, state.referrer) =
+            Referral.applyFeeDiscount(referralStorage, request.user, state.positionFee);
     }
 
     function constructAdlOrder(
@@ -168,7 +168,9 @@ library Execution {
         IPriceFeed priceFeed,
         bytes32 _positionKey,
         bytes32 _priceRequestId,
-        uint256 _sizeDelta
+        uint256 _sizeDelta,
+        uint256 _adlFeePercentage,
+        address _feeReceiver
     )
         external
         view
@@ -201,7 +203,12 @@ library Execution {
         }
 
         // Construct an ADL Order
-        params = Position.createAdlOrder(position, _sizeDelta);
+        params = Position.createAdlOrder(position, _sizeDelta, _feeReceiver, _priceRequestId);
+
+        // Get and set the ADL fee for the executor
+        // multiply the size delta by the adlFee percentage
+        state.feeForExecutor =
+            _calculateFeeForAdl(_sizeDelta, state.collateralPrice, state.collateralBaseUnit, _adlFeePercentage);
     }
 
     /**
@@ -221,7 +228,7 @@ library Execution {
         uint256 collateralIn = _params.request.input.collateralDelta;
 
         // Subtract fee from collateral delta
-        _params.request.input.collateralDelta -= _state.fee;
+        _params.request.input.collateralDelta -= (_state.positionFee + _state.feeForExecutor);
 
         if (_state.affiliateRebate > 0) {
             _params.request.input.collateralDelta -= _state.affiliateRebate;
@@ -251,7 +258,7 @@ library Execution {
             position,
             initialCollateral,
             collateralIn,
-            _state.fee,
+            _state.positionFee,
             _state.fundingFee,
             _state.borrowFee,
             _state.affiliateRebate
@@ -290,7 +297,8 @@ library Execution {
         // Check the Leverage
         Position.checkLeverage(market, _params.request.input.ticker, position.positionSize, remainingCollateralUsd);
         // Get Amount Out
-        amountOut = _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee;
+        amountOut = _params.request.input.collateralDelta - _state.positionFee - _state.affiliateRebate
+            - _state.borrowFee - _state.feeForExecutor;
         // Add / Subtract funding fees
         if (_state.fundingFee < 0) {
             // User Paid Funding
@@ -317,7 +325,7 @@ library Execution {
         if (tradeStorage.getPosition(_positionKey).user != address(0)) revert Execution_PositionExists();
         uint256 initialCollateralDelta = _params.request.input.collateralDelta;
         // Subtract Fee from Collateral Delta
-        _params.request.input.collateralDelta -= _state.fee;
+        _params.request.input.collateralDelta -= (_state.positionFee + _state.feeForExecutor);
         // Subtract the fee paid to the refferer
         if (_state.affiliateRebate > 0) {
             _params.request.input.collateralDelta -= _state.affiliateRebate;
@@ -335,7 +343,7 @@ library Execution {
         );
         // Validate the Position
         Position.validateNewPosition(
-            initialCollateralDelta, position.collateralAmount, _state.fee, _state.affiliateRebate
+            initialCollateralDelta, position.collateralAmount, _state.positionFee, _state.affiliateRebate
         );
         // Return the Position
         return (position, _state);
@@ -354,7 +362,8 @@ library Execution {
         uint256 initialSize = position.positionSize;
         uint256 collateralIn = _params.request.input.collateralDelta;
         // Subtract Fee from Collateral Delta
-        _params.request.input.collateralDelta -= _state.fee;
+        // @audit - validate addition of fee for executor here
+        _params.request.input.collateralDelta -= (_state.positionFee + _state.feeForExecutor);
         // Process any Outstanding Borrow Fees
         (position, _state.borrowFee) = _processBorrowFees(market, position, _params, _state);
         // Process any Outstanding Funding Fees
@@ -431,7 +440,7 @@ library Execution {
             position, _state, _params.request.input.collateralDelta, _params.request.input.sizeDelta, false
         );
 
-        uint256 losses = _state.borrowFee + _state.fee;
+        uint256 losses = _state.borrowFee + _state.positionFee;
 
         /**
          * Subtract any losses owed from the position.
@@ -460,8 +469,8 @@ library Execution {
             decreaseState.isLiquidation = true;
         } else {
             // Calculate the amount of collateral left after fees
-            // = Collateral Delta - Borrow Fees - Fee - Losses
-            decreaseState.afterFeeAmount = _params.request.input.collateralDelta - losses;
+            // = Collateral Delta - Borrow Fees - Fee - Losses - Fee for Executor (if any)
+            decreaseState.afterFeeAmount = _params.request.input.collateralDelta - losses - _state.feeForExecutor;
 
             _validatePositionDecrease(
                 position, decreaseState, _state, _params.request.input.sizeDelta, initialCollateral, initialSize
@@ -627,6 +636,18 @@ library Execution {
         );
     }
 
+    function _calculateFeeForAdl(
+        uint256 _sizeDelta,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        uint256 _adlFeePercentage
+    ) internal pure returns (uint256 adlFee) {
+        // Calculate the fee in USD as a percentage of the size delta
+        uint256 adlFeeUsd = mulDiv(_sizeDelta, _adlFeePercentage, PRECISION);
+        // Convert value from USD to collateral
+        adlFee = mulDiv(adlFeeUsd, _collateralBaseUnit, _collateralPrice);
+    }
+
     function _processFundingFees(
         IMarket market,
         Position.Data memory _position,
@@ -702,7 +723,7 @@ library Execution {
             _position,
             _initialCollateral,
             _amountOut,
-            _state.fee,
+            _state.positionFee,
             _state.fundingFee,
             _state.borrowFee,
             _state.affiliateRebate
@@ -722,7 +743,7 @@ library Execution {
             _initialCollateral,
             _initialSize,
             _collateralIn,
-            _state.fee,
+            _state.positionFee,
             _state.affiliateRebate,
             _state.fundingFee,
             _state.borrowFee,
@@ -744,7 +765,7 @@ library Execution {
             _initialCollateral,
             _initialSize,
             _decreaseState.afterFeeAmount,
-            _state.fee,
+            _state.positionFee,
             _state.affiliateRebate,
             _decreaseState.decreasePnl,
             _state.fundingFee,

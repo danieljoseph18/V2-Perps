@@ -5,7 +5,7 @@
 // import {Deploy} from "../../../script/Deploy.s.sol";
 // import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 // import {Market, IMarket} from "../../../src/markets/Market.sol";
-// import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
+// import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
 // import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 // import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 // import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
@@ -30,7 +30,7 @@
 
 //     RoleStorage roleStorage;
 
-//     MarketMaker marketMaker;
+//     MarketFactory marketFactory;
 //     IPriceFeed priceFeed; // Deployed in Helper Config
 //     ITradeStorage tradeStorage;
 //     ReferralStorage referralStorage;
@@ -60,7 +60,7 @@
 //         Deploy.Contracts memory contracts = deploy.run();
 //         roleStorage = contracts.roleStorage;
 
-//         marketMaker = contracts.marketMaker;
+//         marketFactory = contracts.marketFactory;
 //         priceFeed = contracts.priceFeed;
 //         referralStorage = contracts.referralStorage;
 //         positionManager = contracts.positionManager;
@@ -84,17 +84,17 @@
 //         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
 //         vm.startPrank(OWNER);
 //         WETH(weth).deposit{value: 50 ether}();
-//         IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
+//         IMarketFactory.MarketRequest memory request = IMarketFactory.MarketRequest({
 //             owner: OWNER,
 //             indexTokenTicker: "ETH",
 //             marketTokenName: "BRRR",
 //             marketTokenSymbol: "BRRR",
 //             baseUnit: 1e18
 //         });
-//         marketMaker.requestNewMarket{value: 0.01 ether}(request);
-//         marketMaker.executeNewMarket(marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker));
+//         marketFactory.requestNewMarket{value: 0.01 ether}(request);
+//         marketFactory.executeNewMarket(marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker));
 //         vm.stopPrank();
-//         // market = Market(payable(marketMaker.tokenToMarket(ethAssetId)));
+//         // market = Market(payable(marketFactory.tokenToMarket(ethAssetId)));
 //         tradeStorage = ITradeStorage(market.tradeStorage());
 //         // Call the deposit function with sufficient gas
 //         vm.prank(OWNER);
@@ -116,23 +116,23 @@
 //     }
 
 //     function testCreatingNewMarkets() public setUpMarkets {
-//         // IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
+//         // IMarketFactory.MarketRequest memory request = IMarketFactory.MarketRequest({
 //         //     owner: OWNER,
 //         //     indexTokenTicker: "RANDOM_ASSET",
 //         //     marketTokenName: "BRRR2",
 //         //     marketTokenSymbol: "BRRR2",
 //         //     baseUnit: 1e18
 //         // });
-//         // marketMaker.requestNewMarket{value: 0.01 ether}(request);
-//         // bytes32 marketKey = marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker);
+//         // marketFactory.requestNewMarket{value: 0.01 ether}(request);
+//         // bytes32 marketKey = marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker);
 //         // bytes32 randomAssetId = keccak256(abi.encode("RANDOM_ASSET"));
 //         // // Set primary prices for ref price
 //         // priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
 //         // // Clear them
 //         // priceFeed.clearPrimaryPrices();
-//         // marketMaker.executeNewMarket(marketKey);
+//         // marketFactory.executeNewMarket(marketKey);
 
-//         // address wethMarket = marketMaker.tokenToMarket(randomAssetId);
+//         // address wethMarket = marketFactory.tokenToMarket(randomAssetId);
 //         // Market newMarket = Market(payable(wethMarket));
 //         // ITradeStorage newTradeStorage = ITradeStorage(newMarket.tradeStorage());
 //         // assertNotEq(address(newTradeStorage), address(tradeStorage));

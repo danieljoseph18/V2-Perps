@@ -5,7 +5,7 @@
 // import {Deploy} from "../../../script/Deploy.s.sol";
 // import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 // import {Market, IMarket} from "../../../src/markets/Market.sol";
-// import {MarketMaker, IMarketMaker} from "../../../src/markets/MarketMaker.sol";
+// import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
 // import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 // import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
 // import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
@@ -23,7 +23,7 @@
 // contract TestRequestExecution is Test {
 //     RoleStorage roleStorage;
 
-//     MarketMaker marketMaker;
+//     MarketFactory marketFactory;
 //     IPriceFeed priceFeed; // Deployed in Helper Config
 //     ITradeStorage tradeStorage;
 //     ReferralStorage referralStorage;
@@ -53,7 +53,7 @@
 //         Deploy.Contracts memory contracts = deploy.run();
 //         roleStorage = contracts.roleStorage;
 
-//         marketMaker = contracts.marketMaker;
+//         marketFactory = contracts.marketFactory;
 //         priceFeed = contracts.priceFeed;
 //         referralStorage = contracts.referralStorage;
 //         positionManager = contracts.positionManager;
@@ -78,20 +78,20 @@
 //         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
 //         vm.startPrank(OWNER);
 //         WETH(weth).deposit{value: 50 ether}();
-//         IMarketMaker.MarketRequest memory request = IMarketMaker.MarketRequest({
+//         IMarketFactory.MarketRequest memory request = IMarketFactory.MarketRequest({
 //             owner: OWNER,
 //             indexTokenTicker: "ETH",
 //             marketTokenName: "BRRR",
 //             marketTokenSymbol: "BRRR"
 //         });
-//         marketMaker.requestNewMarket{value: 0.01 ether}(request);
+//         marketFactory.requestNewMarket{value: 0.01 ether}(request);
 //         // Set primary prices for ref price
 //         priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
 //         // Clear them
 //         priceFeed.clearPrimaryPrices();
-//         marketMaker.executeNewMarket(marketMaker.getMarketRequestKey(request.owner, request.indexTokenTicker));
+//         marketFactory.executeNewMarket(marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker));
 //         vm.stopPrank();
-//         market = Market(payable(marketMaker.tokenToMarket(ethAssetId)));
+//         market = Market(payable(marketFactory.tokenToMarket(ethAssetId)));
 //         tradeStorage = ITradeStorage(market.tradeStorage());
 //         // Call the deposit function with sufficient gas
 //         vm.prank(OWNER);
@@ -181,11 +181,11 @@
 //         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
 
 //         // Get the size of the impact pool before the position is executed
-//         uint256 impactPoolBefore = MarketUtils.getImpactPool(IMarket(marketMaker.tokenToMarket(ethAssetId)), ethAssetId);
+//         uint256 impactPoolBefore = MarketUtils.getImpactPool(IMarket(marketFactory.tokenToMarket(ethAssetId)), ethAssetId);
 //         vm.prank(OWNER);
 //         positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER);
 //         // Get the size of the impact pool after the position is executed
-//         uint256 impactPoolAfter = MarketUtils.getImpactPool(IMarket(marketMaker.tokenToMarket(ethAssetId)), ethAssetId);
+//         uint256 impactPoolAfter = MarketUtils.getImpactPool(IMarket(marketFactory.tokenToMarket(ethAssetId)), ethAssetId);
 //         // Check that the impact pool has been updated
 //         assertGt(impactPoolAfter, impactPoolBefore, "Impact Pool should be increased");
 //     }

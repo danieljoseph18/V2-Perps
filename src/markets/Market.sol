@@ -139,7 +139,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         if (msg.sender != WETH) revert Market_InvalidETHTransfer();
     }
 
-    function initialize(address _tradeStorage, uint256 _borrowScale) external onlyMarketMaker {
+    function initialize(address _tradeStorage, uint256 _borrowScale) external onlyMarketFactory {
         if (isInitialized) revert Market_AlreadyInitialized();
         tradeStorage = _tradeStorage;
         borrowScale = _borrowScale;
@@ -157,7 +157,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function addToken(Config memory _config, string memory _ticker, uint256[] calldata _newAllocations)
         external
-        onlyMarketMaker
+        onlyMarketFactory
     {
         if (assetIds.length() >= MAX_ASSETS) revert Market_MaxAssetsReached();
         if (!isMultiAssetMarket) isMultiAssetMarket = true;

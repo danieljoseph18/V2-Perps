@@ -4,30 +4,30 @@ pragma solidity 0.8.23;
 import {IMarket} from "./IMarket.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
-interface IMarketMaker {
-    event MarketMakerInitialized(address priceStorage);
+interface IMarketFactory {
+    event MarketFactoryInitialized(address priceStorage);
     event MarketCreated(address market, string ticker);
     event TokenAddedToMarket(address market, string ticker);
     event DefaultConfigSet();
     event MarketRequested(bytes32 requestKey, string indexTokenTicker);
 
-    error MarketMaker_AlreadyInitialized();
-    error MarketMaker_InvalidAsset();
-    error MarketMaker_InvalidPriceId();
-    error MarketMaker_InvalidBaseUnit();
-    error MarketMaker_MarketExists();
-    error MarketMaker_InvalidPriceFeed();
-    error MarketMaker_MarketDoesNotExist();
-    error MarketMaker_FailedToAddMarket();
-    error MarketMaker_InvalidMaxPriceDeviation();
-    error MarketMaker_InvalidPrimaryStrategy();
-    error MarketMaker_InvalidSecondaryStrategy();
-    error MarketMaker_InvalidPoolType();
-    error MarketMaker_InvalidPoolTokens();
-    error MarketMaker_InvalidPoolAddress();
-    error MarketMaker_InvalidOwner();
-    error MarketMaker_InvalidFee();
-    error MarketMaker_RequestDoesNotExist();
+    error MarketFactory_AlreadyInitialized();
+    error MarketFactory_InvalidAsset();
+    error MarketFactory_InvalidPriceId();
+    error MarketFactory_InvalidBaseUnit();
+    error MarketFactory_MarketExists();
+    error MarketFactory_InvalidPriceFeed();
+    error MarketFactory_MarketDoesNotExist();
+    error MarketFactory_FailedToAddMarket();
+    error MarketFactory_InvalidMaxPriceDeviation();
+    error MarketFactory_InvalidPrimaryStrategy();
+    error MarketFactory_InvalidSecondaryStrategy();
+    error MarketFactory_InvalidPoolType();
+    error MarketFactory_InvalidPoolTokens();
+    error MarketFactory_InvalidPoolAddress();
+    error MarketFactory_InvalidOwner();
+    error MarketFactory_InvalidFee();
+    error MarketFactory_RequestDoesNotExist();
 
     struct MarketRequest {
         address owner;

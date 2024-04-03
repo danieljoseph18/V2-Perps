@@ -20,8 +20,8 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyMarketMaker() {
-        if (!roleStorage.hasRole(Roles.MARKET_MAKER, msg.sender)) revert RoleValidation_AccessDenied();
+    modifier onlyMarketFactory() {
+        if (!roleStorage.hasRole(Roles.MARKET_FACTORY, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 

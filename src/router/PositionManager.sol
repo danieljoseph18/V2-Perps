@@ -3,7 +3,7 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {IMarketMaker} from "../markets/interfaces/IMarketMaker.sol";
+import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
@@ -46,7 +46,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     string private constant LONG_TICKER = "ETH";
     string private constant SHORT_TICKER = "USDC";
 
-    IMarketMaker public marketMaker;
+    IMarketFactory public marketFactory;
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
 
@@ -58,14 +58,14 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     uint256 public averagePositionCost;
 
     constructor(
-        address _marketMaker,
+        address _marketFactory,
         address _referralStorage,
         address _priceFeed,
         address _weth,
         address _usdc,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
-        marketMaker = IMarketMaker(_marketMaker);
+        marketFactory = IMarketFactory(_marketFactory);
         referralStorage = IReferralStorage(_referralStorage);
         priceFeed = IPriceFeed(_priceFeed);
         WETH = IWETH(_weth);
@@ -178,7 +178,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
     function cancelMarketRequest(IMarket market, bytes32 _requestKey) external nonReentrant {
         // Check if the market exists /  is valid on the market maker
-        if (!marketMaker.isMarket(address(market))) revert PositionManager_InvalidMarket();
+        if (!marketFactory.isMarket(address(market))) revert PositionManager_InvalidMarket();
         // Cancel the Request
         (address tokenOut, uint256 amountOut, bool shouldUnwrap) = market.cancelRequest(_requestKey, msg.sender);
         // Transfer out the Tokens from the Request
@@ -192,11 +192,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         emit MarketRequestCancelled(_requestKey, msg.sender, tokenOut, amountOut);
     }
 
-    // @audit - we need to financially compensate the executor of the trade.
-    // whether this be through a percentage of the fee charged on the position or other.
-    // we essentially need a way to incentivize users to run their own keeper nodes.
-    // For market orders, can just pass in bytes32(0) as the request id, as it's only required for limits
-    // If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestId as input
+    /// @dev For market orders, can just pass in bytes32(0) as the request id, as it's only required for limits
+    /// @dev If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestId as input
     function executePosition(IMarket market, bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
         external
         payable
@@ -214,12 +211,16 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
         if (request.input.isIncrease) {
             _transferTokensForIncrease(
-                market, request.input.collateralToken, request.input.collateralDelta, state.affiliateRebate
+                market,
+                request.input.collateralToken,
+                request.input.collateralDelta,
+                state.affiliateRebate,
+                state.feeForExecutor
             );
         }
 
         // Emit Trade Executed Event
-        emit ExecutePosition(_orderKey, state.fee, state.affiliateRebate);
+        emit ExecutePosition(_orderKey, state.positionFee, state.affiliateRebate);
 
         // Send Execution Fee + Rebate
         // Execution Fee reduced to account for value sent to update Pyth prices
@@ -232,8 +233,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
     }
 
-    // @audit - need to add a "Request Liquidation Step" -> Then the only person who should be able to initiate the liquidation
-    // up until a certain time buffer, should be the requester. After that time buffer, any liquidation keeper should be able to
+    // Only person who requested the pricing for an order should be able to initiate the liquidation,
+    // up until a certain time buffer. After that time buffer, any user should be able to.
     /// @dev - Caller needs to call Router.requestExecutionPricing before
     function liquidatePosition(IMarket market, bytes32 _positionKey, bytes32 _requestId)
         external
@@ -273,8 +274,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         payable(msg.sender).sendValue(refundAmount);
     }
 
-    // @audit - need to add a "Request adl Step" -> Then the only person who should be able to initiate the adl
-    // up until a certain time buffer, should be the requester. After that time buffer, any adl keeper should be able to
+    // Only person who requested the pricing for an order should be able to initiate the adl,
+    // up until a certain time buffer. After that time buffer, any user should be able to.
     /// @dev - Caller needs to call Router.requestExecutionPricing before
     function executeAdl(IMarket market, bytes32 _requestId, uint256 _sizeDelta, bytes32 _positionKey)
         external
@@ -283,7 +284,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the ADL
-        try tradeStorage.executeAdl(_positionKey, _requestId, _sizeDelta) {}
+        try tradeStorage.executeAdl(_positionKey, _requestId, _sizeDelta, msg.sender) {}
         catch {
             revert PositionManager_AdlFailed();
         }
@@ -293,7 +294,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         IMarket market,
         address _collateralToken,
         uint256 _collateralDelta,
-        uint256 _affiliateRebate
+        uint256 _affiliateRebate,
+        uint256 _feeForExecutor
     ) internal {
         // Transfer Fee Discount to Referral Storage
         uint256 transferAmount = _collateralDelta;
@@ -301,6 +303,11 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
             // Transfer Fee Discount to Referral Storage
             transferAmount -= _affiliateRebate;
             IERC20(_collateralToken).safeTransfer(address(referralStorage), _affiliateRebate);
+        }
+        // Transfer Fee to Executor
+        if (_feeForExecutor > 0) {
+            transferAmount -= _feeForExecutor;
+            payable(msg.sender).sendValue(_feeForExecutor);
         }
         // Send Tokens + Fee to the Market (Will be Accounted for Separately)
         // Subtract Affiliate Rebate -> will go to Referral Storage

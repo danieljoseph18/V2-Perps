@@ -7,8 +7,6 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 
-// @audit - update for new price feed structure
-// @audit - can use lib/chainlink/contracts/src/v0.8/functions/v1_1_0/libraries/ChainSpecificUtil.sol
 library Gas {
     uint256 private constant CANCELLATION_PENALTY = 0.2e18; // 20%
     uint256 private constant SCALING_FACTOR = 1e18;
@@ -29,16 +27,19 @@ library Gas {
     function validateExecutionFee(
         IPriceFeed priceFeed,
         IPositionManager positionManager,
-        IMarket market,
         uint256 _executionFee,
         uint256 _msgValue,
-        Action _action
-    ) external view {
+        Action _action,
+        bool _hasPnlRequest,
+        bool _isLimit
+    ) external view returns (uint256 priceUpdateFee) {
         if (_msgValue < _executionFee) {
             revert Gas_InsufficientMsgValue(_msgValue, _executionFee);
         }
-        uint256 estimatedFee = estimateExecutionFee(priceFeed, positionManager, market, _action);
-        if (_executionFee < estimatedFee) {
+        uint256 estimatedFee;
+        (estimatedFee, priceUpdateFee) =
+            estimateExecutionFee(priceFeed, positionManager, _action, _hasPnlRequest, _isLimit);
+        if (_executionFee < estimatedFee + priceUpdateFee) {
             revert Gas_InsufficientExecutionFee(_executionFee, estimatedFee);
         }
     }
@@ -46,16 +47,13 @@ library Gas {
     function estimateExecutionFee(
         IPriceFeed priceFeed,
         IPositionManager positionManager,
-        IMarket market,
-        Action _action
-    ) public view returns (uint256) {
+        Action _action,
+        bool _hasPnlRequest,
+        bool _isLimit
+    ) public view returns (uint256 estimatedCost, uint256 priceUpdateCost) {
         uint256 actionCost = _getActionCost(positionManager, _action);
-        uint256 priceUpdateCost = _getPriceUpdateCost(priceFeed, market, _action == Action.POSITION);
-
-        uint256 estimatedCost = actionCost + priceUpdateCost;
-        uint256 bufferAmount = mulDiv(estimatedCost, BUFFER_PERCENTAGE, SCALING_FACTOR);
-
-        return estimatedCost + bufferAmount;
+        priceUpdateCost = _getPriceUpdateCost(priceFeed, _hasPnlRequest, _isLimit);
+        estimatedCost = mulDiv(actionCost + priceUpdateCost, BUFFER_PERCENTAGE, SCALING_FACTOR);
     }
 
     function getRefundForCancellation(uint256 _executionFee) external pure returns (uint256) {
@@ -78,18 +76,14 @@ library Gas {
         }
     }
 
-    function _getPriceUpdateCost(IPriceFeed priceFeed, IMarket market, bool _isPosition)
+    function _getPriceUpdateCost(IPriceFeed priceFeed, bool _hasPnlrequest, bool _isLimit)
         private
         view
-        returns (uint256)
+        returns (uint256 estimatedCost)
     {
-        // If a Position, only need to update Long, Short and Index asset prices
-        // For markets, need to update all prices in the market to track the cumulative pnl
-        uint256 priceUpdateCount = _isPosition ? 3 : market.getAssetsInMarket();
-
-        uint256 baseCost = priceFeed.averagePriceUpdateCost();
-        uint256 assetCost = priceFeed.additionalCostPerAsset() * priceUpdateCount;
-
-        return baseCost + assetCost;
+        // If limit, return 0
+        if (_isLimit) return 0;
+        // For PNL Requests, we double the cost as 2 feed updates are required
+        estimatedCost = _hasPnlrequest ? 2 * priceFeed.estimateRequestCost() : priceFeed.estimateRequestCost();
     }
 }

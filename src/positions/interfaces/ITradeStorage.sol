@@ -35,11 +35,13 @@ interface ITradeStorage {
     error TradeStorage_InvalidRequestType();
 
     function initialize(
-        uint256 _liquidationFee,
-        uint256 _tradingFee,
-        uint256 _minCollateralUsd,
-        uint256 _minCancellationTime,
-        uint256 _minExecutionTime
+        uint256 _liquidationFee, // 0.05e18 = 5%
+        uint256 _positionFee, // 0.001e18 = 0.1%
+        uint256 _adlFee,
+        uint256 _feeForExecution,
+        uint256 _minCollateralUsd, // 2e30 = 2 USD
+        uint256 _minCancellationTime, // e.g 1 minutes
+        uint256 _minTimeForExecution // e.g 1 minutes
     ) external;
     function createOrderRequest(Position.Request calldata _request) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
@@ -47,13 +49,15 @@ interface ITradeStorage {
         external
         returns (Execution.State memory state, Position.Request memory request);
     function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator) external;
-    function executeAdl(bytes32 _positionKey, bytes32 _requestId, uint256 _sizeDelta) external;
-    function setFees(uint256 _liquidationFee, uint256 _tradingFee) external;
+    function executeAdl(bytes32 _positionKey, bytes32 _requestId, uint256 _sizeDelta, address _feeReceiver) external;
+    function setFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
+        external;
     function getOpenPositionKeys(bool _isLong) external view returns (bytes32[] memory);
     function getOrderKeys(bool _isLimit) external view returns (bytes32[] memory orderKeys);
 
     // Getters for public variables
     function tradingFee() external view returns (uint256);
+    function feeForExecution() external view returns (uint256);
     function market() external view returns (IMarket);
     function getOrder(bytes32 _key) external view returns (Position.Request memory _order);
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory);
