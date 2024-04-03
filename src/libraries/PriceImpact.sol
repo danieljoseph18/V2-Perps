@@ -52,13 +52,13 @@ library PriceImpact {
         if (_request.input.sizeDelta == 0) revert PriceImpact_SizeDeltaIsZero();
 
         ImpactState memory state;
-        state.impact = MarketUtils.getImpactConfig(market, _request.input.assetId);
+        state.impact = MarketUtils.getImpactConfig(market, _request.input.ticker);
         // Get long / short Oi -> used to calculate skew
-        state.longOi = MarketUtils.getOpenInterest(market, _request.input.assetId, true);
-        state.shortOi = MarketUtils.getOpenInterest(market, _request.input.assetId, false);
+        state.longOi = MarketUtils.getOpenInterest(market, _request.input.ticker, true);
+        state.shortOi = MarketUtils.getOpenInterest(market, _request.input.ticker, false);
         // Used to calculate the impact on available liquidity
         state.availableOi = MarketUtils.getTotalAvailableOiUsd(
-            market, _request.input.assetId, _orderState.longMarketTokenPrice, _orderState.shortMarketTokenPrice
+            market, _request.input.ticker, _orderState.longMarketTokenPrice, _orderState.shortMarketTokenPrice
         ).toInt256();
         if (state.availableOi == 0) revert PriceImpact_NoAvailableLiquidity();
 
@@ -140,7 +140,7 @@ library PriceImpact {
 
         // validate the impact delta on pool
         if (priceImpactUsd > 0) {
-            priceImpactUsd = _validateImpactDelta(market, _request.input.assetId, priceImpactUsd);
+            priceImpactUsd = _validateImpactDelta(market, _request.input.ticker, priceImpactUsd);
         }
         // calculate the impacted price
         impactedPrice = _calculateImpactedPrice(
@@ -220,12 +220,12 @@ library PriceImpact {
      * Positive impact is capped by the impact pool.
      * If the positive impact is > impact pool, return the entire impact pool.
      */
-    function _validateImpactDelta(IMarket market, bytes32 _assetId, int256 _priceImpactUsd)
+    function _validateImpactDelta(IMarket market, string memory _ticker, int256 _priceImpactUsd)
         internal
         view
         returns (int256)
     {
-        int256 impactPoolUsd = MarketUtils.getImpactPool(market, _assetId).toInt256();
+        int256 impactPoolUsd = MarketUtils.getImpactPool(market, _ticker).toInt256();
         if (_priceImpactUsd > impactPoolUsd) {
             return impactPoolUsd;
         } else {

@@ -7,14 +7,24 @@ import {IMarketMaker} from "../../markets/interfaces/IMarketMaker.sol";
 interface IPriceFeed {
     struct Price {
         uint256 timestamp;
-        uint256 minPrice;
-        uint256 medPrice;
-        uint256 maxPrice;
+        uint256 min;
+        uint256 med;
+        uint256 max;
+    }
+
+    struct Pnl {
+        bool wasSigned;
+        int256 cumulativePnl;
     }
 
     enum RequestType {
         PRICE_UPDATE,
         CUMULATIVE_PNL
+    }
+
+    struct RequestData {
+        address requester;
+        RequestType requestType;
     }
 
     struct UnpackedPriceResponse {
@@ -28,33 +38,45 @@ interface IPriceFeed {
     }
 
     // Custom error type
-    error UnexpectedRequestID(bytes32 requestId);
+    error PriceFeed_UnexpectedRequestID(bytes32 requestId);
     error PriceFeed_PriceUpdateLength();
-    error FulfillmentFailed(string err);
+    error PriceFeed_FulfillmentFailed(string err);
     error PriceFeed_InvalidGasParams();
     error PriceFeed_AssetSupportFailed();
     error PriceFeed_AssetRemovalFailed();
     error PriceFeed_InvalidMarket();
+    error PriceFeed_InvalidRequestType();
+    error PriceFeed_FailedToClearPrice();
+    error PriceFeed_FailedToClearPnl();
+    error PriceFeed_PriceNotSigned();
+    error PriceFeed_PnlNotSigned();
 
     // Event to log responses
-    event Response(bytes32 indexed requestId, RequestType requestType, bytes response, bytes err);
+    event Response(bytes32 indexed requestId, RequestData requestData, bytes response, bytes err);
+    event AssetPricesCleared();
+    event PnlCleared(address indexed market);
+    event AssetSupported(string indexed ticker, uint256 baseUnit);
+    event SupportRemoved(string indexed ticker);
 
     function marketMaker() external view returns (IMarketMaker);
     function PRICE_DECIMALS() external pure returns (uint256);
     function sequencerUptimeFeed() external view returns (address);
     function averagePriceUpdateCost() external view returns (uint256);
     function additionalCostPerAsset() external view returns (uint256);
-    function getPrices(bytes32 _assetId) external view returns (Price memory);
-    function cumulativePnl(address market) external view returns (int256);
+    function getPrices(bytes32 _requestId, string memory _ticker) external view returns (Price memory signedPrices);
+    function getCumulativePnl(bytes32 _requestId) external view returns (int256);
 
     function updateSubscriptionId(uint64 _subId) external;
     function updateGasLimits(uint32 _priceGasLimit, uint32 _cumulativePnlGasLimit) external;
     function setAverageGasParameters(uint256 _averagePriceUpdateCost, uint256 _additionalCostPerAsset) external;
-    function supportAsset(string memory _ticker) external;
+    function supportAsset(string memory _ticker, uint256 _baseUnit) external;
     function unsupportAsset(string memory _ticker) external;
     function updateSequencerUptimeFeed(address _sequencerUptimeFeed) external;
-    function requestPriceUpdate(string[] calldata args) external returns (bytes32 requestId);
-    function requestGetCumulativeMarketPnl(IMarket market) external returns (bytes32 requestId);
-    function LONG_ASSET_ID() external view returns (bytes32);
-    function SHORT_ASSET_ID() external view returns (bytes32);
+    function requestPriceUpdate(string[] calldata args, address _requester) external returns (bytes32 requestId);
+    function requestCumulativeMarketPnl(IMarket market, address _requester) external returns (bytes32 requestId);
+    function clearSignedPrices(IMarket market, bytes32 _requestId) external;
+    function clearCumulativePnl(IMarket market, bytes32 _requestId) external;
+    function baseUnits(string memory _ticker) external view returns (uint256);
+    function priceUpdateRequested(bytes32 _requestId) external view returns (bool);
+    function getRequester(bytes32 _requestId) external view returns (address);
 }

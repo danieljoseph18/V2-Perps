@@ -34,7 +34,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
 
     EnumerableSet.AddressSet private markets;
     EnumerableSet.Bytes32Set private requestKeys;
-    mapping(bytes32 requestKey => MarketRequest) public requests;
+    mapping(bytes32 requestKey => MarketRequest) private requests;
     mapping(string ticker => address market) public tokenToMarket;
     uint256[] private defaultAllocation;
 
@@ -72,7 +72,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
 
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external onlyAdmin {
         defaultConfig = _defaultConfig;
-        emit DefaultConfigSet(_defaultConfig);
+        emit DefaultConfigSet();
     }
 
     function updatePriceFeed(IPriceFeed _priceFeed) external onlyAdmin {
@@ -104,40 +104,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // 2. Owner should be msg.sender
         if (_request.owner != msg.sender) revert MarketMaker_InvalidOwner();
         // 3. Base Unit should be non-zero
-        if (_request.asset.baseUnit == 0) revert MarketMaker_InvalidBaseUnit();
-        // 4. If primary strategy is pyth, priceId should be non-zero
-        if (_request.asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
-            if (_request.asset.priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
-        } else if (_request.asset.primaryStrategy != Oracle.PrimaryStrategy.OFFCHAIN) {
-            revert MarketMaker_InvalidPrimaryStrategy();
-        }
-        // 5. If secondary strategy is chainlink, chainlinkPriceFeed should be non-zero
-        if (_request.asset.secondaryStrategy == Oracle.SecondaryStrategy.CHAINLINK) {
-            if (_request.asset.chainlinkPriceFeed == address(0)) revert MarketMaker_InvalidPriceFeed();
-        } else if (_request.asset.secondaryStrategy == Oracle.SecondaryStrategy.AMM) {
-            // 6. If secondary strategy is AMM, Uniswap Pool should be correctly configured.
-            if (
-                _request.asset.pool.poolType != Oracle.PoolType.V3 && _request.asset.pool.poolType != Oracle.PoolType.V2
-            ) {
-                revert MarketMaker_InvalidPoolType();
-            }
-            if (_request.asset.pool.poolAddress == address(0)) revert MarketMaker_InvalidPoolAddress();
-            if (_request.asset.pool.token0 == address(0) || _request.asset.pool.token1 == address(0)) {
-                revert MarketMaker_InvalidPoolTokens();
-            }
-        } else if (_request.asset.secondaryStrategy == Oracle.SecondaryStrategy.NONE) {
-            // If secondary strategy is NONE, caller has to have Admin role
-            // For permissionless markets, users can't request a market with no secondary strategy
-            if (!roleStorage.hasRole(Roles.DEFAULT_ADMIN_ROLE, msg.sender)) {
-                revert MarketMaker_InvalidSecondaryStrategy();
-            }
-        } else {
-            revert MarketMaker_InvalidSecondaryStrategy();
-        }
-        // 7. Max Price Deviation should be within bounds
-        if (_request.asset.maxPriceDeviation > MAX_PERCENTAGE || _request.asset.maxPriceDeviation < MIN_PERCENTAGE) {
-            revert MarketMaker_InvalidMaxPriceDeviation();
-        }
+        if (_request.baseUnit == 0) revert MarketMaker_InvalidBaseUnit();
         // 8. Market shouldn't already exist for that asset
         if (tokenToMarket[_request.indexTokenTicker] != address(0)) {
             revert MarketMaker_MarketExists();
@@ -174,24 +141,9 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
             _deleteMarketRequest(_requestKey);
             return address(0);
         }
-        // 3. If price id is set, make a call to check it returns a non 0 value from pyth
-        if (request.asset.primaryStrategy == Oracle.PrimaryStrategy.PYTH) {
-            (uint256 price,) = priceFeed.getPriceUnsafe(request.asset);
-            if (price == 0) {
-                _deleteMarketRequest(_requestKey);
-                return address(0);
-            }
-        }
-        // 4. If secondary strategy is set, make a call to check it returns a non 0 value
-        if (request.asset.secondaryStrategy != Oracle.SecondaryStrategy.NONE) {
-            if (Oracle.getReferencePrice(request.asset) == 0) {
-                _deleteMarketRequest(_requestKey);
-                return address(0);
-            }
-        }
 
         // Set Up Price Oracle
-        priceFeed.supportAsset(request.indexTokenTicker, request.asset);
+        priceFeed.supportAsset(request.indexTokenTicker, request.baseUnit);
         // Create new Market Token
         MarketToken marketToken =
             new MarketToken(request.marketTokenName, request.marketTokenSymbol, address(roleStorage));
@@ -212,7 +164,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
         market.initialize(address(tradeStorage), 0.003e18);
         // Initialize TradeStorage with Default values
-        tradeStorage.initialize(0.05e18, 0.001e18, 2e30, 10);
+        tradeStorage.initialize(0.05e18, 0.001e18, 2e30, 10 seconds, 1 minutes);
 
         // Add to Storage
         bool success = markets.add(address(market));
@@ -227,7 +179,7 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
         payable(msg.sender).transfer(marketCreationFee);
 
         // Fire Event
-        emit MarketCreated(address(market), request.indexTokenTicker, request.asset.priceId);
+        emit MarketCreated(address(market), request.indexTokenTicker);
 
         return address(market);
     }
@@ -240,26 +192,27 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
     }
 
     /// @dev - Only the Admin can create multi-asset markets
+    // @audit - remove price id
     function addTokenToMarket(
         IMarket market,
         string memory _ticker,
-        bytes32 _priceId,
+        uint256 _baseUnit,
         uint256[] calldata _newAllocations
     ) external onlyAdmin nonReentrant {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (assetId == bytes32(0)) revert MarketMaker_InvalidAsset();
-        if (_priceId == bytes32(0)) revert MarketMaker_InvalidPriceId();
+        if (_baseUnit == 0) revert MarketMaker_InvalidBaseUnit();
         if (!markets.contains(address(market))) revert MarketMaker_MarketDoesNotExist();
 
         // Set Up Price Oracle
-        priceFeed.supportAsset(_ticker);
+        priceFeed.supportAsset(_ticker, _baseUnit);
         // Cache
         address marketAddress = address(market);
         // Add to Market
         market.addToken(defaultConfig, _ticker, _newAllocations);
 
         // Fire Event
-        emit TokenAddedToMarket(marketAddress, _ticker, _priceId);
+        emit TokenAddedToMarket(marketAddress, _ticker);
     }
 
     /**
@@ -287,6 +240,10 @@ contract MarketMaker is IMarketMaker, RoleValidation, ReentrancyGuard {
 
     function isMarket(address _market) external view returns (bool) {
         return markets.contains(_market);
+    }
+
+    function getRequest(bytes32 _requestKey) external view returns (MarketRequest memory) {
+        return requests[_requestKey];
     }
 
     /**

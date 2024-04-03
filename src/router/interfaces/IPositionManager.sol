@@ -6,7 +6,7 @@ import {IMarket} from "../../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface IPositionManager {
-    event ExecutePosition(bytes32 indexed _orderKey, Position.Request _request, uint256 _fee, uint256 _feeDiscount);
+    event ExecutePosition(bytes32 indexed _orderKey, uint256 _fee, uint256 _feeDiscount);
     event GasLimitsUpdated(
         uint256 indexed depositGasLimit, uint256 indexed withdrawalGasLimit, uint256 indexed positionGasLimit
     );

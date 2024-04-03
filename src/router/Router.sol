@@ -31,8 +31,16 @@ contract Router is ReentrancyGuard, RoleValidation {
     IWETH private immutable WETH;
     IPositionManager private positionManager;
 
-    // Used to request a secondary price update from the Keeper
-    event Router_PriceUpdateRequested(bytes32 indexed assetId, uint256 indexed blockNumber);
+    string private constant LONG_TICKER = "ETH";
+    string private constant SHORT_TICKER = "USDC";
+
+    event DepositRequestCreated(IMarket market, address owner, address tokenIn, uint256 amountIn);
+    event WithdrawalRequestCreated(IMarket market, address owner, address tokenOut, uint256 amountOut);
+    event PositionRequestCreated(
+        address market, string ticker, bool isLong, bool isIncrease, uint256 sizeDelta, uint256 collateralDelta
+    );
+    event PriceUpdateRequested(bytes32 requestId, string[] tickers, address requester);
+    event PnlRequested(bytes32 requestId, IMarket market, address requester);
 
     error Router_InvalidOwner();
     error Router_InvalidAmountIn();
@@ -64,6 +72,9 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     receive() external payable {}
 
+    /**
+     * ========================================= Setter Functions =========================================
+     */
     function updateConfig(address _marketMaker, address _positionManager) external onlyAdmin {
         marketMaker = IMarketMaker(_marketMaker);
         positionManager = IPositionManager(_positionManager);
@@ -72,6 +83,10 @@ contract Router is ReentrancyGuard, RoleValidation {
     function updatePriceFeed(IPriceFeed _priceFeed) external onlyAdmin {
         priceFeed = _priceFeed;
     }
+
+    /**
+     * ========================================= External Functions =========================================
+     */
 
     // @audit - add price update request / cumulative pnl update request
     function createDeposit(
@@ -96,11 +111,15 @@ contract Router is ReentrancyGuard, RoleValidation {
             IERC20(_tokenIn).safeTransferFrom(msg.sender, address(positionManager), _amountIn);
         }
 
-        market.createRequest(_owner, _tokenIn, _amountIn, _executionFee, _shouldWrap, true);
+        bytes32 priceRequestId = _requestPriceUpdate("");
+        bytes32 pnlRequestId = _requestPnlUpdate(market);
+
+        market.createRequest(
+            _owner, _tokenIn, _amountIn, _executionFee, priceRequestId, pnlRequestId, _shouldWrap, true
+        );
         _sendExecutionFee(_executionFee);
 
-        // Request a Price Update for the Asset
-        emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
+        emit DepositRequestCreated(market, _owner, _tokenIn, _amountIn);
     }
 
     // @audit - add price update request / cumulative pnl update request
@@ -121,21 +140,25 @@ contract Router is ReentrancyGuard, RoleValidation {
             if (_tokenOut != address(USDC) && _tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         }
 
+        bytes32 priceRequestId = _requestPriceUpdate("");
+        bytes32 pnlRequestId = _requestPnlUpdate(market);
+
         IMarketToken marketToken = market.MARKET_TOKEN();
         marketToken.safeTransferFrom(msg.sender, address(positionManager), _marketTokenAmountIn);
 
-        market.createRequest(_owner, _tokenOut, _marketTokenAmountIn, _executionFee, _shouldUnwrap, false);
+        market.createRequest(
+            _owner, _tokenOut, _marketTokenAmountIn, _executionFee, priceRequestId, pnlRequestId, _shouldUnwrap, false
+        );
         _sendExecutionFee(_executionFee);
 
-        // Request a Price Update for the Asset
-        emit Router_PriceUpdateRequested(bytes32(0), block.number); // Only Need Long / Short Tokens
+        emit WithdrawalRequestCreated(market, _owner, _tokenOut, _marketTokenAmountIn);
     }
 
     // @audit - can we create a trailing stop loss?
-    // @audit - add price update request
+    // @audit - don't need price request if it's a limit order, SL, or TP
     function createPositionRequest(Position.Input memory _trade) external payable nonReentrant {
         // Get the market to direct the user to
-        address market = marketMaker.tokenToMarket(_trade.assetId);
+        address market = marketMaker.tokenToMarket(_trade.ticker);
 
         /**
          * 3 Cases:
@@ -176,6 +199,10 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Handle Token Transfers
         if (_trade.isIncrease) _handleTokenTransfers(_trade);
 
+        // Request Price Update for the Asset if Market Order
+        // Limit Orders, Stop Loss, and Take Profit Order's prices will be updated at execution time
+        bytes32 priceRequestId = _trade.isLimit ? bytes32(0) : _requestPriceUpdate(_trade.ticker);
+
         // Construct the state for Order Creation
         bytes32 positionKey = Position.validateInputParameters(_trade, market);
 
@@ -187,7 +214,8 @@ contract Router is ReentrancyGuard, RoleValidation {
         Position.RequestType requestType = Position.getRequestType(_trade, position);
 
         // Construct the Request from the user input
-        Position.Request memory request = Position.createRequest(_trade, msg.sender, requestType);
+        // @audit - need to add request id
+        Position.Request memory request = Position.createRequest(_trade, msg.sender, requestType, priceRequestId);
 
         // Store the Order Request
         tradeStorage.createOrderRequest(request);
@@ -195,8 +223,68 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Send Full Execution Fee to positionManager to Distribute
         _sendExecutionFee(_trade.executionFee);
 
+        emit PositionRequestCreated(
+            market, _trade.ticker, _trade.isLong, _trade.isIncrease, _trade.sizeDelta, _trade.collateralDelta
+        );
+    }
+
+    /**
+     * This function is used to create a price update request before execution one of either:
+     * - Limit Order
+     * - Adl
+     * - Liquidation
+     *
+     * As the user doesn't provide the request in real time in these cases.
+     *
+     * To prevent the case where a user requests pricing to execute an order,
+     */
+    // Key can be an orderKey if limit new position, position key if limit decrease, sl, tp, adl or liquidation
+    // @audit - watch for vulnerability where users use stale requests to execute orders
+    // @audit - probably need an expiry on the validity of price requests
+    function requestExecutionPricing(IMarket market, bytes32 _key, bool _positionKey)
+        external
+        payable
+        onlyKeeper
+        returns (bytes32 priceRequestId)
+    {
+        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
+        string memory ticker;
+        // Fetch the Ticker of the Asset
+        if (_positionKey) ticker = tradeStorage.getPosition(_key).ticker;
+        else ticker = tradeStorage.getOrder(_key).input.ticker;
+        // If ticker field was empty, revert
+        if (bytes(ticker).length == 0) revert Router_InvalidAsset();
+        // Request a Price Update
+        priceRequestId = _requestPriceUpdate(ticker);
+    }
+
+    /**
+     * ========================================= Internal Functions =========================================
+     */
+    function _requestPriceUpdate(string memory _ticker) private returns (bytes32 requestId) {
+        // Convert the string to an array of length 1
+        string[] memory tickers;
+        if (bytes(_ticker).length == 0) {
+            // Only prices for Long and Short Tokens
+            tickers = new string[](2);
+            tickers[0] = LONG_TICKER;
+            tickers[1] = SHORT_TICKER;
+        } else {
+            // Prices for index token, long token, and short token
+            tickers = new string[](3);
+            tickers[0] = _ticker;
+            tickers[1] = LONG_TICKER;
+            tickers[2] = SHORT_TICKER;
+        }
         // Request a Price Update for the Asset
-        emit Router_PriceUpdateRequested(_trade.assetId, block.number);
+        requestId = priceFeed.requestPriceUpdate(tickers, msg.sender);
+        // Fire Event
+        emit PriceUpdateRequested(requestId, tickers, msg.sender);
+    }
+
+    function _requestPnlUpdate(IMarket _market) private returns (bytes32 requestId) {
+        requestId = priceFeed.requestCumulativeMarketPnl(_market, msg.sender);
+        emit PnlRequested(requestId, _market, msg.sender);
     }
 
     function _handleTokenTransfers(Position.Input memory _trade) private {

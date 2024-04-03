@@ -43,6 +43,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     uint256 private constant LONG_BASE_UNIT = 1e18;
     uint256 private constant SHORT_BASE_UNIT = 1e6;
     uint256 constant GAS_BUFFER = 10000;
+    string private constant LONG_TICKER = "ETH";
+    string private constant SHORT_TICKER = "USDC";
 
     IMarketMaker public marketMaker;
     IReferralStorage public referralStorage;
@@ -72,11 +74,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
     receive() external payable {}
 
-    modifier onlyMarket() {
-        if (!marketMaker.isMarket(msg.sender)) revert PositionManager_AccessDenied();
-        _;
-    }
-
     function updateGasEstimates(uint256 _base, uint256 _deposit, uint256 _withdrawal, uint256 _position)
         external
         onlyAdmin
@@ -103,13 +100,12 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.deposit = market.getRequest(_key);
         params.key = _key;
         // Get the signed prices
-        (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(priceFeed);
+        (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(priceFeed, params.deposit.priceRequestId);
         // Calculate cumulative borrow fees
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
         // Calculate Cumulative PNL
-        params.cumulativePnl =
-            MarketUtils.calculateCumulativeMarketPnl(market, priceFeed, params.deposit.isLongToken, true); // Maximize AUM for deposits
+        params.cumulativePnl = priceFeed.getCumulativePnl(params.deposit.pnlRequestId);
         params.marketToken = market.MARKET_TOKEN();
 
         // Approve the Market to spend the Collateral
@@ -140,11 +136,11 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.market = market;
         params.withdrawal = market.getRequest(_key);
         params.key = _key;
-        params.cumulativePnl =
-            MarketUtils.calculateCumulativeMarketPnl(market, priceFeed, params.withdrawal.isLongToken, false); // Minimize AUM for withdrawals
+        params.cumulativePnl = priceFeed.getCumulativePnl(params.withdrawal.pnlRequestId);
         params.shouldUnwrap = params.withdrawal.reverseWrap;
         // Calculate the amount out
-        (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(priceFeed);
+        (params.longPrices, params.shortPrices) =
+            Oracle.getMarketTokenPrices(priceFeed, params.withdrawal.priceRequestId);
         // Calculate cumulative borrow fees
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
@@ -199,8 +195,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     // @audit - we need to financially compensate the executor of the trade.
     // whether this be through a percentage of the fee charged on the position or other.
     // we essentially need a way to incentivize users to run their own keeper nodes.
-    // @audit - need to consider pricing updates for limit orders
-    function executePosition(IMarket market, bytes32 _orderKey, address _feeReceiver)
+    // For market orders, can just pass in bytes32(0) as the request id, as it's only required for limits
+    // If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestId as input
+    function executePosition(IMarket market, bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
         external
         payable
         nonReentrant
@@ -213,7 +210,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the Request
         (Execution.State memory state, Position.Request memory request) =
-            tradeStorage.executePositionRequest(_orderKey, _feeReceiver);
+            tradeStorage.executePositionRequest(_orderKey, _requestId, _feeReceiver);
 
         if (request.input.isIncrease) {
             _transferTokensForIncrease(
@@ -222,7 +219,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
 
         // Emit Trade Executed Event
-        emit ExecutePosition(_orderKey, request, state.fee, state.affiliateRebate);
+        emit ExecutePosition(_orderKey, state.fee, state.affiliateRebate);
 
         // Send Execution Fee + Rebate
         // Execution Fee reduced to account for value sent to update Pyth prices
@@ -235,10 +232,17 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function liquidatePosition(IMarket market, bytes32 _positionKey) external payable onlyLiquidationKeeper {
+    // @audit - need to add a "Request Liquidation Step" -> Then the only person who should be able to initiate the liquidation
+    // up until a certain time buffer, should be the requester. After that time buffer, any liquidation keeper should be able to
+    /// @dev - Caller needs to call Router.requestExecutionPricing before
+    function liquidatePosition(IMarket market, bytes32 _positionKey, bytes32 _requestId)
+        external
+        payable
+        onlyLiquidationKeeper
+    {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // liquidate the position
-        try tradeStorage.liquidatePosition(_positionKey, msg.sender) {}
+        try tradeStorage.liquidatePosition(_positionKey, _requestId, msg.sender) {}
         catch {
             revert PositionManager_LiquidationFailed();
         }
@@ -256,7 +260,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
             // Check the caller is the position owner
             if (msg.sender != request.user) revert PositionManager_NotPositionOwner();
             // Check sufficient time has passed
-            if (block.number < request.requestBlock + tradeStorage.minBlockDelay()) {
+            if (block.timestamp < request.requestTimestamp + tradeStorage.minCancellationTime()) {
                 revert PositionManager_InsufficientDelay();
             }
         }
@@ -269,14 +273,17 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         payable(msg.sender).sendValue(refundAmount);
     }
 
-    function executeAdl(IMarket market, bytes32 _assetId, uint256 _sizeDelta, bytes32 _positionKey)
+    // @audit - need to add a "Request adl Step" -> Then the only person who should be able to initiate the adl
+    // up until a certain time buffer, should be the requester. After that time buffer, any adl keeper should be able to
+    /// @dev - Caller needs to call Router.requestExecutionPricing before
+    function executeAdl(IMarket market, bytes32 _requestId, uint256 _sizeDelta, bytes32 _positionKey)
         external
         payable
         onlyAdlKeeper
     {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the ADL
-        try tradeStorage.executeAdl(_positionKey, _assetId, _sizeDelta) {}
+        try tradeStorage.executeAdl(_positionKey, _requestId, _sizeDelta) {}
         catch {
             revert PositionManager_AdlFailed();
         }
@@ -289,14 +296,14 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         uint256 _affiliateRebate
     ) internal {
         // Transfer Fee Discount to Referral Storage
-        uint256 tokensPlusFee = _collateralDelta;
+        uint256 transferAmount = _collateralDelta;
         if (_affiliateRebate > 0) {
             // Transfer Fee Discount to Referral Storage
-            tokensPlusFee -= _affiliateRebate;
+            transferAmount -= _affiliateRebate;
             IERC20(_collateralToken).safeTransfer(address(referralStorage), _affiliateRebate);
         }
         // Send Tokens + Fee to the Market (Will be Accounted for Separately)
         // Subtract Affiliate Rebate -> will go to Referral Storage
-        IERC20(_collateralToken).safeTransfer(address(market), tokensPlusFee);
+        IERC20(_collateralToken).safeTransfer(address(market), transferAmount);
     }
 }

@@ -27,6 +27,8 @@ interface IMarket {
         bool reverseWrap;
         bool isDeposit;
         bytes32 key;
+        bytes32 priceRequestId; // Id of the price update request
+        bytes32 pnlRequestId; // Id of the cumulative pnl request
     }
 
     struct ExecuteDeposit {
@@ -231,10 +233,10 @@ interface IMarket {
     /**
      * ================ Events ================
      */
-    event TokenAdded(bytes32 indexed assetId, Config config);
+    event TokenAdded(bytes32 indexed assetId);
     event TokenRemoved(bytes32 indexed assetId);
-    event MarketConfigUpdated(bytes32 indexed assetId, Config config);
-    event MarketStateUpdated(bytes32 assetId, bool isLong);
+    event MarketConfigUpdated(bytes32 indexed assetId);
+    event MarketStateUpdated(string ticker, bool isLong);
     event Market_Initialzied();
     event RequestCreated(bytes32 indexed key, address indexed owner, address tokenIn, uint256 amountIn, bool isDeposit);
     event DepositExecuted(
@@ -266,9 +268,11 @@ interface IMarket {
 
     function createRequest(
         address _owner,
-        address _transferToken,
+        address _transferToken, // Token In for Deposits, Out for Withdrawals
         uint256 _amountIn,
         uint256 _executionFee,
+        bytes32 _priceRequestId,
+        bytes32 _pnlRequestId,
         bool _reverseWrap,
         bool _isDeposit
     ) external payable;
@@ -289,7 +293,7 @@ interface IMarket {
     function addToken(Config memory _config, string memory _ticker, uint256[] calldata _newAllocations) external;
     function removeToken(string memory _ticker, uint256[] calldata _newAllocations) external;
     function updateMarketState(
-        bytes32 _assetId,
+        string memory _ticker,
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
@@ -297,7 +301,7 @@ interface IMarket {
         bool _isLong,
         bool _isIncrease
     ) external;
-    function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external;
+    function updateImpactPool(string memory _ticker, int256 _priceImpactUsd) external;
     function setAllocationsWithBits(uint256[] memory _allocations) external;
 
     function tradeStorage() external view returns (address);
@@ -305,11 +309,11 @@ interface IMarket {
     function borrowScale() external view returns (uint256);
     function getAssetIds() external view returns (bytes32[] memory);
     function getAssetsInMarket() external view returns (uint256);
-    function getStorage(bytes32 _assetId) external view returns (MarketStorage memory);
+    function getStorage(string memory _ticker) external view returns (MarketStorage memory);
     function longTokenBalance() external view returns (uint256);
     function shortTokenBalance() external view returns (uint256);
     function longTokensReserved() external view returns (uint256);
     function shortTokensReserved() external view returns (uint256);
-    function isAssetInMarket(bytes32 _assetId) external view returns (bool);
+    function isAssetInMarket(string memory _ticker) external view returns (bool);
     function getTickers() external view returns (string[] memory);
 }

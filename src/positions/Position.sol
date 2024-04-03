@@ -31,7 +31,7 @@ library Position {
     error Position_InvalidConditionalPercentage();
     error Position_InvalidSizeDelta();
     error Position_ZeroAddress();
-    error Position_InvalidRequestBlock();
+    error Position_InvalidRequestTimestamp();
     error Position_CollateralDelta();
     error Position_NewPosition();
     error Position_IncreasePositionCollateral();
@@ -53,19 +53,19 @@ library Position {
     uint64 private constant MIN_COLLATERAL = 1000;
     int256 private constant PRICE_PRECISION = 1e30;
     // Max and Min Price Slippage
-    uint256 private constant MIN_SLIPPAGE = 0.0001e30; // 0.01%
-    uint256 private constant MAX_SLIPPAGE = 0.9999e30; // 99.99%
+    uint128 private constant MIN_SLIPPAGE = 0.0001e30; // 0.01%
+    uint128 private constant MAX_SLIPPAGE = 0.9999e30; // 99.99%
 
     // Data for an Open Position
     struct Data {
-        bytes32 assetId;
+        string ticker;
         address user;
         address collateralToken; // WETH long, USDC short
+        bool isLong;
         uint256 collateralAmount;
         uint256 positionSize; // USD
         uint256 weightedAvgEntryPrice;
-        uint256 lastUpdate;
-        bool isLong;
+        uint64 lastUpdate;
         FundingParams fundingParams;
         BorrowingParams borrowingParams;
         /**
@@ -91,21 +91,21 @@ library Position {
     struct Conditionals {
         bool stopLossSet;
         bool takeProfitSet;
+        uint64 stopLossPercentage;
+        uint64 takeProfitPercentage;
         uint256 stopLossPrice;
         uint256 takeProfitPrice;
-        uint256 stopLossPercentage;
-        uint256 takeProfitPercentage;
     }
 
     // Trade Request -> Sent by user
     struct Input {
-        bytes32 assetId; // Hash of the asset ticker, e.g keccak256(abi.encode("ETH"))
+        string ticker; // Asset ticker, e.g "ETH"
         address collateralToken;
         uint256 collateralDelta;
         uint256 sizeDelta; // USD
         uint256 limitPrice;
-        uint256 maxSlippage; // % with 30 D.P
-        uint256 executionFee;
+        uint128 maxSlippage; // % with 30 D.P
+        uint64 executionFee;
         bool isLong;
         bool isLimit;
         bool isIncrease;
@@ -117,8 +117,9 @@ library Position {
     struct Request {
         Input input;
         address user;
-        uint256 requestBlock;
+        uint64 requestTimestamp;
         RequestType requestType;
+        bytes32 requestId; // Id of the price update request
     }
 
     // Bundled Request for Execution
@@ -152,10 +153,10 @@ library Position {
             revert Position_InvalidSlippage();
         }
         if (_trade.collateralDelta < MIN_COLLATERAL) revert Position_InvalidCollateralDelta();
-        if (_trade.assetId == bytes32(0)) revert Position_InvalidAssetId();
+        if (bytes(_trade.ticker).length == 0) revert Position_InvalidAssetId();
         if (_market == address(0)) revert Position_MarketDoesNotExist();
 
-        positionKey = keccak256(abi.encode(_trade.assetId, msg.sender, _trade.isLong));
+        positionKey = keccak256(abi.encode(_trade.ticker, msg.sender, _trade.isLong));
 
         if (_trade.isLimit && _trade.limitPrice == 0) revert Position_InvalidLimitPrice();
         else if (!_trade.isLimit && _trade.limitPrice != 0) revert Position_InvalidLimitPrice();
@@ -170,11 +171,11 @@ library Position {
         returns (Request memory)
     {
         // Check the Market contains the Asset
-        if (!market.isAssetInMarket(_request.input.assetId)) revert Position_MarketDoesNotExist();
+        if (!market.isAssetInMarket(_request.input.ticker)) revert Position_MarketDoesNotExist();
         // Re-Validate the Input
         validateInputParameters(_request.input, address(market));
         if (_request.user == address(0)) revert Position_ZeroAddress();
-        if (_request.requestBlock > block.number) revert Position_InvalidRequestBlock();
+        if (_request.requestTimestamp > block.timestamp) revert Position_InvalidRequestTimestamp();
         _request.input.conditionals =
             _validateConditionals(_request.input.conditionals, _state.indexPrice, _request.input.isLong);
 
@@ -306,8 +307,11 @@ library Position {
     }
 
     // 1x = 100
-    function checkLeverage(IMarket market, bytes32 _assetId, uint256 _sizeUsd, uint256 _collateralUsd) external view {
-        uint256 maxLeverage = MarketUtils.getMaxLeverage(market, _assetId);
+    function checkLeverage(IMarket market, string calldata _ticker, uint256 _sizeUsd, uint256 _collateralUsd)
+        external
+        view
+    {
+        uint256 maxLeverage = MarketUtils.getMaxLeverage(market, _ticker);
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
@@ -362,13 +366,13 @@ library Position {
      * =========================== Constructor Functions ============================
      */
     function generateKey(Request memory _request) external pure returns (bytes32 positionKey) {
-        positionKey = keccak256(abi.encode(_request.input.assetId, _request.user, _request.input.isLong));
+        positionKey = keccak256(abi.encode(_request.input.ticker, _request.user, _request.input.isLong));
     }
 
     function generateOrderKey(Request memory _request) public pure returns (bytes32 orderKey) {
         orderKey = keccak256(
             abi.encode(
-                _request.input.assetId,
+                _request.input.ticker,
                 _request.user,
                 _request.input.isLong,
                 _request.input.isIncrease, // Enables separate SL / TP Orders
@@ -377,12 +381,18 @@ library Position {
         );
     }
 
-    function createRequest(Input calldata _trade, address _user, RequestType _requestType)
+    function createRequest(Input calldata _trade, address _user, RequestType _requestType, bytes32 _requestId)
         external
         view
         returns (Request memory request)
     {
-        request = Request({input: _trade, user: _user, requestBlock: block.number, requestType: _requestType});
+        request = Request({
+            input: _trade,
+            user: _user,
+            requestTimestamp: uint64(block.timestamp),
+            requestType: _requestType,
+            requestId: _requestId
+        });
     }
 
     function generateNewPosition(IMarket market, Request memory _request, Execution.State memory _state)
@@ -392,18 +402,18 @@ library Position {
     {
         // Get Entry Funding & Borrowing Values
         (uint256 longBorrowFee, uint256 shortBorrowFee) =
-            MarketUtils.getCumulativeBorrowFees(market, _request.input.assetId);
+            MarketUtils.getCumulativeBorrowFees(market, _request.input.ticker);
         // get Trade Value in USD
         position = Data({
-            assetId: _request.input.assetId,
+            ticker: _request.input.ticker,
             collateralToken: _request.input.collateralToken,
             user: _request.user,
             collateralAmount: _request.input.collateralDelta,
             positionSize: _request.input.sizeDelta,
             weightedAvgEntryPrice: _state.impactedPrice,
-            lastUpdate: block.timestamp,
+            lastUpdate: uint64(block.timestamp),
             isLong: _request.input.isLong,
-            fundingParams: FundingParams(MarketUtils.getFundingAccrued(market, _request.input.assetId), 0),
+            fundingParams: FundingParams(MarketUtils.getFundingAccrued(market, _request.input.ticker), 0),
             borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
             stopLossKey: bytes32(0),
             takeProfitKey: bytes32(0)
@@ -421,13 +431,13 @@ library Position {
         if (_conditionals.stopLossSet) {
             stopLossOrder = Request({
                 input: Input({
-                    assetId: _position.assetId,
+                    ticker: _position.ticker,
                     collateralToken: _position.collateralToken,
                     collateralDelta: mulDiv(_position.collateralAmount, _conditionals.stopLossPercentage, PRECISION),
                     sizeDelta: mulDiv(_position.positionSize, _conditionals.stopLossPercentage, PRECISION),
                     limitPrice: _conditionals.stopLossPrice,
                     maxSlippage: MAX_SLIPPAGE,
-                    executionFee: slExecutionFee,
+                    executionFee: uint64(slExecutionFee),
                     isLong: !_position.isLong,
                     isLimit: true,
                     isIncrease: false,
@@ -442,21 +452,22 @@ library Position {
                     })
                 }),
                 user: _position.user,
-                requestBlock: block.number,
-                requestType: RequestType.STOP_LOSS
+                requestTimestamp: uint64(block.timestamp),
+                requestType: RequestType.STOP_LOSS,
+                requestId: bytes32(0)
             });
         }
         // Construct the Take profit based on the values
         if (_conditionals.takeProfitSet) {
             takeProfitOrder = Request({
                 input: Input({
-                    assetId: _position.assetId,
+                    ticker: _position.ticker,
                     collateralToken: _position.collateralToken,
                     collateralDelta: mulDiv(_position.collateralAmount, _conditionals.takeProfitPercentage, PRECISION),
                     sizeDelta: mulDiv(_position.positionSize, _conditionals.takeProfitPercentage, PRECISION),
                     limitPrice: _conditionals.takeProfitPrice,
                     maxSlippage: MAX_SLIPPAGE,
-                    executionFee: _totalExecutionFee - slExecutionFee,
+                    executionFee: uint64(_totalExecutionFee - slExecutionFee),
                     isLong: !_position.isLong,
                     isLimit: true,
                     isIncrease: false,
@@ -471,8 +482,9 @@ library Position {
                     })
                 }),
                 user: _position.user,
-                requestBlock: block.number,
-                requestType: RequestType.TAKE_PROFIT
+                requestTimestamp: uint64(block.timestamp),
+                requestType: RequestType.TAKE_PROFIT,
+                requestId: bytes32(0)
             });
         }
     }
@@ -485,7 +497,7 @@ library Position {
         order = Settlement({
             request: Request({
                 input: Input({
-                    assetId: _position.assetId,
+                    ticker: _position.ticker,
                     collateralToken: _position.collateralToken,
                     collateralDelta: _position.collateralAmount,
                     sizeDelta: _position.positionSize,
@@ -499,8 +511,9 @@ library Position {
                     conditionals: Conditionals(false, false, 0, 0, 0, 0)
                 }),
                 user: _position.user,
-                requestBlock: block.number,
-                requestType: RequestType.POSITION_DECREASE
+                requestTimestamp: uint64(block.timestamp),
+                requestType: RequestType.POSITION_DECREASE,
+                requestId: bytes32(0)
             }),
             orderKey: bytes32(0),
             feeReceiver: _liquidator,
@@ -509,6 +522,7 @@ library Position {
     }
 
     // @audit - can structure like above for more efficiency
+    // @audit - fee receiver - need to incentivize
     function createAdlOrder(Data memory _position, uint256 _sizeDelta)
         external
         view
@@ -519,7 +533,7 @@ library Position {
 
         Request memory request = Request({
             input: Input({
-                assetId: _position.assetId,
+                ticker: _position.ticker,
                 collateralToken: _position.collateralToken,
                 collateralDelta: collateralDelta,
                 sizeDelta: _sizeDelta,
@@ -533,8 +547,9 @@ library Position {
                 conditionals: Conditionals(false, false, 0, 0, 0, 0)
             }),
             user: _position.user,
-            requestBlock: block.number,
-            requestType: RequestType.POSITION_DECREASE
+            requestTimestamp: uint64(block.timestamp),
+            requestType: RequestType.POSITION_DECREASE,
+            requestId: bytes32(0)
         });
         settlement =
             Settlement({request: request, orderKey: generateOrderKey(request), feeReceiver: address(0), isAdl: true});
@@ -563,12 +578,12 @@ library Position {
 
     function getFundingFeeDelta(
         IMarket market,
-        bytes32 _assetId,
+        string calldata _ticker,
         uint256 _indexPrice,
         uint256 _sizeDelta,
         int256 _entryFundingAccrued
     ) external view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
-        (, nextFundingAccrued) = Funding.calculateNextFunding(market, _assetId, _indexPrice);
+        (, nextFundingAccrued) = Funding.calculateNextFunding(market, _ticker, _indexPrice);
         // Both Values in USD -> 30 D.P: Divide by Price precision to get 30 D.P value
         fundingFeeUsd = mulDivSigned(_sizeDelta.toInt256(), nextFundingAccrued - _entryFundingAccrued, PRICE_PRECISION);
     }
@@ -578,7 +593,7 @@ library Position {
         view
         returns (int256 totalFeesOwedUsd)
     {
-        (, int256 nextFundingAccrued) = Funding.calculateNextFunding(market, _position.assetId, _indexPrice);
+        (, int256 nextFundingAccrued) = Funding.calculateNextFunding(market, _position.ticker, _indexPrice);
         totalFeesOwedUsd = mulDivSigned(
             _position.positionSize.toInt256(),
             nextFundingAccrued - _position.fundingParams.lastFundingAccrued,
@@ -604,11 +619,11 @@ library Position {
         returns (uint256 totalFeesOwedUsd)
     {
         uint256 borrowFee = _position.isLong
-            ? MarketUtils.getCumulativeBorrowFee(market, _position.assetId, true)
+            ? MarketUtils.getCumulativeBorrowFee(market, _position.ticker, true)
                 - _position.borrowingParams.lastLongCumulativeBorrowFee
-            : MarketUtils.getCumulativeBorrowFee(market, _position.assetId, false)
+            : MarketUtils.getCumulativeBorrowFee(market, _position.ticker, false)
                 - _position.borrowingParams.lastShortCumulativeBorrowFee;
-        borrowFee += Borrowing.calculatePendingFees(market, _position.assetId, _position.isLong);
+        borrowFee += Borrowing.calculatePendingFees(market, _position.ticker, _position.isLong);
         uint256 feeSinceUpdate = borrowFee == 0 ? 0 : mulDiv(_position.positionSize, borrowFee, PRECISION);
         totalFeesOwedUsd = feeSinceUpdate + _position.borrowingParams.feesOwed;
     }

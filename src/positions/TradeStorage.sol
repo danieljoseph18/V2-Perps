@@ -15,7 +15,6 @@ import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {console, console2} from "forge-std/Test.sol";
 
 contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -40,7 +39,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint256 private minCollateralUsd;
 
     uint256 public tradingFee;
-    uint256 public minBlockDelay;
+    // @gas - consider changing to uint64
+    uint256 public minCancellationTime;
+    // Minimum time a keeper must execute their reserved transaction before it is
+    // made available to the broader network.
+    uint256 public minTimeForExecution;
 
     constructor(IMarket _market, IReferralStorage _referralStorage, IPriceFeed _priceFeed, address _roleStorage)
         RoleValidation(_roleStorage)
@@ -57,19 +60,27 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         uint256 _liquidationFee, // 0.05e18 = 5%
         uint256 _positionFee, // 0.001e18 = 0.1%
         uint256 _minCollateralUsd, // 2e30 = 2 USD
-        uint256 _minBlockDelay // e.g 1 minutes
+        uint256 _minCancellationTime, // e.g 1 minutes
+        uint256 _minTimeForExecution // e.g 1 minutes
     ) external onlyMarketMaker {
         if (isInitialized) revert TradeStorage_AlreadyInitialized();
         liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
         minCollateralUsd = _minCollateralUsd;
-        minBlockDelay = _minBlockDelay;
+        minCancellationTime = _minCancellationTime;
+        minTimeForExecution = _minTimeForExecution;
         isInitialized = true;
         emit TradeStorageInitialized(_liquidationFee, _positionFee);
     }
 
-    function setMinBlockDelay(uint256 _minBlockDelay) external onlyConfigurator(address(market)) {
-        minBlockDelay = _minBlockDelay;
+    // Time until a position request can be cancelled by a user
+    function setMinCancellationTime(uint256 _minCancellationTime) external onlyConfigurator(address(market)) {
+        minCancellationTime = _minCancellationTime;
+    }
+
+    // Time until a position request can be executed by the broader keeper network
+    function setMinTimeForExecution(uint256 _minTimeForExecution) external onlyConfigurator(address(market)) {
+        minTimeForExecution = _minTimeForExecution;
     }
 
     function setFees(uint256 _liquidationFee, uint256 _positionFee) external onlyConfigurator(address(market)) {
@@ -91,21 +102,15 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Create the order
         bytes32 orderKey = _createOrder(_request);
         // If SL / TP, tie to the position
+        Position.Data storage position = openPositions[Position.generateKey(_request)];
+        if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
         if (_request.requestType == Position.RequestType.STOP_LOSS) {
-            bytes32 positionKey = Position.generateKey(_request);
-            Position.Data memory position = openPositions[positionKey];
-            if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
             if (position.stopLossKey != bytes32(0)) revert TradeStorage_StopLossAlreadySet();
-            openPositions[positionKey].stopLossKey = orderKey;
-        } else if (_request.requestType == Position.RequestType.TAKE_PROFIT) {
-            bytes32 positionKey = Position.generateKey(_request);
-            Position.Data memory position = openPositions[positionKey];
-            if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
+            position.stopLossKey = orderKey;
+        } else {
             if (position.takeProfitKey != bytes32(0)) revert TradeStorage_TakeProfitAlreadySet();
-            openPositions[positionKey].takeProfitKey = orderKey;
+            position.takeProfitKey = orderKey;
         }
-        // Fire Event
-        emit OrderRequestCreated(orderKey, _request);
     }
 
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyPositionManager {
@@ -118,24 +123,25 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     /**
      * ===================================== Execution Functions =====================================
      */
-    function executePositionRequest(bytes32 _orderKey, address _feeReceiver)
+    // @audit - needs to accept request id for limit order cases
+    // the request id at request time won't be the same as the request id at execution time
+    function executePositionRequest(bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
         external
         onlyPositionManager
         nonReentrant
         returns (Execution.State memory state, Position.Request memory request)
     {
-        (state, request) = Execution.constructParams(market, this, priceFeed, referralStorage, _orderKey, _feeReceiver);
-        console2.log("Price Impact in TradeStorage: ", state.priceImpactUsd);
-        console.log("Impacted Price in TradeStorage: ", state.impactedPrice);
+        (state, request) =
+            Execution.constructParams(market, this, priceFeed, referralStorage, _orderKey, _requestId, _feeReceiver);
         // Fetch the State of the Market Before the Position
-        IMarket.MarketStorage memory initialMarket = market.getStorage(request.input.assetId);
+        IMarket.MarketStorage memory initialMarket = market.getStorage(request.input.ticker);
 
         // Delete the Order from Storage
         _deleteOrder(_orderKey, request.input.isLimit);
 
         // Update the Market State
         _updateMarketState(
-            state, request.input.assetId, request.input.sizeDelta, request.input.isLong, request.input.isIncrease
+            state, request.input.ticker, request.input.sizeDelta, request.input.isLong, request.input.isIncrease
         );
 
         // Execute Trade
@@ -157,14 +163,21 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             revert TradeStorage_InvalidRequestType();
         }
 
+        // Clear the Signed Prices
+        priceFeed.clearSignedPrices(market, request.requestId);
+
         // Fetch the State of the Market After the Position
-        IMarket.MarketStorage memory updatedMarket = market.getStorage(request.input.assetId);
+        IMarket.MarketStorage memory updatedMarket = market.getStorage(request.input.ticker);
 
         // Invariant Check
         Position.validateMarketDelta(initialMarket, updatedMarket, request);
     }
 
-    function liquidatePosition(bytes32 _positionKey, address _liquidator) external onlyPositionManager nonReentrant {
+    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator)
+        external
+        onlyPositionManager
+        nonReentrant
+    {
         // Fetch the Position
         Position.Data memory position = openPositions[_positionKey];
         // Check the Position Exists
@@ -172,15 +185,18 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Construct the Execution State
         Execution.State memory state;
         // @audit - is this the right price returned ? (min vs max vs med)
-        state = Execution.cacheTokenPrices(priceFeed, state, position.assetId, position.isLong, false);
+        state = Execution.cacheTokenPrices(priceFeed, state, position.ticker, _requestId, position.isLong, false);
         // No price impact on Liquidations
         state.impactedPrice = state.indexPrice;
         // Update the Market State
-        _updateMarketState(state, position.assetId, position.positionSize, position.isLong, false);
+        _updateMarketState(state, position.ticker, position.positionSize, position.isLong, false);
         // Construct Liquidation Order
         Position.Settlement memory params = Position.constructLiquidationOrder(position, _liquidator);
         // Execute the Liquidation
         _decreasePosition(params, state);
+        // Clear Signed Prices
+        // Need request id
+        priceFeed.clearSignedPrices(market, _requestId);
         // Fire Event
         emit LiquidatePosition(_positionKey, _liquidator, position.collateralAmount, position.isLong);
     }
@@ -189,7 +205,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     // need to consider how this would function if permissionless
     // probably need to add incentives for keepers to execute, similar to liquidations
     // @audit - make sure that the funds are going to the position owner, not the ADLer
-    function executeAdl(bytes32 _positionKey, bytes32 _assetId, uint256 _sizeDelta)
+    function executeAdl(bytes32 _positionKey, bytes32 _requestId, uint256 _sizeDelta)
         external
         onlyPositionManager
         nonReentrant
@@ -201,12 +217,12 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             Position.Data memory position,
             uint256 targetPnlFactor,
             int256 startingPnlFactor
-        ) = Execution.constructAdlOrder(market, this, priceFeed, _positionKey, _sizeDelta);
+        ) = Execution.constructAdlOrder(market, this, priceFeed, _positionKey, _requestId, _sizeDelta);
 
         // Update the Market State
         _updateMarketState(
             state,
-            params.request.input.assetId,
+            params.request.input.ticker,
             params.request.input.sizeDelta,
             params.request.input.isLong,
             params.request.input.isIncrease
@@ -215,8 +231,13 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         // Execute the order
         _decreasePosition(params, state);
 
+        // Clear signed prices
+        priceFeed.clearSignedPrices(market, _requestId);
+
         // Validate the Adl
-        Execution.validateAdl(market, state, startingPnlFactor, targetPnlFactor, _assetId, position.isLong);
+        Execution.validateAdl(
+            market, state, startingPnlFactor, targetPnlFactor, params.request.input.ticker, position.isLong
+        );
 
         emit AdlExecuted(address(market), _positionKey, _sizeDelta, position.isLong);
     }
@@ -271,7 +292,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         }
         // Check Market has enough available liquidity for payout
         if (
-            MarketUtils.getPoolBalance(market, _params.request.input.assetId, _params.request.input.isLong)
+            MarketUtils.getPoolBalance(market, _params.request.input.ticker, _params.request.input.isLong)
                 < amountOut + _state.affiliateRebate
         ) {
             revert TradeStorage_InsufficientFreeLiquidity();
@@ -333,7 +354,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         bool success = openPositionKeys[position.isLong].add(positionKey);
         if (!success) revert TradeStorage_PositionAdditionFailed();
         // Fire Event
-        emit PositionCreated(positionKey, position);
+        emit PositionCreated(positionKey);
     }
 
     function _increasePosition(Position.Settlement memory _params, Execution.State memory _state) internal {
@@ -513,21 +534,20 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     function _updateMarketState(
         Execution.State memory _state,
-        bytes32 _assetId,
+        string memory _ticker,
         uint256 _sizeDelta,
         bool _isLong,
         bool _isIncrease
     ) internal {
         // Update the Market State
         market.updateMarketState(
-            _assetId, _sizeDelta, _state.indexPrice, _state.impactedPrice, _state.collateralPrice, _isLong, _isIncrease
+            _ticker, _sizeDelta, _state.indexPrice, _state.impactedPrice, _state.collateralPrice, _isLong, _isIncrease
         );
         // If Price Impact is Negative, add to the impact Pool
         // If Price Impact is Positive, Subtract from the Impact Pool
         // Impact Pool Delta = -1 * Price Impact
-        console2.log("Price Impact: ", _state.priceImpactUsd);
         if (_state.priceImpactUsd == 0) return;
-        market.updateImpactPool(_assetId, -_state.priceImpactUsd);
+        market.updateImpactPool(_ticker, -_state.priceImpactUsd);
     }
 
     function _payFees(

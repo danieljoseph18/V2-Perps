@@ -7,7 +7,7 @@ import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {IMarket} from "../../markets/interfaces/IMarket.sol";
 
 interface ITradeStorage {
-    event OrderRequestCreated(bytes32 indexed _orderKey, Position.Request indexed _request);
+    event OrderRequestCreated(bytes32 indexed _orderKey);
     event OrderRequestCancelled(bytes32 indexed _orderKey);
     event LiquidatePosition(
         bytes32 indexed _positionKey, address indexed _liquidator, uint256 indexed _amountLiquidated, bool _isLong
@@ -15,7 +15,7 @@ interface ITradeStorage {
     event TradeStorageInitialized(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
     event FeesSet(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
     event CollateralEdited(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, bool indexed _isIncrease);
-    event PositionCreated(bytes32 indexed _positionKey, Position.Data indexed _position);
+    event PositionCreated(bytes32 indexed _positionKey);
     event AdlExecuted(address _market, bytes32 _positionKey, uint256 _sizeDelta, bool _isLong);
     event IncreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
     event DecreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
@@ -38,15 +38,16 @@ interface ITradeStorage {
         uint256 _liquidationFee,
         uint256 _tradingFee,
         uint256 _minCollateralUsd,
-        uint256 _minCancellationTime
+        uint256 _minCancellationTime,
+        uint256 _minExecutionTime
     ) external;
     function createOrderRequest(Position.Request calldata _request) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
-    function executePositionRequest(bytes32 _orderKey, address _feeReceiver)
+    function executePositionRequest(bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
         external
         returns (Execution.State memory state, Position.Request memory request);
-    function liquidatePosition(bytes32 _positionKey, address _liquidator) external;
-    function executeAdl(bytes32 _positionKey, bytes32 _assetId, uint256 _sizeDelta) external;
+    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator) external;
+    function executeAdl(bytes32 _positionKey, bytes32 _requestId, uint256 _sizeDelta) external;
     function setFees(uint256 _liquidationFee, uint256 _tradingFee) external;
     function getOpenPositionKeys(bool _isLong) external view returns (bytes32[] memory);
     function getOrderKeys(bool _isLimit) external view returns (bytes32[] memory orderKeys);
@@ -57,5 +58,7 @@ interface ITradeStorage {
     function getOrder(bytes32 _key) external view returns (Position.Request memory _order);
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory);
     function getOrderAtIndex(uint256 _index, bool _isLimit) external view returns (bytes32);
-    function minBlockDelay() external view returns (uint256);
+    function minCancellationTime() external view returns (uint256);
+    function minTimeForExecution() external view returns (uint256);
+    function priceFeed() external view returns (IPriceFeed);
 }

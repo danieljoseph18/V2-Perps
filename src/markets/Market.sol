@@ -13,6 +13,8 @@ import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {MarketUtils} from "./MarketUtils.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -201,9 +203,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      * Permissions restricted to only a super-user.
      */
     // @audit - should we make this configurable by users, then just contrain the inputs?
-    function updateConfig(Config memory _config, bytes32 _assetId) external onlyAdmin {
-        marketStorage[_assetId].config = _config;
-        emit MarketConfigUpdated(_assetId, _config);
+    function updateConfig(Config memory _config, string calldata _ticker) external onlyAdmin {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        marketStorage[assetId].config = _config;
+        emit MarketConfigUpdated(assetId);
     }
 
     /**
@@ -216,7 +219,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     }
 
     function updateMarketState(
-        bytes32 _assetId,
+        string calldata _ticker,
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
@@ -225,23 +228,23 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
         // 1. Depends on Open Interest Delta to determine Skew
-        _updateFundingRate(_assetId, _indexPrice);
+        _updateFundingRate(_ticker, _indexPrice);
         if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
             // 2. Relies on Open Interest Delta
             _updateWeightedAverages(
-                _assetId,
+                _ticker,
                 _impactedPrice == 0 ? _indexPrice : _impactedPrice, // If no price impact, set to the index price
                 _isIncrease ? int256(_sizeDelta) : -int256(_sizeDelta),
                 _isLong
             );
             // 3. Updated pre-borrowing rate if size delta > 0
-            _updateOpenInterest(_assetId, _sizeDelta, _isLong, _isIncrease);
+            _updateOpenInterest(_ticker, _sizeDelta, _isLong, _isIncrease);
         }
         // 4. Relies on Updated Open interest
-        _updateBorrowingRate(_assetId, _collateralPrice, _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT, _isLong);
+        _updateBorrowingRate(_ticker, _collateralPrice, _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT, _isLong);
         // Fire Event
-        emit MarketStateUpdated(_assetId, _isLong);
+        emit MarketStateUpdated(_ticker, _isLong);
     }
 
     /**
@@ -325,6 +328,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         address _transferToken, // Token In for Deposits, Out for Withdrawals
         uint256 _amountIn,
         uint256 _executionFee,
+        bytes32 _priceRequestId,
+        bytes32 _pnlRequestId,
         bool _reverseWrap,
         bool _isDeposit
     ) external payable onlyRouter {
@@ -336,7 +341,9 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             isLongToken: _transferToken == WETH,
             reverseWrap: _reverseWrap,
             isDeposit: _isDeposit,
-            key: _generateKey(_owner, _transferToken, _amountIn, _isDeposit)
+            key: _generateKey(_owner, _transferToken, _amountIn, _isDeposit),
+            priceRequestId: _priceRequestId,
+            pnlRequestId: _pnlRequestId
         });
         if (!requestKeys.add(request.key)) revert Market_FailedToAddRequest();
         requests[request.key] = request;
@@ -393,6 +400,11 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         _accumulateFees(fee, _params.deposit.isLongToken);
         _updatePoolBalance(afterFeeAmount, _params.deposit.isLongToken, true);
 
+        // Clear Signed Prices and Pnl
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        priceFeed.clearSignedPrices(this, _params.deposit.priceRequestId);
+        priceFeed.clearCumulativePnl(this, _params.deposit.pnlRequestId);
+
         emit DepositExecuted(_params.key, _params.deposit.owner, tokenIn, _params.deposit.amountIn, mintAmount);
         // mint tokens to user
         MARKET_TOKEN.mint(_params.deposit.owner, mintAmount);
@@ -426,6 +438,11 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         // decrease the pool
         _updatePoolBalance(_params.amountOut, _params.withdrawal.isLongToken, false);
 
+        // Clear Signed Prices and Pnl
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        priceFeed.clearSignedPrices(this, _params.withdrawal.priceRequestId);
+        priceFeed.clearCumulativePnl(this, _params.withdrawal.pnlRequestId);
+
         emit WithdrawalExecuted(
             _params.key,
             _params.withdrawal.owner,
@@ -446,16 +463,18 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         return assetIds.values();
     }
 
-    function isAssetInMarket(bytes32 _assetId) external view returns (bool) {
-        return assetIds.contains(_assetId);
+    function isAssetInMarket(string calldata _ticker) external view returns (bool) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return assetIds.contains(assetId);
     }
 
     function getAssetsInMarket() external view returns (uint256) {
         return assetIds.length();
     }
 
-    function getStorage(bytes32 _assetId) external view returns (MarketStorage memory) {
-        return marketStorage[_assetId];
+    function getStorage(string calldata _ticker) external view returns (MarketStorage memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId];
     }
 
     function getRequest(bytes32 _key) external view returns (Input memory) {
@@ -477,65 +496,79 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     /**
      *  ========================= Internal Functions  =========================
      */
-    function _updateFundingRate(bytes32 _assetId, uint256 _indexPrice) internal {
-        FundingValues memory funding = marketStorage[_assetId].funding;
-        marketStorage[_assetId].funding = Funding.updateState(this, funding, _assetId, _indexPrice);
+    function _updateFundingRate(string calldata _ticker, uint256 _indexPrice) internal {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        FundingValues memory funding = marketStorage[assetId].funding;
+        marketStorage[assetId].funding = Funding.updateState(this, funding, _ticker, _indexPrice);
     }
 
-    function _updateBorrowingRate(bytes32 _assetId, uint256 _collateralPrice, uint256 _collateralBaseUnit, bool _isLong)
-        internal
-    {
-        BorrowingValues memory borrowing = marketStorage[_assetId].borrowing;
-        marketStorage[_assetId].borrowing =
-            Borrowing.updateState(this, borrowing, _assetId, _collateralPrice, _collateralBaseUnit, _isLong);
+    function _updateBorrowingRate(
+        string calldata _ticker,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) internal {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        BorrowingValues memory borrowing = marketStorage[assetId].borrowing;
+        marketStorage[assetId].borrowing =
+            Borrowing.updateState(this, borrowing, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
     }
 
     /**
      * Updates the weighted average values for the market. Both rely on the market condition pre-open interest update.
      */
-    function _updateWeightedAverages(bytes32 _assetId, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
+    function _updateWeightedAverages(string calldata _ticker, uint256 _priceUsd, int256 _sizeDeltaUsd, bool _isLong)
         internal
     {
         if (_priceUsd == 0) revert Market_PriceIsZero();
         if (_sizeDeltaUsd == 0) return;
 
-        PnlValues storage pnl = marketStorage[_assetId].pnl;
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+
+        PnlValues storage pnl = marketStorage[assetId].pnl;
         uint256 openInterest;
 
         if (_isLong) {
-            openInterest = marketStorage[_assetId].openInterest.longOpenInterest;
+            openInterest = marketStorage[assetId].openInterest.longOpenInterest;
             pnl.longAverageEntryPriceUsd = MarketUtils.calculateWeightedAverageEntryPrice(
                 pnl.longAverageEntryPriceUsd, openInterest, _sizeDeltaUsd, _priceUsd
             );
-            marketStorage[_assetId].borrowing.weightedAvgCumulativeLong =
-                Borrowing.getNextAverageCumulative(this, _assetId, _sizeDeltaUsd, true);
+            marketStorage[assetId].borrowing.weightedAvgCumulativeLong =
+                Borrowing.getNextAverageCumulative(this, _ticker, _sizeDeltaUsd, true);
         } else {
-            openInterest = marketStorage[_assetId].openInterest.shortOpenInterest;
+            openInterest = marketStorage[assetId].openInterest.shortOpenInterest;
             pnl.shortAverageEntryPriceUsd = MarketUtils.calculateWeightedAverageEntryPrice(
                 pnl.shortAverageEntryPriceUsd, openInterest, _sizeDeltaUsd, _priceUsd
             );
-            marketStorage[_assetId].borrowing.weightedAvgCumulativeShort =
-                Borrowing.getNextAverageCumulative(this, _assetId, _sizeDeltaUsd, false);
+            marketStorage[assetId].borrowing.weightedAvgCumulativeShort =
+                Borrowing.getNextAverageCumulative(this, _ticker, _sizeDeltaUsd, false);
         }
     }
 
-    function _updateOpenInterest(bytes32 _assetId, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd) internal {
+    function _updateOpenInterest(string calldata _ticker, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
+        internal
+    {
         // Update the open interest
+        bytes32 assetId = keccak256(abi.encode(_ticker));
         if (_shouldAdd) {
             _isLong
-                ? marketStorage[_assetId].openInterest.longOpenInterest += _sizeDeltaUsd
-                : marketStorage[_assetId].openInterest.shortOpenInterest += _sizeDeltaUsd;
+                ? marketStorage[assetId].openInterest.longOpenInterest += _sizeDeltaUsd
+                : marketStorage[assetId].openInterest.shortOpenInterest += _sizeDeltaUsd;
         } else {
             _isLong
-                ? marketStorage[_assetId].openInterest.longOpenInterest -= _sizeDeltaUsd
-                : marketStorage[_assetId].openInterest.shortOpenInterest -= _sizeDeltaUsd;
+                ? marketStorage[assetId].openInterest.longOpenInterest -= _sizeDeltaUsd
+                : marketStorage[assetId].openInterest.shortOpenInterest -= _sizeDeltaUsd;
         }
     }
 
-    function updateImpactPool(bytes32 _assetId, int256 _priceImpactUsd) external onlyTradeStorage(address(this)) {
+    function updateImpactPool(string calldata _ticker, int256 _priceImpactUsd)
+        external
+        onlyTradeStorage(address(this))
+    {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
         _priceImpactUsd > 0
-            ? marketStorage[_assetId].impactPool += _priceImpactUsd.abs()
-            : marketStorage[_assetId].impactPool -= _priceImpactUsd.abs();
+            ? marketStorage[assetId].impactPool += _priceImpactUsd.abs()
+            : marketStorage[assetId].impactPool -= _priceImpactUsd.abs();
     }
 
     function _setAllocationsWithBits(uint256[] memory _allocations) internal {
@@ -569,7 +602,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         marketStorage[assetId].config = _config;
         marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
         marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
-        emit TokenAdded(assetId, _config);
+        emit TokenAdded(assetId);
     }
 
     function _deleteRequest(bytes32 _key) internal {

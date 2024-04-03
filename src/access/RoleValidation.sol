@@ -4,6 +4,7 @@ pragma solidity 0.8.23;
 import {RoleStorage} from "./RoleStorage.sol";
 import {Roles} from "./Roles.sol";
 
+// @audit - remove all keeper modifiers once the roles are properly set up
 contract RoleValidation {
     RoleStorage public immutable roleStorage;
 
@@ -36,6 +37,19 @@ contract RoleValidation {
 
     modifier onlyTradeStorage(address _market) {
         if (!roleStorage.hasTradeStorageRole(_market, msg.sender)) revert RoleValidation_AccessDenied();
+        _;
+    }
+
+    // @audit - check permissions
+    modifier onlyTradeStorageOrMarket(address _market) {
+        if (!roleStorage.hasTradeStorageRole(_market, msg.sender) && msg.sender != _market) {
+            revert RoleValidation_AccessDenied();
+        }
+        _;
+    }
+
+    modifier onlyMarket(address _market) {
+        if (msg.sender != _market) revert RoleValidation_AccessDenied();
         _;
     }
 

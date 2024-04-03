@@ -6,9 +6,9 @@ import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface IMarketMaker {
     event MarketMakerInitialized(address priceStorage);
-    event MarketCreated(address market, string ticker, bytes32 priceId);
-    event TokenAddedToMarket(address market, string ticker, bytes32 priceId);
-    event DefaultConfigSet(IMarket.Config defaultConfig);
+    event MarketCreated(address market, string ticker);
+    event TokenAddedToMarket(address market, string ticker);
+    event DefaultConfigSet();
     event MarketRequested(bytes32 requestKey, string indexTokenTicker);
 
     error MarketMaker_AlreadyInitialized();
@@ -34,6 +34,7 @@ interface IMarketMaker {
         string indexTokenTicker;
         string marketTokenName;
         string marketTokenSymbol;
+        uint256 baseUnit;
     }
 
     function initialize(
@@ -51,15 +52,7 @@ interface IMarketMaker {
     function executeNewMarket(bytes32 _requestKey) external returns (address);
     function tokenToMarket(string memory ticker) external view returns (address);
     function getMarkets() external view returns (address[] memory);
-    function requests(bytes32 _requestKey)
-        external
-        view
-        returns (
-            address owner,
-            string memory indexTokenTicker,
-            string memory marketTokenName,
-            string memory marketTokenSymbol
-        );
+    function getRequest(bytes32 _requestKey) external view returns (MarketRequest memory);
     function marketCreationFee() external view returns (uint256);
     function isMarket(address _market) external view returns (bool);
 }

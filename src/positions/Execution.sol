@@ -36,6 +36,8 @@ library Execution {
     error Execution_PositionNotActive();
     error Execution_PNLFactorNotReduced();
     error Execution_PositionExists();
+    error Execution_InvalidPriceRequest();
+    error Execution_InvalidRequestId();
 
     event AdlTargetRatioReached(address indexed market, int256 pnlFactor, bool isLong);
 
@@ -83,6 +85,7 @@ library Execution {
         IPriceFeed priceFeed,
         IReferralStorage referralStorage,
         bytes32 _orderKey,
+        bytes32 _requestId,
         address _feeReceiver
     ) external view returns (State memory state, Position.Request memory request) {
         // Fetch and validate request from key
@@ -90,10 +93,25 @@ library Execution {
         if (request.user == address(0)) revert Execution_InvalidRequestKey();
         if (_feeReceiver == address(0)) revert Execution_InvalidFeeReceiver();
         // Validate the request before continuing execution
-
+        if (request.input.isLimit) {
+            // Set the Request Id to the Provided Request Id
+            request.requestId = _requestId;
+            // If a limit order, the keeper should've requested a price update themselves
+            // Required to prevent front-runners from stealing keeper fees for TXs they didn't initiate
+            // MinTimeForExecution acts as a time buffer in which the keeper must execute the TX before it opens to the broader network
+            if (
+                priceFeed.getRequester(request.requestId) != _feeReceiver
+                    && block.timestamp < request.requestTimestamp + tradeStorage.minTimeForExecution()
+            ) {
+                revert Execution_InvalidPriceRequest();
+            }
+        } else if (request.requestId == bytes32(0)) {
+            revert Execution_InvalidRequestId();
+        }
         // Fetch and validate price
-        state =
-            cacheTokenPrices(priceFeed, state, request.input.assetId, request.input.isLong, request.input.isIncrease);
+        state = cacheTokenPrices(
+            priceFeed, state, request.input.ticker, request.requestId, request.input.isLong, request.input.isIncrease
+        );
 
         Position.validateRequest(market, request, state);
 
@@ -122,7 +140,7 @@ library Execution {
 
             MarketUtils.validateAllocation(
                 market,
-                request.input.assetId,
+                request.input.ticker,
                 request.input.sizeDelta,
                 state.collateralPrice,
                 state.collateralBaseUnit,
@@ -149,6 +167,7 @@ library Execution {
         ITradeStorage tradeStorage,
         IPriceFeed priceFeed,
         bytes32 _positionKey,
+        bytes32 _priceRequestId,
         uint256 _sizeDelta
     )
         external
@@ -164,17 +183,17 @@ library Execution {
         // Check the position in question is active
         position = tradeStorage.getPosition(_positionKey);
         if (position.positionSize == 0) revert Execution_PositionNotActive();
-        targetPnlFactor = MarketUtils.getAdlConfig(market, position.assetId).targetPnlFactor;
+        targetPnlFactor = MarketUtils.getAdlConfig(market, position.ticker).targetPnlFactor;
         // Get current MarketUtils and token data
-        state = cacheTokenPrices(priceFeed, state, position.assetId, position.isLong, false);
+        state = cacheTokenPrices(priceFeed, state, position.ticker, _priceRequestId, position.isLong, false);
 
         // Set the impacted price to the index price => 0 price impact on ADLs
         state.impactedPrice = state.indexPrice;
         state.priceImpactUsd = 0;
         // Get starting PNL Factor
-        startingPnlFactor = _getPnlFactor(market, state, position.assetId, position.isLong);
+        startingPnlFactor = _getPnlFactor(market, state, position.ticker, position.isLong);
         // fetch max pnl to pool ratio
-        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market, position.assetId);
+        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market, position.ticker);
 
         // Check the PNL Factor is greater than the max PNL Factor
         if (startingPnlFactor.abs() <= maxPnlFactor || startingPnlFactor < 0) {
@@ -223,7 +242,7 @@ library Execution {
         // Check the Leverage
         Position.checkLeverage(
             market,
-            _params.request.input.assetId,
+            _params.request.input.ticker,
             position.positionSize,
             mulDiv(position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit) // Collat in USD
         );
@@ -269,7 +288,7 @@ library Execution {
             revert Execution_LiquidatablePosition();
         }
         // Check the Leverage
-        Position.checkLeverage(market, _params.request.input.assetId, position.positionSize, remainingCollateralUsd);
+        Position.checkLeverage(market, _params.request.input.ticker, position.positionSize, remainingCollateralUsd);
         // Get Amount Out
         amountOut = _params.request.input.collateralDelta - _state.fee - _state.affiliateRebate - _state.borrowFee;
         // Add / Subtract funding fees
@@ -312,7 +331,7 @@ library Execution {
         Position.Data memory position = Position.generateNewPosition(market, _params.request, _state);
         // Check the Position's Leverage is Valid
         Position.checkLeverage(
-            market, _params.request.input.assetId, _params.request.input.sizeDelta, _state.collateralDeltaUsd
+            market, _params.request.input.ticker, _params.request.input.sizeDelta, _state.collateralDeltaUsd
         );
         // Validate the Position
         Position.validateNewPosition(
@@ -359,7 +378,7 @@ library Execution {
         // Check the Leverage
         Position.checkLeverage(
             market,
-            _params.request.input.assetId,
+            _params.request.input.ticker,
             position.positionSize,
             mulDiv(position.collateralAmount, _state.collateralPrice, _state.collateralBaseUnit)
         );
@@ -469,11 +488,11 @@ library Execution {
         State memory _state,
         int256 _startingPnlFactor,
         uint256 _targetPnlFactor,
-        bytes32 _assetId,
+        string memory _ticker,
         bool _isLong
     ) external {
         // Get the new PNL to pool ratio
-        int256 newPnlFactor = _getPnlFactor(market, _state, _assetId, _isLong);
+        int256 newPnlFactor = _getPnlFactor(market, _state, _ticker, _isLong);
         // PNL to pool has reduced
         if (newPnlFactor >= _startingPnlFactor) revert Execution_PNLFactorNotReduced();
         // Check if the new PNL to pool ratio is below the threshold
@@ -489,11 +508,14 @@ library Execution {
 
     /**
      * Cache the signed prices for each token
+     * If request is limit, the keeper should've requested a price update themselves.
+     * If the request is a market, simply fetch and fulfill the request, making sure it exists
      */
     function cacheTokenPrices(
         IPriceFeed priceFeed,
         State memory _state,
-        bytes32 _assetId,
+        string memory _indexTicker,
+        bytes32 _requestId,
         bool _isLong,
         bool _isIncrease
     ) public view returns (State memory) {
@@ -502,19 +524,21 @@ library Execution {
 
         // Fetch index price based on order type and direction
         _state.indexPrice = _isLong
-            ? _isIncrease ? Oracle.getMaxPrice(priceFeed, _assetId) : Oracle.getMinPrice(priceFeed, _assetId)
-            : _isIncrease ? Oracle.getMinPrice(priceFeed, _assetId) : Oracle.getMaxPrice(priceFeed, _assetId);
-
-        if (_state.indexPrice == 0) revert Execution_InvalidPriceRetrieval();
+            ? _isIncrease
+                ? Oracle.getMaxPrice(priceFeed, _requestId, _indexTicker)
+                : Oracle.getMinPrice(priceFeed, _requestId, _indexTicker)
+            : _isIncrease
+                ? Oracle.getMinPrice(priceFeed, _requestId, _indexTicker)
+                : Oracle.getMaxPrice(priceFeed, _requestId, _indexTicker);
 
         // Market Token Prices and Base Units
         (_state.longMarketTokenPrice, _state.shortMarketTokenPrice) =
-            Oracle.getMarketTokenPrices(priceFeed, maximizePrice);
+            Oracle.getMarketTokenPrices(priceFeed, _requestId, maximizePrice);
 
         _state.collateralPrice = _isLong ? _state.longMarketTokenPrice : _state.shortMarketTokenPrice;
         _state.collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
 
-        _state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _assetId);
+        _state.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexTicker);
 
         return _state;
     }
@@ -530,7 +554,7 @@ library Execution {
         uint256 _sizeDelta,
         bool _isIncrease
     ) internal view returns (Position.Data memory) {
-        _position.lastUpdate = block.timestamp;
+        _position.lastUpdate = uint64(block.timestamp);
         if (_isIncrease) {
             // Increase the Position's collateral
             _position.collateralAmount += _collateralDelta;
@@ -612,7 +636,7 @@ library Execution {
         // Calculate and subtract the funding fee
         (int256 fundingFeeUsd, int256 nextFundingAccrued) = Position.getFundingFeeDelta(
             market,
-            _params.request.input.assetId,
+            _params.request.input.ticker,
             _state.indexPrice,
             _params.request.input.sizeDelta,
             _position.fundingParams.lastFundingAccrued
@@ -643,7 +667,7 @@ library Execution {
 
         // Update the position's borrowing parameters
         (_position.borrowingParams.lastLongCumulativeBorrowFee, _position.borrowingParams.lastShortCumulativeBorrowFee)
-        = MarketUtils.getCumulativeBorrowFees(market, _position.assetId);
+        = MarketUtils.getCumulativeBorrowFees(market, _position.ticker);
 
         return (_position, borrowFee);
     }
@@ -651,14 +675,14 @@ library Execution {
     /**
      * Extrapolated into an internal function to prevent STD Errors
      */
-    function _getPnlFactor(IMarket market, Execution.State memory _state, bytes32 _assetId, bool _isLong)
+    function _getPnlFactor(IMarket market, Execution.State memory _state, string memory _ticker, bool _isLong)
         internal
         view
         returns (int256 pnlFactor)
     {
         pnlFactor = MarketUtils.getPnlFactor(
             market,
-            _assetId,
+            _ticker,
             _state.indexPrice,
             _state.indexBaseUnit,
             _state.collateralPrice,

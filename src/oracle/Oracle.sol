@@ -27,6 +27,9 @@ library Oracle {
         V2
     }
 
+    string private constant LONG_TICKER = "ETH";
+    string private constant SHORT_TICKER = "USDC";
+
     function isSequencerUp(IPriceFeed priceFeed) external view {
         address sequencerUptimeFeed = priceFeed.sequencerUptimeFeed();
         if (sequencerUptimeFeed != address(0)) {
@@ -51,27 +54,40 @@ library Oracle {
         }
     }
 
-    function getPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 price) {
-        price = priceFeed.getPrices(_assetId).med;
+    function getPrice(IPriceFeed priceFeed, bytes32 _requestId, string calldata _ticker)
+        external
+        view
+        returns (uint256 price)
+    {
+        price = priceFeed.getPrices(_requestId, _ticker).med;
         if (price == 0) revert Oracle_PriceNotSet();
     }
 
-    function getMaxPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 maxPrice) {
-        maxPrice = priceFeed.getPrices(_assetId).max;
+    function getMaxPrice(IPriceFeed priceFeed, bytes32 _requestId, string calldata _ticker)
+        external
+        view
+        returns (uint256 maxPrice)
+    {
+        maxPrice = priceFeed.getPrices(_requestId, _ticker).max;
         if (maxPrice == 0) revert Oracle_PriceNotSet();
     }
 
-    function getMinPrice(IPriceFeed priceFeed, bytes32 _assetId) external view returns (uint256 minPrice) {
-        minPrice = priceFeed.getPrices(_assetId).min;
+    function getMinPrice(IPriceFeed priceFeed, bytes32 _requestId, string calldata _ticker)
+        external
+        view
+        returns (uint256 minPrice)
+    {
+        minPrice = priceFeed.getPrices(_requestId, _ticker).min;
         if (minPrice == 0) revert Oracle_PriceNotSet();
     }
 
-    function getMarketTokenPrices(IPriceFeed priceFeed, bool _maximise)
+    function getMarketTokenPrices(IPriceFeed priceFeed, bytes32 _requestId, bool _maximise)
         external
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
-        (IPriceFeed.Price memory longPrices, IPriceFeed.Price memory shortPrices) = getMarketTokenPrices(priceFeed);
+        (IPriceFeed.Price memory longPrices, IPriceFeed.Price memory shortPrices) =
+            getMarketTokenPrices(priceFeed, _requestId);
         if (_maximise) {
             longPrice = longPrices.max;
             shortPrice = shortPrices.max;
@@ -82,13 +98,17 @@ library Oracle {
         if (longPrice == 0 || shortPrice == 0) revert Oracle_PriceNotSet();
     }
 
-    function getMarketTokenPrices(IPriceFeed priceFeed)
+    function getMarketTokenPrices(IPriceFeed priceFeed, bytes32 _requestId)
         public
         view
         returns (IPriceFeed.Price memory _longPrices, IPriceFeed.Price memory _shortPrices)
     {
-        _longPrices = priceFeed.getPrices(priceFeed.LONG_ASSET_ID());
-        _shortPrices = priceFeed.getPrices(priceFeed.SHORT_ASSET_ID());
+        _longPrices = priceFeed.getPrices(_requestId, LONG_TICKER);
+        _shortPrices = priceFeed.getPrices(_requestId, SHORT_TICKER);
+    }
+
+    function getBaseUnit(IPriceFeed priceFeed, string calldata _ticker) external view returns (uint256 baseUnit) {
+        baseUnit = priceFeed.baseUnits(_ticker);
     }
 
     /**

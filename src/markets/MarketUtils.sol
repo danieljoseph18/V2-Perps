@@ -408,13 +408,15 @@ library MarketUtils {
     }
 
     /// @dev Positive for profit, negative for loss. Returns PNL in USD
-    function getMarketPnl(IMarket market, bytes32 _assetId, uint256 _indexPrice, uint256 _indexBaseUnit, bool _isLong)
-        public
-        view
-        returns (int256 netPnl)
-    {
-        uint256 openInterest = getOpenInterest(market, _assetId, _isLong);
-        uint256 averageEntryPrice = getAverageEntryPrice(market, _assetId, _isLong);
+    function getMarketPnl(
+        IMarket market,
+        string memory _ticker,
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
+        bool _isLong
+    ) public view returns (int256 netPnl) {
+        uint256 openInterest = getOpenInterest(market, _ticker, _isLong);
+        uint256 averageEntryPrice = getAverageEntryPrice(market, _ticker, _isLong);
         if (openInterest == 0 || averageEntryPrice == 0) return 0;
         int256 priceDelta = _indexPrice.toInt256() - averageEntryPrice.toInt256();
         uint256 entryIndexAmount = mulDiv(openInterest, _indexBaseUnit, averageEntryPrice);
@@ -426,11 +428,13 @@ library MarketUtils {
     }
 
     // @audit - move to external computation
-    function calculateCumulativeMarketPnl(IMarket market, IPriceFeed priceFeed, bool _isLong, bool _maximise)
-        external
-        view
-        returns (int256 cumulativePnl)
-    {
+    function calculateCumulativeMarketPnl(
+        IMarket market,
+        IPriceFeed priceFeed,
+        bytes32 _priceRequestId,
+        bool _isLong,
+        bool _maximise
+    ) external view returns (int256 cumulativePnl) {
         /**
          * For each token in the market:
          * 1. Get the current price of the token
@@ -439,14 +443,15 @@ library MarketUtils {
          * 4. Calculate the PNL of the token
          * 5. Add the PNL to the cumulative PNL
          */
-        bytes32[] memory assetIds = market.getAssetIds();
+        string[] memory tickers = market.getTickers();
         // Max 100 Loops, so uint8 sufficient
-        for (uint8 i = 0; i < assetIds.length;) {
-            bytes32 assetId = assetIds[i];
-            uint256 indexPrice =
-                _maximise ? Oracle.getMaxPrice(priceFeed, assetId) : Oracle.getMinPrice(priceFeed, assetId);
-            uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, assetId);
-            int256 pnl = getMarketPnl(market, assetId, indexPrice, indexBaseUnit, _isLong);
+        for (uint8 i = 0; i < tickers.length;) {
+            string memory ticker = tickers[i];
+            uint256 indexPrice = _maximise
+                ? Oracle.getMaxPrice(priceFeed, _priceRequestId, ticker)
+                : Oracle.getMinPrice(priceFeed, _priceRequestId, ticker);
+            uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, ticker);
+            int256 pnl = getMarketPnl(market, ticker, indexPrice, indexBaseUnit, _isLong);
             cumulativePnl += pnl;
             unchecked {
                 ++i;
@@ -454,24 +459,24 @@ library MarketUtils {
         }
     }
 
-    function getNetMarketPnl(IMarket market, bytes32 _assetId, uint256 _indexPrice, uint256 _indexBaseUnit)
+    function getNetMarketPnl(IMarket market, string calldata _ticker, uint256 _indexPrice, uint256 _indexBaseUnit)
         external
         view
         returns (int256)
     {
-        int256 longPnl = getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, true);
-        int256 shortPnl = getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, false);
+        int256 longPnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, true);
+        int256 shortPnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, false);
         return longPnl + shortPnl;
     }
 
     function getTotalOiForMarket(IMarket market, bool _isLong) external view returns (uint256) {
         // get all asset ids from the market
-        bytes32[] memory assetIds = market.getAssetIds();
-        uint256 len = assetIds.length;
+        string[] memory tickers = market.getTickers();
+        uint256 len = tickers.length;
         // loop through all asset ids and sum the open interest
         uint256 totalOi;
         for (uint256 i = 0; i < len;) {
-            totalOi += getOpenInterest(market, assetIds[i], _isLong);
+            totalOi += getOpenInterest(market, tickers[i], _isLong);
             unchecked {
                 ++i;
             }
@@ -479,20 +484,25 @@ library MarketUtils {
         return totalOi;
     }
 
-    function getTotalPoolBalanceUsd(IMarket market, bytes32 _assetId, uint256 _longTokenPrice, uint256 _shortTokenPrice)
-        external
-        view
-        returns (uint256 poolBalanceUsd)
-    {
-        uint256 longPoolUsd = getPoolBalanceUsd(market, _assetId, _longTokenPrice, LONG_BASE_UNIT, true);
-        uint256 shortPoolUsd = getPoolBalanceUsd(market, _assetId, _shortTokenPrice, SHORT_BASE_UNIT, false);
+    function getTotalPoolBalanceUsd(
+        IMarket market,
+        string calldata _ticker,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice
+    ) external view returns (uint256 poolBalanceUsd) {
+        uint256 longPoolUsd = getPoolBalanceUsd(market, _ticker, _longTokenPrice, LONG_BASE_UNIT, true);
+        uint256 shortPoolUsd = getPoolBalanceUsd(market, _ticker, _shortTokenPrice, SHORT_BASE_UNIT, false);
         poolBalanceUsd = longPoolUsd + shortPoolUsd;
     }
 
     // In Collateral Tokens
-    function getPoolBalance(IMarket market, bytes32 _assetId, bool _isLong) public view returns (uint256 poolAmount) {
+    function getPoolBalance(IMarket market, string calldata _ticker, bool _isLong)
+        public
+        view
+        returns (uint256 poolAmount)
+    {
         // get the allocation percentage
-        uint256 allocationShare = getAllocation(market, _assetId);
+        uint256 allocationShare = getAllocation(market, _ticker);
         // get the total liquidity available for that side
         uint256 totalAvailableLiquidity = market.totalAvailableLiquidity(_isLong);
         // calculate liquidity allocated to the market for that side
@@ -501,55 +511,56 @@ library MarketUtils {
 
     function getPoolBalanceUsd(
         IMarket market,
-        bytes32 _assetId,
+        string calldata _ticker,
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 poolUsd) {
         // get the liquidity allocated to the market for that side
-        uint256 allocationInTokens = getPoolBalance(market, _assetId, _isLong);
+        uint256 allocationInTokens = getPoolBalance(market, _ticker, _isLong);
         // convert to usd
         poolUsd = mulDiv(allocationInTokens, _collateralTokenPrice, _collateralBaseUnit);
     }
 
     function validateAllocation(
         IMarket market,
-        bytes32 _assetId,
+        string calldata _ticker,
         uint256 _sizeDeltaUsd,
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) external view {
         // Get Max OI for side
-        uint256 availableUsd = getAvailableOiUsd(market, _assetId, _collateralTokenPrice, _collateralBaseUnit, _isLong);
+        uint256 availableUsd = getAvailableOiUsd(market, _ticker, _collateralTokenPrice, _collateralBaseUnit, _isLong);
         // Check SizeDelta USD won't push the OI over the max
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 
     // @audit - probably issues here. what about price fluctuations etc?
-    function getTotalAvailableOiUsd(IMarket market, bytes32 _assetId, uint256 _longTokenPrice, uint256 _shortTokenPrice)
-        external
-        view
-        returns (uint256 totalAvailableOiUsd)
-    {
-        uint256 longOiUsd = getAvailableOiUsd(market, _assetId, _longTokenPrice, LONG_BASE_UNIT, true);
-        uint256 shortOiUsd = getAvailableOiUsd(market, _assetId, _shortTokenPrice, SHORT_BASE_UNIT, false);
+    function getTotalAvailableOiUsd(
+        IMarket market,
+        string calldata _ticker,
+        uint256 _longTokenPrice,
+        uint256 _shortTokenPrice
+    ) external view returns (uint256 totalAvailableOiUsd) {
+        uint256 longOiUsd = getAvailableOiUsd(market, _ticker, _longTokenPrice, LONG_BASE_UNIT, true);
+        uint256 shortOiUsd = getAvailableOiUsd(market, _ticker, _shortTokenPrice, SHORT_BASE_UNIT, false);
         totalAvailableOiUsd = longOiUsd + shortOiUsd;
     }
 
     /// @notice returns the available remaining open interest for a side in USD
     function getAvailableOiUsd(
         IMarket market,
-        bytes32 _assetId,
+        string calldata _ticker,
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 availableOi) {
         // get the allocation and subtract by the markets reserveFactor
         uint256 remainingAllocationUsd =
-            getPoolBalanceUsd(market, _assetId, _collateralTokenPrice, _collateralBaseUnit, _isLong);
+            getPoolBalanceUsd(market, _ticker, _collateralTokenPrice, _collateralBaseUnit, _isLong);
 
-        uint256 reserveFactor = getReserveFactor(market, _assetId);
+        uint256 reserveFactor = getReserveFactor(market, _ticker);
 
         availableOi = remainingAllocationUsd - mulDiv(remainingAllocationUsd, reserveFactor, SCALAR);
     }
@@ -557,7 +568,7 @@ library MarketUtils {
     // The pnl factor is the ratio of the pnl to the pool usd
     function getPnlFactor(
         IMarket market,
-        bytes32 _assetId,
+        string calldata _ticker,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _collateralPrice,
@@ -565,12 +576,12 @@ library MarketUtils {
         bool _isLong
     ) external view returns (int256 pnlFactor) {
         // get pool usd (if 0 return 0)
-        uint256 poolUsd = getPoolBalanceUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, _isLong);
+        uint256 poolUsd = getPoolBalanceUsd(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
         if (poolUsd == 0) {
             return 0;
         }
         // get pnl
-        int256 pnl = getMarketPnl(market, _assetId, _indexPrice, _indexBaseUnit, _isLong);
+        int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
 
         uint256 factor = mulDiv(pnl.abs(), SCALAR, poolUsd);
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;
@@ -579,110 +590,126 @@ library MarketUtils {
     /**
      * ======================= Getter Functions =======================
      */
-    function getCumulativeBorrowFees(IMarket market, bytes32 _assetId)
+    function getCumulativeBorrowFees(IMarket market, string calldata _ticker)
         external
         view
         returns (uint256 longCumulativeBorrowFees, uint256 shortCumulativeBorrowFees)
     {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return (marketStorage.borrowing.longCumulativeBorrowFees, marketStorage.borrowing.shortCumulativeBorrowFees);
     }
 
-    function getCumulativeBorrowFee(IMarket market, bytes32 _assetId, bool _isLong) public view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getCumulativeBorrowFee(IMarket market, string calldata _ticker, bool _isLong)
+        public
+        view
+        returns (uint256)
+    {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return _isLong
             ? marketStorage.borrowing.longCumulativeBorrowFees
             : marketStorage.borrowing.shortCumulativeBorrowFees;
     }
 
-    function getLastFundingUpdate(IMarket market, bytes32 _assetId) external view returns (uint48) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getLastFundingUpdate(IMarket market, string calldata _ticker) external view returns (uint48) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.funding.lastFundingUpdate;
     }
 
-    function getFundingRates(IMarket market, bytes32 _assetId) external view returns (int256 rate, int256 velocity) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getFundingRates(IMarket market, string calldata _ticker)
+        external
+        view
+        returns (int256 rate, int256 velocity)
+    {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return (marketStorage.funding.fundingRate, marketStorage.funding.fundingRateVelocity);
     }
 
-    function getFundingAccrued(IMarket market, bytes32 _assetId) external view returns (int256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getFundingAccrued(IMarket market, string calldata _ticker) external view returns (int256) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.funding.fundingAccruedUsd;
     }
 
-    function getLastBorrowingUpdate(IMarket market, bytes32 _assetId) external view returns (uint48) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getLastBorrowingUpdate(IMarket market, string calldata _ticker) external view returns (uint48) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.borrowing.lastBorrowUpdate;
     }
 
-    function getBorrowingRate(IMarket market, bytes32 _assetId, bool _isLong) external view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getBorrowingRate(IMarket market, string calldata _ticker, bool _isLong) external view returns (uint256) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return _isLong ? marketStorage.borrowing.longBorrowingRate : marketStorage.borrowing.shortBorrowingRate;
     }
 
-    function getConfig(IMarket market, bytes32 _assetId) external view returns (IMarket.Config memory) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getConfig(IMarket market, string calldata _ticker) external view returns (IMarket.Config memory) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.config;
     }
 
-    function getFundingConfig(IMarket market, bytes32 _assetId) external view returns (IMarket.FundingConfig memory) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getFundingConfig(IMarket market, string calldata _ticker)
+        external
+        view
+        returns (IMarket.FundingConfig memory)
+    {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.config.funding;
     }
 
-    function getImpactConfig(IMarket market, bytes32 _assetId) external view returns (IMarket.ImpactConfig memory) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getImpactConfig(IMarket market, string calldata _ticker)
+        external
+        view
+        returns (IMarket.ImpactConfig memory)
+    {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.config.impact;
     }
 
-    function getAdlConfig(IMarket market, bytes32 _assetId) external view returns (IMarket.AdlConfig memory) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getAdlConfig(IMarket market, string calldata _ticker) external view returns (IMarket.AdlConfig memory) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.config.adl;
     }
 
-    function getReserveFactor(IMarket market, bytes32 _assetId) public view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getReserveFactor(IMarket market, string calldata _ticker) public view returns (uint256) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.config.reserveFactor;
     }
 
-    function getMaxLeverage(IMarket market, bytes32 _assetId) external view returns (uint32) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getMaxLeverage(IMarket market, string calldata _ticker) external view returns (uint32) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.config.maxLeverage;
     }
 
-    function getMaxPnlFactor(IMarket market, bytes32 _assetId) external view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getMaxPnlFactor(IMarket market, string calldata _ticker) external view returns (uint256) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.config.adl.maxPnlFactor;
     }
 
-    function getAllocation(IMarket market, bytes32 _assetId) public view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getAllocation(IMarket market, string calldata _ticker) public view returns (uint256) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.allocationPercentage;
     }
 
-    function getOpenInterest(IMarket market, bytes32 _assetId, bool _isLong) public view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getOpenInterest(IMarket market, string memory _ticker, bool _isLong) public view returns (uint256) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return _isLong ? marketStorage.openInterest.longOpenInterest : marketStorage.openInterest.shortOpenInterest;
     }
 
-    function getAverageEntryPrice(IMarket market, bytes32 _assetId, bool _isLong) public view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getAverageEntryPrice(IMarket market, string memory _ticker, bool _isLong) public view returns (uint256) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return _isLong ? marketStorage.pnl.longAverageEntryPriceUsd : marketStorage.pnl.shortAverageEntryPriceUsd;
     }
 
-    function getAverageCumulativeBorrowFee(IMarket market, bytes32 _assetId, bool _isLong)
+    function getAverageCumulativeBorrowFee(IMarket market, string calldata _ticker, bool _isLong)
         external
         view
         returns (uint256)
     {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return _isLong
             ? marketStorage.borrowing.weightedAvgCumulativeLong
             : marketStorage.borrowing.weightedAvgCumulativeShort;
     }
 
-    function getImpactPool(IMarket market, bytes32 _assetId) external view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_assetId);
+    function getImpactPool(IMarket market, string calldata _ticker) external view returns (uint256) {
+        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.impactPool;
     }
 
