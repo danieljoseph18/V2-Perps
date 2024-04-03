@@ -140,21 +140,6 @@ interface IMarket {
          * Price Impact Config Values
          */
         ImpactConfig impact;
-        /**
-         * ADL Config Values
-         */
-        AdlConfig adl;
-    }
-
-    struct AdlConfig {
-        /**
-         * Maximum PNL:POOL ratio before ADL is triggered.
-         */
-        uint256 maxPnlFactor;
-        /**
-         * The Pnl Factor the system aims to reduce the PNL:POOL ratio to.
-         */
-        uint256 targetPnlFactor;
     }
 
     struct FundingConfig {
@@ -168,11 +153,6 @@ interface IMarket {
          * Units: USD
          */
         int256 skewScale;
-        /**
-         * Level of pSkew beyond which funding rate starts to change
-         * Units: % Per Day
-         */
-        uint256 fundingVelocityClamp;
     }
 
     // Used to scale price impact per market
@@ -229,6 +209,14 @@ interface IMarket {
     error Market_MinimumAssetsReached();
     error Market_SingleAssetMarket();
     error Market_InvalidBorrowScale();
+    error Market_InvalidLeverage();
+    error Market_InvalidReserveFactor();
+    error Market_InvalidMaxVelocity();
+    error Market_InvalidSkewScale();
+    error Market_InvalidSkewScalar();
+    error Market_InvalidLiquidityScalar();
+    error Market_InvalidAllocation();
+    error Market_InvalidPriceRequest();
 
     /**
      * ================ Events ================
@@ -248,10 +236,9 @@ interface IMarket {
     event FeesAccumulated(uint256 amount, bool _isLong);
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
     event RequestCanceled(bytes32 indexed key, address indexed caller);
+    event PoolOwnershipTransferred(address indexed newOwner);
 
     // Admin functions
-
-    function updateFees(address _poolOwner, address _feeDistributor) external;
 
     // Trading related functions
     function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external;
@@ -290,8 +277,14 @@ interface IMarket {
      * ================ Functions ================
      */
     function initialize(address _tradeStorage, uint256 _borrowScale) external;
-    function addToken(Config memory _config, string memory _ticker, uint256[] calldata _newAllocations) external;
-    function removeToken(string memory _ticker, uint256[] calldata _newAllocations) external;
+    function addToken(
+        Config calldata _config,
+        string memory _ticker,
+        uint256[] calldata _newAllocations,
+        bytes32 _priceRequestId
+    ) external;
+    function removeToken(string memory _ticker, uint256[] calldata _newAllocations, bytes32 _priceRequestId)
+        external;
     function updateMarketState(
         string memory _ticker,
         uint256 _sizeDelta,
@@ -302,7 +295,7 @@ interface IMarket {
         bool _isIncrease
     ) external;
     function updateImpactPool(string memory _ticker, int256 _priceImpactUsd) external;
-    function setAllocationsWithBits(uint256[] memory _allocations) external;
+    function reallocate(uint256[] memory _allocations, bytes32 _priceRequestId) external;
 
     function tradeStorage() external view returns (address);
     function MARKET_TOKEN() external view returns (IMarketToken);
@@ -316,4 +309,7 @@ interface IMarket {
     function shortTokensReserved() external view returns (uint256);
     function isAssetInMarket(string memory _ticker) external view returns (bool);
     function getTickers() external view returns (string[] memory);
+    function FUNDING_VELOCITY_CLAMP() external view returns (uint64);
+    function MAX_PNL_FACTOR() external view returns (uint64);
+    function MAX_ADL_PERCENTAGE() external view returns (uint64);
 }

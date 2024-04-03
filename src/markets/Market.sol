@@ -31,10 +31,31 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     // Max 100 assets per market (could fit 12 more in last uint256, but 100 used for simplicity)
     // Fits 16 allocations per uint256
     uint8 private constant MAX_ASSETS = 100;
+    uint32 private constant MIN_LEVERAGE = 100; // Min 1x Leverage
+    uint32 private constant MAX_LEVERAGE = 1000_00; // Max 1000x leverage
+    uint64 private constant MIN_RESERVE_FACTOR = 0.1e18; // 10% reserve factor
+    uint64 private constant MAX_RESERVE_FACTOR = 0.5e18; // 50% reserve factor
     uint64 private constant SCALING_FACTOR = 1e18;
     uint64 private constant MIN_BORROW_SCALE = 0.0001e18; // 0.01% per day
     uint64 private constant MAX_BORROW_SCALE = 0.01e18; // 1% per day
     uint64 public constant BASE_FEE = 0.001e18; // 0.1%
+    int64 private constant MIN_VELOCITY = 0.001e18; // 0.1% per day
+    int64 private constant MAX_VELOCITY = 0.2e18; // 20% per day
+    int256 private constant MIN_SKEW_SCALE = 1000e30; // $1000
+    int256 private constant MAX_SKEW_SCALE = 10_000_000_000e30; // $10 Bn
+    int64 private constant SIGNED_SCALAR = 1e18;
+    string private constant LONG_TICKER = "ETH";
+    string private constant SHORT_TICKER = "USDC";
+    /**
+     * Level of pSkew beyond which funding rate starts to change
+     * Units: % Per Day
+     */
+    uint64 public constant FUNDING_VELOCITY_CLAMP = 0.00001e18; // 0.001% per day
+    /**
+     * Maximum PNL:POOL ratio before ADL is triggered.
+     */
+    uint64 public constant MAX_PNL_FACTOR = 0.45e18; // 45%
+    uint64 public constant MAX_ADL_PERCENTAGE = 0.5e18; // Can only ADL up to 50% of a position
     // Value = Max Bonus Fee
     // Users will be charged a % of this fee based on the skew of the market
     uint256 public constant FEE_SCALE = 0.01e18; // 1%
@@ -114,7 +135,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      *  ========================= Constructor  =========================
      */
     constructor(
-        Config memory _tokenConfig,
+        Config memory _config,
         address _poolOwner,
         address _feeReceiver,
         address _feeDistributor,
@@ -130,9 +151,17 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         poolOwner = _poolOwner;
         feeDistributor = _feeDistributor;
         feeReceiver = _feeReceiver;
-        uint256[] memory allocations = new uint256[](1);
-        allocations[0] = 10000 << 240;
-        _addToken(_tokenConfig, _ticker, allocations);
+        bytes32 assetId = MarketUtils.generateAssetId(_ticker);
+        if (assetIds.contains(assetId)) revert Market_TokenAlreadyExists();
+        if (!assetIds.add(assetId)) revert Market_FailedToAddAssetId();
+        // Add Ticker
+        tickers.push(_ticker);
+        // Initialize Storage
+        marketStorage[assetId].allocationPercentage = 1e18;
+        marketStorage[assetId].config = _config;
+        marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
+        marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
+        emit TokenAdded(assetId);
     }
 
     receive() external payable {
@@ -155,40 +184,59 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         poolOwner = _newOwner;
     }
 
-    function addToken(Config memory _config, string memory _ticker, uint256[] calldata _newAllocations)
-        external
-        onlyMarketFactory
-    {
+    function addToken(
+        Config calldata _config,
+        string memory _ticker,
+        uint256[] calldata _newAllocations,
+        bytes32 _priceRequestId
+    ) external onlyConfigurator(address(this)) nonReentrant {
         if (assetIds.length() >= MAX_ASSETS) revert Market_MaxAssetsReached();
         if (!isMultiAssetMarket) isMultiAssetMarket = true;
-        _addToken(_config, _ticker, _newAllocations);
+        _addToken(_config, _ticker, _newAllocations, _priceRequestId);
     }
 
-    function removeToken(string memory _ticker, uint256[] calldata _newAllocations) external onlyAdmin {
+    // @audit - need to add pricing here and open up to the pool owner too.
+    function removeToken(string memory _ticker, uint256[] calldata _newAllocations, bytes32 _priceRequestId)
+        external
+        onlyConfigurator(address(this))
+        nonReentrant
+    {
         bytes32 assetId = MarketUtils.generateAssetId(_ticker);
         if (!assetIds.contains(assetId)) revert Market_TokenDoesNotExist();
         uint256 len = assetIds.length();
         if (len == 1) revert Market_MinimumAssetsReached();
         if (!assetIds.remove(assetId)) revert Market_FailedToRemoveAssetId();
 
+        // Fetch token prices
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert Market_InvalidPriceRequest();
+        uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
+        uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
+
         // If length after removal is 1, set isMultiAssetMarket to false
         if (len == 2) {
             isMultiAssetMarket = false;
             uint256[] memory allocations = new uint256[](1);
             allocations[0] = 10000 << 240;
-            _setAllocationsWithBits(allocations);
+            _reallocate(allocations, longTokenPrice, shortTokenPrice);
         } else {
-            _setAllocationsWithBits(_newAllocations);
+            _reallocate(_newAllocations, longTokenPrice, shortTokenPrice);
         }
+        // Clear the prices
+        priceFeed.clearSignedPrices(this, _priceRequestId);
 
         delete marketStorage[assetId];
         emit TokenRemoved(assetId);
     }
 
-    function updateFees(address _poolOwner, address _feeDistributor) external onlyConfigurator(address(this)) {
-        if (_poolOwner == address(0)) revert Market_InvalidPoolOwner();
+    function transferOwnership(address _newPoolOwner) external {
+        if (msg.sender != poolOwner || _newPoolOwner == address(0)) revert Market_InvalidPoolOwner();
+        poolOwner = _newPoolOwner;
+        emit PoolOwnershipTransferred(_newPoolOwner);
+    }
+
+    function updateFeeDistributor(address _feeDistributor) external onlyAdmin {
         if (_feeDistributor == address(0)) revert Market_InvalidFeeDistributor();
-        poolOwner = _poolOwner;
         feeDistributor = _feeDistributor;
     }
 
@@ -197,13 +245,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         borrowScale = _borrowScale;
     }
 
-    /**
-     * @dev Sensitive Function. Config must be validated before calling this function.
-     * Unrealistic values may lead to unexpected behavior in the system.
-     * Permissions restricted to only a super-user.
-     */
-    // @audit - should we make this configurable by users, then just contrain the inputs?
-    function updateConfig(Config memory _config, string calldata _ticker) external onlyAdmin {
+    function updateConfig(Config calldata _config, string calldata _ticker) external onlyAdmin {
+        _validateConfig(_config);
         bytes32 assetId = keccak256(abi.encode(_ticker));
         marketStorage[assetId].config = _config;
         emit MarketConfigUpdated(assetId);
@@ -212,10 +255,21 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Market State Functions  =========================
      */
-    // @audit - need to make it so users can't lower allocation below current Oi
-    function setAllocationsWithBits(uint256[] memory _allocations) external onlyStateKeeper {
+    /// @dev - Caller must've requested a price before calling this function
+    function reallocate(uint256[] memory _allocations, bytes32 _priceRequestId)
+        external
+        onlyConfigurator(address(this))
+        nonReentrant
+    {
         if (!isMultiAssetMarket) revert Market_SingleAssetMarket();
-        _setAllocationsWithBits(_allocations);
+        // Fetch token prices
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert Market_InvalidPriceRequest();
+        uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
+        uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
+        _reallocate(_allocations, longTokenPrice, shortTokenPrice);
+        // Clear the prices
+        priceFeed.clearSignedPrices(this, _priceRequestId);
     }
 
     function updateMarketState(
@@ -571,17 +625,25 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             : marketStorage[assetId].impactPool -= _priceImpactUsd.abs();
     }
 
-    function _setAllocationsWithBits(uint256[] memory _allocations) internal {
-        bytes32[] memory assets = assetIds.values();
-        uint256 assetLen = assets.length;
+    function _reallocate(uint256[] memory _allocations, uint256 _longSignedPrice, uint256 _shortSignedPrice) internal {
+        // Copy tickers to memory
+        string[] memory assetTickers = tickers;
+        uint256 assetLen = assetTickers.length;
         uint256 total;
         uint256 len = _allocations.length;
         for (uint256 i = 0; i < len;) {
             uint256 allocation = _allocations[i];
             for (uint256 j = 0; j < 16 && i * 16 + j < assetLen;) {
+                // Extract Allocation Value using bitshifting
                 uint256 allocationValue = (allocation >> (240 - j * 16)) & BITMASK_16;
+                // Increment Total
                 total += allocationValue;
-                marketStorage[assets[i * 16 + j]].allocationPercentage = allocationValue;
+                // Update Storage -> hash ticker to get assetId
+                bytes32 assetId = keccak256(abi.encode(assetTickers[i * 16 + j]));
+                marketStorage[assetId].allocationPercentage = allocationValue;
+                // Check the allocation value -> new max open interest must be > current open interest
+                _validateOpenInterest(assetTickers[i * 16 + j], assetId, _longSignedPrice, _shortSignedPrice);
+                // Iterate
                 unchecked {
                     ++j;
                 }
@@ -594,11 +656,29 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         if (total != TOTAL_ALLOCATION) revert Market_InvalidCumulativeAllocation();
     }
 
-    function _addToken(Config memory _config, string memory _ticker, uint256[] memory _newAllocations) internal {
+    function _addToken(
+        Config calldata _config,
+        string memory _ticker,
+        uint256[] memory _newAllocations,
+        bytes32 _priceRequestId
+    ) internal {
         bytes32 assetId = MarketUtils.generateAssetId(_ticker);
         if (assetIds.contains(assetId)) revert Market_TokenAlreadyExists();
         if (!assetIds.add(assetId)) revert Market_FailedToAddAssetId();
-        _setAllocationsWithBits(_newAllocations);
+        // Valdiate Config
+        _validateConfig(_config);
+        // Add Ticker
+        tickers.push(_ticker);
+        // Fetch token prices
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert Market_InvalidPriceRequest();
+        uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
+        uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
+        // Reallocate
+        _reallocate(_newAllocations, longTokenPrice, shortTokenPrice);
+        // Clear the prices
+        priceFeed.clearSignedPrices(this, _priceRequestId);
+        // Initialize Storage
         marketStorage[assetId].config = _config;
         marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
         marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
@@ -642,5 +722,65 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         returns (bytes32)
     {
         return keccak256(abi.encode(_owner, _tokenIn, _tokenAmount, _isDeposit));
+    }
+
+    function _validateOpenInterest(
+        string memory _ticker,
+        bytes32 _assetId,
+        uint256 _longSignedPrice,
+        uint256 _shortSignedPrice
+    ) internal view {
+        // Get the Long Max Oi
+        uint256 longMaxOi = MarketUtils.getAvailableOiUsd(this, _ticker, _longSignedPrice, LONG_BASE_UNIT, true);
+        // Get the Current oi
+        uint256 longCurrentOi = marketStorage[_assetId].openInterest.longOpenInterest;
+        if (longMaxOi < longCurrentOi) revert Market_InvalidAllocation();
+        // Get the Short Max Oi
+        uint256 shortMaxOi = MarketUtils.getAvailableOiUsd(this, _ticker, _shortSignedPrice, SHORT_BASE_UNIT, false);
+        // Get the Current oi
+        uint256 shortCurrentOi = marketStorage[_assetId].openInterest.shortOpenInterest;
+        if (shortMaxOi < shortCurrentOi) revert Market_InvalidAllocation();
+    }
+
+    function _validateConfig(Config memory _config) internal pure {
+        /* 1. Validate the initial inputs */
+        // Check Leverage is within bounds
+        if (_config.maxLeverage < MIN_LEVERAGE || _config.maxLeverage > MAX_LEVERAGE) revert Market_InvalidLeverage();
+        // Check the Reserve Factor is within bounds
+        if (_config.reserveFactor < MIN_RESERVE_FACTOR || _config.reserveFactor > MAX_RESERVE_FACTOR) {
+            revert Market_InvalidReserveFactor();
+        }
+        /* 2. Validate the Funding Values */
+        // Check the Max Velocity is within bounds
+        if (_config.funding.maxVelocity < MIN_VELOCITY || _config.funding.maxVelocity > MAX_VELOCITY) {
+            revert Market_InvalidMaxVelocity();
+        }
+        // Check the Skew Scale is within bounds
+        if (_config.funding.skewScale < MIN_SKEW_SCALE || _config.funding.skewScale > MAX_SKEW_SCALE) {
+            revert Market_InvalidSkewScale();
+        }
+        /* 3. Validate Impact Values */
+        // Check Skew Scalars are > 0 and <= 100%
+        if (_config.impact.positiveSkewScalar <= 0 || _config.impact.positiveSkewScalar > SIGNED_SCALAR) {
+            revert Market_InvalidSkewScalar();
+        }
+        if (_config.impact.negativeSkewScalar <= 0 || _config.impact.negativeSkewScalar > SIGNED_SCALAR) {
+            revert Market_InvalidSkewScalar();
+        }
+        // Check negative skew scalar is >= positive skew scalar
+        if (_config.impact.negativeSkewScalar < _config.impact.positiveSkewScalar) {
+            revert Market_InvalidSkewScalar();
+        }
+        // Check Liquidity Scalars are > 0 and <= 100%
+        if (_config.impact.positiveLiquidityScalar <= 0 || _config.impact.positiveLiquidityScalar > SIGNED_SCALAR) {
+            revert Market_InvalidLiquidityScalar();
+        }
+        if (_config.impact.negativeLiquidityScalar <= 0 || _config.impact.negativeLiquidityScalar > SIGNED_SCALAR) {
+            revert Market_InvalidLiquidityScalar();
+        }
+        // Check negative liquidity scalar is >= positive liquidity scalar
+        if (_config.impact.negativeLiquidityScalar < _config.impact.positiveLiquidityScalar) {
+            revert Market_InvalidLiquidityScalar();
+        }
     }
 }

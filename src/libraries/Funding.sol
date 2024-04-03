@@ -56,7 +56,7 @@ library Funding {
         // Get the proportionalSkew
         int256 proportionalSkew = mulDivSigned(_skew, SIGNED_PRECISION, funding.skewScale);
         // Check if the absolute value of proportionalSkew is less than the fundingVelocityClamp
-        if (proportionalSkew.abs() < funding.fundingVelocityClamp) {
+        if (proportionalSkew.abs() < market.FUNDING_VELOCITY_CLAMP()) {
             return 0;
         }
         // Bound between -1e18 and 1e18

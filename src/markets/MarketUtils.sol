@@ -662,11 +662,6 @@ library MarketUtils {
         return marketStorage.config.impact;
     }
 
-    function getAdlConfig(IMarket market, string calldata _ticker) external view returns (IMarket.AdlConfig memory) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.config.adl;
-    }
-
     function getReserveFactor(IMarket market, string calldata _ticker) public view returns (uint256) {
         IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.config.reserveFactor;
@@ -677,9 +672,8 @@ library MarketUtils {
         return marketStorage.config.maxLeverage;
     }
 
-    function getMaxPnlFactor(IMarket market, string calldata _ticker) external view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.config.adl.maxPnlFactor;
+    function getMaxPnlFactor(IMarket market) external view returns (uint256) {
+        return market.MAX_PNL_FACTOR();
     }
 
     function getAllocation(IMarket market, string calldata _ticker) public view returns (uint256) {

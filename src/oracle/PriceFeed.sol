@@ -23,19 +23,22 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
 
     uint256 public constant PRICE_DECIMALS = 30;
     // Uniswap V3 Router address on Network
-    address public constant UNISWAP_V3_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    address public immutable UNISWAP_V3_ROUTER;
     // Uniswap V3 Factory address on Network
-    address public constant UNISWAP_V3_FACTORY = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
+    address public immutable UNISWAP_V3_FACTORY;
     // WETH address on Network
-    address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address public immutable WETH;
     // LINK address on Network
-    address public constant LINK = 0x514910771AF9Ca656af840dff83E8264EcF986CA;
+    address public immutable LINK;
+    // donID - Sepolia = 0x66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000
+    // Check to get the donID for your supported network https://docs.chain.link/chainlink-functions/supported-networks
+    bytes32 private immutable DON_ID;
+    // Router address - Hardcoded for Sepolia = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0
+    // Check to get the router address for your supported network https://docs.chain.link/chainlink-functions/supported-networks
+    address private immutable ROUTER;
 
     IMarketFactory public marketFactory;
 
-    // Router address - Hardcoded for Sepolia
-    // Check to get the router address for your supported network https://docs.chain.link/chainlink-functions/supported-networks
-    address router = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0;
     address public sequencerUptimeFeed;
     uint64 subscriptionId;
     bool private isInitialized;
@@ -47,15 +50,11 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
 
     //Callback gas limit
     uint256 public gasOverhead;
-    uint32 public callbackGasLimit;
     uint256 public premiumFee;
     uint256 public fallbackWeiToLinkRatio;
     address public nativeLinkPriceFeed;
+    uint32 public callbackGasLimit;
     uint256 public timeToExpiration;
-
-    // donID - Hardcoded for Sepolia
-    // Check to get the donID for your supported network https://docs.chain.link/chainlink-functions/supported-networks
-    bytes32 donID = 0x66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000;
 
     // State variable to store the returned character information
     mapping(bytes32 requestId => mapping(string ticker => Price priceResponse)) private prices;
@@ -74,12 +73,25 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     /**
      * @notice Initializes the contract with the Chainlink router address and sets the contract owner
      */
-    constructor(address _marketFactory, uint64 _subId, address _roleStorage)
-        FunctionsClient(router)
-        RoleValidation(_roleStorage)
-    {
-        subscriptionId = _subId;
+    constructor(
+        address _marketFactory,
+        address _weth,
+        address _link,
+        address _uniV3Router,
+        address _uniV3Factory,
+        uint64 _subId,
+        bytes32 _donId,
+        address _router,
+        address _roleStorage
+    ) FunctionsClient(_router) RoleValidation(_roleStorage) {
         marketFactory = IMarketFactory(_marketFactory);
+        WETH = _weth;
+        LINK = _link;
+        UNISWAP_V3_ROUTER = _uniV3Router;
+        UNISWAP_V3_FACTORY = _uniV3Factory;
+        subscriptionId = _subId;
+        DON_ID = _donId;
+        ROUTER = _router;
     }
 
     function initialize(
@@ -120,6 +132,14 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         nativeLinkPriceFeed = _nativeLinkPriceFeed;
     }
 
+    function setJavascriptSourceCode(string memory _priceUpdateSource, string memory _cumulativePnlSource)
+        external
+        onlyAdmin
+    {
+        priceUpdateSource = _priceUpdateSource;
+        cumulativePnlSource = _cumulativePnlSource;
+    }
+
     function supportAsset(string memory _ticker, uint256 _baseUnit) external onlyMarketFactory {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (assetIds.contains(assetId)) return; // Return if already supported
@@ -146,6 +166,12 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         timeToExpiration = _timeToExpiration;
     }
 
+    function clearInvalidRequest(bytes32 _requestId) external onlyAdmin {
+        if (requestIds.contains(_requestId)) {
+            if (!requestIds.remove(_requestId)) revert PriceFeed_FailedToClearRequest();
+        }
+    }
+
     /**
      * @notice Sends an HTTP request for character information
      * @param args The arguments to pass to the HTTP request -> should be the tickers for which pricing is requested
@@ -168,7 +194,7 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         req.setArgs(args); // Set the arguments for the request
 
         // Send the request and store the request ID
-        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, donID);
+        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, DON_ID);
 
         requestData[requestId].requestType = RequestType.PRICE_UPDATE;
         requestData[requestId].requester = _requester;
@@ -202,7 +228,7 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         if (tickers.length > 0) req.setArgs(tickers); // Set the arguments for the request
 
         // Send the request and store the request ID
-        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, donID);
+        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, DON_ID);
 
         requestData[requestId].requestType = RequestType.CUMULATIVE_PNL;
         requestData[requestId].requester = _requester;
@@ -364,5 +390,9 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
 
     function getRequester(bytes32 _requestId) external view returns (address) {
         return requestData[_requestId].requester;
+    }
+
+    function getRequests() external view returns (bytes32[] memory) {
+        return requestIds.values();
     }
 }

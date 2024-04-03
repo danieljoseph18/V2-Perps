@@ -33,6 +33,9 @@ interface ITradeStorage {
     error TradeStorage_StopLossAlreadySet();
     error TradeStorage_TakeProfitAlreadySet();
     error TradeStorage_InvalidRequestType();
+    error TradeStorage_InvalidAdlFee();
+    error TradeStorage_InvalidFeeForExecution();
+    error TradeStorage_InvalidExecutionTime();
 
     function initialize(
         uint256 _liquidationFee, // 0.05e18 = 5%

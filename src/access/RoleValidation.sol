@@ -40,7 +40,6 @@ contract RoleValidation {
         _;
     }
 
-    // @audit - check permissions
     modifier onlyTradeStorageOrMarket(address _market) {
         if (!roleStorage.hasTradeStorageRole(_market, msg.sender) && msg.sender != _market) {
             revert RoleValidation_AccessDenied();

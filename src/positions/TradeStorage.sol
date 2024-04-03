@@ -24,8 +24,16 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
 
-    uint256 private constant MAX_LIQUIDATION_FEE = 0.5e18; // 50%
+    uint256 private constant MAX_LIQUIDATION_FEE = 0.1e18; // 10%
+    uint256 private constant MIN_LIQUIDATION_FEE = 0.001e18; // 1%
     uint256 private constant MAX_TRADING_FEE = 0.01e18; // 1%
+    uint256 private constant MIN_TRADING_FEE = 0.00001e18; // 0.001%
+    uint256 private constant MAX_ADL_FEE = 0.05e18; // 5%
+    uint256 private constant MIN_ADL_FEE = 0.0001e18; // 0.01%
+    uint256 private constant MAX_FEE_FOR_EXECUTION = 0.3e18; // 30%
+    uint256 private constant MIN_FEE_FOR_EXECUTION = 0.05e18; // 5%
+    uint256 private constant MAX_TIME_TO_EXPIRATION = 3 minutes;
+    uint256 private constant MIN_TIME_TO_EXPIRATION = 20 seconds;
 
     mapping(bytes32 _key => Position.Request _order) private orders;
     EnumerableSet.Bytes32Set private marketOrderKeys;
@@ -61,8 +69,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     function initialize(
         uint256 _liquidationFee, // 0.05e18 = 5%
         uint256 _positionFee, // 0.001e18 = 0.1%
-        uint256 _adlFee,
-        uint256 _feeForExecution,
+        uint256 _adlFee, // Percentage of the output amount that goes to the ADL executor, 18 D.P
+        uint256 _feeForExecution, // Percentage of the Trading Fee that goes to the keeper, 18 D.P
         uint256 _minCollateralUsd, // 2e30 = 2 USD
         uint256 _minCancellationTime, // e.g 1 minutes
         uint256 _minTimeForExecution // e.g 1 minutes
@@ -81,23 +89,36 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     // Time until a position request can be cancelled by a user
     function setMinCancellationTime(uint256 _minCancellationTime) external onlyConfigurator(address(market)) {
+        if (_minCancellationTime > MAX_TIME_TO_EXPIRATION || _minCancellationTime < MIN_TIME_TO_EXPIRATION) {
+            revert TradeStorage_InvalidExecutionTime();
+        }
         minCancellationTime = _minCancellationTime;
     }
 
     // Time until a position request can be executed by the broader keeper network
     function setMinTimeForExecution(uint256 _minTimeForExecution) external onlyConfigurator(address(market)) {
+        if (_minTimeForExecution > MAX_TIME_TO_EXPIRATION || _minTimeForExecution < MIN_TIME_TO_EXPIRATION) {
+            revert TradeStorage_InvalidExecutionTime();
+        }
         minTimeForExecution = _minTimeForExecution;
     }
 
-    // @audit - add boundaries for all fees or hardode them
     function setFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
         external
         onlyConfigurator(address(market))
     {
-        if (!(_liquidationFee <= MAX_LIQUIDATION_FEE && _liquidationFee != 0)) {
+        if (_liquidationFee > MAX_LIQUIDATION_FEE || _liquidationFee < MIN_LIQUIDATION_FEE) {
             revert TradeStorage_InvalidLiquidationFee();
         }
-        if (!(_positionFee <= MAX_TRADING_FEE && _positionFee != 0)) revert TradeStorage_InvalidTradingFee();
+        if (_positionFee > MAX_TRADING_FEE || _positionFee < MIN_TRADING_FEE) {
+            revert TradeStorage_InvalidTradingFee();
+        }
+        if (_adlFee > MAX_ADL_FEE || _adlFee < MIN_ADL_FEE) {
+            revert TradeStorage_InvalidAdlFee();
+        }
+        if (_feeForExecution > MAX_FEE_FOR_EXECUTION || _feeForExecution < MIN_FEE_FOR_EXECUTION) {
+            revert TradeStorage_InvalidFeeForExecution();
+        }
         liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
         adlFee = _adlFee;
@@ -197,7 +218,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (position.user == address(0)) revert TradeStorage_PositionDoesNotExist();
         // Construct the Execution State
         Execution.State memory state;
-        // @audit - is this the right price returned ? (min vs max vs med)
         state = Execution.cacheTokenPrices(priceFeed, state, position.ticker, _requestId, position.isLong, false);
         // No price impact on Liquidations
         state.impactedPrice = state.indexPrice;
@@ -215,9 +235,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - needs more constraints before we can make permissionless
-    // e.g max percentage to adl a position by
-    // e.g only allow adl on profitable positions above a threshold
-    // e.g only allow reduction of the pnl factor by so much
+    // - only allow adl on profitable positions above a threshold
+    // - only allow reduction of the pnl factor by so much
+    // - how do we make sure that users can only ADL the most profitable positions?
     function executeAdl(bytes32 _positionKey, bytes32 _requestId, uint256 _sizeDelta, address _feeReceiver)
         external
         onlyPositionManager
@@ -228,7 +248,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             Execution.State memory state,
             Position.Settlement memory params,
             Position.Data memory position,
-            uint256 targetPnlFactor,
             int256 startingPnlFactor
         ) = Execution.constructAdlOrder(
             market, this, priceFeed, _positionKey, _requestId, _sizeDelta, adlFee, _feeReceiver
@@ -250,9 +269,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         priceFeed.clearSignedPrices(market, _requestId);
 
         // Validate the Adl
-        Execution.validateAdl(
-            market, state, startingPnlFactor, targetPnlFactor, params.request.input.ticker, position.isLong
-        );
+        Execution.validateAdl(market, state, startingPnlFactor, params.request.input.ticker, position.isLong);
 
         emit AdlExecuted(address(market), _positionKey, _sizeDelta, position.isLong);
     }

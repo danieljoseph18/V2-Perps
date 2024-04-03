@@ -191,29 +191,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         _deleteMarketRequest(_requestKey);
     }
 
-    /// @dev - Only the Admin can create multi-asset markets
-    function addTokenToMarket(
-        IMarket market,
-        string memory _ticker,
-        uint256 _baseUnit,
-        uint256[] calldata _newAllocations
-    ) external onlyAdmin nonReentrant {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        if (assetId == bytes32(0)) revert MarketFactory_InvalidAsset();
-        if (_baseUnit == 0) revert MarketFactory_InvalidBaseUnit();
-        if (!markets.contains(address(market))) revert MarketFactory_MarketDoesNotExist();
-
-        // Set Up Price Oracle
-        priceFeed.supportAsset(_ticker, _baseUnit);
-        // Cache
-        address marketAddress = address(market);
-        // Add to Market
-        market.addToken(defaultConfig, _ticker, _newAllocations);
-
-        // Fire Event
-        emit TokenAddedToMarket(marketAddress, _ticker);
-    }
-
     /**
      * ========================= Getter Functions =========================
      */

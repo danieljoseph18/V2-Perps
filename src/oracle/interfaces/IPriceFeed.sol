@@ -52,6 +52,7 @@ interface IPriceFeed {
     error PriceFeed_PnlNotSigned();
     error PriceFeed_AlreadyInitialized();
     error PriceFeed_PriceExpired();
+    error PriceFeed_FailedToClearRequest();
 
     // Event to log responses
     event Response(bytes32 indexed requestId, RequestData requestData, bytes response, bytes err);

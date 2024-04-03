@@ -37,6 +37,7 @@ library Execution {
     error Execution_PositionExists();
     error Execution_InvalidPriceRequest();
     error Execution_InvalidRequestId();
+    error Execution_InvalidAdlDelta();
 
     event AdlTargetRatioReached(address indexed market, int256 pnlFactor, bool isLong);
 
@@ -178,14 +179,12 @@ library Execution {
             State memory state,
             Position.Settlement memory params,
             Position.Data memory position,
-            uint256 targetPnlFactor,
             int256 startingPnlFactor
         )
     {
         // Check the position in question is active
         position = tradeStorage.getPosition(_positionKey);
         if (position.positionSize == 0) revert Execution_PositionNotActive();
-        targetPnlFactor = MarketUtils.getAdlConfig(market, position.ticker).targetPnlFactor;
         // Get current MarketUtils and token data
         state = cacheTokenPrices(priceFeed, state, position.ticker, _priceRequestId, position.isLong, false);
 
@@ -195,11 +194,16 @@ library Execution {
         // Get starting PNL Factor
         startingPnlFactor = _getPnlFactor(market, state, position.ticker, position.isLong);
         // fetch max pnl to pool ratio
-        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market, position.ticker);
+        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market);
 
         // Check the PNL Factor is greater than the max PNL Factor
         if (startingPnlFactor.abs() <= maxPnlFactor || startingPnlFactor < 0) {
             revert Execution_PnlToPoolRatioNotExceeded(startingPnlFactor, maxPnlFactor);
+        }
+
+        // Check the Size Delta is < Max Percentage Delta
+        if (_sizeDelta > mulDiv(position.positionSize, market.MAX_ADL_PERCENTAGE(), PRECISION)) {
+            revert Execution_InvalidAdlDelta();
         }
 
         // Construct an ADL Order
@@ -496,19 +500,13 @@ library Execution {
         IMarket market,
         State memory _state,
         int256 _startingPnlFactor,
-        uint256 _targetPnlFactor,
         string memory _ticker,
         bool _isLong
-    ) external {
+    ) external view {
         // Get the new PNL to pool ratio
         int256 newPnlFactor = _getPnlFactor(market, _state, _ticker, _isLong);
         // PNL to pool has reduced
         if (newPnlFactor >= _startingPnlFactor) revert Execution_PNLFactorNotReduced();
-        // Check if the new PNL to pool ratio is below the threshold
-        // Fire event to alert the keepers
-        if (newPnlFactor.abs() <= _targetPnlFactor) {
-            emit AdlTargetRatioReached(address(market), newPnlFactor, _isLong);
-        }
     }
 
     /**
