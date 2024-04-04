@@ -16,8 +16,8 @@ import {MarketUtils} from "./MarketUtils.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 
-// @audit - optimize. Can probably remove some stuff
-contract Market is IMarket, RoleValidation, ReentrancyGuard {
+/// @dev - Vault can support the trading of multiple assets under the same liquidity.
+contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SignedMath for int256;
     using SafeERC20 for IERC20;
@@ -185,6 +185,50 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         poolOwner = _newOwner;
     }
 
+    function addToken(
+        Config calldata _config,
+        string memory _ticker,
+        uint256[] calldata _newAllocations,
+        bytes32 _priceRequestId
+    ) external onlyConfigurator(address(this)) nonReentrant {
+        if (assetIds.length() >= MAX_ASSETS) revert Market_MaxAssetsReached();
+        if (!isMultiAssetMarket) isMultiAssetMarket = true;
+        _addToken(_config, _ticker, _newAllocations, _priceRequestId);
+    }
+
+    function removeToken(string memory _ticker, uint256[] calldata _newAllocations, bytes32 _priceRequestId)
+        external
+        onlyConfigurator(address(this))
+        nonReentrant
+    {
+        bytes32 assetId = MarketUtils.generateAssetId(_ticker);
+        if (!assetIds.contains(assetId)) revert Market_TokenDoesNotExist();
+        uint256 len = assetIds.length();
+        if (len == 1) revert Market_MinimumAssetsReached();
+        if (!assetIds.remove(assetId)) revert Market_FailedToRemoveAssetId();
+
+        // Fetch token prices
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert Market_InvalidPriceRequest();
+        uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
+        uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
+
+        // If length after removal is 1, set isMultiAssetMarket to false
+        if (len == 2) {
+            isMultiAssetMarket = false;
+            uint256[] memory allocations = new uint256[](1);
+            allocations[0] = 10000 << 240;
+            _reallocate(allocations, longTokenPrice, shortTokenPrice, _priceRequestId);
+        } else {
+            _reallocate(_newAllocations, longTokenPrice, shortTokenPrice, _priceRequestId);
+        }
+        // Clear the prices
+        priceFeed.clearSignedPrices(this, _priceRequestId);
+
+        delete marketStorage[assetId];
+        emit TokenRemoved(assetId);
+    }
+
     function transferOwnership(address _newPoolOwner) external {
         if (msg.sender != poolOwner || _newPoolOwner == address(0)) revert Market_InvalidPoolOwner();
         poolOwner = _newPoolOwner;
@@ -211,6 +255,23 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Market State Functions  =========================
      */
+    /// @dev - Caller must've requested a price before calling this function
+    function reallocate(uint256[] memory _allocations, bytes32 _priceRequestId)
+        external
+        onlyConfigurator(address(this))
+        nonReentrant
+    {
+        if (!isMultiAssetMarket) revert Market_SingleAssetMarket();
+        // Fetch token prices
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert Market_InvalidPriceRequest();
+        uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
+        uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
+        _reallocate(_allocations, longTokenPrice, shortTokenPrice, _priceRequestId);
+        // Clear the prices
+        priceFeed.clearSignedPrices(this, _priceRequestId);
+    }
+
     function updateMarketState(
         string calldata _ticker,
         uint256 _sizeDelta,
@@ -570,6 +631,74 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             : marketStorage[assetId].impactPool -= _priceImpactUsd.abs();
     }
 
+    /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
+    function _reallocate(
+        uint256[] memory _allocations,
+        uint256 _longSignedPrice,
+        uint256 _shortSignedPrice,
+        bytes32 _priceRequestId
+    ) internal {
+        // Copy tickers to memory
+        string[] memory assetTickers = tickers;
+        uint256 assetLen = assetTickers.length;
+        uint256 total;
+        uint256 len = _allocations.length;
+        for (uint256 i = 0; i < len;) {
+            uint256 allocation = _allocations[i];
+            for (uint256 j = 0; j < 16 && i * 16 + j < assetLen;) {
+                // Extract Allocation Value using bitshifting
+                uint256 allocationValue = (allocation >> (240 - j * 16)) & BITMASK_16;
+                // Increment Total
+                total += allocationValue;
+                // Update Storage -> hash ticker to get assetId
+                bytes32 assetId = keccak256(abi.encode(assetTickers[i * 16 + j]));
+                marketStorage[assetId].allocationPercentage = allocationValue;
+                // Check the allocation value -> new max open interest must be > current open interest
+                _validateOpenInterest(
+                    assetTickers[i * 16 + j], assetId, _priceRequestId, _longSignedPrice, _shortSignedPrice
+                );
+                // Iterate
+                unchecked {
+                    ++j;
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (total != TOTAL_ALLOCATION) revert Market_InvalidCumulativeAllocation();
+    }
+
+    function _addToken(
+        Config calldata _config,
+        string memory _ticker,
+        uint256[] memory _newAllocations,
+        bytes32 _priceRequestId
+    ) internal {
+        bytes32 assetId = MarketUtils.generateAssetId(_ticker);
+        if (assetIds.contains(assetId)) revert Market_TokenAlreadyExists();
+        if (!assetIds.add(assetId)) revert Market_FailedToAddAssetId();
+        // Valdiate Config
+        _validateConfig(_config);
+        // Add Ticker
+        tickers.push(_ticker);
+        // Fetch token prices
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert Market_InvalidPriceRequest();
+        uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
+        uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
+        // Reallocate
+        _reallocate(_newAllocations, longTokenPrice, shortTokenPrice, _priceRequestId);
+        // Clear the prices
+        priceFeed.clearSignedPrices(this, _priceRequestId);
+        // Initialize Storage
+        marketStorage[assetId].config = _config;
+        marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
+        marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
+        emit TokenAdded(assetId);
+    }
+
     function _deleteRequest(bytes32 _key) internal {
         if (!requestKeys.remove(_key)) revert Market_FailedToRemoveRequest();
         delete requests[_key];
@@ -607,6 +736,33 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         returns (bytes32)
     {
         return keccak256(abi.encode(_owner, _tokenIn, _tokenAmount, _isDeposit));
+    }
+
+    function _validateOpenInterest(
+        string memory _ticker,
+        bytes32 _assetId,
+        bytes32 _priceRequestId,
+        uint256 _longSignedPrice,
+        uint256 _shortSignedPrice
+    ) internal view {
+        // Get the index price and the index base unit
+        IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
+        uint256 indexPrice = priceFeed.getPrices(_priceRequestId, _ticker).med;
+        uint256 indexBaseUnit = priceFeed.baseUnits(_ticker);
+        // Get the Long Max Oi
+        uint256 longMaxOi = MarketUtils.getAvailableOiUsd(
+            this, _ticker, indexPrice, _longSignedPrice, indexBaseUnit, LONG_BASE_UNIT, true
+        );
+        // Get the Current oi
+        uint256 longCurrentOi = marketStorage[_assetId].openInterest.longOpenInterest;
+        if (longMaxOi < longCurrentOi) revert Market_InvalidAllocation();
+        // Get the Short Max Oi
+        uint256 shortMaxOi = MarketUtils.getAvailableOiUsd(
+            this, _ticker, indexPrice, _shortSignedPrice, indexBaseUnit, SHORT_BASE_UNIT, false
+        );
+        // Get the Current oi
+        uint256 shortCurrentOi = marketStorage[_assetId].openInterest.shortOpenInterest;
+        if (shortMaxOi < shortCurrentOi) revert Market_InvalidAllocation();
     }
 
     function _validateConfig(Config memory _config) internal pure {

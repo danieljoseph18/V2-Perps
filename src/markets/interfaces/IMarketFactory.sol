@@ -28,8 +28,10 @@ interface IMarketFactory {
     error MarketFactory_InvalidOwner();
     error MarketFactory_InvalidFee();
     error MarketFactory_RequestDoesNotExist();
+    error MarketFactory_AccessDenied();
 
     struct MarketRequest {
+        bool isMultiAsset;
         address owner;
         string indexTokenTicker;
         string marketTokenName;
@@ -50,7 +52,6 @@ interface IMarketFactory {
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function requestNewMarket(MarketRequest calldata _request) external payable;
     function executeNewMarket(bytes32 _requestKey) external returns (address);
-    function tokenToMarket(string memory ticker) external view returns (address);
     function getMarkets() external view returns (address[] memory);
     function getRequest(bytes32 _requestKey) external view returns (MarketRequest memory);
     function marketCreationFee() external view returns (uint256);

@@ -37,7 +37,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     event DepositRequestCreated(IMarket market, address owner, address tokenIn, uint256 amountIn);
     event WithdrawalRequestCreated(IMarket market, address owner, address tokenOut, uint256 amountOut);
     event PositionRequestCreated(
-        address market, string ticker, bool isLong, bool isIncrease, uint256 sizeDelta, uint256 collateralDelta
+        IMarket market, string ticker, bool isLong, bool isIncrease, uint256 sizeDelta, uint256 collateralDelta
     );
     event PriceUpdateRequested(bytes32 requestId, string[] tickers, address requester);
     event PnlRequested(bytes32 requestId, IMarket market, address requester);
@@ -163,10 +163,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit WithdrawalRequestCreated(market, _owner, _tokenOut, _marketTokenAmountIn);
     }
 
-    function createPositionRequest(Position.Input memory _trade) external payable nonReentrant {
-        // Get the market to direct the user to
-        address market = marketFactory.tokenToMarket(_trade.ticker);
-
+    function createPositionRequest(IMarket market, Position.Input memory _trade) external payable nonReentrant {
         /**
          * 3 Cases:
          * 1. Position with no Conditionals -> Gas.Action.POSITION
@@ -217,9 +214,9 @@ contract Router is ReentrancyGuard, RoleValidation {
         bytes32 priceRequestId = _trade.isLimit ? bytes32(0) : _requestPriceUpdate(priceUpdateFee, _trade.ticker);
 
         // Construct the state for Order Creation
-        bytes32 positionKey = Position.validateInputParameters(_trade, market);
+        bytes32 positionKey = Position.validateInputParameters(_trade, address(market));
 
-        ITradeStorage tradeStorage = ITradeStorage(IMarket(market).tradeStorage());
+        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
 
         Position.Data memory position = tradeStorage.getPosition(positionKey);
 

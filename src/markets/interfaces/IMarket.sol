@@ -277,14 +277,6 @@ interface IMarket {
      * ================ Functions ================
      */
     function initialize(address _tradeStorage, uint256 _borrowScale) external;
-    function addToken(
-        Config calldata _config,
-        string memory _ticker,
-        uint256[] calldata _newAllocations,
-        bytes32 _priceRequestId
-    ) external;
-    function removeToken(string memory _ticker, uint256[] calldata _newAllocations, bytes32 _priceRequestId)
-        external;
     function updateMarketState(
         string calldata _ticker,
         uint256 _sizeDelta,
@@ -296,7 +288,6 @@ interface IMarket {
         bool _isIncrease
     ) external;
     function updateImpactPool(string memory _ticker, int256 _priceImpactUsd) external;
-    function reallocate(uint256[] memory _allocations, bytes32 _priceRequestId) external;
 
     function tradeStorage() external view returns (address);
     function MARKET_TOKEN() external view returns (IMarketToken);

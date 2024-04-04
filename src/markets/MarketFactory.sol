@@ -5,6 +5,7 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Market, IMarket} from "./Market.sol";
+import {MultiAssetMarket} from "./MultiAssetMarket.sol";
 import {MarketToken} from "./MarketToken.sol";
 import {TradeStorage} from "../positions/TradeStorage.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -35,8 +36,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     EnumerableSet.AddressSet private markets;
     EnumerableSet.Bytes32Set private requestKeys;
     mapping(bytes32 requestKey => MarketRequest) private requests;
-    mapping(string ticker => address market) public tokenToMarket;
-    uint256[] private defaultAllocation;
 
     bool private isInitialized;
     IMarket.Config public defaultConfig;
@@ -46,7 +45,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     constructor(address _weth, address _usdc, address _roleStorage) RoleValidation(_roleStorage) {
         WETH = _weth;
         USDC = _usdc;
-        defaultAllocation.push(10000 << 240);
     }
 
     function initialize(
@@ -105,9 +103,9 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         if (_request.owner != msg.sender) revert MarketFactory_InvalidOwner();
         // 3. Base Unit should be non-zero
         if (_request.baseUnit == 0) revert MarketFactory_InvalidBaseUnit();
-        // 8. Market shouldn't already exist for that asset
-        if (tokenToMarket[_request.indexTokenTicker] != address(0)) {
-            revert MarketFactory_MarketExists();
+        if (_request.isMultiAsset) {
+            // Caller must have the admin role
+            if (!roleStorage.hasRole(Roles.DEFAULT_ADMIN_ROLE, msg.sender)) revert MarketFactory_AccessDenied();
         }
 
         /* Generate a differentiated Request Key based on the inputs */
@@ -131,11 +129,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
 
         /* Validate and Update the Request */
 
-        // 1. If asset already has a market, delete request and return
-        if (tokenToMarket[request.indexTokenTicker] != address(0)) {
-            _deleteMarketRequest(_requestKey);
-            return address(0);
-        }
         // 2. Make sure Market token name and symbol are < 32 bytes for gas efficiency
         if (bytes(request.marketTokenName).length > 32 || bytes(request.marketTokenSymbol).length > 32) {
             _deleteMarketRequest(_requestKey);
@@ -148,17 +141,32 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         MarketToken marketToken =
             new MarketToken(request.marketTokenName, request.marketTokenSymbol, address(roleStorage));
         // Create new Market contract
-        Market market = new Market(
-            defaultConfig,
-            request.owner,
-            feeReceiver,
-            address(feeDistributor),
-            WETH,
-            USDC,
-            address(marketToken),
-            request.indexTokenTicker,
-            address(roleStorage)
-        );
+        IMarket market;
+        if (request.isMultiAsset) {
+            market = new MultiAssetMarket(
+                defaultConfig,
+                request.owner,
+                feeReceiver,
+                address(feeDistributor),
+                WETH,
+                USDC,
+                address(marketToken),
+                request.indexTokenTicker,
+                address(roleStorage)
+            );
+        } else {
+            market = new Market(
+                defaultConfig,
+                request.owner,
+                feeReceiver,
+                address(feeDistributor),
+                WETH,
+                USDC,
+                address(marketToken),
+                request.indexTokenTicker,
+                address(roleStorage)
+            );
+        }
         // Create new TradeStorage contract
         TradeStorage tradeStorage = new TradeStorage(market, referralStorage, priceFeed, address(roleStorage));
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
@@ -169,7 +177,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // Add to Storage
         bool success = markets.add(address(market));
         if (!success) revert MarketFactory_FailedToAddMarket();
-        tokenToMarket[request.indexTokenTicker] = address(market);
 
         // Set Up Roles -> Enable Caller to control Market
         roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender, msg.sender));

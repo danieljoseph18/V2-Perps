@@ -556,9 +556,6 @@ library MarketUtils {
     }
 
     /// @notice returns the available remaining open interest for a side in USD
-    // @audit - should use the relative values of all positions
-    // need to get the market pnl. If it's positive (side is in profit) subtract the profit from the available oi
-    // if it's in net loss, do nothing to the available oi.
     function getAvailableOiUsd(
         IMarket market,
         string calldata _ticker,
@@ -578,6 +575,7 @@ library MarketUtils {
         if (pnl > 0) {
             availableOi -= pnl.abs();
         }
+        // no negative case, as OI hasn't been freed / realised
     }
 
     // The pnl factor is the ratio of the pnl to the pool usd
