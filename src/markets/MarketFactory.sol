@@ -15,6 +15,8 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {IReferralStorage} from "../referrals/ReferralStorage.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
+import {LiquidityLocker} from "../rewards/LiquidityLocker.sol";
+import {TransferStakedTokens} from "../rewards/TransferStakedTokens.sol";
 import {Roles} from "../access/Roles.sol";
 
 /// @dev Needs MarketFactory Role
@@ -26,6 +28,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     IReferralStorage referralStorage;
     IFeeDistributor feeDistributor;
     IPositionManager positionManager;
+    TransferStakedTokens transferStakedTokens;
 
     uint256 private constant MAX_FEE_TO_OWNER = 0.3e18; // 30%
     uint256 private constant MAX_HEARTBEAT_DURATION = 1 days;
@@ -62,6 +65,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         referralStorage = IReferralStorage(_referralStorage);
         feeDistributor = IFeeDistributor(_feeDistributor);
         positionManager = IPositionManager(_positionManager);
+        transferStakedTokens = new TransferStakedTokens();
         defaultConfig = _defaultConfig;
         feeReceiver = _feeReceiver;
         marketCreationFee = _marketCreationFee;
@@ -172,14 +176,15 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
             string(abi.encodePacked("s", request.marketTokenSymbol)),
             address(roleStorage)
         );
-        // @audit - also deploy liquidity locker and TransferStakedTokens
+        // Deploy LiquidityLocker
+        LiquidityLocker liquidityLocker =
+            new LiquidityLocker(address(rewardTracker), address(transferStakedTokens), WETH, USDC, address(roleStorage));
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
         market.initialize(address(tradeStorage), address(rewardTracker), 0.003e18);
         // Initialize TradeStorage with Default values
         tradeStorage.initialize(0.05e18, 0.001e18, 0.005e18, 0.1e18, 2e30, 10 seconds, 1 minutes);
         // Initialize RewardTracker with Default values
-        // Initialize Liquidity Locker and TransferStakedTokens
-        // @audit
+        rewardTracker.initialize(address(marketToken), address(feeDistributor), address(liquidityLocker));
         // Add to Storage
         bool success = markets.add(address(market));
         if (!success) revert MarketFactory_FailedToAddMarket();

@@ -180,7 +180,7 @@ library MarketUtils {
     function calculateWithdrawalAmounts(IMarket.ExecuteWithdrawal calldata _params)
         external
         view
-        returns (uint256 tokenAmountOut, uint256 fee)
+        returns (uint256 tokenAmountOut)
     {
         // Validate the Amount Out vs Expected Amount out
         uint256 expectedOut = calculateWithdrawalAmount(
@@ -198,7 +198,7 @@ library MarketUtils {
         if (_params.amountOut != expectedOut) revert MarketUtils_InvalidAmountOut(_params.amountOut, expectedOut);
 
         // Calculate Fee on the Amount Out
-        fee = calculateWithdrawalFee(
+        uint256 fee = calculateWithdrawalFee(
             _params.longPrices.med,
             _params.shortPrices.med,
             _params.market.longTokenBalance(),

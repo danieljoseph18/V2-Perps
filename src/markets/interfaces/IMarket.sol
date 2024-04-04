@@ -196,48 +196,22 @@ interface IMarket {
     error Market_FailedToRemoveRequest();
     error Market_InsufficientCollateral();
     error Market_TokenAlreadyExists();
-    error Market_TokenDoesNotExist();
-    error Market_PriceIsZero();
-    error Market_InvalidCumulativeAllocation();
     error Market_FailedToAddAssetId();
     error Market_FailedToRemoveAssetId();
     error Market_AlreadyInitialized();
-    error Market_MaxAssetsReached();
     error Market_FailedToTransferETH();
-    error Market_RequestNotOwner();
-    error Market_RequestNotExpired();
     error Market_InvalidETHTransfer();
-    error Market_MinimumAssetsReached();
     error Market_InvalidBorrowScale();
-    error Market_InvalidLeverage();
-    error Market_InvalidReserveFactor();
-    error Market_InvalidMaxVelocity();
-    error Market_InvalidSkewScale();
-    error Market_InvalidSkewScalar();
-    error Market_InvalidLiquidityScalar();
-    error Market_InvalidAllocation();
-    error Market_InvalidPriceRequest();
-    error Market_InvalidTicker();
+    error Market_InvalidCaller();
+    error Market_SingleAssetMarket();
 
     /**
      * ================ Events ================
      */
     event TokenAdded(bytes32 indexed assetId);
-    event TokenRemoved(bytes32 indexed assetId);
     event MarketConfigUpdated(bytes32 indexed assetId);
-    event MarketStateUpdated(string ticker, bool isLong);
     event Market_Initialzied();
-    event RequestCreated(bytes32 indexed key, address indexed owner, address tokenIn, uint256 amountIn, bool isDeposit);
-    event DepositExecuted(
-        bytes32 indexed key, address indexed owner, address tokenIn, uint256 amountIn, uint256 mintAmount
-    );
-    event WithdrawalExecuted(
-        bytes32 indexed key, address indexed owner, address tokenOut, uint256 marketTokenAmountIn, uint256 amountOut
-    );
     event FeesAccumulated(uint256 amount, bool _isLong);
-    event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
-    event RequestCanceled(bytes32 indexed key, address indexed caller);
-    event PoolOwnershipTransferred(address indexed newOwner);
 
     // Admin functions
 
@@ -306,4 +280,24 @@ interface IMarket {
     function FUNDING_VELOCITY_CLAMP() external view returns (uint64);
     function MAX_PNL_FACTOR() external view returns (uint64);
     function MAX_ADL_PERCENTAGE() external view returns (uint64);
+
+    function deleteRequest(bytes32 _key) external;
+    function addRequest(Input calldata _request) external;
+    function requestExists(bytes32 _key) external view returns (bool);
+    function setFunding(FundingValues calldata _funding, string calldata _ticker) external;
+    function setBorrowing(BorrowingValues calldata _borrowing, string calldata _ticker) external;
+    function setWeightedAverages(
+        uint256 _averageEntryPrice,
+        uint256 _weightedAvgCumulative,
+        string calldata _ticker,
+        bool _isLong
+    ) external;
+    function updateOpenInterest(string calldata _ticker, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
+        external;
+    function setAllocationPercentage(string calldata _ticker, uint256 _allocationPercentage) external;
+    function addAsset(string calldata _ticker) external;
+    function removeAsset(string calldata _ticker) external;
+    function setConfig(string calldata _ticker, Config calldata _config) external;
+    function setLastUpdate(string calldata _ticker) external;
+    function getState() external view returns (State memory);
 }

@@ -36,6 +36,7 @@ interface ITradeStorage {
     error TradeStorage_InvalidAdlFee();
     error TradeStorage_InvalidFeeForExecution();
     error TradeStorage_InvalidExecutionTime();
+    error TradeStorage_InvalidCaller();
 
     function initialize(
         uint256 _liquidationFee, // 0.05e18 = 5%
@@ -68,4 +69,42 @@ interface ITradeStorage {
     function minCancellationTime() external view returns (uint256);
     function minTimeForExecution() external view returns (uint256);
     function priceFeed() external view returns (IPriceFeed);
+    function minCollateralUsd() external view returns (uint256);
+    function liquidationFee() external view returns (uint256);
+
+    function deleteOrder(bytes32 _orderKey, bool _isLimit) external;
+    function updateMarketState(
+        Execution.State memory _state,
+        string memory _ticker,
+        uint256 _sizeDelta,
+        bool _isLong,
+        bool _isIncrease
+    ) external;
+    function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external;
+    function createPosition(Position.Data calldata _position, bytes32 _positionKey) external;
+    function payFees(
+        uint256 _borrowAmount,
+        uint256 _positionFee,
+        uint256 _affiliateRebate,
+        address _referrer,
+        bool _isLong
+    ) external;
+    function createOrder(Position.Request memory _request) external returns (bytes32 orderKey);
+    function reserveLiquidity(
+        uint256 _sizeDeltaUsd,
+        uint256 _collateralDelta,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        address _user,
+        bool _isLong
+    ) external;
+    function unreserveLiquidity(
+        uint256 _sizeDeltaUsd,
+        uint256 _collateralDelta,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        address _user,
+        bool _isLong
+    ) external;
+    function deletePosition(bytes32 _positionKey, bool _isLong) external;
 }

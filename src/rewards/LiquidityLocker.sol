@@ -81,7 +81,7 @@ contract LiquidityLocker is ILiquidityLocker, RoleValidation, ReentrancyGuard {
         if (rewardTracker.balanceOf(msg.sender) < amount) revert LiquidityLocker_InsufficientFunds();
         uint64 duration = _getDuration(tier);
 
-        stakeTransferrer.transferFrom(msg.sender, address(this), amount);
+        stakeTransferrer.transferFrom(msg.sender, address(this), address(rewardTracker), amount);
 
         _updateRewards(msg.sender);
 
@@ -126,7 +126,7 @@ contract LiquidityLocker is ILiquidityLocker, RoleValidation, ReentrancyGuard {
             }
         }
 
-        stakeTransferrer.transfer(msg.sender, position.depositAmount);
+        stakeTransferrer.transfer(msg.sender, address(rewardTracker), position.depositAmount);
 
         emit LiquidityLocker_LiquidityUnlocked(msg.sender, index, position.depositAmount, position.tier);
     }

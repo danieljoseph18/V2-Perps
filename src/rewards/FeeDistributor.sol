@@ -10,13 +10,6 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 
-/**
- * - Tokens are sent into this contract by markets.
- * - Tokens consist of WETH and USDC
- * - When these tokens are received, store them in a data structure, with who they were received from
- * - Map markets to their respective reward trackers
- * - Reward trackers distribute fees from their share of the reward pool
- */
 contract FeeDistributor is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IERC20;
 
@@ -51,6 +44,9 @@ contract FeeDistributor is ReentrancyGuard, RoleValidation {
         usdc = _usdc;
     }
 
+    /**
+     * =================================== Core Functions ===================================
+     */
     function accumulateFees(uint256 _wethAmount, uint256 _usdcAmount) external {
         if (!marketFactory.isMarket(msg.sender)) revert FeeDistributor_InvalidMarket();
         IMarket market = IMarket(msg.sender);
@@ -98,8 +94,11 @@ contract FeeDistributor is ReentrancyGuard, RoleValidation {
         emit Distribute(market, wethAmount, usdcAmount);
     }
 
+    /**
+     * =================================== Getter Functions ===================================
+     */
     function pendingRewards(IMarket _market) public view returns (uint256 wethAmount, uint256 usdcAmount) {
-        FeeParams storage feeParams = accumulatedFees[_market];
+        FeeParams memory feeParams = accumulatedFees[_market];
         uint256 timeSinceLastUpdate = block.timestamp - feeParams.lastDistributionTime;
         if (block.timestamp == feeParams.lastDistributionTime) return (0, 0);
         uint256 wethReward = feeParams.wethTokensPerInterval * timeSinceLastUpdate;
@@ -113,7 +112,7 @@ contract FeeDistributor is ReentrancyGuard, RoleValidation {
         view
         returns (uint256 wethTokensPerInterval, uint256 usdcTokensPerInterval)
     {
-        FeeParams storage feeParams = accumulatedFees[_market];
+        FeeParams memory feeParams = accumulatedFees[_market];
         return (feeParams.wethTokensPerInterval, feeParams.usdcTokensPerInterval);
     }
 }
