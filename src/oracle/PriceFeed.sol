@@ -45,6 +45,12 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
 
     // JavaScript source code
     // Hard code the javascript source code here for each request's execution function
+    /**
+     * Price Sources:
+     * - Aggregate CEXs
+     * - CryptoCompare
+     * - CMC / CoinGecko
+     */
     string priceUpdateSource = "";
     string cumulativePnlSource = "";
 

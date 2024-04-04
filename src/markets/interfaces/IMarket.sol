@@ -5,6 +5,7 @@ import {IMarket} from "./IMarket.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {IMarketToken} from "./IMarketToken.sol";
+import {IRewardTracker} from "../../rewards/interfaces/IRewardTracker.sol";
 
 interface IMarket {
     /**
@@ -207,7 +208,6 @@ interface IMarket {
     error Market_RequestNotExpired();
     error Market_InvalidETHTransfer();
     error Market_MinimumAssetsReached();
-    error Market_SingleAssetMarket();
     error Market_InvalidBorrowScale();
     error Market_InvalidLeverage();
     error Market_InvalidReserveFactor();
@@ -217,6 +217,7 @@ interface IMarket {
     error Market_InvalidLiquidityScalar();
     error Market_InvalidAllocation();
     error Market_InvalidPriceRequest();
+    error Market_InvalidTicker();
 
     /**
      * ================ Events ================
@@ -272,11 +273,12 @@ interface IMarket {
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total);
     function getRequest(bytes32 _key) external view returns (Input memory);
     function getRequestAtIndex(uint256 _index) external view returns (Input memory);
+    function rewardTracker() external view returns (IRewardTracker);
 
     /**
      * ================ Functions ================
      */
-    function initialize(address _tradeStorage, uint256 _borrowScale) external;
+    function initialize(address _tradeStorage, address _rewardTracker, uint256 _borrowScale) external;
     function updateMarketState(
         string calldata _ticker,
         uint256 _sizeDelta,

@@ -15,6 +15,7 @@ import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 
 /// @dev - Vault can support the trading of multiple assets under the same liquidity.
 contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
@@ -24,6 +25,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IMarketToken;
 
     IMarketToken public immutable MARKET_TOKEN;
+    IRewardTracker public rewardTracker;
 
     address public tradeStorage;
 
@@ -70,8 +72,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     uint48 private constant TIME_TO_EXPIRATION = 1 minutes;
     uint256 private constant LONG_BASE_UNIT = 1e18;
     uint256 private constant SHORT_BASE_UNIT = 1e6;
-
-    bool public isMultiAssetMarket;
 
     EnumerableSet.Bytes32Set private assetIds;
     bool private isInitialized;
@@ -169,9 +169,13 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         if (msg.sender != WETH) revert Market_InvalidETHTransfer();
     }
 
-    function initialize(address _tradeStorage, uint256 _borrowScale) external onlyMarketFactory {
+    function initialize(address _tradeStorage, address _rewardTracker, uint256 _borrowScale)
+        external
+        onlyMarketFactory
+    {
         if (isInitialized) revert Market_AlreadyInitialized();
         tradeStorage = _tradeStorage;
+        rewardTracker = IRewardTracker(_rewardTracker);
         borrowScale = _borrowScale;
         isInitialized = true;
         emit Market_Initialzied();
@@ -192,7 +196,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         bytes32 _priceRequestId
     ) external onlyConfigurator(address(this)) nonReentrant {
         if (assetIds.length() >= MAX_ASSETS) revert Market_MaxAssetsReached();
-        if (!isMultiAssetMarket) isMultiAssetMarket = true;
         _addToken(_config, _ticker, _newAllocations, _priceRequestId);
     }
 
@@ -213,9 +216,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
         uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
 
-        // If length after removal is 1, set isMultiAssetMarket to false
         if (len == 2) {
-            isMultiAssetMarket = false;
             uint256[] memory allocations = new uint256[](1);
             allocations[0] = 10000 << 240;
             _reallocate(allocations, longTokenPrice, shortTokenPrice, _priceRequestId);
@@ -261,7 +262,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         onlyConfigurator(address(this))
         nonReentrant
     {
-        if (!isMultiAssetMarket) revert Market_SingleAssetMarket();
         // Fetch token prices
         IPriceFeed priceFeed = ITradeStorage(tradeStorage).priceFeed();
         if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert Market_InvalidPriceRequest();
@@ -282,6 +282,8 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         bool _isLong,
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
+        // If invalid ticker, revert
+        if (!assetIds.contains(keccak256(abi.encode(_ticker)))) revert Market_InvalidTicker();
         // 1. Depends on Open Interest Delta to determine Skew
         _updateFundingRate(_ticker, _indexPrice);
         if (_sizeDelta != 0) {

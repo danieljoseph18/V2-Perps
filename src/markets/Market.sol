@@ -15,6 +15,8 @@ import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
+import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 
 // @audit - optimize. Can probably remove some stuff
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
@@ -24,14 +26,11 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IMarketToken;
 
     IMarketToken public immutable MARKET_TOKEN;
+    IRewardTracker public rewardTracker;
+    IFeeDistributor public feeDistributor;
 
     address public tradeStorage;
 
-    uint256 private constant BITMASK_16 = type(uint256).max >> (256 - 16);
-    uint16 private constant TOTAL_ALLOCATION = 10000;
-    // Max 100 assets per market (could fit 12 more in last uint256, but 100 used for simplicity)
-    // Fits 16 allocations per uint256
-    uint8 private constant MAX_ASSETS = 100;
     uint32 private constant MIN_LEVERAGE = 100; // Min 1x Leverage
     uint32 private constant MAX_LEVERAGE = 1000_00; // Max 1000x leverage
     uint64 private constant MIN_RESERVE_FACTOR = 0.1e18; // 10% reserve factor
@@ -71,13 +70,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     uint256 private constant LONG_BASE_UNIT = 1e18;
     uint256 private constant SHORT_BASE_UNIT = 1e6;
 
-    bool public isMultiAssetMarket;
-
     EnumerableSet.Bytes32Set private assetIds;
     bool private isInitialized;
 
     address private poolOwner;
-    address private feeDistributor;
     address private feeReceiver;
 
     uint256 private longAccumulatedFees;
@@ -150,7 +146,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         USDC = _usdc;
         MARKET_TOKEN = IMarketToken(_marketToken);
         poolOwner = _poolOwner;
-        feeDistributor = _feeDistributor;
+        feeDistributor = IFeeDistributor(_feeDistributor);
         feeReceiver = _feeReceiver;
         bytes32 assetId = MarketUtils.generateAssetId(_ticker);
         if (assetIds.contains(assetId)) revert Market_TokenAlreadyExists();
@@ -169,9 +165,13 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         if (msg.sender != WETH) revert Market_InvalidETHTransfer();
     }
 
-    function initialize(address _tradeStorage, uint256 _borrowScale) external onlyMarketFactory {
+    function initialize(address _tradeStorage, address _rewardTracker, uint256 _borrowScale)
+        external
+        onlyMarketFactory
+    {
         if (isInitialized) revert Market_AlreadyInitialized();
         tradeStorage = _tradeStorage;
+        rewardTracker = IRewardTracker(_rewardTracker);
         borrowScale = _borrowScale;
         isInitialized = true;
         emit Market_Initialzied();
@@ -191,8 +191,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         emit PoolOwnershipTransferred(_newPoolOwner);
     }
 
-    function updateFeeDistributor(address _feeDistributor) external onlyAdmin {
-        if (_feeDistributor == address(0)) revert Market_InvalidFeeDistributor();
+    function updateFeeDistributor(IFeeDistributor _feeDistributor) external onlyAdmin {
+        if (address(_feeDistributor) == address(0)) revert Market_InvalidFeeDistributor();
         feeDistributor = _feeDistributor;
     }
 
@@ -201,7 +201,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         borrowScale = _borrowScale;
     }
 
-    function updateConfig(Config calldata _config, string calldata _ticker) external onlyAdmin {
+    function updateConfig(Config calldata _config, string calldata _ticker) external onlyConfigurator(address(this)) {
         _validateConfig(_config);
         bytes32 assetId = keccak256(abi.encode(_ticker));
         marketStorage[assetId].config = _config;
@@ -221,6 +221,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         bool _isLong,
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
+        // If invalid ticker, revert
+        if (!assetIds.contains(keccak256(abi.encode(_ticker)))) revert Market_InvalidTicker();
         // 1. Depends on Open Interest Delta to determine Skew
         _updateFundingRate(_ticker, _indexPrice);
         if (_sizeDelta != 0) {
@@ -246,7 +248,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Token Functions  =========================
      */
-    function batchWithdrawFees() external onlyAdmin nonReentrant {
+    function batchWithdrawFees() external onlyConfigurator(address(this)) nonReentrant {
         uint256 longFees = longAccumulatedFees;
         uint256 shortFees = shortAccumulatedFees;
         longAccumulatedFees = 0;
@@ -256,13 +258,17 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         uint256 shortOwnerFees = mulDiv(shortFees, FEES_TO_OWNER, SCALING_FACTOR);
         uint256 longDistributorFee = longFees - (longOwnerFees * 2); // 2 because 10% to owner and 10% to protocol
         uint256 shortDistributorFee = shortFees - (shortOwnerFees * 2);
-        // send out fees
-        IERC20(WETH).safeTransfer(poolOwner, longOwnerFees);
+
+        // Send Fees to Distribute to LPs
+        IERC20(WETH).approve(address(feeDistributor), longDistributorFee);
+        IERC20(USDC).approve(address(feeDistributor), shortDistributorFee);
+        feeDistributor.accumulateFees(longDistributorFee, shortDistributorFee);
+        // Send Fees to Protocol
         IERC20(WETH).safeTransfer(feeReceiver, longOwnerFees);
-        IERC20(WETH).safeTransfer(feeDistributor, longDistributorFee);
-        IERC20(USDC).safeTransfer(poolOwner, shortOwnerFees);
         IERC20(USDC).safeTransfer(feeReceiver, shortOwnerFees);
-        IERC20(USDC).safeTransfer(feeDistributor, shortDistributorFee);
+        // Send Fees to Owner
+        IERC20(WETH).safeTransfer(poolOwner, longOwnerFees);
+        IERC20(USDC).safeTransfer(poolOwner, shortOwnerFees);
 
         emit FeesWithdrawn(longFees, shortFees);
     }

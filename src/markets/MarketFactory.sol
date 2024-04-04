@@ -8,6 +8,7 @@ import {Market, IMarket} from "./Market.sol";
 import {MultiAssetMarket} from "./MultiAssetMarket.sol";
 import {MarketToken} from "./MarketToken.sol";
 import {TradeStorage} from "../positions/TradeStorage.sol";
+import {RewardTracker} from "../rewards/RewardTracker.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
@@ -89,12 +90,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         positionManager = IPositionManager(_positionManager);
     }
 
-    /**
-     * @dev - A user can pass in a spoofed price strategy. Requests should be reviewed by the executor
-     * pre-execution to ensure the validity of these strategies. The payment of the non-refundable fee
-     * is designed to disincentivize bad actors from creating invalid requests.
-     * Illiquid AMM pools, incorrect price feeds, and other invalid inputs should be rejected.
-     */
     function requestNewMarket(MarketRequest calldata _request) external payable nonReentrant {
         /* Validate the Inputs */
         // 1. Msg.value should be > marketCreationFee
@@ -169,11 +164,22 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         }
         // Create new TradeStorage contract
         TradeStorage tradeStorage = new TradeStorage(market, referralStorage, priceFeed, address(roleStorage));
+        // Create new Reward Tracker contract
+        RewardTracker rewardTracker = new RewardTracker(
+            market,
+            // Prepend an 's' to the start of the name / symbol (staked XYZ)
+            string(abi.encodePacked("s", request.marketTokenName)),
+            string(abi.encodePacked("s", request.marketTokenSymbol)),
+            address(roleStorage)
+        );
+        // @audit - also deploy liquidity locker and TransferStakedTokens
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
-        market.initialize(address(tradeStorage), 0.003e18);
+        market.initialize(address(tradeStorage), address(rewardTracker), 0.003e18);
         // Initialize TradeStorage with Default values
         tradeStorage.initialize(0.05e18, 0.001e18, 0.005e18, 0.1e18, 2e30, 10 seconds, 1 minutes);
-
+        // Initialize RewardTracker with Default values
+        // Initialize Liquidity Locker and TransferStakedTokens
+        // @audit
         // Add to Storage
         bool success = markets.add(address(market));
         if (!success) revert MarketFactory_FailedToAddMarket();
