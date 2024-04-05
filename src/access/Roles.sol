@@ -11,8 +11,6 @@ library Roles {
     // Global
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
     // Global
-    bytes32 public constant MODERATOR = keccak256("MODERATOR");
-    // Global
     bytes32 public constant MARKET_FACTORY = keccak256("MARKET_FACTORY");
     // Global
     bytes32 public constant POSITION_MANAGER = keccak256("POSITION_MANAGER");

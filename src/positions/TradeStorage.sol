@@ -28,6 +28,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint256 private constant MAX_TIME_TO_EXPIRATION = 3 minutes;
     uint256 private constant MIN_TIME_TO_EXPIRATION = 20 seconds;
 
+    // User Enumerable Sets instead of a custom map to allow for easier querying.
     mapping(bytes32 _key => Position.Request _order) private orders;
     EnumerableSet.Bytes32Set private marketOrderKeys;
     EnumerableSet.Bytes32Set private limitOrderKeys;
@@ -114,15 +115,49 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     /// @dev Adds Order to EnumerableSet
     function createOrderRequest(Position.Request calldata _request) external onlyRouter {
-        TradeLogic.createOrderRequest(this, _request);
+        TradeLogic.createOrderRequest(_request);
     }
 
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyPositionManager {
-        TradeLogic.cancelOrderRequest(this, _orderKey, _isLimit);
+        TradeLogic.cancelOrderRequest(_orderKey, _isLimit);
     }
 
-    function deleteOrder(bytes32 _orderKey, bool _isLimit) external {
-        if (msg.sender != address(this)) revert TradeStorage_InvalidCaller();
+    /**
+     * ===================================== Execution Functions =====================================
+     */
+
+    /// @dev needs to accept request id for limit order cases
+    /// the request id at request time won't be the same as the request id at execution time
+    function executePositionRequest(bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
+        external
+        onlyPositionManager
+        nonReentrant
+        returns (Execution.State memory state, Position.Request memory request)
+    {
+        return
+            TradeLogic.executePositionRequest(market, priceFeed, referralStorage, _orderKey, _requestId, _feeReceiver);
+    }
+
+    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator)
+        external
+        onlyPositionManager
+        nonReentrant
+    {
+        TradeLogic.liquidatePosition(market, priceFeed, _positionKey, _requestId, _liquidator);
+    }
+
+    function executeAdl(bytes32 _positionKey, bytes32 _requestId, uint256 _sizeDelta, address _feeReceiver)
+        external
+        onlyPositionManager
+        nonReentrant
+    {
+        TradeLogic.executeAdl(market, priceFeed, _positionKey, _requestId, _sizeDelta, _feeReceiver, adlFee);
+    }
+
+    /**
+     * ===================================== Callback Functions =====================================
+     */
+    function deleteOrder(bytes32 _orderKey, bool _isLimit) external onlyCallback {
         bool success = _isLimit ? limitOrderKeys.remove(_orderKey) : marketOrderKeys.remove(_orderKey);
         if (!success) revert TradeStorage_OrderRemovalFailed();
         delete orders[_orderKey];
@@ -134,8 +169,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         uint256 _sizeDelta,
         bool _isLong,
         bool _isIncrease
-    ) external {
-        if (msg.sender != address(this)) revert TradeStorage_InvalidCaller();
+    ) external onlyCallback {
         // Update the Market State
         market.updateMarketState(
             _ticker,
@@ -154,13 +188,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         market.updateImpactPool(_ticker, -_state.priceImpactUsd);
     }
 
-    function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external {
-        if (msg.sender != address(this)) revert TradeStorage_InvalidCaller();
+    function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external onlyCallback {
         openPositions[_positionKey] = _position;
     }
 
-    function createPosition(Position.Data calldata _position, bytes32 _positionKey) external {
-        if (msg.sender != address(this)) revert TradeStorage_InvalidCaller();
+    function createPosition(Position.Data calldata _position, bytes32 _positionKey) external onlyCallback {
         openPositions[_positionKey] = _position;
         bool success = openPositionKeys[_position.isLong].add(_positionKey);
         if (!success) revert TradeStorage_PositionAdditionFailed();
@@ -172,8 +204,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         uint256 _affiliateRebate,
         address _referrer,
         bool _isLong
-    ) external {
-        if (msg.sender != address(this)) revert TradeStorage_InvalidCaller();
+    ) external onlyCallback {
         // Pay Fees to LPs for Side (Position + Borrow)
         market.accumulateFees(_borrowAmount + _positionFee, _isLong);
         // Pay Affiliate Rebate to Referrer
@@ -182,8 +213,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function createOrder(Position.Request memory _request) external returns (bytes32 orderKey) {
-        if (msg.sender != address(this)) revert TradeStorage_InvalidCaller();
+    function createOrder(Position.Request memory _request) external onlyCallback returns (bytes32 orderKey) {
         // Generate the Key
         orderKey = Position.generateOrderKey(_request);
         // Create a Storage Pointer to the Order Set
@@ -203,8 +233,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         uint256 _collateralBaseUnit,
         address _user,
         bool _isLong
-    ) external {
-        if (msg.sender != address(this)) revert TradeStorage_InvalidCaller();
+    ) external onlyCallback {
         // Convert Size Delta USD to Collateral Tokens
         uint256 reserveDelta = mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice);
         // Reserve an Amount of Liquidity Equal to the Position Size
@@ -220,8 +249,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         uint256 _collateralBaseUnit,
         address _user,
         bool _isLong
-    ) external {
-        if (msg.sender != address(this)) revert TradeStorage_InvalidCaller();
+    ) external onlyCallback {
         // Convert Size Delta USD to Collateral Tokens
         uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice)); // Could use collateral delta * leverage for gas savings?
         // Unreserve an Amount of Liquidity Equal to the Position Size
@@ -230,44 +258,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         market.updateCollateralAmount(_collateralDelta, _user, _isLong, false);
     }
 
-    function deletePosition(bytes32 _positionKey, bool _isLong) external {
-        if (msg.sender != address(this)) revert TradeStorage_InvalidCaller();
+    function deletePosition(bytes32 _positionKey, bool _isLong) external onlyCallback {
         delete openPositions[_positionKey];
         bool success = openPositionKeys[_isLong].remove(_positionKey);
         if (!success) revert TradeStorage_PositionRemovalFailed();
-    }
-
-    /**
-     * ===================================== Execution Functions =====================================
-     */
-
-    /// @dev needs to accept request id for limit order cases
-    /// the request id at request time won't be the same as the request id at execution time
-    function executePositionRequest(bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
-        external
-        onlyPositionManager
-        nonReentrant
-        returns (Execution.State memory state, Position.Request memory request)
-    {
-        return TradeLogic.executePositionRequest(
-            this, market, priceFeed, referralStorage, _orderKey, _requestId, _feeReceiver
-        );
-    }
-
-    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator)
-        external
-        onlyPositionManager
-        nonReentrant
-    {
-        TradeLogic.liquidatePosition(this, market, priceFeed, _positionKey, _requestId, _liquidator);
-    }
-
-    function executeAdl(bytes32 _positionKey, bytes32 _requestId, uint256 _sizeDelta, address _feeReceiver)
-        external
-        onlyPositionManager
-        nonReentrant
-    {
-        TradeLogic.executeAdl(this, market, priceFeed, _positionKey, _requestId, _sizeDelta, _feeReceiver, adlFee);
     }
 
     /**

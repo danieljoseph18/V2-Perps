@@ -5,6 +5,7 @@ import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/Fu
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {CustomMap} from "../libraries/CustomMap.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
@@ -19,7 +20,7 @@ import {Oracle} from "./Oracle.sol";
 contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSet for EnumerableSet.Bytes32Set;
-    using EnumerableSet for EnumerableSet.AddressSet;
+    using CustomMap for CustomMap.PriceRequestMap;
 
     uint256 public constant PRICE_DECIMALS = 30;
     // Uniswap V3 Router address on Network
@@ -70,10 +71,9 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     // only the keeper who requested can fill the order for non market orders
     // all pricing should be cleared once the request is filled
     // data should be tied only to the request as its specific to the request
-    mapping(bytes32 requestId => RequestData requestData) public requestData;
     mapping(string ticker => uint256 baseUnit) public baseUnits;
     // Can probably purge some of these
-    EnumerableSet.Bytes32Set private requestIds;
+    CustomMap.PriceRequestMap private requestData;
     EnumerableSet.Bytes32Set private assetIds;
 
     /**
@@ -173,8 +173,8 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     }
 
     function clearInvalidRequest(bytes32 _requestId) external onlyAdmin {
-        if (requestIds.contains(_requestId)) {
-            if (!requestIds.remove(_requestId)) revert PriceFeed_FailedToClearRequest();
+        if (requestData.contains(_requestId)) {
+            if (!requestData.remove(_requestId)) revert PriceFeed_FailedToClearRequest();
         }
     }
 
@@ -202,10 +202,9 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         // Send the request and store the request ID
         requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, DON_ID);
 
-        requestData[requestId].requestType = RequestType.PRICE_UPDATE;
-        requestData[requestId].requester = _requester;
+        RequestData memory data = RequestData({requester: _requester, requestType: RequestType.PRICE_UPDATE});
 
-        requestIds.add(requestId);
+        requestData.set(requestId, data);
 
         return requestId;
     }
@@ -236,10 +235,9 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         // Send the request and store the request ID
         requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, DON_ID);
 
-        requestData[requestId].requestType = RequestType.CUMULATIVE_PNL;
-        requestData[requestId].requester = _requester;
+        RequestData memory data = RequestData({requester: _requester, requestType: RequestType.CUMULATIVE_PNL});
 
-        requestIds.add(requestId);
+        requestData.set(requestId, data);
 
         return requestId;
     }
@@ -254,14 +252,14 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     // Try to avoid reverting, and instead return without storing the price response if invalid.
     function fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
         // Return if invalid requestId
-        if (!requestIds.contains(requestId)) return;
+        if (!requestData.contains(requestId)) return;
         // Return if an error is thrown
         if (err.length > 0) return;
         // Remove the RequestId from storage and return if fail
-        bool success = requestIds.remove(requestId);
+        bool success = requestData.remove(requestId);
         if (!success) return;
         // Get the request type of the request
-        RequestData memory data = requestData[requestId];
+        RequestData memory data = requestData.get(requestId);
         if (data.requestType == RequestType.PRICE_UPDATE) {
             // Fulfill the price update request
             UnpackedPriceResponse[] memory unpackedResponse = abi.decode(response, (UnpackedPriceResponse[]));
@@ -300,6 +298,7 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     }
 
     function clearSignedPrices(IMarket market, bytes32 _requestId) external onlyTradeStorageOrMarket(address(market)) {
+        if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
         // loop through the assets with prices and clear them from storage
         string[] memory assets = assetsWithPrices[_requestId];
         uint256 len = assets.length;
@@ -391,14 +390,14 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     }
 
     function priceUpdateRequested(bytes32 _requestId) external view returns (bool) {
-        return requestData[_requestId].requester != address(0);
+        return requestData.get(_requestId).requester != address(0);
     }
 
     function getRequester(bytes32 _requestId) external view returns (address) {
-        return requestData[_requestId].requester;
+        return requestData.get(_requestId).requester;
     }
 
     function getRequests() external view returns (bytes32[] memory) {
-        return requestIds.values();
+        return requestData.keys();
     }
 }

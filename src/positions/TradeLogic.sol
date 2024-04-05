@@ -61,8 +61,8 @@ library TradeLogic {
         }
     }
 
-    /// @dev Adds Order to EnumerableSet
-    function createOrderRequest(ITradeStorage tradeStorage, Position.Request calldata _request) external {
+    function createOrderRequest(Position.Request calldata _request) external {
+        ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Create the order
         bytes32 orderKey = tradeStorage.createOrder(_request);
         // If SL / TP, tie to the position
@@ -79,16 +79,15 @@ library TradeLogic {
         tradeStorage.updatePosition(position, positionKey);
     }
 
-    function cancelOrderRequest(ITradeStorage tradeStorage, bytes32 _orderKey, bool _isLimit) external {
+    function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external {
         // Delete the order
-        tradeStorage.deleteOrder(_orderKey, _isLimit);
+        ITradeStorage(address(this)).deleteOrder(_orderKey, _isLimit);
         // Fire Event
         emit OrderRequestCancelled(_orderKey);
     }
 
     // @gas - for tradeStorage can I just use ITradeStorage(address(this))?
     function executePositionRequest(
-        ITradeStorage tradeStorage,
         IMarket market,
         IPriceFeed priceFeed,
         IReferralStorage referralStorage,
@@ -96,6 +95,7 @@ library TradeLogic {
         bytes32 _requestId,
         address _feeReceiver
     ) external returns (Execution.State memory state, Position.Request memory request) {
+        ITradeStorage tradeStorage = ITradeStorage(address(this));
         (state, request) = Execution.constructParams(
             market, tradeStorage, priceFeed, referralStorage, _orderKey, _requestId, _feeReceiver
         );
@@ -150,7 +150,6 @@ library TradeLogic {
     // - only allow reduction of the pnl factor by so much
     // - how do we make sure that users can only ADL the most profitable positions?
     function executeAdl(
-        ITradeStorage tradeStorage,
         IMarket market,
         IPriceFeed priceFeed,
         bytes32 _positionKey,
@@ -159,6 +158,7 @@ library TradeLogic {
         address _feeReceiver,
         uint256 _adlFee
     ) external {
+        ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Construct the Adl order
         (
             Execution.State memory state,
@@ -191,13 +191,13 @@ library TradeLogic {
     }
 
     function liquidatePosition(
-        ITradeStorage tradeStorage,
         IMarket market,
         IPriceFeed priceFeed,
         bytes32 _positionKey,
         bytes32 _requestId,
         address _liquidator
     ) external {
+        ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Fetch the Position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         // Check the Position Exists

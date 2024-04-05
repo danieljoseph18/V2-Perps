@@ -9,6 +9,7 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {CustomMap} from "../libraries/CustomMap.sol";
 import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
@@ -19,9 +20,9 @@ import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {MarketLogic} from "./MarketLogic.sol";
 
-// @audit - optimize. Can probably remove some stuff
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
+    using CustomMap for CustomMap.MarketRequestMap;
     using SignedMath for int256;
     using SafeERC20 for IERC20;
     using SafeERC20 for IMarketToken;
@@ -32,21 +33,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     address public tradeStorage;
 
-    uint32 private constant MIN_LEVERAGE = 100; // Min 1x Leverage
-    uint32 private constant MAX_LEVERAGE = 1000_00; // Max 1000x leverage
-    uint64 private constant MIN_RESERVE_FACTOR = 0.1e18; // 10% reserve factor
-    uint64 private constant MAX_RESERVE_FACTOR = 0.5e18; // 50% reserve factor
-    uint64 private constant SCALING_FACTOR = 1e18;
     uint64 private constant MIN_BORROW_SCALE = 0.0001e18; // 0.01% per day
     uint64 private constant MAX_BORROW_SCALE = 0.01e18; // 1% per day
-    uint64 public constant BASE_FEE = 0.001e18; // 0.1%
-    int64 private constant MIN_VELOCITY = 0.001e18; // 0.1% per day
-    int64 private constant MAX_VELOCITY = 0.2e18; // 20% per day
-    int256 private constant MIN_SKEW_SCALE = 1000e30; // $1000
-    int256 private constant MAX_SKEW_SCALE = 10_000_000_000e30; // $10 Bn
-    int64 private constant SIGNED_SCALAR = 1e18;
-    string private constant LONG_TICKER = "ETH";
-    string private constant SHORT_TICKER = "USDC";
     /**
      * Level of pSkew beyond which funding rate starts to change
      * Units: % Per Day
@@ -67,9 +55,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     address private immutable WETH;
     address private immutable USDC;
-    uint48 private constant TIME_TO_EXPIRATION = 1 minutes;
-    uint256 private constant LONG_BASE_UNIT = 1e18;
-    uint256 private constant SHORT_BASE_UNIT = 1e6;
 
     EnumerableSet.Bytes32Set private assetIds;
     bool private isInitialized;
@@ -96,14 +81,13 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     // Store the Collateral Amount for each User
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
-    mapping(bytes32 key => Input request) private requests;
-    EnumerableSet.Bytes32Set private requestKeys;
+    CustomMap.MarketRequestMap private requests;
 
     // Each Asset's storage is tracked through this mapping
     mapping(bytes32 assetId => MarketStorage assetStorage) private marketStorage;
 
     modifier orderExists(bytes32 _key) {
-        if (!requestKeys.contains(_key)) revert Market_InvalidKey();
+        if (!requests.contains(_key)) revert Market_InvalidKey();
         _;
     }
 
@@ -140,9 +124,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         emit TokenAdded(assetId);
     }
 
-    // @audit - do we need this
     receive() external payable {
-        if (msg.sender != WETH) revert Market_InvalidETHTransfer();
+        // Only accept ETH via fallback from the WETH contract when unwrapping WETH
+        // Ensure that the call depth is 1 (direct call from WETH contract)
+        if (msg.sender != WETH || gasleft() <= 2300) revert Market_InvalidETHTransfer();
     }
 
     function initialize(address _tradeStorage, address _rewardTracker, uint256 _borrowScale)
@@ -182,16 +167,15 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         emit MarketConfigUpdated(assetId);
     }
 
-    // @audit - only self
-    function setFunding(FundingValues calldata _funding, string calldata _ticker) external {
-        if (msg.sender != address(this)) revert Market_InvalidCaller();
+    /**
+     * ========================= Callback Functions  =========================
+     */
+    function setFunding(FundingValues calldata _funding, string calldata _ticker) external onlyCallback {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         marketStorage[assetId].funding = _funding;
     }
 
-    // @audit - only self
-    function setBorrowing(BorrowingValues calldata _borrowing, string calldata _ticker) external {
-        if (msg.sender != address(this)) revert Market_InvalidCaller();
+    function setBorrowing(BorrowingValues calldata _borrowing, string calldata _ticker) external onlyCallback {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         marketStorage[assetId].borrowing = _borrowing;
     }
@@ -201,8 +185,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         uint256 _weightedAvgCumulative,
         string calldata _ticker,
         bool _isLong
-    ) external {
-        if (msg.sender != address(this)) revert Market_InvalidCaller();
+    ) external onlyCallback {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (_isLong) {
             marketStorage[assetId].pnl.longAverageEntryPriceUsd = _averageEntryPrice;
@@ -213,12 +196,63 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function setAllocationPercentage(string calldata _ticker, uint256 _allocationPercentage) external {
+    function setAllocationPercentage(string calldata, uint256) external onlyCallback {
+        // Redundant action to prevent compiler warning
+        delete marketStorage[bytes32(0)].allocationPercentage;
         revert Market_SingleAssetMarket();
     }
 
+    function deleteRequest(bytes32 _key) external onlyCallback {
+        if (!requests.remove(_key)) revert Market_FailedToRemoveRequest();
+    }
+
+    function addRequest(Input calldata _request) external onlyCallback {
+        if (!requests.set(_request.key, _request)) revert Market_FailedToAddRequest();
+    }
+
+    function addAsset(string calldata) external onlyCallback {
+        // Redundant action to prevent compiler warning
+        delete marketStorage[bytes32(0)].allocationPercentage;
+        revert Market_SingleAssetMarket();
+    }
+
+    function removeAsset(string calldata) external onlyCallback {
+        // Redundant action to prevent compiler warning
+        delete marketStorage[bytes32(0)].allocationPercentage;
+        revert Market_SingleAssetMarket();
+    }
+
+    function setConfig(string calldata, Config calldata) external onlyCallback {
+        // Redundant action to prevent compiler warning
+        delete marketStorage[bytes32(0)].allocationPercentage;
+        revert Market_SingleAssetMarket();
+    }
+
+    function setLastUpdate(string calldata) external onlyCallback {
+        // Redundant action to prevent compiler warning
+        delete marketStorage[bytes32(0)].allocationPercentage;
+        revert Market_SingleAssetMarket();
+    }
+
+    function updateOpenInterest(string calldata _ticker, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
+        external
+        onlyCallback
+    {
+        // Update the open interest
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        if (_shouldAdd) {
+            _isLong
+                ? marketStorage[assetId].openInterest.longOpenInterest += _sizeDeltaUsd
+                : marketStorage[assetId].openInterest.shortOpenInterest += _sizeDeltaUsd;
+        } else {
+            _isLong
+                ? marketStorage[assetId].openInterest.longOpenInterest -= _sizeDeltaUsd
+                : marketStorage[assetId].openInterest.shortOpenInterest -= _sizeDeltaUsd;
+        }
+    }
+
     /**
-     * ========================= Market State Functions  =========================
+     * ========================= External State Functions  =========================
      */
     function updateMarketState(
         string calldata _ticker,
@@ -231,64 +265,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
         MarketLogic.updateMarketState(
-            this,
-            _ticker,
-            _sizeDelta,
-            _indexPrice,
-            _impactedPrice,
-            _collateralPrice,
-            _indexBaseUnit,
-            _isLong,
-            _isIncrease
+            _ticker, _sizeDelta, _indexPrice, _impactedPrice, _collateralPrice, _indexBaseUnit, _isLong, _isIncrease
         );
-    }
-
-    // @audit - only market should be able to call
-    function deleteRequest(bytes32 _key) external {
-        if (msg.sender != address(this)) revert Market_InvalidCaller();
-        if (!requestKeys.remove(_key)) revert Market_FailedToRemoveRequest();
-        delete requests[_key];
-    }
-
-    // @audit - only market should be able to call
-    function addRequest(Input calldata _request) external {
-        if (msg.sender != address(this)) revert Market_InvalidCaller();
-        if (!requestKeys.add(_request.key)) revert Market_FailedToAddRequest();
-        requests[_request.key] = _request;
-    }
-
-    function addAsset(string calldata _ticker) external {
-        revert Market_SingleAssetMarket();
-    }
-
-    function removeAsset(string calldata _ticker) external {
-        revert Market_SingleAssetMarket();
-    }
-
-    function setConfig(string calldata _ticker, Config calldata _config) external {
-        revert Market_SingleAssetMarket();
-    }
-
-    function setLastUpdate(string calldata _ticker) external {
-        revert Market_SingleAssetMarket();
-    }
-
-    // @audit - only market should be able to call
-    function updateOpenInterest(string calldata _ticker, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
-        external
-    {
-        if (msg.sender != address(this)) revert Market_InvalidCaller();
-        // Update the open interest
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        if (_shouldAdd) {
-            _isLong
-                ? marketStorage[assetId].openInterest.longOpenInterest += _sizeDeltaUsd
-                : marketStorage[assetId].openInterest.shortOpenInterest += _sizeDeltaUsd;
-        } else {
-            _isLong
-                ? marketStorage[assetId].openInterest.longOpenInterest -= _sizeDeltaUsd
-                : marketStorage[assetId].openInterest.shortOpenInterest -= _sizeDeltaUsd;
-        }
     }
 
     /**
@@ -389,7 +367,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         bool _isDeposit
     ) external payable onlyRouter {
         MarketLogic.createRequest(
-            this,
             _owner,
             _transferToken,
             _amountIn,
@@ -407,7 +384,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
     {
-        return MarketLogic.cancelRequest(this, _key, _caller, WETH, USDC, address(MARKET_TOKEN));
+        return MarketLogic.cancelRequest(_key, _caller, WETH, USDC, address(MARKET_TOKEN));
     }
 
     function executeDeposit(ExecuteDeposit calldata _params)
@@ -460,11 +437,11 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     }
 
     function getRequest(bytes32 _key) external view returns (Input memory) {
-        return requests[_key];
+        return requests.get(_key);
     }
 
-    function getRequestAtIndex(uint256 _index) external view returns (Input memory) {
-        return requests[requestKeys.at(_index)];
+    function getRequestAtIndex(uint256 _index) external view returns (Input memory request) {
+        (, request) = requests.at(_index);
     }
 
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total) {
@@ -476,7 +453,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     }
 
     function requestExists(bytes32 _key) external view returns (bool) {
-        return requestKeys.contains(_key);
+        return requests.contains(_key);
     }
 
     function getState() external view returns (State memory) {

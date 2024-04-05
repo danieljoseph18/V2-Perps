@@ -15,11 +15,6 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyModerator() {
-        if (!roleStorage.hasRole(Roles.MODERATOR, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
     modifier onlyMarketFactory() {
         if (!roleStorage.hasRole(Roles.MARKET_FACTORY, msg.sender)) revert RoleValidation_AccessDenied();
         _;
@@ -84,6 +79,11 @@ contract RoleValidation {
 
     modifier onlyAdlKeeper() {
         if (!roleStorage.hasRole(Roles.ADL_KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
+        _;
+    }
+
+    modifier onlyCallback() {
+        if (msg.sender != address(this)) revert RoleValidation_AccessDenied();
         _;
     }
 

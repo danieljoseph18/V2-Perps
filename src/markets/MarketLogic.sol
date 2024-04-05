@@ -79,12 +79,12 @@ library MarketLogic {
     uint256 private constant FEES_TO_OWNER = 0.1e18; // 10% to Owner
     uint256 private constant FEES_TO_PROTOCOL = 0.1e18; // 10% to Protocol
 
-    modifier validAction(IMarket market, uint256 _amountIn, uint256 _amountOut, bool _isLongToken, bool _isDeposit) {
+    modifier validAction(uint256 _amountIn, uint256 _amountOut, bool _isLongToken, bool _isDeposit) {
         // Cache the State Before
-        IMarket.State memory initialState = market.getState();
+        IMarket.State memory initialState = IMarket(address(this)).getState();
         _;
         // Cache the state after
-        IMarket.State memory updatedState = market.getState();
+        IMarket.State memory updatedState = IMarket(address(this)).getState();
         // Validate the Vault State Delta
         if (_isDeposit) {
             MarketUtils.validateDeposit(initialState, updatedState, _amountIn, _isLongToken);
@@ -193,7 +193,6 @@ library MarketLogic {
     }
 
     function createRequest(
-        IMarket market,
         address _owner,
         address _transferToken, // Token In for Deposits, Out for Withdrawals
         uint256 _amountIn,
@@ -216,18 +215,15 @@ library MarketLogic {
             priceRequestId: _priceRequestId,
             pnlRequestId: _pnlRequestId
         });
-        market.addRequest(request);
+        IMarket(address(this)).addRequest(request);
         emit RequestCreated(request.key, _owner, _transferToken, _amountIn, _isDeposit);
     }
 
-    function cancelRequest(
-        IMarket market,
-        bytes32 _key,
-        address _caller,
-        address _weth,
-        address _usdc,
-        address _marketToken
-    ) external returns (address tokenOut, uint256 amountOut, bool shouldUnwrap) {
+    function cancelRequest(bytes32 _key, address _caller, address _weth, address _usdc, address _marketToken)
+        external
+        returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
+    {
+        IMarket market = IMarket(address(this));
         // Check the Request Exists
         if (!market.requestExists(_key)) revert MarketLogic_InvalidKey();
         // Check the caller owns the request
@@ -253,14 +249,14 @@ library MarketLogic {
     }
 
     function addToken(
-        IMarket market,
         IPriceFeed priceFeed,
         IMarket.Config calldata _config,
         string memory _ticker,
         uint256[] calldata _newAllocations,
         bytes32 _priceRequestId
     ) external {
-        if (msg.sender != address(market)) revert MarketLogic_InvalidCaller();
+        IMarket market = IMarket(address(this));
+        if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
         if (market.getAssetsInMarket() >= MAX_ASSETS) revert MarketLogic_MaxAssetsReached();
         if (market.isAssetInMarket(_ticker)) revert MarketLogic_TokenAlreadyExists();
         // Valdiate Config
@@ -268,7 +264,7 @@ library MarketLogic {
         // Add asset to storage
         market.addAsset(_ticker);
         // Reallocate
-        reallocate(market, priceFeed, _newAllocations, _priceRequestId);
+        reallocate(priceFeed, _newAllocations, _priceRequestId);
         // Initialize Storage
         market.setConfig(_ticker, _config);
         market.setLastUpdate(_ticker);
@@ -276,30 +272,29 @@ library MarketLogic {
     }
 
     function removeToken(
-        IMarket market,
         IPriceFeed priceFeed,
         string memory _ticker,
         uint256[] calldata _newAllocations,
         bytes32 _priceRequestId
     ) external {
-        if (msg.sender != address(market)) revert MarketLogic_InvalidCaller();
+        IMarket market = IMarket(address(this));
+        if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
         if (!market.isAssetInMarket(_ticker)) revert MarketLogic_TokenDoesNotExist();
         uint256 len = market.getAssetsInMarket();
         if (len == 1) revert MarketLogic_MinimumAssetsReached();
         // Remove the Asset
         market.removeAsset(_ticker);
         // Reallocate
-        reallocate(market, priceFeed, _newAllocations, _priceRequestId);
+        reallocate(priceFeed, _newAllocations, _priceRequestId);
         // Fire Event
         emit TokenRemoved(_ticker);
     }
 
     /// @dev - Caller must've requested a price before calling this function
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    function reallocate(IMarket market, IPriceFeed priceFeed, uint256[] memory _allocations, bytes32 _priceRequestId)
-        public
-    {
-        if (msg.sender != address(market)) revert MarketLogic_InvalidCaller();
+    function reallocate(IPriceFeed priceFeed, uint256[] memory _allocations, bytes32 _priceRequestId) public {
+        IMarket market = IMarket(address(this));
+        if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
         // Fetch token prices
         if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert MarketLogic_InvalidPriceRequest();
         uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
@@ -339,9 +334,9 @@ library MarketLogic {
 
     function executeDeposit(IPriceFeed priceFeed, IMarket.ExecuteDeposit calldata _params, address _tokenIn)
         external
-        validAction(_params.market, _params.deposit.amountIn, 0, _params.deposit.isLongToken, true)
+        validAction(_params.deposit.amountIn, 0, _params.deposit.isLongToken, true)
     {
-        if (msg.sender != address(_params.market)) revert MarketLogic_InvalidCaller();
+        if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
         // Transfer deposit tokens from msg.sender
         IERC20(_tokenIn).safeTransferFrom(msg.sender, address(this), _params.deposit.amountIn);
         // Delete Deposit Request -> keep
@@ -368,11 +363,8 @@ library MarketLogic {
         address _tokenOut,
         uint256 _tokenBalance,
         uint256 _tokensReserved
-    )
-        external
-        validAction(_params.market, _params.withdrawal.amountIn, _params.amountOut, _params.withdrawal.isLongToken, false)
-    {
-        if (msg.sender != address(_params.market)) revert MarketLogic_InvalidCaller();
+    ) external validAction(_params.withdrawal.amountIn, _params.amountOut, _params.withdrawal.isLongToken, false) {
+        if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
         // Transfer Market Tokens in from msg.sender
         IMarketToken(_params.marketToken).safeTransferFrom(msg.sender, address(this), _params.withdrawal.amountIn);
         // Delete the Withdrawal from Storage
@@ -405,7 +397,6 @@ library MarketLogic {
     }
 
     function updateMarketState(
-        IMarket market,
         string calldata _ticker,
         uint256 _sizeDelta,
         uint256 _indexPrice,
@@ -415,6 +406,7 @@ library MarketLogic {
         bool _isLong,
         bool _isIncrease
     ) external {
+        IMarket market = IMarket(address(this));
         // If invalid ticker, revert
         if (!market.isAssetInMarket(_ticker)) revert MarketLogic_InvalidTicker();
         // 1. Depends on Open Interest Delta to determine Skew

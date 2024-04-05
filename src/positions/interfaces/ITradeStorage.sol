@@ -7,36 +7,16 @@ import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {IMarket} from "../../markets/interfaces/IMarket.sol";
 
 interface ITradeStorage {
-    event OrderRequestCreated(bytes32 indexed _orderKey);
-    event OrderRequestCancelled(bytes32 indexed _orderKey);
-    event LiquidatePosition(
-        bytes32 indexed _positionKey, address indexed _liquidator, uint256 indexed _amountLiquidated, bool _isLong
-    );
     event TradeStorageInitialized(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
     event FeesSet(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
-    event CollateralEdited(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, bool indexed _isIncrease);
-    event PositionCreated(bytes32 indexed _positionKey);
-    event AdlExecuted(address _market, bytes32 _positionKey, uint256 _sizeDelta, bool _isLong);
-    event IncreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
-    event DecreasePosition(bytes32 indexed _positionKey, uint256 indexed _collateralDelta, uint256 indexed _sizeDelta);
 
     error TradeStorage_AlreadyInitialized();
-    error TradeStorage_InvalidLiquidationFee();
-    error TradeStorage_InvalidTradingFee();
     error TradeStorage_OrderAlreadyExists();
-    error TradeStorage_PositionDoesNotExist();
     error TradeStorage_OrderAdditionFailed();
     error TradeStorage_PositionAdditionFailed();
-    error TradeStorage_InsufficientFreeLiquidity();
     error TradeStorage_OrderRemovalFailed();
     error TradeStorage_PositionRemovalFailed();
-    error TradeStorage_StopLossAlreadySet();
-    error TradeStorage_TakeProfitAlreadySet();
-    error TradeStorage_InvalidRequestType();
-    error TradeStorage_InvalidAdlFee();
-    error TradeStorage_InvalidFeeForExecution();
     error TradeStorage_InvalidExecutionTime();
-    error TradeStorage_InvalidCaller();
 
     function initialize(
         uint256 _liquidationFee, // 0.05e18 = 5%

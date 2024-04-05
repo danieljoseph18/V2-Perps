@@ -5,6 +5,7 @@ import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/Fu
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {CustomMap} from "../../../src/libraries/CustomMap.sol";
 import {IMarketFactory} from "../../../src/markets/interfaces/IMarketFactory.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {ISwapRouter} from "../../src/oracle/interfaces/ISwapRouter.sol";
@@ -16,43 +17,48 @@ import {Oracle} from "../../src/oracle/Oracle.sol";
 contract MockPriceFeed is FunctionsClient, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSet for EnumerableSet.Bytes32Set;
-    using EnumerableSet for EnumerableSet.AddressSet;
+    using CustomMap for CustomMap.PriceRequestMap;
 
     uint256 public constant PRICE_DECIMALS = 30;
     // Uniswap V3 Router address on Network
-    address public constant UNISWAP_V3_ROUTER = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    address public immutable UNISWAP_V3_ROUTER;
     // Uniswap V3 Factory address on Network
-    address public constant UNISWAP_V3_FACTORY = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
+    address public immutable UNISWAP_V3_FACTORY;
     // WETH address on Network
-    address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address public immutable WETH;
     // LINK address on Network
-    address public constant LINK = 0x514910771AF9Ca656af840dff83E8264EcF986CA;
+    address public immutable LINK;
+    // donID - Sepolia = 0x66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000
+    // Check to get the donID for your supported network https://docs.chain.link/chainlink-functions/supported-networks
+    bytes32 private immutable DON_ID;
+    // Router address - Hardcoded for Sepolia = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0
+    // Check to get the router address for your supported network https://docs.chain.link/chainlink-functions/supported-networks
+    address private immutable ROUTER;
 
     IMarketFactory public marketFactory;
 
-    // Router address - Hardcoded for Sepolia
-    // Check to get the router address for your supported network https://docs.chain.link/chainlink-functions/supported-networks
-    address router = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0;
     address public sequencerUptimeFeed;
     uint64 subscriptionId;
     bool private isInitialized;
 
     // JavaScript source code
     // Hard code the javascript source code here for each request's execution function
+    /**
+     * Price Sources:
+     * - Aggregate CEXs
+     * - CryptoCompare
+     * - CMC / CoinGecko
+     */
     string priceUpdateSource = "";
     string cumulativePnlSource = "";
 
     //Callback gas limit
     uint256 public gasOverhead;
-    uint32 public callbackGasLimit;
     uint256 public premiumFee;
     uint256 public fallbackWeiToLinkRatio;
     address public nativeLinkPriceFeed;
+    uint32 public callbackGasLimit;
     uint256 public timeToExpiration;
-
-    // donID - Hardcoded for Sepolia
-    // Check to get the donID for your supported network https://docs.chain.link/chainlink-functions/supported-networks
-    bytes32 donID = 0x66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000;
 
     // State variable to store the returned character information
     mapping(bytes32 requestId => mapping(string ticker => Price priceResponse)) private prices;
@@ -62,18 +68,32 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     //  keeper who requested can fill the order for non market orders
     // all pricing should be cleared once the request is filled
     // data should be tied  the request as its specific to the request
-    mapping(bytes32 requestId => RequestData requestData) public requestData;
     mapping(string ticker => uint256 baseUnit) public baseUnits;
     // Can probably purge some of these
-    EnumerableSet.Bytes32Set private requestIds;
+    CustomMap.PriceRequestMap private requestData;
     EnumerableSet.Bytes32Set private assetIds;
 
     /**
      * @notice Initializes the contract with the Chainlink router address and sets the contract owner
      */
-    constructor(address _marketFactory, uint64 _subId) FunctionsClient(router) {
-        subscriptionId = _subId;
+    constructor(
+        address _marketFactory,
+        address _weth,
+        address _link,
+        address _uniV3Router,
+        address _uniV3Factory,
+        uint64 _subId,
+        bytes32 _donId,
+        address _router
+    ) FunctionsClient(_router) {
         marketFactory = IMarketFactory(_marketFactory);
+        WETH = _weth;
+        LINK = _link;
+        UNISWAP_V3_ROUTER = _uniV3Router;
+        UNISWAP_V3_FACTORY = _uniV3Factory;
+        subscriptionId = _subId;
+        DON_ID = _donId;
+        ROUTER = _router;
     }
 
     function initialize(
@@ -114,6 +134,11 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         nativeLinkPriceFeed = _nativeLinkPriceFeed;
     }
 
+    function setJavascriptSourceCode(string memory _priceUpdateSource, string memory _cumulativePnlSource) external {
+        priceUpdateSource = _priceUpdateSource;
+        cumulativePnlSource = _cumulativePnlSource;
+    }
+
     function supportAsset(string memory _ticker, uint256 _baseUnit) external {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (assetIds.contains(assetId)) return; // Return if already supported
@@ -140,6 +165,12 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         timeToExpiration = _timeToExpiration;
     }
 
+    function clearInvalidRequest(bytes32 _requestId) external {
+        if (requestData.contains(_requestId)) {
+            if (!requestData.remove(_requestId)) revert PriceFeed_FailedToClearRequest();
+        }
+    }
+
     /**
      * @notice Sends an HTTP request for character information
      * @param args The arguments to pass to the HTTP request -> should be the tickers for which pricing is requested
@@ -150,23 +181,12 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         payable
         returns (bytes32 requestId)
     {
-        Oracle.isSequencerUp(this);
-        // (Index Token), Long Token, Short Token
-        if (args.length != 3 || args.length != 2) revert PriceFeed_PriceUpdateLength();
-        // Convert ETH into Link
-        _convertEthToLink(msg.value);
-        // Initialize the request
-        FunctionsRequest.Request memory req;
-        req.initializeRequestForInlineJavaScript(priceUpdateSource); // Initialize the request with JS code
-        req.setArgs(args); // Set the arguments for the request
+        // Create a pseudo-random request id
+        requestId = keccak256(abi.encode(args, _requester, block.timestamp, block.prevrandao, tx.gasprice));
 
-        // Send the request and store the request ID
-        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, donID);
+        RequestData memory data = RequestData({requester: _requester, requestType: RequestType.PRICE_UPDATE});
 
-        requestData[requestId].requestType = RequestType.PRICE_UPDATE;
-        requestData[requestId].requester = _requester;
-
-        requestIds.add(requestId);
+        requestData.set(requestId, data);
 
         return requestId;
     }
@@ -189,17 +209,12 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         // convert assets to a string
         string[] memory tickers = market.getTickers();
 
-        FunctionsRequest.Request memory req;
-        req.initializeRequestForInlineJavaScript(cumulativePnlSource); // Initialize the request with JS code
-        if (tickers.length > 0) req.setArgs(tickers); // Set the arguments for the request
+        // Create a pseudo-random request id
+        requestId = keccak256(abi.encode(tickers, _requester, block.timestamp, block.prevrandao, tx.gasprice));
 
-        // Send the request and store the request ID
-        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, donID);
+        RequestData memory data = RequestData({requester: _requester, requestType: RequestType.CUMULATIVE_PNL});
 
-        requestData[requestId].requestType = RequestType.CUMULATIVE_PNL;
-        requestData[requestId].requester = _requester;
-
-        requestIds.add(requestId);
+        requestData.set(requestId, data);
 
         return requestId;
     }
@@ -214,14 +229,14 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     // Try to avoid reverting, and instead return without storing the price response if invalid.
     function fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
         // Return if invalid requestId
-        if (!requestIds.contains(requestId)) return;
+        if (!requestData.contains(requestId)) return;
         // Return if an error is thrown
         if (err.length > 0) return;
         // Remove the RequestId from storage and return if fail
-        bool success = requestIds.remove(requestId);
+        bool success = requestData.remove(requestId);
         if (!success) return;
         // Get the request type of the request
-        RequestData memory data = requestData[requestId];
+        RequestData memory data = requestData.get(requestId);
         if (data.requestType == RequestType.PRICE_UPDATE) {
             // Fulfill the price update request
             UnpackedPriceResponse[] memory unpackedResponse = abi.decode(response, (UnpackedPriceResponse[]));
@@ -260,6 +275,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     }
 
     function clearSignedPrices(IMarket market, bytes32 _requestId) external {
+        if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
         // loop through the assets with prices and clear them from storage
         string[] memory assets = assetsWithPrices[_requestId];
         uint256 len = assets.length;
@@ -351,11 +367,15 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     }
 
     function priceUpdateRequested(bytes32 _requestId) external view returns (bool) {
-        return requestData[_requestId].requester != address(0);
+        return requestData.get(_requestId).requester != address(0);
     }
 
     function getRequester(bytes32 _requestId) external view returns (address) {
-        return requestData[_requestId].requester;
+        return requestData.get(_requestId).requester;
+    }
+
+    function getRequests() external view returns (bytes32[] memory) {
+        return requestData.keys();
     }
 
     // Used to Manually Set Prices for Testing

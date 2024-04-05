@@ -9,7 +9,7 @@ import {MultiAssetMarket} from "./MultiAssetMarket.sol";
 import {MarketToken} from "./MarketToken.sol";
 import {TradeStorage} from "../positions/TradeStorage.sol";
 import {RewardTracker} from "../rewards/RewardTracker.sol";
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {CustomMap} from "../libraries/CustomMap.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IReferralStorage} from "../referrals/ReferralStorage.sol";
@@ -21,8 +21,7 @@ import {Roles} from "../access/Roles.sol";
 
 /// @dev Needs MarketFactory Role
 contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
-    using EnumerableSet for EnumerableSet.AddressSet;
-    using EnumerableSet for EnumerableSet.Bytes32Set;
+    using CustomMap for CustomMap.DeployRequestMap;
 
     IPriceFeed priceFeed;
     IReferralStorage referralStorage;
@@ -37,14 +36,16 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     address private immutable WETH;
     address private immutable USDC;
 
-    EnumerableSet.AddressSet private markets;
-    EnumerableSet.Bytes32Set private requestKeys;
-    mapping(bytes32 requestKey => MarketRequest) private requests;
+    CustomMap.DeployRequestMap private requests;
+    mapping(address market => bool isMarket) public isMarket;
+    mapping(uint256 index => address market) public markets;
 
     bool private isInitialized;
+    bool private multiAssetsEnabled;
     IMarket.Config public defaultConfig;
     address public feeReceiver;
     uint256 public marketCreationFee;
+    uint256 cumulativeMarketIndex;
 
     constructor(address _weth, address _usdc, address _roleStorage) RoleValidation(_roleStorage) {
         WETH = _weth;
@@ -69,6 +70,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         defaultConfig = _defaultConfig;
         feeReceiver = _feeReceiver;
         marketCreationFee = _marketCreationFee;
+        multiAssetsEnabled = false;
         isInitialized = true;
         emit MarketFactoryInitialized(_priceFeed);
     }
@@ -94,7 +96,11 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         positionManager = IPositionManager(_positionManager);
     }
 
-    function requestNewMarket(MarketRequest calldata _request) external payable nonReentrant {
+    function setIsMultiAssetMarketEnabled(bool _multiAssetsEnabled) external onlyAdmin {
+        multiAssetsEnabled = _multiAssetsEnabled;
+    }
+
+    function requestNewMarket(DeployRequest calldata _request) external payable nonReentrant {
         /* Validate the Inputs */
         // 1. Msg.value should be > marketCreationFee
         if (msg.value != marketCreationFee) revert MarketFactory_InvalidFee();
@@ -103,17 +109,17 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // 3. Base Unit should be non-zero
         if (_request.baseUnit == 0) revert MarketFactory_InvalidBaseUnit();
         if (_request.isMultiAsset) {
-            // Caller must have the admin role
-            if (!roleStorage.hasRole(Roles.DEFAULT_ADMIN_ROLE, msg.sender)) revert MarketFactory_AccessDenied();
+            // Caller must have the admin role if multi assets are disabled
+            if (!multiAssetsEnabled && !roleStorage.hasRole(Roles.DEFAULT_ADMIN_ROLE, msg.sender)) {
+                revert MarketFactory_AccessDenied();
+            }
         }
 
         /* Generate a differentiated Request Key based on the inputs */
         bytes32 requestKey = getMarketRequestKey(msg.sender, _request.indexTokenTicker);
 
-        // Add the request key to storage
-        requestKeys.add(requestKey);
         // Add the request to storage
-        requests[requestKey] = _request;
+        if (!requests.set(requestKey, _request)) revert MarketFactory_FailedToAddMarket();
 
         // Fire Event
         emit MarketRequested(requestKey, _request.indexTokenTicker);
@@ -124,7 +130,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /// @dev - never reverts. If the request is invalid, it's deleted and the function returns address(0);
     function executeNewMarket(bytes32 _requestKey) external nonReentrant onlyMarketKeeper returns (address) {
         // Get the Request
-        MarketRequest memory request = requests[_requestKey];
+        DeployRequest memory request = requests.get(_requestKey);
 
         /* Validate and Update the Request */
 
@@ -171,8 +177,8 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // Create new Reward Tracker contract
         RewardTracker rewardTracker = new RewardTracker(
             market,
-            // Prepend an 's' to the start of the name / symbol (staked XYZ)
-            string(abi.encodePacked("s", request.marketTokenName)),
+            // Prepend Staked Prefix
+            string(abi.encodePacked("Staked ", request.marketTokenName)),
             string(abi.encodePacked("s", request.marketTokenSymbol)),
             address(roleStorage)
         );
@@ -186,8 +192,9 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // Initialize RewardTracker with Default values
         rewardTracker.initialize(address(marketToken), address(feeDistributor), address(liquidityLocker));
         // Add to Storage
-        bool success = markets.add(address(market));
-        if (!success) revert MarketFactory_FailedToAddMarket();
+        isMarket[address(market)] = true;
+        markets[cumulativeMarketIndex] = address(market);
+        ++cumulativeMarketIndex;
 
         // Set Up Roles -> Enable Caller to control Market
         roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender, msg.sender));
@@ -204,7 +211,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
 
     function deleteInvalidRequest(bytes32 _requestKey) external onlyMarketKeeper {
         // Check the Request exists
-        if (!requestKeys.contains(_requestKey)) revert MarketFactory_RequestDoesNotExist();
+        if (!requests.contains(_requestKey)) revert MarketFactory_RequestDoesNotExist();
         // Delete the Request
         _deleteMarketRequest(_requestKey);
     }
@@ -212,14 +219,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Getter Functions =========================
      */
-    function getMarkets() external view returns (address[] memory) {
-        return markets.values();
-    }
-
-    function getMarketAtIndex(uint256 _index) external view returns (address) {
-        return markets.at(_index);
-    }
-
     function getMarketRequestKey(address _user, string calldata _indexTokenTicker)
         public
         pure
@@ -232,19 +231,26 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         return keccak256(abi.encode(_indexTokenTicker));
     }
 
-    function isMarket(address _market) external view returns (bool) {
-        return markets.contains(_market);
+    function getRequest(bytes32 _requestKey) external view returns (DeployRequest memory) {
+        return requests.get(_requestKey);
     }
 
-    function getRequest(bytes32 _requestKey) external view returns (MarketRequest memory) {
-        return requests[_requestKey];
+    /**
+     * @dev Return the an array containing all the keys
+     *
+     * WARNING: This operation will copy the entire storage to memory, which can be quite expensive. This is designed
+     * to mostly be used by view accessors that are queried without any gas fees. Developers should keep in mind that
+     * this function has an unbounded cost, and using it as part of a state-changing function may render the function
+     * uncallable if the map grows to a point where copying to memory consumes too much gas to fit in a block.
+     */
+    function getRequestKeys() external view returns (bytes32[] memory) {
+        return requests.keys();
     }
 
     /**
      * ========================= Internal Functions =========================
      */
     function _deleteMarketRequest(bytes32 _requestKey) internal {
-        requestKeys.remove(_requestKey);
-        delete requests[_requestKey];
+        if (!requests.remove(_requestKey)) revert MarketFactory_FailedToRemoveRequest();
     }
 }
