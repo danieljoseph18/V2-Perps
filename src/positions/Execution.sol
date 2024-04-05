@@ -38,6 +38,7 @@ library Execution {
     error Execution_InvalidPriceRequest();
     error Execution_InvalidRequestId();
     error Execution_InvalidAdlDelta();
+    error Execution_PositionNotProfitable();
 
     event AdlTargetRatioReached(address indexed market, int256 pnlFactor, bool isLong);
 
@@ -73,9 +74,10 @@ library Execution {
         address referrer;
     }
 
-    uint256 private constant LONG_BASE_UNIT = 1e18;
-    uint256 private constant SHORT_BASE_UNIT = 1e6;
-    uint256 private constant PRECISION = 1e18;
+    uint64 private constant LONG_BASE_UNIT = 1e18;
+    uint64 private constant SHORT_BASE_UNIT = 1e6;
+    uint64 private constant PRECISION = 1e18;
+    uint64 private constant MAX_PNL_FACTOR = 0.45e18;
 
     /**
      * ========================= Construction Functions =========================
@@ -171,7 +173,6 @@ library Execution {
         IPriceFeed priceFeed,
         bytes32 _positionKey,
         bytes32 _priceRequestId,
-        uint256 _sizeDelta,
         uint256 _adlFeePercentage,
         address _feeReceiver
     )
@@ -195,26 +196,33 @@ library Execution {
         state.priceImpactUsd = 0;
         // Get starting PNL Factor
         startingPnlFactor = _getPnlFactor(market, state, position.ticker, position.isLong);
-        // fetch max pnl to pool ratio
-        uint256 maxPnlFactor = MarketUtils.getMaxPnlFactor(market);
 
         // Check the PNL Factor is greater than the max PNL Factor
-        if (startingPnlFactor.abs() <= maxPnlFactor || startingPnlFactor < 0) {
-            revert Execution_PnlToPoolRatioNotExceeded(startingPnlFactor, maxPnlFactor);
+        if (startingPnlFactor.abs() <= MAX_PNL_FACTOR || startingPnlFactor < 0) {
+            revert Execution_PnlToPoolRatioNotExceeded(startingPnlFactor, MAX_PNL_FACTOR);
         }
 
-        // Check the Size Delta is < Max Percentage Delta
-        if (_sizeDelta > mulDiv(position.positionSize, market.MAX_ADL_PERCENTAGE(), PRECISION)) {
-            revert Execution_InvalidAdlDelta();
-        }
+        // Check the Position being ADLd is profitable
+        int256 pnl = Position.getPositionPnl(
+            position.positionSize,
+            position.weightedAvgEntryPrice,
+            state.indexPrice,
+            state.indexBaseUnit,
+            position.isLong
+        );
+        if (pnl < 0) revert Execution_PositionNotProfitable();
 
+        // Calculate the Percentage to ADL
+        uint256 adlPercentage = Position.calculateAdlPercentage(startingPnlFactor.abs(), pnl, position.positionSize);
+        // Calculate the Size Delta
+        uint256 sizeDelta = mulDiv(position.positionSize, adlPercentage, PRECISION);
         // Construct an ADL Order
-        params = Position.createAdlOrder(position, _sizeDelta, _feeReceiver, _priceRequestId);
+        params = Position.createAdlOrder(position, sizeDelta, _feeReceiver, _priceRequestId);
 
         // Get and set the ADL fee for the executor
         // multiply the size delta by the adlFee percentage
         state.feeForExecutor =
-            _calculateFeeForAdl(_sizeDelta, state.collateralPrice, state.collateralBaseUnit, _adlFeePercentage);
+            _calculateFeeForAdl(sizeDelta, state.collateralPrice, state.collateralBaseUnit, _adlFeePercentage);
     }
 
     /**

@@ -276,15 +276,11 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
     // Only person who requested the pricing for an order should be able to initiate the adl,
     // up until a certain time buffer. After that time buffer, any user should be able to.
-    /// @dev - Caller needs to call Router.requestExecutionPricing before
-    function executeAdl(IMarket market, bytes32 _requestId, uint256 _sizeDelta, bytes32 _positionKey)
-        external
-        payable
-        onlyAdlKeeper
-    {
+    /// @dev - Caller needs to call Router.requestExecutionPricing before and provide a valid requestId
+    function executeAdl(IMarket market, bytes32 _requestId, bytes32 _positionKey) external payable onlyAdlKeeper {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the ADL
-        try tradeStorage.executeAdl(_positionKey, _requestId, _sizeDelta, msg.sender) {}
+        try tradeStorage.executeAdl(_positionKey, _requestId, msg.sender) {}
         catch {
             revert PositionManager_AdlFailed();
         }

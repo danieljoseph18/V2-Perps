@@ -7,6 +7,8 @@ import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {UD60x18, ud, unwrap, exp} from "@prb/math/UD60x18.sol";
+import {SD59x18, sd, unwrap, exp} from "@prb/math/SD59x18.sol";
 import {Execution} from "../positions/Execution.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
@@ -15,6 +17,7 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 library Position {
     using SignedMath for int256;
     using SafeCast for uint256;
+    using SafeCast for int256;
 
     error Position_InvalidDecrease();
     error Position_SizeDelta();
@@ -50,10 +53,12 @@ library Position {
     uint8 private constant LEVERAGE_PRECISION = 100;
     uint64 private constant PRECISION = 1e18;
     uint64 private constant MIN_COLLATERAL = 1000;
+    uint64 private constant MAX_PNL_RATIO = 0.45e18; // 45%
     int256 private constant PRICE_PRECISION = 1e30;
     // Max and Min Price Slippage
     uint128 private constant MIN_SLIPPAGE = 0.0001e30; // 0.01%
     uint128 private constant MAX_SLIPPAGE = 0.9999e30; // 99.99%
+    uint256 private constant MAX_ADL_PERCENTAGE = 0.5e18; // 50%
 
     // Data for an Open Position
     struct Data {
@@ -667,6 +672,22 @@ library Position {
         // Convert from USD to collateral tokens
         decreasePositionPnl =
             mulDivSigned(realizedPnl, _collateralBaseUnit.toInt256(), _collateralTokenPrice.toInt256());
+    }
+
+    /**
+     * @dev Calculates the Percentage to ADL a position by based on the PNL to Pool Ratio.
+     * Percentage to ADL = 1 - e ** (-excessRatio(positionPnl/positionSize))
+     * where excessRatio = (currentPnlToPoolRatio/maxPnlToPoolRatio) - 1
+     */
+    function calculateAdlPercentage(uint256 _pnlToPoolRatio, int256 _positionProfit, uint256 _positionSize)
+        external
+        pure
+        returns (uint256 adlPercentage)
+    {
+        uint256 excessRatio = mulDiv(_pnlToPoolRatio, PRECISION, MAX_PNL_RATIO) - PRECISION;
+        SD59x18 exponent = sd(-excessRatio.toInt256()).mul(sd(_positionProfit)).div(sd(_positionSize.toInt256()));
+        adlPercentage = PRECISION - unwrap(exp(exponent)).toUint256();
+        if (adlPercentage > MAX_ADL_PERCENTAGE) adlPercentage = MAX_ADL_PERCENTAGE;
     }
 
     /**

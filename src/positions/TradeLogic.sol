@@ -154,7 +154,6 @@ library TradeLogic {
         IPriceFeed priceFeed,
         bytes32 _positionKey,
         bytes32 _requestId,
-        uint256 _sizeDelta,
         address _feeReceiver,
         uint256 _adlFee
     ) external {
@@ -166,7 +165,7 @@ library TradeLogic {
             Position.Data memory position,
             int256 startingPnlFactor
         ) = Execution.constructAdlOrder(
-            market, tradeStorage, priceFeed, _positionKey, _requestId, _sizeDelta, _adlFee, _feeReceiver
+            market, tradeStorage, priceFeed, _positionKey, _requestId, _adlFee, _feeReceiver
         );
 
         // Update the Market State
@@ -187,7 +186,7 @@ library TradeLogic {
         // Validate the Adl
         Execution.validateAdl(market, state, startingPnlFactor, params.request.input.ticker, position.isLong);
 
-        emit AdlExecuted(address(market), _positionKey, _sizeDelta, position.isLong);
+        emit AdlExecuted(address(market), _positionKey, params.request.input.sizeDelta, position.isLong);
     }
 
     function liquidatePosition(
