@@ -6,7 +6,6 @@ remappings = [
     '@openzeppelin/contracts=lib/openzeppelin-contracts/contracts',
     '@prb/math/=lib/prb-math/src/',
     '@solmate/=lib/solmate/src/',
-    "@pythnetwork/pyth-sdk-solidity/=node_modules/@pythnetwork/pyth-sdk-solidity",
     "@chainlink/contracts/src/v0.8/=lib/chainlink/contracts/src/v0.8",
 ]
 

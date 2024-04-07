@@ -9,6 +9,7 @@ import {IMarket} from "../../markets/interfaces/IMarket.sol";
 interface ITradeStorage {
     event TradeStorageInitialized(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
     event FeesSet(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
+    event OrderRequestCancelled(bytes32 indexed _orderKey);
 
     error TradeStorage_AlreadyInitialized();
     error TradeStorage_OrderAlreadyExists();
@@ -17,6 +18,8 @@ interface ITradeStorage {
     error TradeStorage_OrderRemovalFailed();
     error TradeStorage_PositionRemovalFailed();
     error TradeStorage_InvalidExecutionTime();
+    error TradeStorage_InvalidPosition();
+    error TradeStorage_InvalidOrder();
 
     function initialize(
         uint256 _liquidationFee, // 0.05e18 = 5%
@@ -53,38 +56,8 @@ interface ITradeStorage {
     function liquidationFee() external view returns (uint256);
 
     function deleteOrder(bytes32 _orderKey, bool _isLimit) external;
-    function updateMarketState(
-        Execution.State memory _state,
-        string memory _ticker,
-        uint256 _sizeDelta,
-        bool _isLong,
-        bool _isIncrease
-    ) external;
     function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external;
     function createPosition(Position.Data calldata _position, bytes32 _positionKey) external;
-    function payFees(
-        uint256 _borrowAmount,
-        uint256 _positionFee,
-        uint256 _affiliateRebate,
-        address _referrer,
-        bool _isLong
-    ) external;
     function createOrder(Position.Request memory _request) external returns (bytes32 orderKey);
-    function reserveLiquidity(
-        uint256 _sizeDeltaUsd,
-        uint256 _collateralDelta,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit,
-        address _user,
-        bool _isLong
-    ) external;
-    function unreserveLiquidity(
-        uint256 _sizeDeltaUsd,
-        uint256 _collateralDelta,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit,
-        address _user,
-        bool _isLong
-    ) external;
     function deletePosition(bytes32 _positionKey, bool _isLong) external;
 }

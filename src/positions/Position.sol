@@ -7,17 +7,18 @@ import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {UD60x18, ud, unwrap, exp} from "@prb/math/UD60x18.sol";
 import {SD59x18, sd, unwrap, exp} from "@prb/math/SD59x18.sol";
 import {Execution} from "../positions/Execution.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
+import {Convert} from "../libraries/Convert.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
     using SignedMath for int256;
     using SafeCast for uint256;
     using SafeCast for int256;
+    using Convert for uint256;
 
     error Position_InvalidDecrease();
     error Position_SizeDelta();
@@ -114,12 +115,13 @@ library Position {
         bool isLimit;
         bool isIncrease;
         bool reverseWrap;
-        Conditionals conditionals;
+        bool triggerAbove; // For Limits -> Execute above the limit price, or below it
     }
 
     // Request -> Constructed by Router based on User Input
     struct Request {
         Input input;
+        Conditionals conditionals;
         address user;
         uint64 requestTimestamp;
         RequestType requestType;
@@ -148,7 +150,7 @@ library Position {
     /**
      * =========================== Validation Functions ============================
      */
-    function validateInputParameters(Position.Input memory _trade, address _market)
+    function validateInputParameters(Input memory _trade, Conditionals memory _conditionals, address _market)
         public
         view
         returns (bytes32 positionKey)
@@ -156,7 +158,6 @@ library Position {
         if (!(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE)) {
             revert Position_InvalidSlippage();
         }
-        if (_trade.collateralDelta < MIN_COLLATERAL) revert Position_InvalidCollateralDelta();
         if (bytes(_trade.ticker).length == 0) revert Position_InvalidAssetId();
         if (_market == address(0)) revert Position_MarketDoesNotExist();
 
@@ -165,25 +166,8 @@ library Position {
         if (_trade.isLimit && _trade.limitPrice == 0) revert Position_InvalidLimitPrice();
         else if (!_trade.isLimit && _trade.limitPrice != 0) revert Position_InvalidLimitPrice();
 
-        if (_trade.conditionals.stopLossPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
-        if (_trade.conditionals.takeProfitPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
-    }
-
-    function validateRequest(IMarket market, Request memory _request, Execution.State memory _state)
-        external
-        view
-        returns (Request memory)
-    {
-        // Check the Market contains the Asset
-        if (!market.isAssetInMarket(_request.input.ticker)) revert Position_MarketDoesNotExist();
-        // Re-Validate the Input
-        validateInputParameters(_request.input, address(market));
-        if (_request.user == address(0)) revert Position_ZeroAddress();
-        if (_request.requestTimestamp > block.timestamp) revert Position_InvalidRequestTimestamp();
-        _request.input.conditionals =
-            _validateConditionals(_request.input.conditionals, _state.indexPrice, _request.input.isLong);
-
-        return _request;
+        if (_conditionals.stopLossPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
+        if (_conditionals.takeProfitPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
     }
 
     function validateMarketDelta(
@@ -212,10 +196,11 @@ library Position {
         uint256 _positionFee,
         int256 _fundingFee,
         uint256 _borrowFee,
-        uint256 _affiliateRebate
+        uint256 _affiliateRebate,
+        uint256 _feeForExecutor
     ) external pure {
         // ensure the position collateral has changed by the correct amount
-        uint256 expectedCollateralDelta = _collateralIn - _positionFee - _borrowFee - _affiliateRebate;
+        uint256 expectedCollateralDelta = _collateralIn - _positionFee - _borrowFee - _affiliateRebate - _feeForExecutor;
         // Account for funding
         if (_fundingFee < 0) expectedCollateralDelta -= _fundingFee.abs();
         else if (_fundingFee > 0) expectedCollateralDelta += _fundingFee.abs();
@@ -232,10 +217,12 @@ library Position {
         uint256 _positionFee, // trading fee not charged on collateral delta
         int256 _fundingFee,
         uint256 _borrowFee,
-        uint256 _affiliateRebate
+        uint256 _affiliateRebate,
+        uint256 _feeForExecutor
     ) external pure {
         // ensure the position collateral has changed by the correct amount
-        uint256 expectedCollateralDelta = _collateralDelta + _positionFee + _borrowFee + _affiliateRebate;
+        uint256 expectedCollateralDelta =
+            _collateralDelta + _positionFee + _borrowFee + _affiliateRebate + _feeForExecutor;
         // Account for funding
         if (_fundingFee < 0) expectedCollateralDelta += _fundingFee.abs();
         else if (_fundingFee > 0) expectedCollateralDelta -= _fundingFee.abs();
@@ -249,9 +236,10 @@ library Position {
         uint256 _collateralIn,
         uint256 _positionCollateral,
         uint256 _positionFee,
-        uint256 _affiliateRebate
+        uint256 _affiliateRebate,
+        uint256 _feeForExecutor
     ) external pure {
-        if (_collateralIn != _positionCollateral + _positionFee + _affiliateRebate) {
+        if (_collateralIn != _positionCollateral + _positionFee + _affiliateRebate + _feeForExecutor) {
             revert Position_NewPosition();
         }
     }
@@ -265,9 +253,10 @@ library Position {
         uint256 _affiliateRebate,
         int256 _fundingFee,
         uint256 _borrowFee,
-        uint256 _sizeDelta
+        uint256 _sizeDelta,
+        uint256 _feeForExecutor
     ) external pure {
-        uint256 expectedCollateralDelta = _collateralIn - _positionFee - _affiliateRebate - _borrowFee;
+        uint256 expectedCollateralDelta = _collateralIn - _positionFee - _affiliateRebate - _borrowFee - _feeForExecutor;
         // Account for funding paid out from / to the user
         if (_fundingFee < 0) expectedCollateralDelta -= _fundingFee.abs();
         else if (_fundingFee > 0) expectedCollateralDelta += _fundingFee.abs();
@@ -279,6 +268,7 @@ library Position {
         }
     }
 
+    // @gas - can combine with collateral decrease?
     function validateDecreasePosition(
         Data memory _position,
         uint256 _initialCollateral,
@@ -289,14 +279,16 @@ library Position {
         int256 _pnl,
         int256 _fundingFee,
         uint256 _borrowFee,
-        uint256 _sizeDelta
+        uint256 _sizeDelta,
+        uint256 _feeForExecutor
     ) external pure {
-        // Amount out should = collateralDelta +- pnl += fundingFee - borrow fee - trading fee
+        // Amount out should = collateralDelta +- pnl += fundingFee - borrow fee - trading fee - affiliateRebate - feeForExecutor
         /**
          * collat before should = collat after + collateralDelta + fees + pnl
          * feeDiscount / 2, as 1/2 is rebate to referrer
          */
-        uint256 expectedCollateralDelta = _collateralOut + _positionFee + _affiliateRebate + _borrowFee;
+        uint256 expectedCollateralDelta =
+            _collateralOut + _positionFee + _affiliateRebate + _borrowFee + _feeForExecutor;
         // Account for funding / pnl paid out from collateral
         if (_pnl < 0) expectedCollateralDelta += _pnl.abs();
         if (_fundingFee < 0) expectedCollateralDelta += _fundingFee.abs();
@@ -322,6 +314,12 @@ library Position {
         if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
 
+    // @audit - can an order get mischaracterized as an SL vs TP? Can this cause harm?
+    // @audit - probably rethink this
+    /**
+     * We can add a bool for execute above / below. This should make categorization
+     * and execution easier.
+     */
     function getRequestType(Input calldata _trade, Data memory _position)
         external
         pure
@@ -350,14 +348,15 @@ library Position {
 
             if (_trade.isLimit) {
                 // Case 4: Trade is a Limit Order on an Existing Position (SL / TP)
-                if (_position.isLong) {
-                    requestType = (_trade.limitPrice > _position.weightedAvgEntryPrice)
-                        ? RequestType.TAKE_PROFIT
-                        : RequestType.STOP_LOSS;
+                if (_trade.triggerAbove) {
+                    if (_trade.isLong) {
+                        requestType = RequestType.TAKE_PROFIT;
+                    } else {
+                        requestType = RequestType.STOP_LOSS;
+                    }
                 } else {
-                    requestType = (_trade.limitPrice < _position.weightedAvgEntryPrice)
-                        ? RequestType.TAKE_PROFIT
-                        : RequestType.STOP_LOSS;
+                    if (_trade.isLong) requestType = RequestType.STOP_LOSS;
+                    else requestType = RequestType.TAKE_PROFIT;
                 }
             } else {
                 // Case 5: Trade is a Market Decrease on an Existing Position
@@ -385,13 +384,16 @@ library Position {
         );
     }
 
-    function createRequest(Input calldata _trade, address _user, RequestType _requestType, bytes32 _requestId)
-        external
-        view
-        returns (Request memory request)
-    {
+    function createRequest(
+        Input calldata _trade,
+        Conditionals calldata _conditionals,
+        address _user,
+        RequestType _requestType,
+        bytes32 _requestId
+    ) external view returns (Request memory request) {
         request = Request({
             input: _trade,
+            conditionals: _conditionals,
             user: _user,
             requestTimestamp: uint64(block.timestamp),
             requestType: _requestType,
@@ -437,24 +439,18 @@ library Position {
                 input: Input({
                     ticker: _position.ticker,
                     collateralToken: _position.collateralToken,
-                    collateralDelta: mulDiv(_position.collateralAmount, _conditionals.stopLossPercentage, PRECISION),
-                    sizeDelta: mulDiv(_position.positionSize, _conditionals.stopLossPercentage, PRECISION),
+                    collateralDelta: _position.collateralAmount.percentage(_conditionals.stopLossPercentage),
+                    sizeDelta: _position.positionSize.percentage(_conditionals.stopLossPercentage),
                     limitPrice: _conditionals.stopLossPrice,
                     maxSlippage: MAX_SLIPPAGE,
                     executionFee: uint64(slExecutionFee),
-                    isLong: !_position.isLong,
+                    isLong: _position.isLong,
                     isLimit: true,
                     isIncrease: false,
                     reverseWrap: true,
-                    conditionals: Conditionals({
-                        stopLossSet: false,
-                        stopLossPrice: 0,
-                        stopLossPercentage: 0,
-                        takeProfitSet: false,
-                        takeProfitPrice: 0,
-                        takeProfitPercentage: 0
-                    })
+                    triggerAbove: _position.isLong ? false : true
                 }),
+                conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
                 requestTimestamp: uint64(block.timestamp),
                 requestType: RequestType.STOP_LOSS,
@@ -467,8 +463,8 @@ library Position {
                 input: Input({
                     ticker: _position.ticker,
                     collateralToken: _position.collateralToken,
-                    collateralDelta: mulDiv(_position.collateralAmount, _conditionals.takeProfitPercentage, PRECISION),
-                    sizeDelta: mulDiv(_position.positionSize, _conditionals.takeProfitPercentage, PRECISION),
+                    collateralDelta: _position.collateralAmount.percentage(_conditionals.takeProfitPercentage),
+                    sizeDelta: _position.positionSize.percentage(_conditionals.takeProfitPercentage),
                     limitPrice: _conditionals.takeProfitPrice,
                     maxSlippage: MAX_SLIPPAGE,
                     executionFee: uint64(_totalExecutionFee - slExecutionFee),
@@ -476,15 +472,9 @@ library Position {
                     isLimit: true,
                     isIncrease: false,
                     reverseWrap: true,
-                    conditionals: Conditionals({
-                        stopLossSet: false,
-                        stopLossPrice: 0,
-                        stopLossPercentage: 0,
-                        takeProfitSet: false,
-                        takeProfitPrice: 0,
-                        takeProfitPercentage: 0
-                    })
+                    triggerAbove: _position.isLong ? true : false
                 }),
+                conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
                 requestTimestamp: uint64(block.timestamp),
                 requestType: RequestType.TAKE_PROFIT,
@@ -512,8 +502,9 @@ library Position {
                     isLimit: false,
                     isIncrease: false,
                     reverseWrap: false,
-                    conditionals: Conditionals(false, false, 0, 0, 0, 0)
+                    triggerAbove: false
                 }),
+                conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
                 requestTimestamp: uint64(block.timestamp),
                 requestType: RequestType.POSITION_DECREASE,
@@ -535,7 +526,7 @@ library Position {
                 input: Input({
                     ticker: _position.ticker,
                     collateralToken: _position.collateralToken,
-                    collateralDelta: mulDiv(_position.collateralAmount, _sizeDelta, _position.positionSize),
+                    collateralDelta: _position.collateralAmount.percentage(_sizeDelta, _position.positionSize),
                     sizeDelta: _sizeDelta,
                     limitPrice: 0,
                     maxSlippage: MAX_SLIPPAGE,
@@ -544,8 +535,9 @@ library Position {
                     isLimit: false,
                     isIncrease: false,
                     reverseWrap: false,
-                    conditionals: Conditionals(false, false, 0, 0, 0, 0)
+                    triggerAbove: false
                 }),
+                conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
                 requestTimestamp: uint64(block.timestamp),
                 requestType: RequestType.POSITION_DECREASE,
@@ -562,23 +554,23 @@ library Position {
      */
     function calculateFee(
         ITradeStorage tradeStorage,
-        uint256 _tokenAmount,
+        uint256 _sizeDelta,
         uint256 _collateralDelta,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit
     ) external view returns (uint256 positionFee, uint256 feeForExecutor) {
         uint256 feePercentage = tradeStorage.tradingFee();
         uint256 executorPercentage = tradeStorage.feeForExecution();
-        // convert index amount to collateral amount
-        if (_tokenAmount != 0) {
-            uint256 sizeInCollateral = mulDiv(_tokenAmount, _collateralBaseUnit, _collateralPrice);
+        // convert usd to collateral amount
+        if (_sizeDelta != 0) {
+            uint256 sizeInCollateral = _sizeDelta.toBase(_collateralBaseUnit, _collateralPrice);
             // calculate fee
-            positionFee = mulDiv(sizeInCollateral, feePercentage, PRECISION);
-            feeForExecutor = mulDiv(positionFee, executorPercentage, PRECISION);
+            positionFee = sizeInCollateral.percentage(feePercentage);
+            feeForExecutor = positionFee.percentage(executorPercentage);
             positionFee -= feeForExecutor;
         } else {
-            positionFee = mulDiv(_collateralDelta, feePercentage, PRECISION);
-            feeForExecutor = mulDiv(positionFee, executorPercentage, PRECISION);
+            positionFee = _collateralDelta.percentage(feePercentage);
+            feeForExecutor = positionFee.percentage(executorPercentage);
             positionFee -= feeForExecutor;
         }
     }
@@ -614,7 +606,7 @@ library Position {
         returns (uint256 collateralFeesOwed)
     {
         uint256 feesUsd = getTotalBorrowFeesUsd(market, _position);
-        collateralFeesOwed = mulDiv(feesUsd, _state.collateralBaseUnit, _state.collateralPrice);
+        collateralFeesOwed = feesUsd.toBase(_state.collateralBaseUnit, _state.collateralPrice);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
@@ -631,12 +623,13 @@ library Position {
             : MarketUtils.getCumulativeBorrowFee(market, _position.ticker, false)
                 - _position.borrowingParams.lastShortCumulativeBorrowFee;
         borrowFee += Borrowing.calculatePendingFees(market, _position.ticker, _position.isLong);
-        uint256 feeSinceUpdate = borrowFee == 0 ? 0 : mulDiv(_position.positionSize, borrowFee, PRECISION);
+        uint256 feeSinceUpdate = borrowFee == 0 ? 0 : _position.positionSize.percentage(borrowFee);
         totalFeesOwedUsd = feeSinceUpdate + _position.borrowingParams.feesOwed;
     }
 
     /// @dev returns PNL in USD
     // PNL = (Current Price - Average Entry Price) * (Position Value / Average Entry Price)
+    // @audit - precision loss?
     function getPositionPnl(
         uint256 _positionSizeUsd,
         uint256 _weightedAvgEntryPrice,
@@ -645,7 +638,7 @@ library Position {
         bool _isLong
     ) public pure returns (int256) {
         int256 priceDelta = _indexPrice.toInt256() - _weightedAvgEntryPrice.toInt256();
-        uint256 entryIndexAmount = mulDiv(_positionSizeUsd, _indexBaseUnit, _weightedAvgEntryPrice);
+        uint256 entryIndexAmount = _positionSizeUsd.toBase(_indexBaseUnit, _weightedAvgEntryPrice);
         if (_isLong) {
             return mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
@@ -684,19 +677,19 @@ library Position {
         pure
         returns (uint256 adlPercentage)
     {
-        uint256 excessRatio = mulDiv(_pnlToPoolRatio, PRECISION, MAX_PNL_RATIO) - PRECISION;
+        uint256 excessRatio = _pnlToPoolRatio.percentage(PRECISION, MAX_PNL_RATIO) - PRECISION;
         SD59x18 exponent = sd(-excessRatio.toInt256()).mul(sd(_positionProfit)).div(sd(_positionSize.toInt256()));
         adlPercentage = PRECISION - unwrap(exp(exponent)).toUint256();
         if (adlPercentage > MAX_ADL_PERCENTAGE) adlPercentage = MAX_ADL_PERCENTAGE;
     }
 
     /**
-     * =========================== Internal Functions ============================
+     * =========================== Private Functions ============================
      */
 
     // Sizes must be valid percentages
     function _validateConditionals(Conditionals memory _conditionals, uint256 _referencePrice, bool _isLong)
-        internal
+        private
         pure
         returns (Conditionals memory)
     {
@@ -742,7 +735,7 @@ library Position {
     function _validateFundingValues(
         IMarket.FundingValues calldata _prevFunding,
         IMarket.FundingValues calldata _funding
-    ) internal view {
+    ) private view {
         // Funding Rate should update to current block timestamp
         if (_funding.lastFundingUpdate != block.timestamp) {
             revert Position_FundingTimestamp();
@@ -768,7 +761,7 @@ library Position {
         IMarket.BorrowingValues calldata _borrowing,
         uint256 _sizeDelta,
         bool _isLong
-    ) internal view {
+    ) private view {
         // Borrowing Rate should update to current block timestamp
         if (_borrowing.lastBorrowUpdate != block.timestamp) {
             revert Position_BorrowingTimestamp();
@@ -820,7 +813,7 @@ library Position {
         uint256 _sizeDelta,
         bool _isLong,
         bool _isIncrease
-    ) internal pure {
+    ) private pure {
         if (_isLong) {
             // If increase, long open interest should increase by size delta.
             if (_isIncrease) {
@@ -849,7 +842,7 @@ library Position {
     }
 
     function _validatePnlValues(IMarket.PnlValues calldata _prevPnl, IMarket.PnlValues calldata _pnl, bool _isLong)
-        internal
+        private
         pure
     {
         // WAEP for the Opposite side should never change

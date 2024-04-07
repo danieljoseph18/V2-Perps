@@ -163,7 +163,11 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit WithdrawalRequestCreated(market, _owner, _tokenOut, _marketTokenAmountIn);
     }
 
-    function createPositionRequest(IMarket market, Position.Input memory _trade) external payable nonReentrant {
+    function createPositionRequest(
+        IMarket market,
+        Position.Input memory _trade,
+        Position.Conditionals calldata _conditionals
+    ) external payable nonReentrant {
         /**
          * 3 Cases:
          * 1. Position with no Conditionals -> Gas.Action.POSITION
@@ -171,7 +175,7 @@ contract Router is ReentrancyGuard, RoleValidation {
          * 3. Position with Stop Loss and Take Profit -> Gas.Action.POSITION_WITH_LIMITS
          */
         uint256 priceUpdateFee;
-        if (_trade.conditionals.stopLossSet && _trade.conditionals.takeProfitSet) {
+        if (_conditionals.stopLossSet && _conditionals.takeProfitSet) {
             priceUpdateFee = Gas.validateExecutionFee(
                 priceFeed,
                 positionManager,
@@ -181,7 +185,7 @@ contract Router is ReentrancyGuard, RoleValidation {
                 false,
                 _trade.isLimit
             );
-        } else if (_trade.conditionals.stopLossSet || _trade.conditionals.takeProfitSet) {
+        } else if (_conditionals.stopLossSet || _conditionals.takeProfitSet) {
             priceUpdateFee = Gas.validateExecutionFee(
                 priceFeed,
                 positionManager,
@@ -214,7 +218,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         bytes32 priceRequestId = _trade.isLimit ? bytes32(0) : _requestPriceUpdate(priceUpdateFee, _trade.ticker);
 
         // Construct the state for Order Creation
-        bytes32 positionKey = Position.validateInputParameters(_trade, address(market));
+        bytes32 positionKey = Position.validateInputParameters(_trade, _conditionals, address(market));
 
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
 
@@ -224,7 +228,8 @@ contract Router is ReentrancyGuard, RoleValidation {
         Position.RequestType requestType = Position.getRequestType(_trade, position);
 
         // Construct the Request from the user input
-        Position.Request memory request = Position.createRequest(_trade, msg.sender, requestType, priceRequestId);
+        Position.Request memory request =
+            Position.createRequest(_trade, _conditionals, msg.sender, requestType, priceRequestId);
 
         // Store the Order Request
         tradeStorage.createOrderRequest(request);

@@ -117,7 +117,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         // Add Ticker
         tickers.push(_ticker);
         // Initialize Storage
-        marketStorage[assetId].allocationPercentage = 1e18;
+        marketStorage[assetId].allocationShare = 10000;
         marketStorage[assetId].config = _config;
         marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
         marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
@@ -196,9 +196,9 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function setAllocationPercentage(string calldata, uint256) external onlyCallback {
+    function setAllocationShare(string calldata, uint256) external onlyCallback {
         // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationPercentage;
+        delete marketStorage[bytes32(0)].allocationShare;
         revert Market_SingleAssetMarket();
     }
 
@@ -212,25 +212,25 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function addAsset(string calldata) external onlyCallback {
         // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationPercentage;
+        delete marketStorage[bytes32(0)].allocationShare;
         revert Market_SingleAssetMarket();
     }
 
     function removeAsset(string calldata) external onlyCallback {
         // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationPercentage;
+        delete marketStorage[bytes32(0)].allocationShare;
         revert Market_SingleAssetMarket();
     }
 
     function setConfig(string calldata, Config calldata) external onlyCallback {
         // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationPercentage;
+        delete marketStorage[bytes32(0)].allocationShare;
         revert Market_SingleAssetMarket();
     }
 
     function setLastUpdate(string calldata) external onlyCallback {
         // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationPercentage;
+        delete marketStorage[bytes32(0)].allocationShare;
         revert Market_SingleAssetMarket();
     }
 
@@ -285,19 +285,14 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         onlyTradeStorage(address(this))
         nonReentrant
     {
-        uint256 available =
-            _isLongToken ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
-        if (_amount > available) revert Market_InsufficientAvailableTokens();
         if (_isLongToken) {
-            if (_shouldUnwrap) {
-                IWETH(WETH).withdraw(_amount);
-                (bool success,) = _to.call{value: _amount}("");
-                if (!success) revert Market_FailedToTransferETH();
-            } else {
-                IERC20(WETH).safeTransfer(_to, _amount);
-            }
+            MarketLogic.transferOutTokens(
+                _to, WETH, _amount, longTokenBalance - longTokensReserved, true, _shouldUnwrap
+            );
         } else {
-            IERC20(USDC).safeTransfer(_to, _amount);
+            MarketLogic.transferOutTokens(
+                _to, USDC, _amount, shortTokenBalance - shortTokensReserved, false, _shouldUnwrap
+            );
         }
     }
 
@@ -406,11 +401,11 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     {
         if (_params.withdrawal.isLongToken) {
             MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), _params, WETH, longTokenBalance, longTokensReserved
+                ITradeStorage(tradeStorage).priceFeed(), _params, WETH, longTokenBalance - longTokensReserved
             );
         } else {
             MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), _params, USDC, shortTokenBalance, shortTokensReserved
+                ITradeStorage(tradeStorage).priceFeed(), _params, USDC, shortTokenBalance - shortTokensReserved
             );
         }
     }

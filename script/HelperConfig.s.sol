@@ -6,6 +6,7 @@ import {MockUSDC} from "../test/mocks/MockUSDC.sol";
 import {IPriceFeed} from "../src/oracle/interfaces/IPriceFeed.sol";
 import {WETH} from "../src/tokens/WETH.sol";
 import {Oracle} from "../src/oracle/Oracle.sol";
+import {MockToken} from "../test/mocks/MockToken.sol";
 import {IHelperConfig} from "./IHelperConfig.s.sol";
 
 contract HelperConfig is IHelperConfig, Script {
@@ -28,17 +29,19 @@ contract HelperConfig is IHelperConfig, Script {
         // Need to configurate Price Feed for Sepolia and return
         MockUSDC mockUsdc = new MockUSDC();
         WETH weth = new WETH();
-        bytes32 ethPriceId = 0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace;
-        bytes32 usdcPriceId = 0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a;
 
-        activeNetworkConfig.weth = address(weth);
-        activeNetworkConfig.usdc = address(mockUsdc);
-        activeNetworkConfig.ethPriceId = ethPriceId;
-        activeNetworkConfig.usdcPriceId = usdcPriceId;
-        activeNetworkConfig.mockFeed = true;
-        activeNetworkConfig.sequencerUptimeFeed = address(0);
+        sepoliaConfig.weth = address(weth);
+        sepoliaConfig.usdc = address(mockUsdc);
+        sepoliaConfig.link = 0x779877A7B0D9E8603169DdbD7836e478b4624789;
+        sepoliaConfig.uniV3SwapRouter = 0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E;
+        sepoliaConfig.uniV3Factory = 0x0227628f3F023bb0B980b67D528571c95c6DaC1c;
+        sepoliaConfig.subId = 1; // To fill out
+        sepoliaConfig.donId = keccak256(abi.encode("DON")); // To fill out
+        sepoliaConfig.chainlinkRouter = 0x7AFe30cB3E53dba6801aa0EA647A0EcEA7cBe18d; // To fill out
+        sepoliaConfig.mockFeed = false;
+        sepoliaConfig.sequencerUptimeFeed = address(0);
 
-        sepoliaConfig = activeNetworkConfig;
+        activeNetworkConfig = sepoliaConfig;
     }
 
     function getActiveNetworkConfig() public view returns (NetworkConfig memory) {
@@ -52,17 +55,19 @@ contract HelperConfig is IHelperConfig, Script {
     function getOrCreateAnvilConfig() public returns (NetworkConfig memory anvilConfig) {
         MockUSDC mockUsdc = new MockUSDC();
         WETH weth = new WETH();
-        bytes32 ethPriceId = keccak256(abi.encode("ETH/USD"));
-        bytes32 usdcPriceId = keccak256(abi.encode("USDC/USD"));
-        // Create a mock price feed and return
+        MockToken link = new MockToken();
 
-        activeNetworkConfig.weth = address(weth);
-        activeNetworkConfig.usdc = address(mockUsdc);
-        activeNetworkConfig.ethPriceId = ethPriceId;
-        activeNetworkConfig.usdcPriceId = usdcPriceId;
-        activeNetworkConfig.mockFeed = true;
-        activeNetworkConfig.sequencerUptimeFeed = address(0);
+        anvilConfig.weth = address(weth);
+        anvilConfig.usdc = address(mockUsdc);
+        anvilConfig.link = address(link);
+        anvilConfig.uniV3SwapRouter = address(0);
+        anvilConfig.uniV3Factory = address(0);
+        anvilConfig.subId = 0;
+        anvilConfig.donId = keccak256(abi.encode("DON"));
+        anvilConfig.chainlinkRouter = address(0);
+        anvilConfig.mockFeed = true;
+        anvilConfig.sequencerUptimeFeed = address(0);
 
-        anvilConfig = activeNetworkConfig;
+        activeNetworkConfig = anvilConfig;
     }
 }

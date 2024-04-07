@@ -7,8 +7,12 @@ interface IHelperConfig {
     struct NetworkConfig {
         address weth;
         address usdc;
-        bytes32 ethPriceId;
-        bytes32 usdcPriceId;
+        address link;
+        address uniV3SwapRouter;
+        address uniV3Factory;
+        uint64 subId;
+        bytes32 donId;
+        address chainlinkRouter;
         bool mockFeed;
         address sequencerUptimeFeed;
     }

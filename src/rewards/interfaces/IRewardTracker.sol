@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
+import {ILiquidityLocker} from "./ILiquidityLocker.sol";
+
 interface IRewardTracker {
     error RewardTracker_ActionDisbaled();
     error RewardTracker_InvalidAmount();
@@ -43,4 +45,5 @@ interface IRewardTracker {
         external
         returns (uint256 wethAmount, uint256 usdcAmount);
     function claimable(address account) external view returns (uint256 wethAmount, uint256 usdcAmount);
+    function liquidityLocker() external view returns (ILiquidityLocker);
 }

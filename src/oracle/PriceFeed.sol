@@ -190,8 +190,6 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         returns (bytes32 requestId)
     {
         Oracle.isSequencerUp(this);
-        // (Index Token), Long Token, Short Token
-        if (args.length != 3 || args.length != 2) revert PriceFeed_PriceUpdateLength();
         // Convert ETH into Link
         _convertEthToLink(msg.value);
         // Initialize the request
@@ -347,7 +345,7 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
      * When Ether is received, it needs to be swapped for LINK to pay for the fee of the request.
      * The execution fee should be sufficient to cover the cost of the request in LINK.
      */
-    function _convertEthToLink(uint256 _ethAmount) internal {
+    function _convertEthToLink(uint256 _ethAmount) private {
         // Get the Uniswap V3 router instance
         ISwapRouter uniswapRouter = ISwapRouter(UNISWAP_V3_ROUTER);
 

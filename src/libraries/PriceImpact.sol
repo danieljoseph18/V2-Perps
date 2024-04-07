@@ -58,7 +58,12 @@ library PriceImpact {
         state.shortOi = MarketUtils.getOpenInterest(market, _request.input.ticker, false);
         // Used to calculate the impact on available liquidity
         state.availableOi = MarketUtils.getTotalAvailableOiUsd(
-            market, _request.input.ticker, _orderState.indexPrice, _orderState.longMarketTokenPrice, _orderState.shortMarketTokenPrice, _orderState.indexBaseUnit
+            market,
+            _request.input.ticker,
+            _orderState.indexPrice,
+            _orderState.longMarketTokenPrice,
+            _orderState.shortMarketTokenPrice,
+            _orderState.indexBaseUnit
         ).toInt256();
         if (state.availableOi == 0) revert PriceImpact_NoAvailableLiquidity();
 
@@ -153,7 +158,7 @@ library PriceImpact {
     }
 
     /**
-     * ========================= Internal Functions =========================
+     * ========================= Private Functions =========================
      */
 
     /**
@@ -169,7 +174,7 @@ library PriceImpact {
         uint256 _initialTotalOi,
         uint256 _updatedTotalOi,
         int256 _availableOi
-    ) internal pure returns (int256 priceImpactUsd) {
+    ) private pure returns (int256 priceImpactUsd) {
         /**
          * If initialTotalOi is 0, the (initialSkew/initialTotalOi) term is cancelled out.
          * Price impact will always be negative when total oi before is 0.
@@ -191,7 +196,7 @@ library PriceImpact {
     }
 
     function _calculateImpactedPrice(uint256 _sizeDeltaUsd, uint256 _indexPrice, int256 _priceImpactUsd, bool _isLong)
-        internal
+        private
         pure
         returns (uint256 impactedPrice)
     {
@@ -220,7 +225,7 @@ library PriceImpact {
      * If the positive impact is > impact pool, return the entire impact pool.
      */
     function _validateImpactDelta(IMarket market, string memory _ticker, int256 _priceImpactUsd)
-        internal
+        private
         view
         returns (int256)
     {
@@ -232,7 +237,7 @@ library PriceImpact {
         }
     }
 
-    function _checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) internal pure {
+    function _checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) private pure {
         uint256 impactDelta =
             _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
         uint256 slippage = mulDiv(impactDelta, PRICE_PRECISION, _signedPrice);

@@ -100,6 +100,7 @@ library MarketUtils {
     }
 
     /// @dev - Med price used, as in the case of a full withdrawal, a spread between max / min could cause amount to be > pool value
+    // @audit - failing when token amount > pool amount
     function calculateWithdrawalFee(
         uint256 _longPrice,
         uint256 _shortPrice,
@@ -121,6 +122,7 @@ library MarketUtils {
 
         int256 initSkew = longValue.toInt256() - shortValue.toInt256();
         _isLongToken ? longValue -= amountUsd : shortValue -= amountUsd;
+
         int256 updatedSkew = longValue.toInt256() - shortValue.toInt256();
 
         if (longValue + shortValue == 0) {
@@ -137,8 +139,10 @@ library MarketUtils {
         uint256 negativeSkewAccrued = skewFlip ? updatedSkew.abs() : amountUsd;
         // Calculate the relative impact on Market Skew
         // Re-add amount to get the initial net pool value
+
         uint256 feeFactor = mulDiv(negativeSkewAccrued, FEE_SCALE, longValue + shortValue + amountUsd);
         // Calculate the additional fee
+
         uint256 feeAddition = mulDiv(feeFactor, _tokenAmount, SCALAR);
         // Return base fee + fee addition
         return baseFee + feeAddition;
@@ -177,13 +181,13 @@ library MarketUtils {
         );
     }
 
-    function calculateWithdrawalAmounts(IMarket.ExecuteWithdrawal calldata _params)
+    function calculateWithdrawalAmounts(IMarket.ExecuteWithdrawal memory _params)
         external
         view
         returns (uint256 tokenAmountOut)
     {
         // Validate the Amount Out vs Expected Amount out
-        uint256 expectedOut = calculateWithdrawalAmount(
+        uint256 amountOut = calculateWithdrawalAmount(
             _params.market,
             _params.marketToken,
             _params.longPrices,
@@ -195,7 +199,7 @@ library MarketUtils {
             _params.withdrawal.isLongToken
         );
 
-        if (_params.amountOut != expectedOut) revert MarketUtils_InvalidAmountOut(_params.amountOut, expectedOut);
+        if (_params.amountOut != amountOut) revert MarketUtils_InvalidAmountOut(_params.amountOut, amountOut);
 
         // Calculate Fee on the Amount Out
         uint256 fee = calculateWithdrawalFee(
@@ -203,12 +207,12 @@ library MarketUtils {
             _params.shortPrices.med,
             _params.market.longTokenBalance(),
             _params.market.shortTokenBalance(),
-            _params.amountOut,
+            amountOut,
             _params.withdrawal.isLongToken
         );
 
         // Calculate the Token Amount Out
-        tokenAmountOut = _params.amountOut - fee;
+        tokenAmountOut = amountOut - fee;
     }
 
     function validateDeposit(
@@ -333,9 +337,15 @@ library MarketUtils {
         );
         uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALAR);
         // Minimize the Value of the Amount Out
-        tokenAmount = _isLongToken
-            ? mulDiv(valueUsd, LONG_BASE_UNIT, _longPrices.max)
-            : mulDiv(valueUsd, SHORT_BASE_UNIT, _shortPrices.max);
+        if (_isLongToken) {
+            tokenAmount = mulDiv(valueUsd, LONG_BASE_UNIT, _longPrices.max);
+            uint256 poolBalance = market.longTokenBalance();
+            if (tokenAmount > poolBalance) tokenAmount = poolBalance;
+        } else {
+            tokenAmount = mulDiv(valueUsd, SHORT_BASE_UNIT, _shortPrices.max);
+            uint256 poolBalance = market.shortTokenBalance();
+            if (tokenAmount > poolBalance) tokenAmount = poolBalance;
+        }
     }
 
     function getMarketTokenPrice(
@@ -509,6 +519,7 @@ library MarketUtils {
         poolAmount = mulDiv(totalAvailableLiquidity, allocationShare, MAX_ALLOCATION);
     }
 
+    // @audit - wrong -> 48 dp? should have 30
     function getPoolBalanceUsd(
         IMarket market,
         string calldata _ticker,
@@ -520,6 +531,7 @@ library MarketUtils {
         uint256 allocationInTokens = getPoolBalance(market, _ticker, _isLong);
         // convert to usd
         poolUsd = mulDiv(allocationInTokens, _collateralTokenPrice, _collateralBaseUnit);
+
     }
 
     function validateAllocation(
@@ -537,6 +549,8 @@ library MarketUtils {
             market, _ticker, _indexPrice, _collateralTokenPrice, _indexBaseUnit, _collateralBaseUnit, _isLong
         );
         // Check SizeDelta USD won't push the OI over the max
+
+
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 
@@ -556,6 +570,7 @@ library MarketUtils {
     }
 
     /// @notice returns the available remaining open interest for a side in USD
+    // @audit - wrong -> 48 dp? should have 30
     function getAvailableOiUsd(
         IMarket market,
         string calldata _ticker,
@@ -568,9 +583,12 @@ library MarketUtils {
         // get the allocation and subtract by the markets reserveFactor
         uint256 remainingAllocationUsd =
             getPoolBalanceUsd(market, _ticker, _collateralTokenPrice, _collateralBaseUnit, _isLong);
+
         availableOi = remainingAllocationUsd - mulDiv(remainingAllocationUsd, getReserveFactor(market, _ticker), SCALAR);
+
         // get the pnl
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
+
         // if the pnl is positive, subtract it from the available oi
         if (pnl > 0) {
             availableOi -= pnl.abs();
@@ -691,7 +709,7 @@ library MarketUtils {
 
     function getAllocation(IMarket market, string calldata _ticker) public view returns (uint256) {
         IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.allocationPercentage;
+        return marketStorage.allocationShare;
     }
 
     function getOpenInterest(IMarket market, string memory _ticker, bool _isLong) public view returns (uint256) {

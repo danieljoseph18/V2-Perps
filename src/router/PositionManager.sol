@@ -25,6 +25,7 @@ import {Roles} from "../access/Roles.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
+import {console2} from "forge-std/Test.sol";
 
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
@@ -202,6 +203,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     {
         // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
+        console2.log("Starting Ether Bal: ", address(this).balance);
 
         // Get the Trade Storage
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
@@ -223,7 +225,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         emit ExecutePosition(_orderKey, state.positionFee, state.affiliateRebate);
 
         // Send Execution Fee + Rebate
-        // Execution Fee reduced to account for value sent to update Pyth prices
         uint256 executionCost = (initialGas - gasleft()) * tx.gasprice;
 
         uint256 feeToRefund = request.input.executionFee - executionCost;
@@ -292,18 +293,18 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         uint256 _collateralDelta,
         uint256 _affiliateRebate,
         uint256 _feeForExecutor
-    ) internal {
-        // Transfer Fee Discount to Referral Storage
+    ) private {
         uint256 transferAmount = _collateralDelta;
+        // Transfer Fee to Executor
+        if (_feeForExecutor > 0) {
+            transferAmount -= _feeForExecutor;
+            IERC20(_collateralToken).safeTransfer(msg.sender, _feeForExecutor);
+        }
+        // Transfer Fee Discount to Referral Storage
         if (_affiliateRebate > 0) {
             // Transfer Fee Discount to Referral Storage
             transferAmount -= _affiliateRebate;
             IERC20(_collateralToken).safeTransfer(address(referralStorage), _affiliateRebate);
-        }
-        // Transfer Fee to Executor
-        if (_feeForExecutor > 0) {
-            transferAmount -= _feeForExecutor;
-            payable(msg.sender).sendValue(_feeForExecutor);
         }
         // Send Tokens + Fee to the Market (Will be Accounted for Separately)
         // Subtract Affiliate Rebate -> will go to Referral Storage

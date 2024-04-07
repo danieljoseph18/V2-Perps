@@ -181,8 +181,9 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         payable
         returns (bytes32 requestId)
     {
-        // Create a pseudo-random request id
-        requestId = keccak256(abi.encode(args, _requester, block.timestamp, block.prevrandao, tx.gasprice));
+        args;
+        // Create a  request id
+        requestId = keccak256(abi.encode("PRICE REQUEST"));
 
         RequestData memory data = RequestData({requester: _requester, requestType: RequestType.PRICE_UPDATE});
 
@@ -192,25 +193,9 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     }
 
     /// @dev - for this, we need to copy / call the function MarketUtils.calculateCumulativeMarketPnl but offchain
-    function requestCumulativeMarketPnl(IMarket market, address _requester)
-        external
-        payable
-        returns (bytes32 requestId)
-    {
-        // Need to check the market is valid
-        // If the market is not valid, revert
-        if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
-
-        // Convert ETH into Link
-        _convertEthToLink(msg.value);
-
-        // get all of the assets from the market
-        // pass the assets to the request as args
-        // convert assets to a string
-        string[] memory tickers = market.getTickers();
-
-        // Create a pseudo-random request id
-        requestId = keccak256(abi.encode(tickers, _requester, block.timestamp, block.prevrandao, tx.gasprice));
+    function requestCumulativeMarketPnl(IMarket, address _requester) external payable returns (bytes32 requestId) {
+        // Create a  request id
+        requestId = keccak256(abi.encode("PNL REQUEST"));
 
         RequestData memory data = RequestData({requester: _requester, requestType: RequestType.CUMULATIVE_PNL});
 
@@ -274,96 +259,21 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         emit Response(requestId, data, response, err);
     }
 
-    function clearSignedPrices(IMarket market, bytes32 _requestId) external {
-        if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
-        // loop through the assets with prices and clear them from storage
-        string[] memory assets = assetsWithPrices[_requestId];
-        uint256 len = assets.length;
-        for (uint256 i = 0; i < len;) {
-            // Can pop in any order as assets isn't a storage ref
-            assetsWithPrices[_requestId].pop();
-            delete prices[_requestId][assets[i]];
-            unchecked {
-                ++i;
-            }
-        }
-        emit AssetPricesCleared();
-    }
+    function clearSignedPrices(IMarket, bytes32) external {}
 
-    function clearCumulativePnl(IMarket market, bytes32 _requestId) external {
-        if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
-        delete cumulativePnl[_requestId];
-        emit PnlCleared(address(market));
-    }
+    function clearCumulativePnl(IMarket, bytes32) external {}
 
     function estimateRequestCost() external view returns (uint256) {
-        // Get the current gas price
-        uint256 gasPrice = tx.gasprice;
-
-        // Calculate the overestimated gas price
-        uint256 overestimatedGasPrice = gasPrice * 110 / 100;
-
-        // Calculate the total estimated gas cost in native units
-        uint256 totalEstimatedGasCost = overestimatedGasPrice * (gasOverhead + callbackGasLimit);
-
-        // Convert the total estimated gas cost to LINK using the price feed or fallback ratio
-        uint256 totalEstimatedGasCostInLink;
-        try AggregatorV2V3Interface(nativeLinkPriceFeed).latestAnswer() returns (int256 answer) {
-            totalEstimatedGasCostInLink = totalEstimatedGasCost * uint256(answer) / 1e18;
-        } catch {
-            totalEstimatedGasCostInLink = totalEstimatedGasCost / fallbackWeiToLinkRatio;
-        }
-
-        // Add the premium fee to get the total estimated cost in LINK
-        uint256 totalEstimatedCost = totalEstimatedGasCostInLink + premiumFee;
-
-        return totalEstimatedCost;
-    }
-
-    /**
-     * When Ether is received, it needs to be swapped for LINK to pay for the fee of the request.
-     * The execution fee should be sufficient to cover the cost of the request in LINK.
-     */
-    function _convertEthToLink(uint256 _ethAmount) internal {
-        // Get the Uniswap V3 router instance
-        ISwapRouter uniswapRouter = ISwapRouter(UNISWAP_V3_ROUTER);
-
-        // Calculate the amount of Ether received
-        uint256 ethAmount = _ethAmount;
-
-        // Approve the router to spend ETH
-        IWETH(WETH).deposit{value: ethAmount}();
-        IWETH(WETH).approve(address(uniswapRouter), ethAmount);
-
-        // Set the path for the swap (WETH -> LINK)
-        address[] memory path = new address[](2);
-        path[0] = WETH;
-        path[1] = LINK;
-
-        // Set the fee tier for the pool (e.g., 0.3% fee tier)
-        uint24 feeTier = 3000;
-
-        // Swap WETH for LINK
-        uniswapRouter.exactInput(
-            ISwapRouter.ExactInputParams({
-                path: abi.encodePacked(path[0], feeTier, path[1]),
-                recipient: address(this),
-                deadline: block.timestamp + 1800,
-                amountIn: ethAmount,
-                amountOutMinimum: 0
-            })
-        );
+        return prices[bytes32(0)][""].min;
     }
 
     function getPrices(bytes32 _requestId, string memory _ticker) external view returns (Price memory signedPrices) {
         signedPrices = prices[_requestId][_ticker];
         if (signedPrices.med == 0) revert PriceFeed_PriceNotSigned();
-        if (signedPrices.expirationTimestamp < block.timestamp) revert PriceFeed_PriceExpired();
     }
 
     function getCumulativePnl(bytes32 _requestId) external view returns (int256 pnl) {
         pnl = cumulativePnl[_requestId].cumulativePnl;
-        if (!cumulativePnl[_requestId].wasSigned) revert PriceFeed_PnlNotSigned();
     }
 
     function priceUpdateRequested(bytes32 _requestId) external view returns (bool) {
@@ -378,6 +288,8 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         return requestData.keys();
     }
 
+    event PricesUpdated(bytes32 indexed requestId, string[] tickers, Price[] prices);
+
     // Used to Manually Set Prices for Testing
     function updatePrices(bytes32 _requestId, string[] calldata _tickers, Price[] calldata _prices) external {
         if (_tickers.length != _prices.length) revert PriceFeed_PriceUpdateLength();
@@ -388,11 +300,15 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
                 ++i;
             }
         }
+        emit PricesUpdated(_requestId, _tickers, _prices);
     }
+
+    event PnlUpdated(bytes32 indexed requestId, int256 pnl);
 
     // Used to Manually Set Pnl for Testing
     function updatePnl(IMarket market, int256 _pnl, bytes32 _requestId) external {
         if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
         cumulativePnl[_requestId] = Pnl(true, _pnl);
+        emit PnlUpdated(_requestId, _pnl);
     }
 }

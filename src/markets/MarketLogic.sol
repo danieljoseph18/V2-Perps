@@ -172,13 +172,11 @@ library MarketLogic {
         address _to,
         address _tokenOut,
         uint256 _amount,
-        uint256 _tokenBalance,
-        uint256 _tokensReserved,
+        uint256 _availableTokens,
         bool _isLongToken,
         bool _shouldUnwrap
-    ) external {
-        uint256 available = _tokenBalance - _tokensReserved;
-        if (_amount > available) revert MarketLogic_InsufficientAvailableTokens();
+    ) public {
+        if (_amount > _availableTokens) revert MarketLogic_InsufficientAvailableTokens();
         if (_isLongToken) {
             if (_shouldUnwrap) {
                 IWETH(_tokenOut).withdraw(_amount);
@@ -312,7 +310,7 @@ library MarketLogic {
                 // Increment Total
                 total += allocationValue;
                 // Update Storage
-                market.setAllocationPercentage(assetTickers[i * 16 + j], allocationValue);
+                market.setAllocationShare(assetTickers[i * 16 + j], allocationValue);
                 // Check the allocation value -> new max open interest must be > current open interest
                 _validateOpenInterest(
                     market, priceFeed, assetTickers[i * 16 + j], _priceRequestId, longTokenPrice, shortTokenPrice
@@ -361,8 +359,7 @@ library MarketLogic {
         IPriceFeed priceFeed,
         IMarket.ExecuteWithdrawal calldata _params,
         address _tokenOut,
-        uint256 _tokenBalance,
-        uint256 _tokensReserved
+        uint256 _availableTokens // tokenBalance - tokensReserved
     ) external validAction(_params.withdrawal.amountIn, _params.amountOut, _params.withdrawal.isLongToken, false) {
         if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
         // Transfer Market Tokens in from msg.sender
@@ -379,7 +376,7 @@ library MarketLogic {
         // accumulate the fee
         _params.market.accumulateFees(_params.amountOut - transferAmountOut, _params.withdrawal.isLongToken);
         // validate whether the pool has enough tokens
-        if (transferAmountOut > _tokenBalance - _tokensReserved) revert MarketLogic_InsufficientAvailableTokens();
+        if (transferAmountOut > _availableTokens) revert MarketLogic_InsufficientAvailableTokens();
         // decrease the pool
         _params.market.updatePoolBalance(_params.amountOut, _params.withdrawal.isLongToken, false);
 
@@ -391,8 +388,13 @@ library MarketLogic {
             _params.key, _params.withdrawal.owner, _tokenOut, _params.withdrawal.amountIn, transferAmountOut
         );
         // transfer tokens to user
-        _params.market.transferOutTokens(
-            _params.withdrawal.owner, transferAmountOut, _params.withdrawal.isLongToken, _params.shouldUnwrap
+        transferOutTokens(
+            _params.withdrawal.owner,
+            _tokenOut,
+            transferAmountOut,
+            _availableTokens,
+            _params.withdrawal.isLongToken,
+            _params.withdrawal.reverseWrap
         );
     }
 
@@ -438,7 +440,7 @@ library MarketLogic {
         emit MarketStateUpdated(_ticker, _isLong);
     }
 
-    function _updateFundingRate(IMarket market, string calldata _ticker, uint256 _indexPrice) internal {
+    function _updateFundingRate(IMarket market, string calldata _ticker, uint256 _indexPrice) private {
         IMarket.FundingValues memory funding = market.getStorage(_ticker).funding;
         market.setFunding(Funding.updateState(market, funding, _ticker, _indexPrice), _ticker);
     }
@@ -451,7 +453,7 @@ library MarketLogic {
         uint256 _indexBaseUnit,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) internal {
+    ) private {
         IMarket.BorrowingValues memory borrowing = market.getStorage(_ticker).borrowing;
         market.setBorrowing(
             Borrowing.updateState(
@@ -470,7 +472,7 @@ library MarketLogic {
         uint256 _priceUsd,
         int256 _sizeDeltaUsd,
         bool _isLong
-    ) internal {
+    ) private {
         if (_priceUsd == 0) revert MarketLogic_PriceIsZero();
         if (_sizeDeltaUsd == 0) return;
 
@@ -504,7 +506,7 @@ library MarketLogic {
         bytes32 _priceRequestId,
         uint256 _longSignedPrice,
         uint256 _shortSignedPrice
-    ) internal view {
+    ) private view {
         // Get the index price and the index base unit
         uint256 indexPrice = priceFeed.getPrices(_priceRequestId, _ticker).med;
         uint256 indexBaseUnit = priceFeed.baseUnits(_ticker);
@@ -524,7 +526,7 @@ library MarketLogic {
     }
 
     function _generateKey(address _owner, address _tokenIn, uint256 _tokenAmount, bool _isDeposit)
-        internal
+        private
         pure
         returns (bytes32)
     {

@@ -114,7 +114,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         // Add Ticker
         tickers.push(_ticker);
         // Initialize Storage
-        marketStorage[assetId].allocationPercentage = 1e18;
+        marketStorage[assetId].allocationShare = 10000;
         marketStorage[assetId].config = _config;
         marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
         marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
@@ -236,11 +236,11 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     {
         if (_params.withdrawal.isLongToken) {
             MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), _params, WETH, longTokenBalance, longTokensReserved
+                ITradeStorage(tradeStorage).priceFeed(), _params, WETH, longTokenBalance - longTokensReserved
             );
         } else {
             MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), _params, USDC, shortTokenBalance, shortTokensReserved
+                ITradeStorage(tradeStorage).priceFeed(), _params, USDC, shortTokenBalance - shortTokensReserved
             );
         }
     }
@@ -274,9 +274,9 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function setAllocationPercentage(string calldata _ticker, uint256 _allocationPercentage) external onlyCallback {
+    function setAllocationShare(string calldata _ticker, uint256 _allocationShare) external onlyCallback {
         bytes32 assetId = keccak256(abi.encode(_ticker));
-        marketStorage[assetId].allocationPercentage = _allocationPercentage;
+        marketStorage[assetId].allocationShare = _allocationShare;
     }
 
     function deleteRequest(bytes32 _key) external onlyCallback {
@@ -440,10 +440,12 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         nonReentrant
     {
         if (_isLongToken) {
-            MarketLogic.transferOutTokens(_to, WETH, _amount, longTokenBalance, longTokensReserved, true, _shouldUnwrap);
+            MarketLogic.transferOutTokens(
+                _to, WETH, _amount, longTokenBalance - longTokensReserved, true, _shouldUnwrap
+            );
         } else {
             MarketLogic.transferOutTokens(
-                _to, USDC, _amount, shortTokenBalance, shortTokensReserved, false, _shouldUnwrap
+                _to, USDC, _amount, shortTokenBalance - shortTokensReserved, false, _shouldUnwrap
             );
         }
     }
@@ -498,11 +500,11 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     }
 
     /**
-     *  ========================= Internal Functions  =========================
+     *  ========================= Private Functions  =========================
      */
 
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    function _reallocate(uint256[] memory _allocations, bytes32 _priceRequestId) internal {
+    function _reallocate(uint256[] memory _allocations, bytes32 _priceRequestId) private {
         // function reallocate(IMarket market, IPriceFeed priceFeed, uint256[] memory _allocations, bytes32 _priceRequestId)
         MarketLogic.reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _priceRequestId);
     }

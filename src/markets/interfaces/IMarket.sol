@@ -72,13 +72,13 @@ interface IMarket {
          */
         uint256 impactPool;
         /**
-         * The percentage of the pool that is allocated to each sub-market.
+         * Number of shares allocated to each sub-market.
          * A market can contain multiple index tokens, each of which have
          * a percentage of liquidity allocated to them.
-         * Units are in percentage, where 100% = 1e18.
-         * Cumulative allocations must total up to 100%
+         * Units are in shares, where 100% = 10,000.
+         * Cumulative allocations must total up to 10,000.
          */
-        uint256 allocationPercentage;
+        uint256 allocationShare;
     }
 
     struct FundingValues {
@@ -294,7 +294,7 @@ interface IMarket {
     ) external;
     function updateOpenInterest(string calldata _ticker, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
         external;
-    function setAllocationPercentage(string calldata _ticker, uint256 _allocationPercentage) external;
+    function setAllocationShare(string calldata _ticker, uint256 _allocationShare) external;
     function addAsset(string calldata _ticker) external;
     function removeAsset(string calldata _ticker) external;
     function setConfig(string calldata _ticker, Config calldata _config) external;

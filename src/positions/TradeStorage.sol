@@ -34,7 +34,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     EnumerableSet.Bytes32Set private limitOrderKeys;
 
     mapping(bytes32 _positionKey => Position.Data) private openPositions;
-    mapping(bool _isLong => EnumerableSet.Bytes32Set _positionKeys) internal openPositionKeys;
+    mapping(bool _isLong => EnumerableSet.Bytes32Set _positionKeys) private openPositionKeys;
 
     bool private isInitialized;
     uint256 public liquidationFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
@@ -119,7 +119,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyPositionManager {
-        TradeLogic.cancelOrderRequest(_orderKey, _isLimit);
+        _deleteOrder(_orderKey, _isLimit);
     }
 
     /**
@@ -143,7 +143,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.liquidatePosition(market, priceFeed, _positionKey, _requestId, _liquidator);
+        TradeLogic.liquidatePosition(market, referralStorage, priceFeed, _positionKey, _requestId, _liquidator);
     }
 
     function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver)
@@ -151,41 +151,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.executeAdl(market, priceFeed, _positionKey, _requestId, _feeReceiver, adlFee);
+        TradeLogic.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestId, _feeReceiver, adlFee);
     }
 
     /**
      * ===================================== Callback Functions =====================================
      */
     function deleteOrder(bytes32 _orderKey, bool _isLimit) external onlyCallback {
-        bool success = _isLimit ? limitOrderKeys.remove(_orderKey) : marketOrderKeys.remove(_orderKey);
-        if (!success) revert TradeStorage_OrderRemovalFailed();
-        delete orders[_orderKey];
-    }
-
-    function updateMarketState(
-        Execution.State memory _state,
-        string memory _ticker,
-        uint256 _sizeDelta,
-        bool _isLong,
-        bool _isIncrease
-    ) external onlyCallback {
-        // Update the Market State
-        market.updateMarketState(
-            _ticker,
-            _sizeDelta,
-            _state.indexPrice,
-            _state.impactedPrice,
-            _state.collateralPrice,
-            _state.indexBaseUnit,
-            _isLong,
-            _isIncrease
-        );
-        // If Price Impact is Negative, add to the impact Pool
-        // If Price Impact is Positive, Subtract from the Impact Pool
-        // Impact Pool Delta = -1 * Price Impact
-        if (_state.priceImpactUsd == 0) return;
-        market.updateImpactPool(_ticker, -_state.priceImpactUsd);
+        _deleteOrder(_orderKey, _isLimit);
     }
 
     function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external onlyCallback {
@@ -196,21 +169,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         openPositions[_positionKey] = _position;
         bool success = openPositionKeys[_position.isLong].add(_positionKey);
         if (!success) revert TradeStorage_PositionAdditionFailed();
-    }
-
-    function payFees(
-        uint256 _borrowAmount,
-        uint256 _positionFee,
-        uint256 _affiliateRebate,
-        address _referrer,
-        bool _isLong
-    ) external onlyCallback {
-        // Pay Fees to LPs for Side (Position + Borrow)
-        market.accumulateFees(_borrowAmount + _positionFee, _isLong);
-        // Pay Affiliate Rebate to Referrer
-        if (_affiliateRebate > 0) {
-            referralStorage.accumulateAffiliateRewards(address(market), _referrer, _isLong, _affiliateRebate);
-        }
     }
 
     function createOrder(Position.Request memory _request) external onlyCallback returns (bytes32 orderKey) {
@@ -226,42 +184,20 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         orders[orderKey] = _request;
     }
 
-    function reserveLiquidity(
-        uint256 _sizeDeltaUsd,
-        uint256 _collateralDelta,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit,
-        address _user,
-        bool _isLong
-    ) external onlyCallback {
-        // Convert Size Delta USD to Collateral Tokens
-        uint256 reserveDelta = mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice);
-        // Reserve an Amount of Liquidity Equal to the Position Size
-        market.updateLiquidityReservation(reserveDelta, _isLong, true);
-        // Register the Collateral in
-        market.updateCollateralAmount(_collateralDelta, _user, _isLong, true);
-    }
-
-    function unreserveLiquidity(
-        uint256 _sizeDeltaUsd,
-        uint256 _collateralDelta,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit,
-        address _user,
-        bool _isLong
-    ) external onlyCallback {
-        // Convert Size Delta USD to Collateral Tokens
-        uint256 reserveDelta = (mulDiv(_sizeDeltaUsd, _collateralBaseUnit, _collateralPrice)); // Could use collateral delta * leverage for gas savings?
-        // Unreserve an Amount of Liquidity Equal to the Position Size
-        market.updateLiquidityReservation(reserveDelta, _isLong, false);
-        // Register the Collateral out
-        market.updateCollateralAmount(_collateralDelta, _user, _isLong, false);
-    }
-
     function deletePosition(bytes32 _positionKey, bool _isLong) external onlyCallback {
         delete openPositions[_positionKey];
         bool success = openPositionKeys[_isLong].remove(_positionKey);
         if (!success) revert TradeStorage_PositionRemovalFailed();
+    }
+
+    /**
+     * ===================================== Private Functions =====================================
+     */
+    function _deleteOrder(bytes32 _orderKey, bool _isLimit) private {
+        bool success = _isLimit ? limitOrderKeys.remove(_orderKey) : marketOrderKeys.remove(_orderKey);
+        if (!success) revert TradeStorage_OrderRemovalFailed();
+        delete orders[_orderKey];
+        emit OrderRequestCancelled(_orderKey);
     }
 
     /**
@@ -275,12 +211,16 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         orderKeys = _isLimit ? limitOrderKeys.values() : marketOrderKeys.values();
     }
 
-    function getPosition(bytes32 _positionKey) external view returns (Position.Data memory) {
-        return openPositions[_positionKey];
+    /// @notice - Get the position data for a given position key. Reverts if invalid.
+    function getPosition(bytes32 _positionKey) external view returns (Position.Data memory position) {
+        position = openPositions[_positionKey];
+        if (position.user == address(0)) revert TradeStorage_InvalidPosition();
     }
 
-    function getOrder(bytes32 _orderKey) external view returns (Position.Request memory) {
-        return orders[_orderKey];
+    /// @notice - Get the request data for a given order key. Reverts if invalid.
+    function getOrder(bytes32 _orderKey) external view returns (Position.Request memory order) {
+        order = orders[_orderKey];
+        if (bytes(order.input.ticker).length == 0) revert TradeStorage_InvalidOrder();
     }
 
     function getOrderAtIndex(uint256 _index, bool _isLimit) external view returns (bytes32) {

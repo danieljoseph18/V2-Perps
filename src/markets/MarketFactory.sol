@@ -248,9 +248,9 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     }
 
     /**
-     * ========================= Internal Functions =========================
+     * ========================= Private Functions =========================
      */
-    function _deleteMarketRequest(bytes32 _requestKey) internal {
+    function _deleteMarketRequest(bytes32 _requestKey) private {
         if (!requests.remove(_requestKey)) revert MarketFactory_FailedToRemoveRequest();
     }
 }

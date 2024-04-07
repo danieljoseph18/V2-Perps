@@ -108,7 +108,7 @@ library Funding {
      * @dev Returns the proportional time elapsed since last funding (proportional by 1 day).
      * 18 D.P
      */
-    function _getProportionalFundingElapsed(IMarket market, string calldata _ticker) internal view returns (int256) {
+    function _getProportionalFundingElapsed(IMarket market, string calldata _ticker) private view returns (int256) {
         return mulDivSigned(
             (block.timestamp - MarketUtils.getLastFundingUpdate(market, _ticker)).toInt256(),
             SIGNED_PRECISION,
@@ -120,7 +120,7 @@ library Funding {
      * @dev Returns the next market funding accrued value.
      */
     function _getUnrecordedFundingWithRate(IMarket market, string calldata _ticker, uint256 _indexPrice)
-        internal
+        private
         view
         returns (int256 fundingRate, int256 unrecordedFunding)
     {

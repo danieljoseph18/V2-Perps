@@ -22,7 +22,7 @@ contract RewardTracker is IERC20, ReentrancyGuard, IRewardTracker, RoleValidatio
     bool public isInitialized;
 
     IMarket market;
-    ILiquidityLocker liquidityLocker;
+    ILiquidityLocker public liquidityLocker;
 
     string public name;
     string public symbol;
@@ -59,7 +59,10 @@ contract RewardTracker is IERC20, ReentrancyGuard, IRewardTracker, RoleValidatio
     /**
      * =============================== Setter Functions ===============================
      */
-    function initialize(address _depositToken, address _distributor, address _liquidityLocker) external onlyAdmin {
+    function initialize(address _depositToken, address _distributor, address _liquidityLocker)
+        external
+        onlyMarketFactory
+    {
         if (isInitialized) revert RewardTracker_AlreadyInitialized();
         isInitialized = true;
         depositToken = _depositToken;

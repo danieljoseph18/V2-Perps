@@ -13,8 +13,6 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "dependencies": {
-    "@pythnetwork/pyth-sdk-solidity": "^2.4.0"
-  },
+  "dependencies": {},
   "devDependencies": {}
 }

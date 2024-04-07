@@ -216,7 +216,7 @@ contract LiquidityLocker is ILiquidityLocker, RoleValidation, ReentrancyGuard {
     }
 
     /**
-     * ========================= Internal Functions =========================
+     * ========================= Private Functions =========================
      */
 
     /// @notice Crucial function. Claims WETH from the RewardTracker and updates the contract state.
@@ -289,7 +289,7 @@ contract LiquidityLocker is ILiquidityLocker, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function _claimPendingRewards(address _user) internal returns (uint256, uint256) {
+    function _claimPendingRewards(address _user) private returns (uint256, uint256) {
         _updateRewards(_user);
 
         uint256 userWethReward = lockData[_user].claimableWethReward;

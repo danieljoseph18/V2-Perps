@@ -107,6 +107,7 @@ library Borrowing {
      * f_current: The current cumulative fee on the market.
      * p: The proportion of the new position size relative to the total open interest.
      */
+    // @audit - gas?
     function getNextAverageCumulative(IMarket market, string calldata _ticker, int256 _sizeDeltaUsd, bool _isLong)
         external
         view
