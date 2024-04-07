@@ -191,19 +191,16 @@ library Position {
 
     function validateCollateralIncrease(
         Data memory _position,
+        Execution.FeeState memory _feeState,
         uint256 _initialCollateral,
-        uint256 _collateralIn,
-        uint256 _positionFee,
-        int256 _fundingFee,
-        uint256 _borrowFee,
-        uint256 _affiliateRebate,
-        uint256 _feeForExecutor
+        uint256 _collateralIn
     ) external pure {
         // ensure the position collateral has changed by the correct amount
-        uint256 expectedCollateralDelta = _collateralIn - _positionFee - _borrowFee - _affiliateRebate - _feeForExecutor;
+        uint256 expectedCollateralDelta = _collateralIn - _feeState.positionFee - _feeState.borrowFee
+            - _feeState.affiliateRebate - _feeState.feeForExecutor;
         // Account for funding
-        if (_fundingFee < 0) expectedCollateralDelta -= _fundingFee.abs();
-        else if (_fundingFee > 0) expectedCollateralDelta += _fundingFee.abs();
+        if (_feeState.fundingFee < 0) expectedCollateralDelta -= _feeState.fundingFee.abs();
+        else if (_feeState.fundingFee > 0) expectedCollateralDelta += _feeState.fundingFee.abs();
         // Validate Position Delta
         if (_position.collateralAmount != _initialCollateral + expectedCollateralDelta) {
             revert Position_CollateralDelta();
@@ -212,20 +209,15 @@ library Position {
 
     function validateCollateralDecrease(
         Data memory _position,
-        uint256 _initialCollateral,
-        uint256 _collateralDelta,
-        uint256 _positionFee, // trading fee not charged on collateral delta
-        int256 _fundingFee,
-        uint256 _borrowFee,
-        uint256 _affiliateRebate,
-        uint256 _feeForExecutor
+        Execution.FeeState memory _feeState,
+        uint256 _initialCollateral
     ) external pure {
         // ensure the position collateral has changed by the correct amount
-        uint256 expectedCollateralDelta =
-            _collateralDelta + _positionFee + _borrowFee + _affiliateRebate + _feeForExecutor;
+        uint256 expectedCollateralDelta = _feeState.afterFeeAmount + _feeState.positionFee + _feeState.borrowFee
+            + _feeState.affiliateRebate + _feeState.feeForExecutor;
         // Account for funding
-        if (_fundingFee < 0) expectedCollateralDelta += _fundingFee.abs();
-        else if (_fundingFee > 0) expectedCollateralDelta -= _fundingFee.abs();
+        if (_feeState.fundingFee < 0) expectedCollateralDelta += _feeState.fundingFee.abs();
+        else if (_feeState.fundingFee > 0) expectedCollateralDelta -= _feeState.fundingFee.abs();
         // Validate Position Delta
         if (_position.collateralAmount != _initialCollateral - expectedCollateralDelta) {
             revert Position_CollateralDelta();
@@ -246,20 +238,17 @@ library Position {
 
     function validateIncreasePosition(
         Data memory _position,
+        Execution.FeeState memory _feeState,
         uint256 _initialCollateral,
         uint256 _initialSize,
         uint256 _collateralIn,
-        uint256 _positionFee,
-        uint256 _affiliateRebate,
-        int256 _fundingFee,
-        uint256 _borrowFee,
-        uint256 _sizeDelta,
-        uint256 _feeForExecutor
+        uint256 _sizeDelta
     ) external pure {
-        uint256 expectedCollateralDelta = _collateralIn - _positionFee - _affiliateRebate - _borrowFee - _feeForExecutor;
+        uint256 expectedCollateralDelta = _collateralIn - _feeState.positionFee - _feeState.affiliateRebate
+            - _feeState.borrowFee - _feeState.feeForExecutor;
         // Account for funding paid out from / to the user
-        if (_fundingFee < 0) expectedCollateralDelta -= _fundingFee.abs();
-        else if (_fundingFee > 0) expectedCollateralDelta += _fundingFee.abs();
+        if (_feeState.fundingFee < 0) expectedCollateralDelta -= _feeState.fundingFee.abs();
+        else if (_feeState.fundingFee > 0) expectedCollateralDelta += _feeState.fundingFee.abs();
         if (_position.collateralAmount != _initialCollateral + expectedCollateralDelta) {
             revert Position_IncreasePositionCollateral();
         }
@@ -271,27 +260,22 @@ library Position {
     // @gas - can combine with collateral decrease?
     function validateDecreasePosition(
         Data memory _position,
+        Execution.FeeState memory _feeState,
         uint256 _initialCollateral,
         uint256 _initialSize,
-        uint256 _collateralOut,
-        uint256 _positionFee,
-        uint256 _affiliateRebate,
-        int256 _pnl,
-        int256 _fundingFee,
-        uint256 _borrowFee,
         uint256 _sizeDelta,
-        uint256 _feeForExecutor
+        int256 _pnl
     ) external pure {
         // Amount out should = collateralDelta +- pnl += fundingFee - borrow fee - trading fee - affiliateRebate - feeForExecutor
         /**
          * collat before should = collat after + collateralDelta + fees + pnl
          * feeDiscount / 2, as 1/2 is rebate to referrer
          */
-        uint256 expectedCollateralDelta =
-            _collateralOut + _positionFee + _affiliateRebate + _borrowFee + _feeForExecutor;
+        uint256 expectedCollateralDelta = _feeState.afterFeeAmount + _feeState.positionFee + _feeState.affiliateRebate
+            + _feeState.borrowFee + _feeState.feeForExecutor;
         // Account for funding / pnl paid out from collateral
         if (_pnl < 0) expectedCollateralDelta += _pnl.abs();
-        if (_fundingFee < 0) expectedCollateralDelta += _fundingFee.abs();
+        if (_feeState.fundingFee < 0) expectedCollateralDelta += _feeState.fundingFee.abs();
 
         if (_initialCollateral != _position.collateralAmount + expectedCollateralDelta) {
             revert Position_DecreasePositionCollateral();
@@ -401,11 +385,12 @@ library Position {
         });
     }
 
-    function generateNewPosition(IMarket market, Request memory _request, Execution.State memory _state)
-        external
-        view
-        returns (Data memory position)
-    {
+    function generateNewPosition(
+        IMarket market,
+        Request memory _request,
+        uint256 _impactedPrice,
+        uint256 _afterFeeAmount
+    ) external view returns (Data memory position) {
         // Get Entry Funding & Borrowing Values
         (uint256 longBorrowFee, uint256 shortBorrowFee) =
             MarketUtils.getCumulativeBorrowFees(market, _request.input.ticker);
@@ -414,9 +399,9 @@ library Position {
             ticker: _request.input.ticker,
             collateralToken: _request.input.collateralToken,
             user: _request.user,
-            collateralAmount: _request.input.collateralDelta,
+            collateralAmount: _afterFeeAmount,
             positionSize: _request.input.sizeDelta,
-            weightedAvgEntryPrice: _state.impactedPrice,
+            weightedAvgEntryPrice: _impactedPrice,
             lastUpdate: uint64(block.timestamp),
             isLong: _request.input.isLong,
             fundingParams: FundingParams(MarketUtils.getFundingAccrued(market, _request.input.ticker), 0),
@@ -600,13 +585,13 @@ library Position {
         );
     }
 
-    function getTotalBorrowFees(IMarket market, Data memory _position, Execution.State memory _state)
+    function getTotalBorrowFees(IMarket market, Data memory _position, Execution.Prices memory _prices)
         external
         view
         returns (uint256 collateralFeesOwed)
     {
         uint256 feesUsd = getTotalBorrowFeesUsd(market, _position);
-        collateralFeesOwed = feesUsd.toBase(_state.collateralBaseUnit, _state.collateralPrice);
+        collateralFeesOwed = feesUsd.toBase(_prices.collateralBaseUnit, _prices.collateralPrice);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens

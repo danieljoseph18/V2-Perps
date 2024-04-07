@@ -208,7 +208,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Get the Trade Storage
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the Request
-        (Execution.State memory state, Position.Request memory request) =
+        (Execution.FeeState memory feeState, Position.Request memory request) =
             tradeStorage.executePositionRequest(_orderKey, _requestId, _feeReceiver);
 
         if (request.input.isIncrease) {
@@ -216,13 +216,13 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
                 market,
                 request.input.collateralToken,
                 request.input.collateralDelta,
-                state.affiliateRebate,
-                state.feeForExecutor
+                feeState.affiliateRebate,
+                feeState.feeForExecutor
             );
         }
 
         // Emit Trade Executed Event
-        emit ExecutePosition(_orderKey, state.positionFee, state.affiliateRebate);
+        emit ExecutePosition(_orderKey, feeState.positionFee, feeState.affiliateRebate);
 
         // Send Execution Fee + Rebate
         uint256 executionCost = (initialGas - gasleft()) * tx.gasprice;

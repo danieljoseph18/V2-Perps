@@ -44,7 +44,7 @@ library PriceImpact {
      * 1. How the action affects the skew of the market. Positions should be punished for increasing, and rewarded for decreasing.
      * 2. The liquidity of the market. The more illiquid, the higher the price impact will be.
      */
-    function execute(IMarket market, Position.Request memory _request, Execution.State memory _orderState)
+    function execute(IMarket market, Position.Request memory _request, Execution.Prices memory _prices)
         external
         view
         returns (uint256 impactedPrice, int256 priceImpactUsd)
@@ -60,10 +60,10 @@ library PriceImpact {
         state.availableOi = MarketUtils.getTotalAvailableOiUsd(
             market,
             _request.input.ticker,
-            _orderState.indexPrice,
-            _orderState.longMarketTokenPrice,
-            _orderState.shortMarketTokenPrice,
-            _orderState.indexBaseUnit
+            _prices.indexPrice,
+            _prices.longMarketTokenPrice,
+            _prices.shortMarketTokenPrice,
+            _prices.indexBaseUnit
         ).toInt256();
         if (state.availableOi == 0) revert PriceImpact_NoAvailableLiquidity();
 
@@ -119,7 +119,7 @@ library PriceImpact {
              * Fully reducing the open interest technically brings the market to perfect harmony.
              * To avoid incentivizing this case with positive impact, the price impact is set to 0.
              */
-            if (state.updatedTotalOi == 0) return (_orderState.indexPrice, 0);
+            if (state.updatedTotalOi == 0) return (_prices.indexPrice, 0);
             // Get the skew scalar and liquidity scalar, depending on direction of price impact
             int256 skewScalar;
             int256 liquidityScalar;
@@ -148,12 +148,11 @@ library PriceImpact {
             priceImpactUsd = _validateImpactDelta(market, _request.input.ticker, priceImpactUsd);
         }
         // calculate the impacted price
-        impactedPrice = _calculateImpactedPrice(
-            _request.input.sizeDelta, _orderState.indexPrice, priceImpactUsd, _request.input.isLong
-        );
+        impactedPrice =
+            _calculateImpactedPrice(_request.input.sizeDelta, _prices.indexPrice, priceImpactUsd, _request.input.isLong);
         // check the slippage if negative
         if (priceImpactUsd < 0) {
-            _checkSlippage(impactedPrice, _orderState.indexPrice, _request.input.maxSlippage);
+            _checkSlippage(impactedPrice, _prices.indexPrice, _request.input.maxSlippage);
         }
     }
 

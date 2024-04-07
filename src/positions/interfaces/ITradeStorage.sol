@@ -34,7 +34,7 @@ interface ITradeStorage {
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
     function executePositionRequest(bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
         external
-        returns (Execution.State memory state, Position.Request memory request);
+        returns (Execution.FeeState memory feeState, Position.Request memory request);
     function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator) external;
     function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver) external;
     function setFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
@@ -60,4 +60,6 @@ interface ITradeStorage {
     function createPosition(Position.Data calldata _position, bytes32 _positionKey) external;
     function createOrder(Position.Request memory _request) external returns (bytes32 orderKey);
     function deletePosition(bytes32 _positionKey, bool _isLong) external;
+    function isPosition(bytes32 _positionKey) external view returns (bool);
+    function isOrder(bytes32 _orderKey) external view returns (bool);
 }

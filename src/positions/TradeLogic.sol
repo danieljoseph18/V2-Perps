@@ -79,63 +79,68 @@ library TradeLogic {
         bytes32 _orderKey,
         bytes32 _requestId,
         address _feeReceiver
-    ) external returns (Execution.State memory state, Position.Request memory request) {
+    ) external returns (Execution.FeeState memory feeState, Position.Request memory request) {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Initiate the execution
-        (state, request) =
-            Execution.initiate(tradeStorage, market, priceFeed, referralStorage, _orderKey, _requestId, _feeReceiver);
-        // Fetch the State of the Market Before the Position
+        Execution.Prices memory prices;
+        (prices, request) = Execution.initiate(tradeStorage, market, priceFeed, _orderKey, _requestId, _feeReceiver);
+        // Cache the State of the Market Before the Position
         IMarket.MarketStorage memory initialStorage = market.getStorage(request.input.ticker);
         // Delete the Order from Storage
         tradeStorage.deleteOrder(_orderKey, request.input.isLimit);
         // Update the Market State for the Request
         _updateMarketState(
-            market, state, request.input.ticker, request.input.sizeDelta, request.input.isLong, request.input.isIncrease
+            market,
+            prices,
+            request.input.ticker,
+            request.input.sizeDelta,
+            request.input.isLong,
+            request.input.isIncrease
         );
         // Execute Trade
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            _createNewPosition(
+            feeState = _createNewPosition(
                 tradeStorage,
                 market,
                 referralStorage,
                 Position.Settlement(request, _orderKey, _feeReceiver, false),
-                state
+                prices
             );
         } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
-            _increasePosition(
+            feeState = _increasePosition(
                 tradeStorage,
                 market,
                 referralStorage,
                 Position.Settlement(request, _orderKey, _feeReceiver, false),
-                state
+                prices
             );
         } else if (
             request.requestType == Position.RequestType.POSITION_DECREASE
                 || request.requestType == Position.RequestType.TAKE_PROFIT
                 || request.requestType == Position.RequestType.STOP_LOSS
         ) {
-            _decreasePosition(
+            feeState = _decreasePosition(
                 tradeStorage,
                 market,
                 referralStorage,
                 Position.Settlement(request, _orderKey, _feeReceiver, false),
-                state
+                prices
             );
         } else if (request.requestType == Position.RequestType.COLLATERAL_DECREASE) {
-            _executeCollateralDecrease(
+            feeState = _executeCollateralDecrease(
                 tradeStorage,
                 market,
                 referralStorage,
                 Position.Settlement(request, _orderKey, _feeReceiver, false),
-                state
+                prices
             );
         } else if (request.requestType == Position.RequestType.COLLATERAL_INCREASE) {
-            _executeCollateralIncrease(
+            feeState = _executeCollateralIncrease(
                 tradeStorage,
                 market,
                 referralStorage,
                 Position.Settlement(request, _orderKey, _feeReceiver, false),
-                state
+                prices
             );
         } else {
             revert TradeLogic_InvalidRequestType();
@@ -144,17 +149,13 @@ library TradeLogic {
         // Clear the Signed Prices
         priceFeed.clearSignedPrices(market, request.requestId);
 
-        // Fetch the State of the Market After the Position
+        // Cache the State of the Market After the Position
         IMarket.MarketStorage memory updatedStorage = market.getStorage(request.input.ticker);
 
         // Invariant Check
         Position.validateMarketDelta(initialStorage, updatedStorage, request);
     }
 
-    // @audit - needs more constraints before we can make permissionless
-    // - only allow adl on profitable positions above a threshold
-    // - only allow reduction of the pnl factor by so much
-    // - how do we make sure that users can only ADL the most profitable positions?
     function executeAdl(
         IMarket market,
         IReferralStorage referralStorage,
@@ -166,11 +167,13 @@ library TradeLogic {
     ) external {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Construct the Adl order
+        // @audit - fee for executor isn't stored anywhere -> should be maintained for the decrease
         (
-            Execution.State memory state,
+            Execution.Prices memory prices,
             Position.Settlement memory params,
             Position.Data memory position,
-            int256 startingPnlFactor
+            int256 startingPnlFactor,
+            // uint256 feeForExecutor
         ) = Execution.constructAdlOrder(
             market, tradeStorage, priceFeed, _positionKey, _requestId, _adlFee, _feeReceiver
         );
@@ -178,7 +181,7 @@ library TradeLogic {
         // Update the Market State
         _updateMarketState(
             market,
-            state,
+            prices,
             params.request.input.ticker,
             params.request.input.sizeDelta,
             params.request.input.isLong,
@@ -186,13 +189,13 @@ library TradeLogic {
         );
 
         // Execute the order
-        _decreasePosition(tradeStorage, market, referralStorage, params, state);
+        _decreasePosition(tradeStorage, market, referralStorage, params, prices);
 
         // Clear signed prices
         priceFeed.clearSignedPrices(market, _requestId);
 
         // Validate the Adl
-        Execution.validateAdl(market, state, startingPnlFactor, params.request.input.ticker, position.isLong);
+        Execution.validateAdl(market, prices, startingPnlFactor, params.request.input.ticker, position.isLong);
 
         emit AdlExecuted(address(market), _positionKey, params.request.input.sizeDelta, position.isLong);
     }
@@ -211,16 +214,16 @@ library TradeLogic {
         // Check the Position Exists
         if (position.user == address(0)) revert TradeLogic_PositionDoesNotExist();
         // Construct the Execution State
-        Execution.State memory state;
-        state = Execution.cacheTokenPrices(priceFeed, state, position.ticker, _requestId, position.isLong, false);
+        Execution.Prices memory prices =
+            Execution.getTokenPrices(priceFeed, position.ticker, _requestId, position.isLong, false);
         // No price impact on Liquidations
-        state.impactedPrice = state.indexPrice;
+        prices.impactedPrice = prices.indexPrice;
         // Update the Market State
-        _updateMarketState(market, state, position.ticker, position.positionSize, position.isLong, false);
+        _updateMarketState(market, prices, position.ticker, position.positionSize, position.isLong, false);
         // Construct Liquidation Order
         Position.Settlement memory params = Position.constructLiquidationOrder(position, _liquidator, _requestId);
         // Execute the Liquidation
-        _decreasePosition(tradeStorage, market, referralStorage, params, state);
+        _decreasePosition(tradeStorage, market, referralStorage, params, prices);
         // Clear Signed Prices
         // Need request id
         priceFeed.clearSignedPrices(market, _requestId);
@@ -229,48 +232,25 @@ library TradeLogic {
     }
 
     /**
-     * ========================= private Functions =========================
+     * ========================= Core Functions =========================
      */
     function _executeCollateralIncrease(
         ITradeStorage tradeStorage,
         IMarket market,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Execution.State memory _state
-    ) private {
+        Execution.Prices memory _prices
+    ) private returns (Execution.FeeState memory feeState) {
         // Get the Position Key
         bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in Library
         Position.Data memory position;
-        (position, _state) = Execution.increaseCollateral(market, tradeStorage, _params, _state, positionKey);
+        (position, feeState) = Execution.increaseCollateral(market, tradeStorage, _params, _prices, positionKey);
         // Add Value to Stored Collateral Amount in Market
-        market.updateCollateralAmount(
-            _params.request.input.collateralDelta - _state.positionFee - _state.feeForExecutor - _state.affiliateRebate
-                - _state.borrowFee,
-            _params.request.user,
-            _params.request.input.isLong,
-            true
-        );
-        // Account for any Funding
-        if (_state.fundingFee < 0) {
-            // User Paid Funding
-            uint256 absFundingFee = _state.fundingFee.abs();
-            market.updatePoolBalance(absFundingFee, position.isLong, true);
-        } else if (_state.fundingFee > 0) {
-            // User got Paid Funding
-            uint256 absFundingFee = _state.fundingFee.abs();
-            market.updatePoolBalance(absFundingFee, position.isLong, false);
-        }
-        // Pay Fees
-        _payFees(
-            market,
-            referralStorage,
-            _state.borrowFee,
-            _state.positionFee,
-            _state.affiliateRebate,
-            _state.referrer,
-            _params.request.input.isLong
-        );
+        // @audit - probably handling funding wrong -> should maybe be separate from the collateral and settled through LPs
+        market.updateCollateralAmount(feeState.afterFeeAmount, _params.request.user, _params.request.input.isLong, true);
+        // Account for Fees in Storage
+        _accumulateFees(market, referralStorage, feeState, position.isLong);
         // Update Final Storage
         tradeStorage.updatePosition(position, positionKey);
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
@@ -281,27 +261,20 @@ library TradeLogic {
         IMarket market,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Execution.State memory _state
-    ) private {
+        Execution.Prices memory _prices
+    ) private returns (Execution.FeeState memory feeState) {
         // Get the Position Key
         bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in Library
         Position.Data memory position;
-        uint256 amountOut;
-        (position, _state, amountOut) = Execution.decreaseCollateral(
-            market, tradeStorage, _params, _state, tradeStorage.minCollateralUsd(), positionKey
+        (position, feeState) = Execution.decreaseCollateral(
+            market, tradeStorage, _params, _prices, tradeStorage.minCollateralUsd(), positionKey
         );
-        if (_state.fundingFee < 0) {
-            // User Paid Funding
-            market.updatePoolBalance(_state.fundingFee.abs(), position.isLong, true);
-        } else if (_state.fundingFee > 0) {
-            // User got Paid Funding
-            market.updatePoolBalance(_state.fundingFee.abs(), position.isLong, false);
-        }
+
         // Check Market has enough available liquidity for payout
         if (
             MarketUtils.getPoolBalance(market, _params.request.input.ticker, _params.request.input.isLong)
-                < amountOut + _state.affiliateRebate
+                < feeState.afterFeeAmount + feeState.affiliateRebate
         ) {
             revert TradeLogic_InsufficientFreeLiquidity();
         }
@@ -309,34 +282,29 @@ library TradeLogic {
         market.updateCollateralAmount(
             _params.request.input.collateralDelta, _params.request.user, _params.request.input.isLong, false
         );
-        // Pay Fees
-        _payFees(
-            market,
-            referralStorage,
-            _state.borrowFee,
-            _state.positionFee,
-            _state.affiliateRebate,
-            _state.referrer,
-            _params.request.input.isLong
-        );
+        // Account for Fees in Storage
+        _accumulateFees(market, referralStorage, feeState, position.isLong);
         // Update Final Storage
         tradeStorage.updatePosition(position, positionKey);
         // Transfer Rebate to Referrer
-        if (_state.affiliateRebate > 0) {
+        if (feeState.affiliateRebate > 0) {
             market.transferOutTokens(
-                _state.referrer,
-                _state.affiliateRebate,
+                feeState.referrer,
+                feeState.affiliateRebate,
                 _params.request.input.isLong,
                 false // Leave unwrapped by default
             );
         }
         // Transfer Execution Fee to Executor
-        if (_state.feeForExecutor > 0) {
-            market.transferOutTokens(_params.feeReceiver, _state.feeForExecutor, _params.request.input.isLong, true);
+        if (feeState.feeForExecutor > 0) {
+            market.transferOutTokens(_params.feeReceiver, feeState.feeForExecutor, _params.request.input.isLong, true);
         }
         // Transfer Tokens to User
         market.transferOutTokens(
-            _params.request.user, amountOut, _params.request.input.isLong, _params.request.input.reverseWrap
+            _params.request.user,
+            feeState.afterFeeAmount,
+            _params.request.input.isLong,
+            _params.request.input.reverseWrap
         );
         // Fire Event
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
@@ -347,36 +315,28 @@ library TradeLogic {
         IMarket market,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Execution.State memory _state
-    ) private {
+        Execution.Prices memory _prices
+    ) private returns (Execution.FeeState memory feeState) {
         // Get the Position Key
         bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in the Library
         Position.Data memory position;
-        (position, _state) = Execution.createNewPosition(
-            market, tradeStorage, _params, _state, tradeStorage.minCollateralUsd(), positionKey
+        (position, feeState) = Execution.createNewPosition(
+            market, tradeStorage, referralStorage, _params, _prices, tradeStorage.minCollateralUsd(), positionKey
         );
         // Create Conditional Orders
         position = _createConditionalOrders(
             tradeStorage, position, _params.request.conditionals, _params.request.input.executionFee
         );
-        // Pay fees
-        _payFees(
-            market,
-            referralStorage,
-            0,
-            _state.positionFee,
-            _state.affiliateRebate,
-            _state.referrer,
-            _params.request.input.isLong
-        );
+        // Account for Fees in Storage
+        _accumulateFees(market, referralStorage, feeState, position.isLong);
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(
             market,
             _params.request.input.sizeDelta,
             position.collateralAmount,
-            _state.collateralPrice,
-            _state.collateralBaseUnit,
+            _prices.collateralPrice,
+            _prices.collateralBaseUnit,
             position.user,
             _params.request.input.isLong
         );
@@ -386,66 +346,66 @@ library TradeLogic {
         emit PositionCreated(positionKey);
     }
 
-    function _createConditionalOrders(
-        ITradeStorage tradeStorage,
-        Position.Data memory position,
-        Position.Conditionals memory _conditionals,
-        uint256 _executionFee
-    ) private returns (Position.Data memory) {
-        if (!_conditionals.stopLossSet && !_conditionals.takeProfitSet) return position;
-        // If Request has conditionals, create the SL / TP
-        (Position.Request memory stopLoss, Position.Request memory takeProfit) =
-            Position.constructConditionalOrders(position, _conditionals, _executionFee);
-        // If stop loss set, create and store the order
-        if (_conditionals.stopLossSet) position.stopLossKey = tradeStorage.createOrder(stopLoss);
-        // If take profit set, create and store the order
-        if (_conditionals.takeProfitSet) {
-            position.takeProfitKey = tradeStorage.createOrder(takeProfit);
-        }
-        return position;
-    }
-
     function _increasePosition(
         ITradeStorage tradeStorage,
         IMarket market,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Execution.State memory _state
-    ) private {
+        Execution.Prices memory _prices
+    ) private returns (Execution.FeeState memory feeState) {
+        /**
+         * State Changes (Checks)
+         * - Calculate all of the necessary state changes
+         * - Perform checks along the way to ensure the state update is valid
+         * - Return a list of state changes to be applied
+         * - Need to stop applying changes directly to the position, just return all of the variables we need to update
+         *
+         * Required Computed Varibales:
+         * - Fees (Borrow, Position, Affiliate, Executor, Funding)
+         * - Collateral Delta after fees
+         * - Position after update
+         */
+
         // Get the Position Key
         bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in the Library
         Position.Data memory position;
-        (position, _state) = Execution.increasePosition(market, tradeStorage, _params, _state, positionKey);
-        // Pay Fees
-        _payFees(
-            market,
-            referralStorage,
-            _state.borrowFee,
-            _state.positionFee,
-            _state.affiliateRebate,
-            _state.referrer,
-            _params.request.input.isLong
-        );
+        (feeState, position) =
+            Execution.increasePosition(market, tradeStorage, referralStorage, _params, _prices, positionKey);
+
+        /**
+         * Update Storage (Effects)
+         * - Apply all of the state changes computed from the Execution library
+         * - Update the storage with the new state
+         *
+         * State Changes Required:
+         * - Accounting (Fees, Collateral, Position Size, etc.)
+         * - Reserve Liquidity & Collateral
+         * - Update Position in Storage
+         */
+
+        // Account for Fees in Storage
+        _accumulateFees(market, referralStorage, feeState, position.isLong);
         // Reserve Liquidity Equal to the Position Size
         _reserveLiquidity(
             market,
             _params.request.input.sizeDelta,
-            _params.request.input.collateralDelta - _state.positionFee - _state.feeForExecutor - _state.affiliateRebate
-                - _state.borrowFee,
-            _state.collateralPrice,
-            _state.collateralBaseUnit,
+            feeState.afterFeeAmount,
+            _prices.collateralPrice,
+            _prices.collateralBaseUnit,
             position.user,
             _params.request.input.isLong
         );
-        // If user's position has increased with positive funding, need to subtract from the pool
-        // If user's position has decreased with negative funding, need to add to the pool
-        if (_state.fundingFee > 0) market.updatePoolBalance(_state.fundingFee.abs(), position.isLong, false);
-        else if (_state.fundingFee < 0) market.updatePoolBalance(_state.fundingFee.abs(), position.isLong, true);
         // Update Final Storage
         tradeStorage.updatePosition(position, positionKey);
         // Fire event
         emit IncreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
+
+        /**
+         * Token Transfers (Interactions)
+         * - Transfer any tokens to users
+         * - As this is an increase token transfers should be handled in the position manager
+         */
     }
 
     function _decreasePosition(
@@ -453,18 +413,18 @@ library TradeLogic {
         IMarket market,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Execution.State memory _state
-    ) private {
+        Execution.Prices memory _prices
+    ) private returns (Execution.FeeState memory feeState) {
         // Get the Position Key
         bytes32 positionKey = Position.generateKey(_params.request);
         // Perform Execution in the Library
         Position.Data memory position;
         Execution.DecreaseState memory decreaseState;
-        (position, decreaseState, _state) = Execution.decreasePosition(
+        (position, decreaseState, feeState) = Execution.decreasePosition(
             market,
             tradeStorage,
             _params,
-            _state,
+            _prices,
             tradeStorage.minCollateralUsd(),
             tradeStorage.liquidationFee(),
             positionKey
@@ -475,27 +435,21 @@ library TradeLogic {
             market,
             _params.request.input.sizeDelta,
             _params.request.input.collateralDelta,
-            _state.collateralPrice,
-            _state.collateralBaseUnit,
+            _prices.collateralPrice,
+            _prices.collateralBaseUnit,
             position.user,
             _params.request.input.isLong
         );
 
-        /**
-         * To handle insolvency case for liquidations, we do the following:
-         * - Pay fees in order of important, each time checking if the remaining amount is sufficient.
-         * - Once the remaining amount is used up, stop paying fees.
-         * - If any is remaining after paying all fees, add to pool.
-         */
-        // @audit - are we ignoring fee for executor?
         if (decreaseState.isLiquidation) {
             // Liquidate the Position
             _handleLiquidation(
                 tradeStorage,
                 market,
+                referralStorage,
                 position,
-                _state,
                 decreaseState,
+                feeState,
                 positionKey,
                 _params.request.user,
                 _params.request.input.reverseWrap
@@ -507,8 +461,8 @@ library TradeLogic {
                 market,
                 referralStorage,
                 position,
-                _state,
                 decreaseState,
+                feeState,
                 positionKey,
                 _params.feeReceiver,
                 _params.request.input.reverseWrap
@@ -519,54 +473,58 @@ library TradeLogic {
         emit DecreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
+    /**
+     * ========================= Private Helper Functions =========================
+     */
+
+    // @audit - are we ignoring fee for executor?
+    /**
+     * To handle insolvency case for liquidations, we do the following:
+     * - Pay fees in order of importance, each time checking if the remaining amount is sufficient.
+     * - Once the remaining amount is used up, stop paying fees.
+     * - If any is remaining after paying all fees, add to pool.
+     */
+    // @audit - other functions aren't transferring to referral storage for affiliate rebate maybe?
+    // @audit - what about funding?
     function _handleLiquidation(
         ITradeStorage tradeStorage,
         IMarket market,
+        IReferralStorage referralStorage,
         Position.Data memory _position,
-        Execution.State memory _state,
         Execution.DecreaseState memory _decreaseState,
+        Execution.FeeState memory _feeState,
         bytes32 _positionKey,
         address _liquidator,
         bool _reverseWrap
     ) private {
         // Delete the position from storage
         tradeStorage.deletePosition(_positionKey, _position.isLong);
-        // Start Tracking Remaining Collateral for Payours
-        uint256 remainingCollateral = _position.collateralAmount;
-        // Pay the liquidator
-        remainingCollateral -= _decreaseState.liqFee;
-        market.transferOutTokens(
-            _liquidator, // Liquidator
-            _decreaseState.liqFee,
-            _position.isLong,
-            true // Unwrap by default
-        );
-        // Pay the Borrowing Fee
-        if (_state.borrowFee > remainingCollateral) _state.borrowFee = remainingCollateral;
-        remainingCollateral -= _state.borrowFee;
-        market.accumulateFees(_state.borrowFee, _position.isLong);
-        // Pay the Position Fee if any remaining collateral -> Fee For Executor is ignored in Liquidation
-        if (_state.positionFee > remainingCollateral) _state.positionFee = remainingCollateral;
-        remainingCollateral -= _state.positionFee;
-        market.accumulateFees(_state.positionFee, _position.isLong);
-        // Pay the Affiliate Rebate
-        if (_state.affiliateRebate > remainingCollateral) _state.affiliateRebate = remainingCollateral;
-        remainingCollateral -= _state.affiliateRebate;
-        market.transferOutTokens(
-            _state.referrer,
-            _state.affiliateRebate,
-            _position.isLong,
-            false // Leave unwrapped by default
-        );
+
+        // Adjust Fees to handle insolvent liquidation case
+        uint256 remainingCollateral;
+        (_feeState, remainingCollateral) = _adjustFeesForInsolvency(_feeState, _position.collateralAmount);
+
+        // Account for Fees in Storage
+        _accumulateFees(market, referralStorage, _feeState, _position.isLong);
+
+        // Update the Pool Balance for any Remaining Collateral
+        market.updatePoolBalance(remainingCollateral, _position.isLong, true);
+
         // Pay the Liquidated User if owed anything
         if (_decreaseState.feesOwedToUser > 0) {
             // Decrease the pool amount by the amount being payed out to the user
             market.updatePoolBalance(_decreaseState.feesOwedToUser, _position.isLong, false);
-            // Transfer the User's Tokens
-            market.transferOutTokens(_position.user, _decreaseState.feesOwedToUser, _position.isLong, _reverseWrap);
         }
-        // Accumulate the remaining collateral into the pool
-        market.updatePoolBalance(remainingCollateral, _position.isLong, true);
+
+        _transferTokensForDecrease(
+            market,
+            _feeState,
+            _decreaseState.feesOwedToUser,
+            _liquidator,
+            _position.user,
+            _position.isLong,
+            _reverseWrap
+        );
     }
 
     function _handlePositionDecrease(
@@ -574,67 +532,80 @@ library TradeLogic {
         IMarket market,
         IReferralStorage referralStorage,
         Position.Data memory _position,
-        Execution.State memory _state,
         Execution.DecreaseState memory _decreaseState,
+        Execution.FeeState memory _feeState,
         bytes32 _positionKey,
         address _executor,
         bool _reverseWrap
     ) private {
-        // Pay Fees
-        _payFees(
-            market,
-            referralStorage,
-            _state.borrowFee,
-            _state.positionFee,
-            _state.affiliateRebate,
-            _state.referrer,
-            _position.isLong
-        );
-        // Set Amount Out
+        // Account for Fees in Storage
+        _accumulateFees(market, referralStorage, _feeState, _position.isLong);
+
+        // Calculate Amount Out
         uint256 amountOut = _decreaseState.decreasePnl > 0
-            ? _decreaseState.afterFeeAmount + _decreaseState.decreasePnl.abs() // Profit Case
-            : _decreaseState.afterFeeAmount; // Loss / Break Even Case -> Losses already deducted in Execution if any
+            ? _feeState.afterFeeAmount + _decreaseState.decreasePnl.abs() // Profit Case
+            : _feeState.afterFeeAmount; // Loss / Break Even Case -> Losses already deducted in Execution if any
         // Pay any positive funding accrued. Negative Funding Deducted in Execution
-        amountOut += _state.fundingFee > 0 ? _state.fundingFee.abs() : 0;
+        amountOut += _feeState.fundingFee > 0 ? _feeState.fundingFee.abs() : 0;
         // If profit being payed out, need to decrease the pool amount by the profit
-        if (amountOut > _decreaseState.afterFeeAmount) {
-            market.updatePoolBalance(amountOut - _decreaseState.afterFeeAmount, _position.isLong, false);
+        if (amountOut > _feeState.afterFeeAmount) {
+            market.updatePoolBalance(amountOut - _feeState.afterFeeAmount, _position.isLong, false);
         }
+
         // Delete the Position if Full Decrease
         if (_position.positionSize == 0 || _position.collateralAmount == 0) {
             tradeStorage.deletePosition(_positionKey, _position.isLong);
         } else {
-            // Update Final Storage
+            // Update Final Storage if Partial Decrease
             tradeStorage.updatePosition(_position, _positionKey);
         }
-        // Check Market has enough available liquidity for payout (@audit - only check if profitable)
-        if (market.totalAvailableLiquidity(_position.isLong) < amountOut + _state.affiliateRebate) {
+
+        // Check Market has enough available liquidity for all transfers out (@audit - only check if profitable)
+        // In cases where the market is insolvent, there may not be enough in the pool to pay out a profitable position.
+        if (
+            market.totalAvailableLiquidity(_position.isLong)
+                < amountOut + _feeState.affiliateRebate + _feeState.feeForExecutor
+        ) {
             revert TradeLogic_InsufficientFreeLiquidity();
         }
 
+        _transferTokensForDecrease(
+            market, _feeState, amountOut, _executor, _position.user, _position.isLong, _reverseWrap
+        );
+    }
+
+    function _transferTokensForDecrease(
+        IMarket market,
+        Execution.FeeState memory _feeState,
+        uint256 _amountOut,
+        address _executor,
+        address _user,
+        bool _isLong,
+        bool _reverseWrap
+    ) private {
         // Transfer the Fee to the Executor
-        if (_state.feeForExecutor > 0) {
-            market.transferOutTokens(_executor, _state.feeForExecutor, _position.isLong, true);
+        if (_feeState.feeForExecutor > 0) {
+            market.transferOutTokens(_executor, _feeState.feeForExecutor, _isLong, true);
         }
 
         // Transfer Rebate to Referrer
-        if (_state.affiliateRebate > 0) {
+        if (_feeState.affiliateRebate > 0) {
             market.transferOutTokens(
-                _state.referrer,
-                _state.affiliateRebate,
-                _position.isLong,
+                _feeState.referrer,
+                _feeState.affiliateRebate,
+                _isLong,
                 false // Leave unwrapped by default
             );
         }
         // Transfer Tokens to User
-        if (amountOut > 0) {
-            market.transferOutTokens(_position.user, amountOut, _position.isLong, _reverseWrap);
+        if (_amountOut > 0) {
+            market.transferOutTokens(_user, _amountOut, _isLong, _reverseWrap);
         }
     }
 
     function _updateMarketState(
         IMarket market,
-        Execution.State memory _state,
+        Execution.Prices memory _prices,
         string memory _ticker,
         uint256 _sizeDelta,
         bool _isLong,
@@ -644,18 +615,18 @@ library TradeLogic {
         market.updateMarketState(
             _ticker,
             _sizeDelta,
-            _state.indexPrice,
-            _state.impactedPrice,
-            _state.collateralPrice,
-            _state.indexBaseUnit,
+            _prices.indexPrice,
+            _prices.impactedPrice,
+            _prices.collateralPrice,
+            _prices.indexBaseUnit,
             _isLong,
             _isIncrease
         );
         // If Price Impact is Negative, add to the impact Pool
         // If Price Impact is Positive, Subtract from the Impact Pool
         // Impact Pool Delta = -1 * Price Impact
-        if (_state.priceImpactUsd == 0) return;
-        market.updateImpactPool(_ticker, -_state.priceImpactUsd);
+        if (_prices.priceImpactUsd == 0) return;
+        market.updateImpactPool(_ticker, -_prices.priceImpactUsd);
     }
 
     function _reserveLiquidity(
@@ -692,21 +663,30 @@ library TradeLogic {
         market.updateCollateralAmount(_collateralDelta, _user, _isLong, false);
     }
 
-    function _payFees(
+    /**
+     * For Increase:
+     * - Borrow & Position Fee --> LPs
+     * - Affiliate Rebate --> Referrer
+     * - Fee For Executor --> Executor
+     * - Funding Fee --> Pool
+     */
+    function _accumulateFees(
         IMarket market,
         IReferralStorage referralStorage,
-        uint256 _borrowAmount,
-        uint256 _positionFee,
-        uint256 _affiliateRebate,
-        address _referrer,
+        Execution.FeeState memory _feeState,
         bool _isLong
     ) private {
-        // Pay Fees to LPs for Side (Position + Borrow)
-        market.accumulateFees(_borrowAmount + _positionFee, _isLong);
+        // Account for Fees in Storage to LPs for Side (Position + Borrow)
+        market.accumulateFees(_feeState.borrowFee + _feeState.positionFee, _isLong);
         // Pay Affiliate Rebate to Referrer
-        if (_affiliateRebate > 0) {
-            referralStorage.accumulateAffiliateRewards(address(market), _referrer, _isLong, _affiliateRebate);
+        if (_feeState.affiliateRebate > 0) {
+            referralStorage.accumulateAffiliateRewards(
+                address(market), _feeState.referrer, _isLong, _feeState.affiliateRebate
+            );
         }
+        // If user's position has increased with positive funding, need to subtract from the pool
+        // If user's position has decreased with negative funding, need to add to the pool
+        market.updatePoolBalance(_feeState.fundingFee.abs(), _isLong, _feeState.fundingFee < 0);
     }
 
     function _attachConditionalOrder(ITradeStorage tradeStorage, Position.Request calldata _request, bytes32 _orderKey)
@@ -725,5 +705,46 @@ library TradeLogic {
             position.takeProfitKey = _orderKey;
             tradeStorage.updatePosition(position, positionKey);
         }
+    }
+
+    function _createConditionalOrders(
+        ITradeStorage tradeStorage,
+        Position.Data memory position,
+        Position.Conditionals memory _conditionals,
+        uint256 _executionFee
+    ) private returns (Position.Data memory) {
+        if (!_conditionals.stopLossSet && !_conditionals.takeProfitSet) return position;
+        // If Request has conditionals, create the SL / TP
+        (Position.Request memory stopLoss, Position.Request memory takeProfit) =
+            Position.constructConditionalOrders(position, _conditionals, _executionFee);
+        // If stop loss set, create and store the order
+        if (_conditionals.stopLossSet) position.stopLossKey = tradeStorage.createOrder(stopLoss);
+        // If take profit set, create and store the order
+        if (_conditionals.takeProfitSet) {
+            position.takeProfitKey = tradeStorage.createOrder(takeProfit);
+        }
+        return position;
+    }
+
+    // Use remaining collateral as a decreasing incrementer -> pay fees until all used up, adjust fees as necessary
+    function _adjustFeesForInsolvency(Execution.FeeState memory _feeState, uint256 _remainingCollateral)
+        private
+        pure
+        returns (Execution.FeeState memory, uint256)
+    {
+        // Subtract Liq Fee --> Liq Fee is a % of the collateral, so can never be >
+        // Paid first to always incentivize liquidations.
+        _remainingCollateral -= _feeState.feeForExecutor;
+
+        if (_feeState.borrowFee > _remainingCollateral) _feeState.borrowFee = _remainingCollateral;
+        _remainingCollateral -= _feeState.borrowFee;
+
+        if (_feeState.positionFee > _remainingCollateral) _feeState.positionFee = _remainingCollateral;
+        _remainingCollateral -= _feeState.positionFee;
+
+        if (_feeState.affiliateRebate > _remainingCollateral) _feeState.affiliateRebate = _remainingCollateral;
+        _remainingCollateral -= _feeState.affiliateRebate;
+
+        return (_feeState, _remainingCollateral);
     }
 }

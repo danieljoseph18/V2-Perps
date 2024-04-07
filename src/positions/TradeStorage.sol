@@ -132,7 +132,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         external
         onlyPositionManager
         nonReentrant
-        returns (Execution.State memory state, Position.Request memory request)
+        returns (Execution.FeeState memory feeState, Position.Request memory request)
     {
         return
             TradeLogic.executePositionRequest(market, priceFeed, referralStorage, _orderKey, _requestId, _feeReceiver);
@@ -215,6 +215,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory position) {
         position = openPositions[_positionKey];
         if (position.user == address(0)) revert TradeStorage_InvalidPosition();
+    }
+
+    function isPosition(bytes32 _positionKey) external view returns (bool) {
+        return openPositions[_positionKey].user != address(0);
+    }
+
+    function isOrder(bytes32 _orderKey) external view returns (bool) {
+        return bytes(orders[_orderKey].input.ticker).length != 0;
     }
 
     /// @notice - Get the request data for a given order key. Reverts if invalid.
