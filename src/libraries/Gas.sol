@@ -5,9 +5,11 @@ import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {mulDiv} from "@prb/math/Common.sol";
+import {MathUtils} from "./MathUtils.sol";
 
 library Gas {
+    using MathUtils for uint256;
+
     uint256 private constant CANCELLATION_PENALTY = 0.2e18; // 20%
     uint256 private constant SCALING_FACTOR = 1e18;
     uint256 private constant BUFFER_PERCENTAGE = 1.1e18; // 110%
@@ -53,11 +55,11 @@ library Gas {
     ) public view returns (uint256 estimatedCost, uint256 priceUpdateCost) {
         uint256 actionCost = _getActionCost(positionManager, _action);
         priceUpdateCost = _getPriceUpdateCost(priceFeed, _hasPnlRequest, _isLimit);
-        estimatedCost = mulDiv(actionCost + priceUpdateCost, BUFFER_PERCENTAGE, SCALING_FACTOR);
+        estimatedCost = (actionCost + priceUpdateCost).percentage(BUFFER_PERCENTAGE);
     }
 
     function getRefundForCancellation(uint256 _executionFee) external pure returns (uint256) {
-        return mulDiv(_executionFee, CANCELLATION_PENALTY, SCALING_FACTOR);
+        return _executionFee.percentage(CANCELLATION_PENALTY);
     }
 
     function _getActionCost(IPositionManager positionManager, Action _action) private view returns (uint256) {

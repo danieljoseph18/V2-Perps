@@ -2,11 +2,11 @@
 pragma solidity 0.8.23;
 
 import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
-import {mulDiv} from "@prb/math/Common.sol";
+import {MathUtils} from "../libraries/MathUtils.sol";
 
 // Library for referral related logic
 library Referral {
-    uint256 constant PRECISION = 1e18;
+    using MathUtils for uint256;
 
     /**
      * Precision loss - Fee discount should be 5% of the fee
@@ -19,7 +19,7 @@ library Referral {
     {
         uint256 discountPercentage = referralStorage.getDiscountForUser(_account);
 
-        uint256 totalReduction = mulDiv(_fee, discountPercentage, PRECISION);
+        uint256 totalReduction = _fee.percentage(discountPercentage);
 
         // 50% goes to user as extra collateral, 50% goes to code owner
         uint256 discount = totalReduction / 2; // 0.000100020004000800.15 ether = 0.25 USD

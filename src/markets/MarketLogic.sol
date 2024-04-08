@@ -2,7 +2,6 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "./interfaces/IMarket.sol";
-import {mulDiv} from "@prb/math/Common.sol";
 import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
@@ -12,10 +11,12 @@ import {MarketUtils} from "./MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
+import {MathUtils} from "../libraries/MathUtils.sol";
 
 library MarketLogic {
     using SafeERC20 for IERC20;
     using SafeERC20 for IMarketToken;
+    using MathUtils for uint256;
 
     error MarketLogic_InvalidLeverage();
     error MarketLogic_InvalidReserveFactor();
@@ -149,8 +150,8 @@ library MarketLogic {
         uint256 longFees = _longAccumulatedFees;
         uint256 shortFees = _shortAccumulatedFees;
         // calculate percentages and distribute percentage to owner and feeDistributor
-        uint256 longOwnerFees = mulDiv(longFees, FEES_TO_OWNER, SCALING_FACTOR);
-        uint256 shortOwnerFees = mulDiv(shortFees, FEES_TO_OWNER, SCALING_FACTOR);
+        uint256 longOwnerFees = longFees.percentage(FEES_TO_OWNER);
+        uint256 shortOwnerFees = shortFees.percentage(FEES_TO_OWNER);
         uint256 longDistributorFee = longFees - (longOwnerFees * 2); // 2 because 10% to owner and 10% to protocol
         uint256 shortDistributorFee = shortFees - (shortOwnerFees * 2);
 

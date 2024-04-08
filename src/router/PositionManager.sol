@@ -10,22 +10,17 @@ import {Position} from "../positions/Position.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {Execution} from "../positions/Execution.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IPositionManager} from "./interfaces/IPositionManager.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {mulDiv} from "@prb/math/Common.sol";
 import {Roles} from "../access/Roles.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
-import {console2} from "forge-std/Test.sol";
 
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
@@ -34,9 +29,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
     using SafeERC20 for IMarketToken;
-    using SafeCast for uint256;
     using Address for address payable;
-    using SignedMath for int256;
 
     IWETH immutable WETH;
     IERC20 immutable USDC;
@@ -203,23 +196,12 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     {
         // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
-        console2.log("Starting Ether Bal: ", address(this).balance);
 
         // Get the Trade Storage
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the Request
         (Execution.FeeState memory feeState, Position.Request memory request) =
             tradeStorage.executePositionRequest(_orderKey, _requestId, _feeReceiver);
-
-        if (request.input.isIncrease) {
-            _transferTokensForIncrease(
-                market,
-                request.input.collateralToken,
-                request.input.collateralDelta,
-                feeState.affiliateRebate,
-                feeState.feeForExecutor
-            );
-        }
 
         // Emit Trade Executed Event
         emit ExecutePosition(_orderKey, feeState.positionFee, feeState.affiliateRebate);
@@ -287,13 +269,13 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function _transferTokensForIncrease(
+    function transferTokensForIncrease(
         IMarket market,
         address _collateralToken,
         uint256 _collateralDelta,
         uint256 _affiliateRebate,
         uint256 _feeForExecutor
-    ) private {
+    ) external onlyTradeStorage(address(market)) {
         uint256 transferAmount = _collateralDelta;
         // Transfer Fee to Executor
         if (_feeForExecutor > 0) {

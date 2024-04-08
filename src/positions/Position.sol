@@ -11,14 +11,15 @@ import {SD59x18, sd, unwrap, exp} from "@prb/math/SD59x18.sol";
 import {Execution} from "../positions/Execution.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {Convert} from "../libraries/Convert.sol";
+import {MathUtils} from "../libraries/MathUtils.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
     using SignedMath for int256;
     using SafeCast for uint256;
     using SafeCast for int256;
-    using Convert for uint256;
+    using MathUtils for uint256;
+    using MathUtils for int256;
 
     error Position_InvalidDecrease();
     error Position_SizeDelta();
@@ -33,8 +34,6 @@ library Position {
     error Position_InvalidAssetId();
     error Position_InvalidConditionalPercentage();
     error Position_InvalidSizeDelta();
-    error Position_ZeroAddress();
-    error Position_InvalidRequestTimestamp();
     error Position_CollateralDelta();
     error Position_NewPosition();
     error Position_IncreasePositionCollateral();
@@ -412,13 +411,13 @@ library Position {
     }
 
     // SL / TP are Decrease Orders tied to a Position
-    function constructConditionalOrders(
+    function createConditionalOrders(
         Data memory _position,
         Conditionals memory _conditionals,
         uint256 _totalExecutionFee
     ) external view returns (Request memory stopLossOrder, Request memory takeProfitOrder) {
         // Construct the stop loss based on the values
-        uint256 slExecutionFee = mulDiv(_totalExecutionFee, 2, 3); // 2/3 of the total execution fee
+        uint256 slExecutionFee = _totalExecutionFee.percentage(2, 3); // 2/3 of the total execution fee
         if (_conditionals.stopLossSet) {
             stopLossOrder = Request({
                 input: Input({
@@ -468,7 +467,7 @@ library Position {
         }
     }
 
-    function constructLiquidationOrder(Data memory _position, address _liquidator, bytes32 _requestId)
+    function createLiquidationOrder(Data memory _position, address _liquidator, bytes32 _requestId)
         external
         view
         returns (Settlement memory order)
@@ -546,9 +545,9 @@ library Position {
     ) external view returns (uint256 positionFee, uint256 feeForExecutor) {
         uint256 feePercentage = tradeStorage.tradingFee();
         uint256 executorPercentage = tradeStorage.feeForExecution();
-        // convert usd to collateral amount
+        // Units usd to collateral amount
         if (_sizeDelta != 0) {
-            uint256 sizeInCollateral = _sizeDelta.toBase(_collateralBaseUnit, _collateralPrice);
+            uint256 sizeInCollateral = _sizeDelta.fromUsd(_collateralBaseUnit, _collateralPrice);
             // calculate fee
             positionFee = sizeInCollateral.percentage(feePercentage);
             feeForExecutor = positionFee.percentage(executorPercentage);
@@ -568,8 +567,8 @@ library Position {
         int256 _entryFundingAccrued
     ) external view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
         (, nextFundingAccrued) = Funding.calculateNextFunding(market, _ticker, _indexPrice);
-        // Both Values in USD -> 30 D.P: Divide by Price precision to get 30 D.P value
-        fundingFeeUsd = mulDivSigned(_sizeDelta.toInt256(), nextFundingAccrued - _entryFundingAccrued, PRICE_PRECISION);
+        // Funding Fee Usd = Size Delta * Percentage Funding Accrued
+        fundingFeeUsd = _sizeDelta.toInt256().percentageUsd(nextFundingAccrued - _entryFundingAccrued);
     }
 
     function getTotalFundingFees(IMarket market, Data memory _position, uint256 _indexPrice)
@@ -578,10 +577,9 @@ library Position {
         returns (int256 totalFeesOwedUsd)
     {
         (, int256 nextFundingAccrued) = Funding.calculateNextFunding(market, _position.ticker, _indexPrice);
-        totalFeesOwedUsd = mulDivSigned(
-            _position.positionSize.toInt256(),
-            nextFundingAccrued - _position.fundingParams.lastFundingAccrued,
-            PRICE_PRECISION
+        // Total Fees Owed Usd = Position Size * Percentage Funding Accrued
+        totalFeesOwedUsd = _position.positionSize.toInt256().percentageInt(
+            nextFundingAccrued - _position.fundingParams.lastFundingAccrued
         );
     }
 
@@ -591,7 +589,7 @@ library Position {
         returns (uint256 collateralFeesOwed)
     {
         uint256 feesUsd = getTotalBorrowFeesUsd(market, _position);
-        collateralFeesOwed = feesUsd.toBase(_prices.collateralBaseUnit, _prices.collateralPrice);
+        collateralFeesOwed = feesUsd.fromUsd(_prices.collateralBaseUnit, _prices.collateralPrice);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
@@ -614,7 +612,6 @@ library Position {
 
     /// @dev returns PNL in USD
     // PNL = (Current Price - Average Entry Price) * (Position Value / Average Entry Price)
-    // @audit - precision loss?
     function getPositionPnl(
         uint256 _positionSizeUsd,
         uint256 _weightedAvgEntryPrice,
@@ -622,8 +619,8 @@ library Position {
         uint256 _indexBaseUnit,
         bool _isLong
     ) public pure returns (int256) {
-        int256 priceDelta = _indexPrice.toInt256() - _weightedAvgEntryPrice.toInt256();
-        uint256 entryIndexAmount = _positionSizeUsd.toBase(_indexBaseUnit, _weightedAvgEntryPrice);
+        int256 priceDelta = _indexPrice.diff(_weightedAvgEntryPrice);
+        uint256 entryIndexAmount = _positionSizeUsd.fromUsd(_indexBaseUnit, _weightedAvgEntryPrice);
         if (_isLong) {
             return mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
@@ -646,10 +643,9 @@ library Position {
         int256 positionPnl =
             getPositionPnl(_positionSizeUsd, _weightedAvgEntryPrice, _indexPrice, _indexBaseUnit, _isLong);
         // Get (% realised) * pnl
-        int256 realizedPnl = mulDivSigned(positionPnl, _sizeDeltaUsd.toInt256(), _positionSizeUsd.toInt256());
-        // Convert from USD to collateral tokens
-        decreasePositionPnl =
-            mulDivSigned(realizedPnl, _collateralBaseUnit.toInt256(), _collateralTokenPrice.toInt256());
+        int256 realizedPnl = positionPnl.percentageSigned(_sizeDeltaUsd, _positionSizeUsd);
+        // Units from USD to collateral tokens
+        decreasePositionPnl = realizedPnl.fromUsdToSigned(_collateralTokenPrice, _collateralBaseUnit);
     }
 
     /**
@@ -727,10 +723,10 @@ library Position {
         }
         // If Funding Rate Velocity was non 0, funding rate should change
         if (_prevFunding.fundingRateVelocity != 0) {
-            int256 timeElapsed = (block.timestamp - _prevFunding.lastFundingUpdate).toInt256();
-            // currentFundingRate = prevRate + velocity * (timeElapsetd / 1 days)
+            uint256 timeElapsed = (block.timestamp - _prevFunding.lastFundingUpdate);
+            // currentFundingRate = prevRate + velocity * (timeElapsed / 1 days)
             int256 expectedRate =
-                _prevFunding.fundingRate + mulDivSigned(_prevFunding.fundingRateVelocity, timeElapsed, 1 days);
+                _prevFunding.fundingRate + _prevFunding.fundingRateVelocity.percentageSigned(timeElapsed, 1 days);
             if (expectedRate != _funding.fundingRate) {
                 revert Position_FundingRate();
             }

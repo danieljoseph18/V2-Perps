@@ -6,12 +6,14 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {MathUtils} from "./MathUtils.sol";
 
 /// @dev Library for Funding Related Calculations
 library Funding {
     using SafeCast for uint256;
     using SafeCast for int256;
     using SignedMath for int256;
+    using MathUtils for uint256;
 
     int256 constant SIGNED_PRECISION = 1e18;
     int256 constant PRICE_PRECISION = 1e30;
@@ -42,7 +44,7 @@ library Funding {
         uint256 longOI = MarketUtils.getOpenInterest(market, _ticker, true);
         uint256 shortOI = MarketUtils.getOpenInterest(market, _ticker, false);
 
-        skewUsd = longOI.toInt256() - shortOI.toInt256();
+        skewUsd = longOI.diff(shortOI);
     }
 
     //  - proportionalSkew = skew / skewScale

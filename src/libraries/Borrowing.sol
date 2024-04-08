@@ -3,12 +3,13 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {mulDiv} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {MathUtils} from "./MathUtils.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
     using SignedMath for int256;
+    using MathUtils for uint256;
 
     uint256 private constant PRECISION = 1e18;
     uint256 private constant SECONDS_PER_DAY = 86400;
@@ -56,20 +57,20 @@ library Borrowing {
         uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 borrowRatePerDay) {
-        uint256 factor = mulDiv(
-            MarketUtils.getOpenInterest(market, _ticker, _isLong),
-            PRECISION,
+        // Factor = (open interest usd / max open interest usd)
+        uint256 factor = MarketUtils.getOpenInterest(market, _ticker, _isLong).div(
             MarketUtils.getAvailableOiUsd(
                 market, _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _collateralBaseUnit, _isLong
             )
         );
-        borrowRatePerDay = mulDiv(market.borrowScale(), factor, PRECISION);
+        borrowRatePerDay = market.borrowScale().percentage(factor);
     }
 
     function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) public view returns (uint256 fee) {
         uint256 timeElapsed = block.timestamp - _lastUpdate;
         if (timeElapsed == 0) return 0;
-        fee = mulDiv(_rate, timeElapsed, SECONDS_PER_DAY);
+        // Fees = (borrowRatePerDay * timeElapsed)
+        fee = _rate.percentage(timeElapsed, SECONDS_PER_DAY);
     }
 
     function getTotalFeesOwedByMarkets(IMarket market, bool _isLong) external view returns (uint256 totalFeeUsd) {
@@ -92,7 +93,8 @@ library Borrowing {
         uint256 accumulatedFees = MarketUtils.getCumulativeBorrowFee(market, _ticker, _isLong)
             - MarketUtils.getAverageCumulativeBorrowFee(market, _ticker, _isLong);
         uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
-        totalFeesOwedUsd = mulDiv(accumulatedFees, openInterest, PRECISION);
+        // Total Fees Owed = cumulativeFeePercentage * openInterestUsd
+        totalFeesOwedUsd = accumulatedFees.mul(openInterest);
     }
 
     /**
@@ -107,7 +109,6 @@ library Borrowing {
      * f_current: The current cumulative fee on the market.
      * p: The proportion of the new position size relative to the total open interest.
      */
-    // @audit - gas?
     function getNextAverageCumulative(IMarket market, string calldata _ticker, int256 _sizeDeltaUsd, bool _isLong)
         external
         view
@@ -133,10 +134,13 @@ library Borrowing {
         }
         // If this point in execution is reached -> calculate the next average cumulative
         // Get the percentage of the new position size relative to the total open interest
-        uint256 relativeSize = mulDiv(absSizeDelta, PRECISION, openInterestUsd);
+        // Relative Size = (absSizeDelta / openInterestUsd)
+        uint256 relativeSize = absSizeDelta.div(openInterestUsd);
         // Calculate the new weighted average entry cumulative fee
-        nextAverageCumulative = mulDiv(lastCumulative, PRECISION - relativeSize, PRECISION)
-            + mulDiv(currentCumulative, relativeSize, PRECISION);
+        /**
+         * lastCumulative.mul(PRECISION - relativeSize) + currentCumulative.mul(relativeSize);
+         */
+        nextAverageCumulative = lastCumulative.mul(PRECISION - relativeSize) + currentCumulative.mul(relativeSize);
     }
 
     /// @dev Units: Fees as a percentage (e.g 0.03e18 = 3%)

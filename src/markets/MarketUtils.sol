@@ -8,12 +8,15 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {MathUtils} from "../libraries/MathUtils.sol";
 
 library MarketUtils {
     using SignedMath for int256;
     using SafeCast for uint256;
+    using MathUtils for uint256;
+    using MathUtils for uint64;
 
-    uint64 constant SCALAR = 1e18;
+    uint64 constant PRECISION = 1e18;
     uint64 constant BASE_FEE = 0.001e18; // 0.1%
     uint64 public constant FEE_SCALE = 0.01e18; // 1%
     uint64 constant LONG_BASE_UNIT = 1e18;
@@ -31,6 +34,7 @@ library MarketUtils {
     error MarketUtils_AmountTooSmall();
     error MarketUtils_InvalidAmountOut(uint256 amountOut, uint256 expectedOut);
     error MarketUtils_TokenMintFailed();
+    error MarketUtils_InsufficientFreeLiquidity();
 
     struct FeeParams {
         IMarket market;
@@ -64,25 +68,25 @@ library MarketUtils {
         uint256 _tokenAmount,
         bool _isLongToken
     ) public pure returns (uint256) {
-        uint256 baseFee = mulDiv(_tokenAmount, BASE_FEE, SCALAR);
+        uint256 baseFee = _tokenAmount.percentage(BASE_FEE);
         // If long / short token balance = 0 return Base Fee
         if (_longTokenBalance == 0 || _shortTokenBalance == 0) return baseFee;
         // Maximize to increase the impact on the skew
         uint256 amountUsd = _isLongToken
-            ? mulDiv(_tokenAmount, _longPrices.max, LONG_BASE_UNIT)
-            : mulDiv(_tokenAmount, _shortPrices.max, SHORT_BASE_UNIT);
+            ? _tokenAmount.toUsd(_longPrices.max, LONG_BASE_UNIT)
+            : _tokenAmount.toUsd(_shortPrices.max, SHORT_BASE_UNIT);
         if (amountUsd == 0) revert MarketUtils_AmountTooSmall();
         // Minimize value of pool to maximise the effect on the skew
-        uint256 longValue = mulDiv(_longTokenBalance, _longPrices.min, LONG_BASE_UNIT);
-        uint256 shortValue = mulDiv(_shortTokenBalance, _shortPrices.min, SHORT_BASE_UNIT);
+        uint256 longValue = _longTokenBalance.toUsd(_longPrices.min, LONG_BASE_UNIT);
+        uint256 shortValue = _shortTokenBalance.toUsd(_shortPrices.min, SHORT_BASE_UNIT);
 
         // Don't want to disincentivise deposits on empty pool
         if (longValue == 0 && _isLongToken) return baseFee;
         if (shortValue == 0 && !_isLongToken) return baseFee;
 
-        int256 initSkew = longValue.toInt256() - shortValue.toInt256();
+        int256 initSkew = longValue.diff(shortValue);
         _isLongToken ? longValue += amountUsd : shortValue += amountUsd;
-        int256 updatedSkew = longValue.toInt256() - shortValue.toInt256();
+        int256 updatedSkew = longValue.diff(shortValue);
 
         // Check for a Skew Flip
         bool skewFlip = initSkew ^ updatedSkew < 0;
@@ -92,9 +96,9 @@ library MarketUtils {
         // If Flip, charge full Skew After, else charge the delta
         uint256 negativeSkewAccrued = skewFlip ? updatedSkew.abs() : amountUsd;
         // Calculate the relative impact on Market Skew
-        uint256 feeFactor = mulDiv(negativeSkewAccrued, FEE_SCALE, longValue + shortValue);
+        uint256 feeFactor = FEE_SCALE.percentage(negativeSkewAccrued, longValue + shortValue);
         // Calculate the additional fee
-        uint256 feeAddition = mulDiv(feeFactor, _tokenAmount, SCALAR);
+        uint256 feeAddition = _tokenAmount.percentage(feeFactor);
         // Return base fee + fee addition
         return baseFee + feeAddition;
     }
@@ -109,25 +113,24 @@ library MarketUtils {
         uint256 _tokenAmount,
         bool _isLongToken
     ) public pure returns (uint256) {
-        uint256 baseFee = mulDiv(_tokenAmount, BASE_FEE, SCALAR);
+        uint256 baseFee = _tokenAmount.percentage(BASE_FEE);
 
         // Maximize to increase the impact on the skew
         uint256 amountUsd = _isLongToken
-            ? mulDiv(_tokenAmount, _longPrice, LONG_BASE_UNIT)
-            : mulDiv(_tokenAmount, _shortPrice, SHORT_BASE_UNIT);
+            ? _tokenAmount.toUsd(_longPrice, LONG_BASE_UNIT)
+            : _tokenAmount.toUsd(_shortPrice, SHORT_BASE_UNIT);
         if (amountUsd == 0) revert MarketUtils_AmountTooSmall();
         // Minimize value of pool to maximise the effect on the skew
-        uint256 longValue = mulDiv(_longTokenBalance, _longPrice, LONG_BASE_UNIT);
-        uint256 shortValue = mulDiv(_shortTokenBalance, _shortPrice, SHORT_BASE_UNIT);
+        uint256 longValue = _longTokenBalance.toUsd(_longPrice, LONG_BASE_UNIT);
+        uint256 shortValue = _shortTokenBalance.toUsd(_shortPrice, SHORT_BASE_UNIT);
 
-        int256 initSkew = longValue.toInt256() - shortValue.toInt256();
+        int256 initSkew = longValue.diff(shortValue);
         _isLongToken ? longValue -= amountUsd : shortValue -= amountUsd;
-
-        int256 updatedSkew = longValue.toInt256() - shortValue.toInt256();
+        int256 updatedSkew = longValue.diff(shortValue);
 
         if (longValue + shortValue == 0) {
             // Charge the maximium possible fee for full withdrawals
-            return baseFee + mulDiv(_tokenAmount, FEE_SCALE, SCALAR);
+            return baseFee + _tokenAmount.percentage(FEE_SCALE);
         }
 
         // Check for a Skew Flip
@@ -139,11 +142,10 @@ library MarketUtils {
         uint256 negativeSkewAccrued = skewFlip ? updatedSkew.abs() : amountUsd;
         // Calculate the relative impact on Market Skew
         // Re-add amount to get the initial net pool value
-
-        uint256 feeFactor = mulDiv(negativeSkewAccrued, FEE_SCALE, longValue + shortValue + amountUsd);
+        uint256 feeFactor = FEE_SCALE.percentage(negativeSkewAccrued, longValue + shortValue + amountUsd);
         // Calculate the additional fee
 
-        uint256 feeAddition = mulDiv(feeFactor, _tokenAmount, SCALAR);
+        uint256 feeAddition = _tokenAmount.percentage(feeFactor);
         // Return base fee + fee addition
         return baseFee + feeAddition;
     }
@@ -250,8 +252,8 @@ library MarketUtils {
         uint256 _amountOut,
         bool _isLongToken
     ) external pure {
-        uint256 minFee = mulDiv(_amountOut, BASE_FEE, SCALAR);
-        uint256 maxFee = mulDiv(_amountOut, BASE_FEE + FEE_SCALE, SCALAR);
+        uint256 minFee = _amountOut.percentage(BASE_FEE);
+        uint256 maxFee = _amountOut.percentage(BASE_FEE + FEE_SCALE);
         if (_initialState.totalSupply != _updatedState.totalSupply + _marketTokenAmountIn) {
             revert MarketUtils_TokenBurnFailed();
         }
@@ -307,10 +309,10 @@ library MarketUtils {
                 : mulDiv(_amountIn, _shortPrices.min, SHORT_CONVERSION_FACTOR);
         } else {
             uint256 valueUsd = _isLongToken
-                ? mulDiv(_amountIn, _longPrices.min, LONG_BASE_UNIT)
-                : mulDiv(_amountIn, _shortPrices.min, SHORT_BASE_UNIT);
+                ? _amountIn.toUsd(_longPrices.min, LONG_BASE_UNIT)
+                : _amountIn.toUsd(_shortPrices.min, SHORT_BASE_UNIT);
             // (30dp * 18dp / 30dp) = 18dp
-            marketTokenAmount = mulDiv(valueUsd, SCALAR, marketTokenPrice);
+            marketTokenAmount = mulDiv(valueUsd, PRECISION, marketTokenPrice);
         }
     }
 
@@ -335,14 +337,14 @@ library MarketUtils {
             _shortBorrowFeesUsd,
             _cumulativePnl
         );
-        uint256 valueUsd = mulDiv(_marketTokenAmountIn, marketTokenPrice, SCALAR);
+        uint256 valueUsd = _marketTokenAmountIn.toUsd(marketTokenPrice, PRECISION);
         // Minimize the Value of the Amount Out
         if (_isLongToken) {
-            tokenAmount = mulDiv(valueUsd, LONG_BASE_UNIT, _longPrices.max);
+            tokenAmount = valueUsd.fromUsd(_longPrices.max, LONG_BASE_UNIT);
             uint256 poolBalance = market.longTokenBalance();
             if (tokenAmount > poolBalance) tokenAmount = poolBalance;
         } else {
-            tokenAmount = mulDiv(valueUsd, SHORT_BASE_UNIT, _shortPrices.max);
+            tokenAmount = valueUsd.fromUsd(_shortPrices.max, SHORT_BASE_UNIT);
             uint256 poolBalance = market.shortTokenBalance();
             if (tokenAmount > poolBalance) tokenAmount = poolBalance;
         }
@@ -364,7 +366,7 @@ library MarketUtils {
             uint256 aum = getAum(
                 market, _longTokenPrice, _longBorrowFeesUsd, _shortTokenPrice, _shortBorrowFeesUsd, _cumulativePnl
             );
-            lpTokenPrice = mulDiv(aum, SCALAR, totalSupply);
+            lpTokenPrice = aum.div(totalSupply);
         }
     }
 
@@ -380,8 +382,8 @@ library MarketUtils {
         int256 _cumulativePnl
     ) public view returns (uint256 aum) {
         // Get Values in USD -> Subtract reserved amounts from AUM
-        aum += mulDiv(market.longTokenBalance() - market.longTokensReserved(), _longTokenPrice, LONG_BASE_UNIT);
-        aum += mulDiv(market.shortTokenBalance() - market.shortTokensReserved(), _shortTokenPrice, SHORT_BASE_UNIT);
+        aum += (market.longTokenBalance() - market.longTokensReserved()).toUsd(_longTokenPrice, LONG_BASE_UNIT);
+        aum += (market.shortTokenBalance() - market.shortTokensReserved()).toUsd(_shortTokenPrice, SHORT_BASE_UNIT);
 
         // Add Borrow Fees
         aum += _longBorrowFeesUsd;
@@ -428,8 +430,8 @@ library MarketUtils {
         uint256 openInterest = getOpenInterest(market, _ticker, _isLong);
         uint256 averageEntryPrice = getAverageEntryPrice(market, _ticker, _isLong);
         if (openInterest == 0 || averageEntryPrice == 0) return 0;
-        int256 priceDelta = _indexPrice.toInt256() - averageEntryPrice.toInt256();
-        uint256 entryIndexAmount = mulDiv(openInterest, _indexBaseUnit, averageEntryPrice);
+        int256 priceDelta = _indexPrice.diff(averageEntryPrice);
+        uint256 entryIndexAmount = openInterest.fromUsd(averageEntryPrice, _indexBaseUnit);
         if (_isLong) {
             netPnl = mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
@@ -516,10 +518,9 @@ library MarketUtils {
         // get the total liquidity available for that side
         uint256 totalAvailableLiquidity = market.totalAvailableLiquidity(_isLong);
         // calculate liquidity allocated to the market for that side
-        poolAmount = mulDiv(totalAvailableLiquidity, allocationShare, MAX_ALLOCATION);
+        poolAmount = totalAvailableLiquidity.percentage(allocationShare, MAX_ALLOCATION);
     }
 
-    // @audit - wrong -> 48 dp? should have 30
     function getPoolBalanceUsd(
         IMarket market,
         string calldata _ticker,
@@ -530,8 +531,7 @@ library MarketUtils {
         // get the liquidity allocated to the market for that side
         uint256 allocationInTokens = getPoolBalance(market, _ticker, _isLong);
         // convert to usd
-        poolUsd = mulDiv(allocationInTokens, _collateralTokenPrice, _collateralBaseUnit);
-
+        poolUsd = allocationInTokens.toUsd(_collateralTokenPrice, _collateralBaseUnit);
     }
 
     function validateAllocation(
@@ -549,7 +549,6 @@ library MarketUtils {
             market, _ticker, _indexPrice, _collateralTokenPrice, _indexBaseUnit, _collateralBaseUnit, _isLong
         );
         // Check SizeDelta USD won't push the OI over the max
-
 
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
@@ -570,7 +569,6 @@ library MarketUtils {
     }
 
     /// @notice returns the available remaining open interest for a side in USD
-    // @audit - wrong -> 48 dp? should have 30
     function getAvailableOiUsd(
         IMarket market,
         string calldata _ticker,
@@ -584,7 +582,7 @@ library MarketUtils {
         uint256 remainingAllocationUsd =
             getPoolBalanceUsd(market, _ticker, _collateralTokenPrice, _collateralBaseUnit, _isLong);
 
-        availableOi = remainingAllocationUsd - mulDiv(remainingAllocationUsd, getReserveFactor(market, _ticker), SCALAR);
+        availableOi = remainingAllocationUsd - remainingAllocationUsd.percentage(getReserveFactor(market, _ticker));
 
         // get the pnl
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
@@ -613,8 +611,8 @@ library MarketUtils {
         }
         // get pnl
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
-
-        uint256 factor = mulDiv(pnl.abs(), SCALAR, poolUsd);
+        // (PNL / Pool USD)
+        uint256 factor = pnl.abs().div(poolUsd);
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;
     }
 
@@ -740,5 +738,11 @@ library MarketUtils {
 
     function generateAssetId(string memory _ticker) external pure returns (bytes32) {
         return keccak256(abi.encode(_ticker));
+    }
+
+    function hasSufficientLiquidity(IMarket market, uint256 _amount, bool _isLong) external view {
+        if (market.totalAvailableLiquidity(_isLong) < _amount) {
+            revert MarketUtils_InsufficientFreeLiquidity();
+        }
     }
 }

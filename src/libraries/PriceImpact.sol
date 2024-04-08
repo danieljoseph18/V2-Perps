@@ -9,12 +9,14 @@ import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Execution} from "../positions/Execution.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
+import {MathUtils} from "./MathUtils.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
     using SignedMath for int256;
     using SafeCast for uint256;
     using SafeCast for int256;
+    using MathUtils for uint256;
 
     error PriceImpact_InvalidTotalImpact(int256 totalImpact);
     error PriceImpact_SizeDeltaIsZero();
@@ -78,9 +80,9 @@ library PriceImpact {
             sizeDeltaUsd = -_request.input.sizeDelta.toInt256();
             state.updatedTotalOi = state.initialTotalOi - _request.input.sizeDelta;
         }
-        state.initialSkew = state.longOi.toInt256() - state.shortOi.toInt256();
+        state.initialSkew = state.longOi.diff(state.shortOi);
         _request.input.isLong ? state.longOi += _request.input.sizeDelta : state.shortOi += _request.input.sizeDelta;
-        state.updatedSkew = state.longOi.toInt256() - state.shortOi.toInt256();
+        state.updatedSkew = state.longOi.diff(state.shortOi);
 
         // Compare the MSBs to determine whether a skew flip has occurred
         if ((state.initialSkew ^ state.updatedSkew) < 0) {
@@ -200,9 +202,9 @@ library PriceImpact {
         returns (uint256 impactedPrice)
     {
         // Get the price impact as a percentage
-        uint256 percentageImpact = mulDiv(_priceImpactUsd.abs(), PRICE_PRECISION, _sizeDeltaUsd);
+        uint256 percentageImpact = PRICE_PRECISION.percentage(_priceImpactUsd.abs(), _sizeDeltaUsd);
         // Impact the price by the same percentage
-        uint256 impactToPrice = mulDiv(percentageImpact, _indexPrice, PRICE_PRECISION);
+        uint256 impactToPrice = _indexPrice.percentage(percentageImpact, PRICE_PRECISION);
 
         if (_isLong) {
             if (_priceImpactUsd < 0) {
@@ -239,7 +241,7 @@ library PriceImpact {
     function _checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) private pure {
         uint256 impactDelta =
             _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
-        uint256 slippage = mulDiv(impactDelta, PRICE_PRECISION, _signedPrice);
+        uint256 slippage = PRICE_PRECISION.percentage(impactDelta, _signedPrice);
         if (slippage > _maxSlippage) {
             revert PriceImpact_SlippageExceedsMax();
         }

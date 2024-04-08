@@ -7,7 +7,6 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {Position} from "../positions/Position.sol";
-import {mulDiv} from "@prb/math/Common.sol";
 import {Execution} from "./Execution.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
@@ -16,6 +15,7 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {TradeLogic} from "./TradeLogic.sol";
+import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 
 contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -134,8 +134,9 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         nonReentrant
         returns (Execution.FeeState memory feeState, Position.Request memory request)
     {
-        return
-            TradeLogic.executePositionRequest(market, priceFeed, referralStorage, _orderKey, _requestId, _feeReceiver);
+        return TradeLogic.executePositionRequest(
+            market, priceFeed, IPositionManager(msg.sender), referralStorage, _orderKey, _requestId, _feeReceiver
+        );
     }
 
     function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator)
