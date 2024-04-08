@@ -5,7 +5,7 @@ import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/Fu
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {CustomMap} from "../../../src/libraries/CustomMap.sol";
+import {EnumerableMap} from "../../../src/libraries/EnumerableMap.sol";
 import {IMarketFactory} from "../../../src/markets/interfaces/IMarketFactory.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {ISwapRouter} from "../../src/oracle/interfaces/ISwapRouter.sol";
@@ -17,7 +17,7 @@ import {Oracle} from "../../src/oracle/Oracle.sol";
 contract MockPriceFeed is FunctionsClient, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSet for EnumerableSet.Bytes32Set;
-    using CustomMap for CustomMap.PriceRequestMap;
+    using EnumerableMap for EnumerableMap.PriceRequestMap;
 
     uint256 public constant PRICE_DECIMALS = 30;
     // Uniswap V3 Router address on Network
@@ -70,7 +70,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     // data should be tied  the request as its specific to the request
     mapping(string ticker => uint256 baseUnit) public baseUnits;
     // Can probably purge some of these
-    CustomMap.PriceRequestMap private requestData;
+    EnumerableMap.PriceRequestMap private requestData;
     EnumerableSet.Bytes32Set private assetIds;
 
     /**

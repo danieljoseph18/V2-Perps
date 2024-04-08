@@ -9,7 +9,7 @@ import {MultiAssetMarket} from "./MultiAssetMarket.sol";
 import {MarketToken} from "./MarketToken.sol";
 import {TradeStorage} from "../positions/TradeStorage.sol";
 import {RewardTracker} from "../rewards/RewardTracker.sol";
-import {CustomMap} from "../libraries/CustomMap.sol";
+import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IReferralStorage} from "../referrals/ReferralStorage.sol";
@@ -21,7 +21,7 @@ import {Roles} from "../access/Roles.sol";
 
 /// @dev Needs MarketFactory Role
 contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
-    using CustomMap for CustomMap.DeployRequestMap;
+    using EnumerableMap for EnumerableMap.DeployRequestMap;
 
     IPriceFeed priceFeed;
     IReferralStorage referralStorage;
@@ -36,7 +36,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     address private immutable WETH;
     address private immutable USDC;
 
-    CustomMap.DeployRequestMap private requests;
+    EnumerableMap.DeployRequestMap private requests;
     mapping(address market => bool isMarket) public isMarket;
     mapping(uint256 index => address market) public markets;
 

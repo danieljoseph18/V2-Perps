@@ -5,7 +5,7 @@ import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/Fu
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {CustomMap} from "../libraries/CustomMap.sol";
+import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
@@ -20,7 +20,7 @@ import {Oracle} from "./Oracle.sol";
 contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSet for EnumerableSet.Bytes32Set;
-    using CustomMap for CustomMap.PriceRequestMap;
+    using EnumerableMap for EnumerableMap.PriceRequestMap;
 
     uint256 public constant PRICE_DECIMALS = 30;
     // Uniswap V3 Router address on Network
@@ -73,7 +73,7 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     // data should be tied only to the request as its specific to the request
     mapping(string ticker => uint256 baseUnit) public baseUnits;
     // Can probably purge some of these
-    CustomMap.PriceRequestMap private requestData;
+    EnumerableMap.PriceRequestMap private requestData;
     EnumerableSet.Bytes32Set private assetIds;
 
     /**

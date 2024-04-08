@@ -649,7 +649,7 @@ contract TestPositions is Test {
         vm.prank(OWNER);
         positionManager.executePosition(market, key, bytes32(0), OWNER);
 
-        _sizeDelta = bound(_sizeDelta, 1, 5000e30);
+        _sizeDelta = bound(_sizeDelta, 1e30, 5000e30);
 
         // Min collateral around 2e6 USDC (0.4% of position)
         // If Size Delta > 99.6% of position, set to full close

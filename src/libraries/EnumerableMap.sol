@@ -46,7 +46,7 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
  * array of EnumerableMap.
  * ====
  */
-library CustomMap {
+library EnumerableMap {
     using EnumerableSet for EnumerableSet.Bytes32Set;
 
     /**

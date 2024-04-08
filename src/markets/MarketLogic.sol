@@ -82,10 +82,10 @@ library MarketLogic {
 
     modifier validAction(uint256 _amountIn, uint256 _amountOut, bool _isLongToken, bool _isDeposit) {
         // Cache the State Before
-        IMarket.State memory initialState = IMarket(address(this)).getState();
+        IMarket.State memory initialState = IMarket(address(this)).getState(_isLongToken);
         _;
         // Cache the state after
-        IMarket.State memory updatedState = IMarket(address(this)).getState();
+        IMarket.State memory updatedState = IMarket(address(this)).getState(_isLongToken);
         // Validate the Vault State Delta
         if (_isDeposit) {
             MarketUtils.validateDeposit(initialState, updatedState, _amountIn, _isLongToken);

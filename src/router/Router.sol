@@ -253,7 +253,7 @@ contract Router is ReentrancyGuard, RoleValidation {
      * To prevent the case where a user requests pricing to execute an order,
      */
     // Key can be an orderKey if limit new position, position key if limit decrease, sl, tp, adl or liquidation
-    function requestExecutionPricing(IMarket market, bytes32 _key, bool _positionKey)
+    function requestExecutionPricing(IMarket market, bytes32 _key, bool _isPositionKey)
         external
         payable
         onlyKeeper
@@ -262,7 +262,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         string memory ticker;
         // Fetch the Ticker of the Asset
-        if (_positionKey) ticker = tradeStorage.getPosition(_key).ticker;
+        if (_isPositionKey) ticker = tradeStorage.getPosition(_key).ticker;
         else ticker = tradeStorage.getOrder(_key).input.ticker;
         // If ticker field was empty, revert
         if (bytes(ticker).length == 0) revert Router_InvalidAsset();

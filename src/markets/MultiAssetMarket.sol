@@ -9,7 +9,7 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import {CustomMap} from "../libraries/CustomMap.sol";
+import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
@@ -23,7 +23,7 @@ import {MarketLogic} from "./MarketLogic.sol";
 /// @dev - Vault can support the trading of multiple assets under the same liquidity.
 contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
-    using CustomMap for CustomMap.MarketRequestMap;
+    using EnumerableMap for EnumerableMap.MarketRequestMap;
     using SignedMath for int256;
     using SafeERC20 for IERC20;
     using SafeERC20 for IMarketToken;
@@ -78,7 +78,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     // Store the Collateral Amount for each User
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
-    CustomMap.MarketRequestMap private requests;
+    EnumerableMap.MarketRequestMap private requests;
 
     // Each Asset's storage is tracked through this mapping
     mapping(bytes32 assetId => MarketStorage assetStorage) private marketStorage;
@@ -491,12 +491,24 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         return requests.contains(_key);
     }
 
-    function getState() external view returns (State memory) {
-        return State({
-            totalSupply: MARKET_TOKEN.totalSupply(),
-            wethBalance: IERC20(WETH).balanceOf(address(this)),
-            usdcBalance: IERC20(USDC).balanceOf(address(this))
-        });
+    function getState(bool _isLong) external view returns (State memory) {
+        if (_isLong) {
+            return State({
+                totalSupply: MARKET_TOKEN.totalSupply(),
+                wethBalance: IERC20(WETH).balanceOf(address(this)),
+                usdcBalance: IERC20(USDC).balanceOf(address(this)),
+                accumulatedFees: longAccumulatedFees,
+                poolBalance: longTokenBalance
+            });
+        } else {
+            return State({
+                totalSupply: MARKET_TOKEN.totalSupply(),
+                wethBalance: IERC20(WETH).balanceOf(address(this)),
+                usdcBalance: IERC20(USDC).balanceOf(address(this)),
+                accumulatedFees: shortAccumulatedFees,
+                poolBalance: shortTokenBalance
+            });
+        }
     }
 
     /**

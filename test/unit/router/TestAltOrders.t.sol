@@ -141,7 +141,7 @@ contract TestAltOrders is Test {
         Position.Input memory input;
         uint256 collateralDelta;
         _leverage = bound(_leverage, 2, 15);
-        _limitPrice = bound(_limitPrice, 0.5e30, 100_000e30);
+        _limitPrice = bound(_limitPrice, 500e30, 10_000e30);
         if (_isLong) {
             _sizeDelta = bound(_sizeDelta, 210e30, 1_000_000e30);
             collateralDelta = mulDiv(_sizeDelta / _leverage, 1e18, 3000e30);

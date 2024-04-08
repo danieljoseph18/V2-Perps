@@ -60,6 +60,4 @@ interface ITradeStorage {
     function createPosition(Position.Data calldata _position, bytes32 _positionKey) external;
     function createOrder(Position.Request memory _request) external returns (bytes32 orderKey);
     function deletePosition(bytes32 _positionKey, bool _isLong) external;
-    function isPosition(bytes32 _positionKey) external view returns (bool);
-    function isOrder(bytes32 _orderKey) external view returns (bool);
 }

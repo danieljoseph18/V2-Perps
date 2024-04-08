@@ -12,6 +12,7 @@ import {Execution} from "../positions/Execution.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {console2} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -48,6 +49,9 @@ library Position {
     error Position_BorrowRateDelta();
     error Position_CumulativeBorrowDelta();
     error Position_OpenInterestDelta();
+    error Position_InvalidFeeUpdate();
+    error Position_InvalidCollateralUpdate();
+    error Position_InvalidPoolUpdate();
 
     uint8 private constant MIN_LEVERAGE = 100; // 1x
     uint8 private constant LEVERAGE_PRECISION = 100;
@@ -274,8 +278,12 @@ library Position {
             + _feeState.borrowFee + _feeState.feeForExecutor;
         // Account for funding / pnl paid out from collateral
         if (_pnl < 0) expectedCollateralDelta += _pnl.abs();
+        else if (_pnl > 0) expectedCollateralDelta -= _pnl.abs();
+        console2.log("PNL: ", _pnl);
         if (_feeState.fundingFee < 0) expectedCollateralDelta += _feeState.fundingFee.abs();
-
+        console2.log("Initial Collateral: ", _initialCollateral);
+        console2.log("Expected Collateral Delta: ", expectedCollateralDelta);
+        console2.log("Position Collateral: ", _position.collateralAmount);
         if (_initialCollateral != _position.collateralAmount + expectedCollateralDelta) {
             revert Position_DecreasePositionCollateral();
         }
@@ -547,7 +555,7 @@ library Position {
         uint256 executorPercentage = tradeStorage.feeForExecution();
         // Units usd to collateral amount
         if (_sizeDelta != 0) {
-            uint256 sizeInCollateral = _sizeDelta.fromUsd(_collateralBaseUnit, _collateralPrice);
+            uint256 sizeInCollateral = _sizeDelta.fromUsd(_collateralPrice, _collateralBaseUnit);
             // calculate fee
             positionFee = sizeInCollateral.percentage(feePercentage);
             feeForExecutor = positionFee.percentage(executorPercentage);
@@ -589,7 +597,7 @@ library Position {
         returns (uint256 collateralFeesOwed)
     {
         uint256 feesUsd = getTotalBorrowFeesUsd(market, _position);
-        collateralFeesOwed = feesUsd.fromUsd(_prices.collateralBaseUnit, _prices.collateralPrice);
+        collateralFeesOwed = feesUsd.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
@@ -620,7 +628,7 @@ library Position {
         bool _isLong
     ) public pure returns (int256) {
         int256 priceDelta = _indexPrice.diff(_weightedAvgEntryPrice);
-        uint256 entryIndexAmount = _positionSizeUsd.fromUsd(_indexBaseUnit, _weightedAvgEntryPrice);
+        uint256 entryIndexAmount = _positionSizeUsd.fromUsd(_weightedAvgEntryPrice, _indexBaseUnit);
         if (_isLong) {
             return mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
@@ -834,6 +842,88 @@ library Position {
         } else {
             if (_pnl.longAverageEntryPriceUsd != _prevPnl.longAverageEntryPriceUsd) {
                 revert Position_InvalidIncreasePosition();
+            }
+        }
+    }
+
+    /**
+     * For an increase:
+     * - Fees should be accumulated in the fee pool
+     * - Users collateral amount should increase by collateral after fees
+     * - Settled funding should be settled through the pool balance
+     *
+     * For a decrease:
+     * - Fees should be accumulated in the fee pool
+     * - Users collateral amount should decrease by collateral after fees
+     * - Settled funding should be settled through the pool balance
+     * - PNL should be settled through the pool balance
+     */
+    function validatePoolDelta(
+        Execution.FeeState memory _feeState,
+        IMarket.State memory _marketBefore,
+        IMarket.State memory _marketAfter,
+        bool _isIncrease
+    ) external pure {
+        if (_isIncrease) {
+            // Fees should be accumulated in the fee pool
+            if (
+                _marketAfter.accumulatedFees
+                    != _marketBefore.accumulatedFees + _feeState.positionFee + _feeState.borrowFee
+            ) {
+                revert Position_InvalidFeeUpdate();
+            }
+            // Funding / PNL should be settled through the pool balance
+            // Calculate the Execpted Balance of the Market
+            uint256 expectedMarketBalance = _marketBefore.poolBalance;
+            // If user paid funding, pool should increase
+            if (_feeState.fundingFee < 0) expectedMarketBalance += _feeState.fundingFee.abs();
+            // If user got paid funding, pool should decrease
+            else if (_feeState.fundingFee > 0) expectedMarketBalance -= _feeState.fundingFee.abs();
+            // If user lost pnl, pool should increase
+            if (_feeState.realizedPnl < 0) expectedMarketBalance -= _feeState.realizedPnl.abs();
+            // If user gained pnl, pool should decrease
+            else if (_feeState.realizedPnl > 0) expectedMarketBalance += _feeState.realizedPnl.abs();
+
+            console2.log("Pool Balance (increase): ", _marketAfter.poolBalance);
+            console2.log("Expected Balance (increase): ", expectedMarketBalance);
+
+            if (_marketAfter.poolBalance != expectedMarketBalance) {
+                revert Position_InvalidPoolUpdate();
+            }
+        } else {
+            // Fees should be accumulated in the fee pool
+            if (
+                _marketAfter.accumulatedFees
+                    != _marketBefore.accumulatedFees + _feeState.positionFee + _feeState.borrowFee
+            ) {
+                revert Position_InvalidFeeUpdate();
+            }
+
+            // Funding / PNL should be settled through the pool balance
+            // Calculate the Execpted Balance of the Market
+            uint256 expectedMarketBalance = _marketBefore.poolBalance;
+
+            if (_feeState.isLiquidation) {
+                // If liquidation, all collateral after fees should be accumulated in the pool
+                expectedMarketBalance += _feeState.afterFeeAmount;
+            } else {
+                // If user paid funding, pool should increase
+                if (_feeState.fundingFee < 0) expectedMarketBalance += _feeState.fundingFee.abs();
+                // If user got paid funding, pool should decrease
+                else if (_feeState.fundingFee > 0) expectedMarketBalance -= _feeState.fundingFee.abs();
+                // If user lost pnl, pool should increase
+                if (_feeState.realizedPnl < 0) expectedMarketBalance += _feeState.realizedPnl.abs();
+                // If user gained pnl, pool should decrease
+                else if (_feeState.realizedPnl > 0) expectedMarketBalance -= _feeState.realizedPnl.abs();
+            }
+
+            console2.log("Pool Balance (decrease): ", _marketAfter.poolBalance);
+            console2.log("Expected Balance (decrease): ", expectedMarketBalance);
+            console2.log("Funding Fee: ", _feeState.fundingFee);
+            console2.log("Realized PNL: ", _feeState.realizedPnl);
+
+            if (_marketAfter.poolBalance != expectedMarketBalance) {
+                revert Position_InvalidPoolUpdate();
             }
         }
     }

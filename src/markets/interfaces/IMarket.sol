@@ -17,6 +17,8 @@ interface IMarket {
         uint256 totalSupply;
         uint256 wethBalance;
         uint256 usdcBalance;
+        uint256 accumulatedFees;
+        uint256 poolBalance;
     }
 
     struct Input {
@@ -299,5 +301,5 @@ interface IMarket {
     function removeAsset(string calldata _ticker) external;
     function setConfig(string calldata _ticker, Config calldata _config) external;
     function setLastUpdate(string calldata _ticker) external;
-    function getState() external view returns (State memory);
+    function getState(bool _isLong) external view returns (State memory);
 }
