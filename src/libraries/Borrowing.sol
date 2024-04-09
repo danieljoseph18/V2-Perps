@@ -18,23 +18,16 @@ library Borrowing {
         IMarket market,
         IMarket.BorrowingValues memory borrowing,
         string calldata _ticker,
-        uint256 _indexPrice,
-        uint256 _collateralPrice,
-        uint256 _indexBaseUnit,
-        uint256 _collateralBaseUnit,
         bool _isLong
     ) external view returns (IMarket.BorrowingValues memory) {
         if (_isLong) {
             borrowing.longCumulativeBorrowFees +=
                 calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.longBorrowingRate =
-                calculateRate(market, _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _collateralBaseUnit, true);
+            borrowing.longBorrowingRate = calculateRate(market, _ticker, true);
         } else {
             borrowing.shortCumulativeBorrowFees +=
                 calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.shortBorrowingRate = calculateRate(
-                market, _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _collateralBaseUnit, false
-            );
+            borrowing.shortBorrowingRate = calculateRate(market, _ticker, false);
         }
 
         borrowing.lastBorrowUpdate = uint48(block.timestamp);
@@ -48,20 +41,14 @@ library Borrowing {
      * The calculation for the factor is simply (open interest usd / max open interest usd).
      * If OI is low, fee will be low, if OI is close to max, fee will be close to max.
      */
-    function calculateRate(
-        IMarket market,
-        string calldata _ticker,
-        uint256 _indexPrice,
-        uint256 _collateralPrice,
-        uint256 _indexBaseUnit,
-        uint256 _collateralBaseUnit,
-        bool _isLong
-    ) public view returns (uint256 borrowRatePerDay) {
+    function calculateRate(IMarket market, string calldata _ticker, bool _isLong)
+        public
+        view
+        returns (uint256 borrowRatePerDay)
+    {
         // Factor = (open interest usd / max open interest usd)
         uint256 factor = MarketUtils.getOpenInterest(market, _ticker, _isLong).div(
-            MarketUtils.getAvailableOiUsd(
-                market, _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _collateralBaseUnit, _isLong
-            )
+            MarketUtils.getMaxOpenInterest(market, _ticker, _isLong)
         );
         borrowRatePerDay = market.borrowScale().percentage(factor);
     }

@@ -9,6 +9,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {console2} from "forge-std/Test.sol";
 
 library MarketUtils {
     using SignedMath for int256;
@@ -16,14 +17,15 @@ library MarketUtils {
     using MathUtils for uint256;
     using MathUtils for uint64;
 
-    uint64 constant PRECISION = 1e18;
-    uint64 constant BASE_FEE = 0.001e18; // 0.1%
+    uint64 private constant PRECISION = 1e18;
+    uint64 private constant BASE_FEE = 0.001e18; // 0.1%
     uint64 public constant FEE_SCALE = 0.01e18; // 1%
-    uint64 constant LONG_BASE_UNIT = 1e18;
+    uint64 private constant LONG_BASE_UNIT = 1e18;
 
     uint16 public constant MAX_ALLOCATION = 10000;
-    uint32 constant SHORT_BASE_UNIT = 1e6;
-    uint64 constant SHORT_CONVERSION_FACTOR = 1e18;
+    uint32 private constant SHORT_BASE_UNIT = 1e6;
+    uint64 private constant SHORT_CONVERSION_FACTOR = 1e18;
+    uint64 private constant MAX_PNL_FACTOR = 0.45e18;
 
     uint256 constant LONG_CONVERSION_FACTOR = 1e30;
 
@@ -589,9 +591,29 @@ library MarketUtils {
 
         // if the pnl is positive, subtract it from the available oi
         if (pnl > 0) {
-            availableOi -= pnl.abs();
+            uint256 absPnl = pnl.abs();
+            // If PNL > Available OI, set OI to 0
+            if (absPnl > availableOi) availableOi = 0;
+            else availableOi -= absPnl;
         }
         // no negative case, as OI hasn't been freed / realised
+    }
+
+    function getMaxOpenInterest(IMarket market, string calldata _ticker, bool _isLong)
+        external
+        view
+        returns (uint256 maxOpenInterest)
+    {
+        // get the allocation percentage
+        uint256 allocationShare = getAllocation(market, _ticker);
+        // get the total liquidity available for that side
+        uint256 totalAvailableLiquidity = market.totalAvailableLiquidity(_isLong);
+        // calculate liquidity allocated to the market for that side
+        uint256 poolAmount = totalAvailableLiquidity.percentage(allocationShare, MAX_ALLOCATION);
+        // get the reserve factor
+        uint256 reserveFactor = getReserveFactor(market, _ticker);
+        // subtract the reserve factor from the pool amount
+        maxOpenInterest = poolAmount - poolAmount.percentage(reserveFactor);
     }
 
     // The pnl factor is the ratio of the pnl to the pool usd
@@ -609,11 +631,49 @@ library MarketUtils {
         if (poolUsd == 0) {
             return 0;
         }
+
         // get pnl
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
+
         // (PNL / Pool USD)
-        uint256 factor = pnl.abs().div(poolUsd);
+        uint256 factor = pnl.abs().ceilDiv(poolUsd);
+
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;
+    }
+
+    /**
+     * Calculates the price at which the Pnl Factor is > 0.45 (or MAX_PNL_FACTOR).
+     * Note that once this price is reached, the pnl factor may not be exceeded,
+     * as the price of the collateral changes dynamically also.
+     * It wouldn't be possible to account for this predictably.
+     */
+    function getAdlThreshold(
+        IMarket market,
+        string calldata _ticker,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) external view returns (uint256 adlPrice) {
+        // Get the current average entry price and open interest
+        uint256 averageEntryPrice = getAverageEntryPrice(market, _ticker, _isLong);
+        uint256 openInterest = getOpenInterest(market, _ticker, _isLong);
+
+        // Get the pool balance in USD
+        uint256 poolUsd = getPoolBalanceUsd(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+
+        // Calculate the maximum PNL allowed based on the pool balance and max PNL factor
+        uint256 maxProfit = poolUsd.percentage(MAX_PNL_FACTOR);
+
+        // Calculate the ADL price based on the maximum PNL allowed
+        if (_isLong) {
+            // For long positions, ADL price is:
+            // averageEntryPrice + (maxProfit * averageEntryPrice) / openInterest
+            adlPrice = averageEntryPrice + averageEntryPrice.mulDivCeil(maxProfit, openInterest);
+        } else {
+            // For short positions, ADL price is:
+            // averageEntryPrice - (maxProfit * averageEntryPrice) / openInterest
+            adlPrice = averageEntryPrice - averageEntryPrice.mulDivCeil(maxProfit, openInterest);
+        }
     }
 
     /**
@@ -699,10 +759,6 @@ library MarketUtils {
     function getMaxLeverage(IMarket market, string calldata _ticker) external view returns (uint32) {
         IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return marketStorage.config.maxLeverage;
-    }
-
-    function getMaxPnlFactor(IMarket market) external view returns (uint256) {
-        return market.MAX_PNL_FACTOR();
     }
 
     function getAllocation(IMarket market, string calldata _ticker) public view returns (uint256) {

@@ -25,8 +25,8 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
 
-    uint256 private constant MAX_TIME_TO_EXPIRATION = 3 minutes;
-    uint256 private constant MIN_TIME_TO_EXPIRATION = 20 seconds;
+    uint8 private constant MAX_TIME_TO_EXPIRATION = 3 minutes;
+    uint8 private constant MIN_TIME_TO_EXPIRATION = 20 seconds;
 
     // User Enumerable Sets instead of a custom map to allow for easier querying.
     mapping(bytes32 _key => Position.Request _order) private orders;
@@ -37,17 +37,16 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     mapping(bool _isLong => EnumerableSet.Bytes32Set _positionKeys) private openPositionKeys;
 
     bool private isInitialized;
-    uint256 public liquidationFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
-    uint256 private adlFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
+    uint64 public liquidationFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
+    uint64 public adlFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
+    uint64 public tradingFee;
+    uint64 public feeForExecution; // Percentage of the Trading Fee, 18 D.P
     uint256 public minCollateralUsd;
-
-    uint256 public tradingFee;
-    uint256 public feeForExecution; // Percentage of the Trading Fee, 18 D.P
     // @gas - consider changing to uint64
-    uint256 public minCancellationTime;
+    uint64 public minCancellationTime;
     // Minimum time a keeper must execute their reserved transaction before it is
     // made available to the broader network.
-    uint256 public minTimeForExecution;
+    uint64 public minTimeForExecution;
 
     constructor(IMarket _market, IReferralStorage _referralStorage, IPriceFeed _priceFeed, address _roleStorage)
         RoleValidation(_roleStorage)
@@ -61,13 +60,13 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
      * ===================================== Setter Functions =====================================
      */
     function initialize(
-        uint256 _liquidationFee, // 0.05e18 = 5%
-        uint256 _positionFee, // 0.001e18 = 0.1%
-        uint256 _adlFee, // Percentage of the output amount that goes to the ADL executor, 18 D.P
-        uint256 _feeForExecution, // Percentage of the Trading Fee that goes to the keeper, 18 D.P
+        uint64 _liquidationFee, // 0.05e18 = 5%
+        uint64 _positionFee, // 0.001e18 = 0.1%
+        uint64 _adlFee, // Percentage of the output amount that goes to the ADL executor, 18 D.P
+        uint64 _feeForExecution, // Percentage of the Trading Fee that goes to the keeper, 18 D.P
         uint256 _minCollateralUsd, // 2e30 = 2 USD
-        uint256 _minCancellationTime, // e.g 1 minutes
-        uint256 _minTimeForExecution // e.g 1 minutes
+        uint64 _minCancellationTime, // e.g 1 minutes
+        uint64 _minTimeForExecution // e.g 1 minutes
     ) external onlyMarketFactory {
         if (isInitialized) revert TradeStorage_AlreadyInitialized();
         liquidationFee = _liquidationFee;
@@ -82,7 +81,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     // Time until a position request can be cancelled by a user
-    function setMinCancellationTime(uint256 _minCancellationTime) external onlyConfigurator(address(market)) {
+    function setMinCancellationTime(uint64 _minCancellationTime) external onlyConfigurator(address(market)) {
         if (_minCancellationTime > MAX_TIME_TO_EXPIRATION || _minCancellationTime < MIN_TIME_TO_EXPIRATION) {
             revert TradeStorage_InvalidExecutionTime();
         }
@@ -90,14 +89,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     // Time until a position request can be executed by the broader keeper network
-    function setMinTimeForExecution(uint256 _minTimeForExecution) external onlyConfigurator(address(market)) {
+    function setMinTimeForExecution(uint64 _minTimeForExecution) external onlyConfigurator(address(market)) {
         if (_minTimeForExecution > MAX_TIME_TO_EXPIRATION || _minTimeForExecution < MIN_TIME_TO_EXPIRATION) {
             revert TradeStorage_InvalidExecutionTime();
         }
         minTimeForExecution = _minTimeForExecution;
     }
 
-    function setFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
+    function setFees(uint64 _liquidationFee, uint64 _positionFee, uint64 _adlFee, uint64 _feeForExecution)
         external
         onlyConfigurator(address(market))
     {
@@ -152,7 +151,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestId, _feeReceiver, adlFee);
+        TradeLogic.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestId, _feeReceiver);
     }
 
     /**

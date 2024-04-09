@@ -22,13 +22,13 @@ interface ITradeStorage {
     error TradeStorage_InvalidOrder();
 
     function initialize(
-        uint256 _liquidationFee, // 0.05e18 = 5%
-        uint256 _positionFee, // 0.001e18 = 0.1%
-        uint256 _adlFee,
-        uint256 _feeForExecution,
+        uint64 _liquidationFee, // 0.05e18 = 5%
+        uint64 _positionFee, // 0.001e18 = 0.1%
+        uint64 _adlFee,
+        uint64 _feeForExecution,
         uint256 _minCollateralUsd, // 2e30 = 2 USD
-        uint256 _minCancellationTime, // e.g 1 minutes
-        uint256 _minTimeForExecution // e.g 1 minutes
+        uint64 _minCancellationTime, // e.g 1 minutes
+        uint64 _minTimeForExecution // e.g 1 minutes
     ) external;
     function createOrderRequest(Position.Request calldata _request) external;
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external;
@@ -37,24 +37,23 @@ interface ITradeStorage {
         returns (Execution.FeeState memory feeState, Position.Request memory request);
     function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator) external;
     function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver) external;
-    function setFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
-        external;
+    function setFees(uint64 _liquidationFee, uint64 _positionFee, uint64 _adlFee, uint64 _feeForExecution) external;
     function getOpenPositionKeys(bool _isLong) external view returns (bytes32[] memory);
     function getOrderKeys(bool _isLimit) external view returns (bytes32[] memory orderKeys);
 
     // Getters for public variables
-    function tradingFee() external view returns (uint256);
-    function feeForExecution() external view returns (uint256);
+    function tradingFee() external view returns (uint64);
+    function feeForExecution() external view returns (uint64);
     function market() external view returns (IMarket);
     function getOrder(bytes32 _key) external view returns (Position.Request memory _order);
     function getPosition(bytes32 _positionKey) external view returns (Position.Data memory);
     function getOrderAtIndex(uint256 _index, bool _isLimit) external view returns (bytes32);
-    function minCancellationTime() external view returns (uint256);
-    function minTimeForExecution() external view returns (uint256);
+    function minCancellationTime() external view returns (uint64);
+    function minTimeForExecution() external view returns (uint64);
     function priceFeed() external view returns (IPriceFeed);
     function minCollateralUsd() external view returns (uint256);
-    function liquidationFee() external view returns (uint256);
-
+    function liquidationFee() external view returns (uint64);
+    function adlFee() external view returns (uint64);
     function deleteOrder(bytes32 _orderKey, bool _isLimit) external;
     function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external;
     function createPosition(Position.Data calldata _position, bytes32 _positionKey) external;

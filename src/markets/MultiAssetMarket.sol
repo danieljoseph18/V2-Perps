@@ -76,6 +76,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     string[] private tickers;
 
     // Store the Collateral Amount for each User
+    // @audit - need to rethink for new collateral (usd)
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
     EnumerableMap.MarketRequestMap private requests;
@@ -358,14 +359,10 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
-        uint256 _collateralPrice,
-        uint256 _indexBaseUnit,
         bool _isLong,
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
-        MarketLogic.updateMarketState(
-            _ticker, _sizeDelta, _indexPrice, _impactedPrice, _collateralPrice, _indexBaseUnit, _isLong, _isIncrease
-        );
+        MarketLogic.updateMarketState(_ticker, _sizeDelta, _indexPrice, _impactedPrice, _isLong, _isIncrease);
     }
 
     function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorageOrMarket(address(this)) {
@@ -401,6 +398,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
+    // @audit - need to rethink for new collateral (usd)
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease)
         external
         onlyTradeStorage(address(this))

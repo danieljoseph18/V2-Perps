@@ -404,8 +404,6 @@ library MarketLogic {
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
-        uint256 _collateralPrice,
-        uint256 _indexBaseUnit,
         bool _isLong,
         bool _isIncrease
     ) external {
@@ -428,15 +426,7 @@ library MarketLogic {
             market.updateOpenInterest(_ticker, _sizeDelta, _isLong, _isIncrease);
         }
         // 4. Relies on Updated Open interest
-        _updateBorrowingRate(
-            market,
-            _ticker,
-            _indexPrice,
-            _collateralPrice,
-            _indexBaseUnit,
-            _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT,
-            _isLong
-        );
+        _updateBorrowingRate(market, _ticker, _isLong);
         // Fire Event
         emit MarketStateUpdated(_ticker, _isLong);
     }
@@ -446,22 +436,9 @@ library MarketLogic {
         market.setFunding(Funding.updateState(market, funding, _ticker, _indexPrice), _ticker);
     }
 
-    function _updateBorrowingRate(
-        IMarket market,
-        string calldata _ticker,
-        uint256 _indexPrice,
-        uint256 _collateralPrice,
-        uint256 _indexBaseUnit,
-        uint256 _collateralBaseUnit,
-        bool _isLong
-    ) private {
+    function _updateBorrowingRate(IMarket market, string calldata _ticker, bool _isLong) private {
         IMarket.BorrowingValues memory borrowing = market.getStorage(_ticker).borrowing;
-        market.setBorrowing(
-            Borrowing.updateState(
-                market, borrowing, _ticker, _indexPrice, _collateralPrice, _indexBaseUnit, _collateralBaseUnit, _isLong
-            ),
-            _ticker
-        );
+        market.setBorrowing(Borrowing.updateState(market, borrowing, _ticker, _isLong), _ticker);
     }
 
     /**

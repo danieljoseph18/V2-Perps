@@ -25,6 +25,7 @@ When index token == collateral token, the prices used should also be the same bu
 - More Fuzz Tests
 - Formal Verification
 - Can we create a trailing stop loss system onchain?
+- Make library functions internal where possible
 
 ### Functionality Tests
 

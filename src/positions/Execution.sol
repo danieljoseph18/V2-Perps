@@ -16,6 +16,7 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -47,12 +48,6 @@ library Execution {
     /**
      * ========================= Data Structures =========================
      */
-    struct DecreaseState {
-        uint256 amountOwedToUser;
-        uint256 feesToAccumulate;
-        bool isFullDecrease;
-    }
-
     struct FeeState {
         uint256 afterFeeAmount;
         int256 fundingFee;
@@ -61,8 +56,11 @@ library Execution {
         uint256 feeForExecutor;
         uint256 affiliateRebate;
         int256 realizedPnl;
+        uint256 amountOwedToUser;
+        uint256 feesToAccumulate;
         address referrer;
         bool isLiquidation;
+        bool isFullDecrease;
     }
 
     // stated Values for Execution
@@ -133,13 +131,12 @@ library Execution {
         }
     }
 
-    function inititateAdlOrder(
+    function initiateAdlOrder(
         IMarket market,
         ITradeStorage tradeStorage,
         IPriceFeed priceFeed,
         bytes32 _positionKey,
         bytes32 _priceRequestId,
-        uint256 _adlFeePercentage,
         address _feeReceiver
     )
         external
@@ -148,13 +145,12 @@ library Execution {
             Prices memory prices,
             Position.Settlement memory params,
             Position.Data memory position,
-            int256 startingPnlFactor,
-            uint256 feeForExecutor
+            int256 startingPnlFactor
         )
     {
         // Check the position in question is active
         position = tradeStorage.getPosition(_positionKey);
-        if (position.positionSize == 0) revert Execution_PositionNotActive();
+        if (position.size == 0) revert Execution_PositionNotActive();
         // Get current MarketUtils and token data
         prices = getTokenPrices(priceFeed, position.ticker, _priceRequestId, position.isLong, false);
 
@@ -165,31 +161,27 @@ library Execution {
         startingPnlFactor = _getPnlFactor(market, prices, position.ticker, position.isLong);
 
         // Check the PNL Factor is greater than the max PNL Factor
-        if (startingPnlFactor.abs() <= MAX_PNL_FACTOR || startingPnlFactor < 0) {
+        if (startingPnlFactor.abs() < MAX_PNL_FACTOR || startingPnlFactor < 0) {
             revert Execution_PnlToPoolRatioNotExceeded(startingPnlFactor, MAX_PNL_FACTOR);
         }
 
         // Check the Position being ADLd is profitable
         int256 pnl = Position.getPositionPnl(
-            position.positionSize,
-            position.weightedAvgEntryPrice,
-            prices.indexPrice,
-            prices.indexBaseUnit,
-            position.isLong
+            position.size, position.weightedAvgEntryPrice, prices.indexPrice, prices.indexBaseUnit, position.isLong
         );
         if (pnl < 0) revert Execution_PositionNotProfitable();
 
-        // Calculate the Percentage to ADL
-        uint256 adlPercentage = Position.calculateAdlPercentage(startingPnlFactor.abs(), pnl, position.positionSize);
-        // Calculate the Size Delta
-        uint256 sizeDelta = position.positionSize.percentage(adlPercentage);
-        // Construct an ADL Order
-        params = Position.createAdlOrder(position, sizeDelta, _feeReceiver, _priceRequestId);
+        // @audit - also need to make sure the adl percentage is sufficient to cover all fees
 
-        // Get and set the ADL fee for the executor
-        // multiply the size delta by the adlFee percentage
-        feeForExecutor =
-            _calculateFeeForAdl(sizeDelta, prices.collateralPrice, prices.collateralBaseUnit, _adlFeePercentage);
+        // Calculate the Percentage to ADL
+        uint256 adlPercentage = Position.calculateAdlPercentage(startingPnlFactor.abs(), pnl, position.size);
+        // Calculate the Size Delta
+        uint256 sizeDelta = position.size.percentage(adlPercentage);
+        // Calculate the collateral delta
+        uint256 collateralDelta =
+            position.collateral.percentage(adlPercentage).fromUsd(prices.collateralPrice, prices.collateralBaseUnit);
+        // Construct an ADL Order
+        params = Position.createAdlOrder(position, sizeDelta, collateralDelta, _feeReceiver, _priceRequestId);
     }
 
     /**
@@ -207,7 +199,8 @@ library Execution {
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
         // Store the initial collateral amount
-        uint256 initialCollateral = position.collateralAmount;
+        // @audit - this invariant check will be wrong now
+        uint256 initialCollateral = position.collateral;
         // Calculate Fee + Fee for executor
         (feeState.positionFee, feeState.feeForExecutor, feeState.affiliateRebate, feeState.referrer) =
         _calculatePositionFees(
@@ -233,12 +226,13 @@ library Execution {
             feeState.fundingFee
         );
         // Edit the Position for Increase
-        position = _updatePosition(position, feeState.afterFeeAmount, 0, _prices.impactedPrice, true);
+        uint256 collateralDeltaUsd = feeState.afterFeeAmount.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
+        position = _updatePosition(position, collateralDeltaUsd, 0, _prices.impactedPrice, true);
         // Check the Leverage
-        _checkLeverage(market, position, _prices);
+        Position.checkLeverage(market, position.ticker, position.size, position.collateral);
         // Validate the Position Change
         Position.validateCollateralIncrease(
-            position, feeState, initialCollateral, _params.request.input.collateralDelta
+            position, feeState, _prices, _params.request.input.collateralDelta, collateralDeltaUsd, initialCollateral
         );
     }
 
@@ -254,7 +248,8 @@ library Execution {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
-        uint256 initialCollateral = position.collateralAmount;
+        // @audit - this invariant check will be wrong now
+        uint256 initialCollateral = position.collateral;
         // Calculate Fee + Fee for executor
         (feeState.positionFee, feeState.feeForExecutor, feeState.affiliateRebate, feeState.referrer) =
         _calculatePositionFees(
@@ -280,17 +275,18 @@ library Execution {
             feeState.fundingFee
         );
         // Edit the Position (subtract full collateral delta)
-        position = _updatePosition(position, _params.request.input.collateralDelta, 0, _prices.impactedPrice, false);
+        uint256 collateralDeltaUsd =
+            _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
+        position = _updatePosition(position, collateralDeltaUsd, 0, _prices.impactedPrice, false);
         // Get remaining collateral in USD
-        uint256 remainingCollateralUsd =
-            position.collateralAmount.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
+        uint256 remainingCollateralUsd = position.collateral;
         // Check if the Decrease puts the position below the min collateral threshold
         if (remainingCollateralUsd < _minCollateralUsd) revert Execution_MinCollateralThreshold();
         if (_checkIsLiquidatable(market, position, _prices)) revert Execution_LiquidatablePosition();
         // Check the Leverage
-        Position.checkLeverage(market, _params.request.input.ticker, position.positionSize, remainingCollateralUsd);
+        Position.checkLeverage(market, _params.request.input.ticker, position.size, remainingCollateralUsd);
         // Validate the Position Change
-        Position.validateCollateralDecrease(position, feeState, initialCollateral);
+        Position.validateCollateralDecrease(position, feeState, _prices, initialCollateral);
     }
 
     // No Funding Involvement
@@ -331,7 +327,7 @@ library Execution {
         if (collateralDeltaUsd < _minCollateralUsd) revert Execution_MinCollateralThreshold();
 
         // Generate the Position
-        position = Position.generateNewPosition(market, _params.request, _prices.impactedPrice, feeState.afterFeeAmount);
+        position = Position.generateNewPosition(market, _params.request, _prices.impactedPrice, collateralDeltaUsd);
 
         // Check the Position's Leverage is Valid
         Position.checkLeverage(
@@ -340,7 +336,7 @@ library Execution {
         // Validate the Position
         Position.validateNewPosition(
             _params.request.input.collateralDelta,
-            position.collateralAmount,
+            feeState.afterFeeAmount,
             feeState.positionFee,
             feeState.affiliateRebate,
             feeState.feeForExecutor
@@ -357,9 +353,9 @@ library Execution {
     ) external view returns (FeeState memory feeState, Position.Data memory position) {
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
-
-        uint256 initialCollateral = position.collateralAmount;
-        uint256 initialSize = position.positionSize;
+        // @audit - this invariant check will be wrong now
+        uint256 initialCollateral = position.collateral;
+        uint256 initialSize = position.size;
 
         // Calculate Fee + Fee for executor
         (feeState.positionFee, feeState.feeForExecutor, feeState.affiliateRebate, feeState.referrer) =
@@ -387,24 +383,21 @@ library Execution {
         );
 
         // Update the Existing Position in Memory
-        position = _updatePosition(
-            position, feeState.afterFeeAmount, _params.request.input.sizeDelta, _prices.impactedPrice, true
-        );
+        uint256 collateralDeltaUsd = feeState.afterFeeAmount.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
+        position =
+            _updatePosition(position, collateralDeltaUsd, _params.request.input.sizeDelta, _prices.impactedPrice, true);
 
         // Check the Leverage
-        _checkLeverage(market, position, _prices);
+        Position.checkLeverage(market, position.ticker, position.size, position.collateral);
 
         // Validate the Position Change
-        Position.validateIncreasePosition(
-            position,
-            feeState,
-            initialCollateral,
-            initialSize,
-            _params.request.input.collateralDelta,
-            _params.request.input.sizeDelta
+        _validatePositionIncrease(
+            position, feeState, _prices, _params, collateralDeltaUsd, initialCollateral, initialSize
         );
     }
 
+    // @audit - if is ADL, need to also cover the fees with the decrease
+    // @audit - need to adl ADL fees to this function --> can replace the fee for executor.
     function decreasePosition(
         IMarket market,
         ITradeStorage tradeStorage,
@@ -414,11 +407,7 @@ library Execution {
         uint256 _minCollateralUsd,
         uint256 _liquidationFee,
         bytes32 _positionKey
-    )
-        external
-        view
-        returns (Position.Data memory position, DecreaseState memory decreaseState, FeeState memory feeState)
-    {
+    ) external view returns (Position.Data memory position, FeeState memory feeState) {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
@@ -430,8 +419,8 @@ library Execution {
             position.takeProfitKey = bytes32(0);
         }
 
-        (_params.request.input.collateralDelta, _params.request.input.sizeDelta, decreaseState.isFullDecrease) =
-            _validateCollateralDelta(position, _params);
+        (_params.request.input.collateralDelta, _params.request.input.sizeDelta, feeState.isFullDecrease) =
+            _validateCollateralDelta(position, _params, _prices);
 
         // Calculate Fee + Fee for executor
         (feeState.positionFee, feeState.feeForExecutor, feeState.affiliateRebate, feeState.referrer) =
@@ -444,6 +433,7 @@ library Execution {
             _prices.collateralBaseUnit,
             position.user
         );
+
         // Process any Outstanding Borrow Fees
         (position, feeState.borrowFee) = _processBorrowFees(market, position, _prices);
         // Process any Outstanding Funding Fees
@@ -451,6 +441,17 @@ library Execution {
         // No Calculation for After Fee Amount here --> liquidations can be insolvent, so it's only checked for decrease case.
         // Calculate Pnl for decrease
         feeState.realizedPnl = _calculatePnl(_prices, position, _params.request.input.sizeDelta);
+        // If ADL, adjust the collateral / size delta to cover fees
+
+        if (_params.isAdl) {
+            _params.request = _adjustAdlForFees(_params.request, feeState, _prices);
+            feeState.feeForExecutor = _calculateFeeForAdl(
+                _params.request.input.sizeDelta,
+                _prices.collateralPrice,
+                _prices.collateralBaseUnit,
+                tradeStorage.adlFee()
+            );
+        }
 
         // Calculate the total losses accrued by the position
         uint256 losses = feeState.borrowFee + feeState.positionFee + feeState.feeForExecutor + feeState.affiliateRebate;
@@ -458,20 +459,14 @@ library Execution {
         if (feeState.fundingFee < 0) losses += feeState.fundingFee.abs();
 
         // Liquidation Case
-        if (losses >= position.collateralAmount) {
-            (_params, decreaseState, feeState) = _initiateLiquidation(
-                _params,
-                decreaseState,
-                _prices,
-                feeState,
-                position.positionSize,
-                position.collateralAmount,
-                _liquidationFee
-            );
+        if (losses.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit) >= position.collateral) {
+            // @audit - this function call will be wrong now
+            (_params, feeState) =
+                _initiateLiquidation(_params, _prices, feeState, position.size, position.collateral, _liquidationFee);
         } else {
             // Decrease Case
             (position, feeState.afterFeeAmount) = _initiateDecreasePosition(
-                market, _params, position, _prices, feeState, _minCollateralUsd, decreaseState.isFullDecrease
+                market, _params, position, _prices, feeState, _minCollateralUsd, feeState.isFullDecrease
             );
         }
     }
@@ -489,6 +484,8 @@ library Execution {
         // Get the new PNL to pool ratio
         int256 newPnlFactor = _getPnlFactor(market, _prices, _ticker, _isLong);
         // PNL to pool has reduced
+        console2.log("New Pnl Factor: ", newPnlFactor);
+        console2.log("Starting Pnl Factor: ", _startingPnlFactor);
         if (newPnlFactor >= _startingPnlFactor) revert Execution_PNLFactorNotReduced();
     }
 
@@ -536,7 +533,7 @@ library Execution {
     /// @dev Applies all changes to an active position
     function _updatePosition(
         Position.Data memory _position,
-        uint256 _collateralDelta,
+        uint256 _collateralDeltaUsd,
         uint256 _sizeDelta,
         uint256 _impactedPrice,
         bool _isIncrease
@@ -544,20 +541,22 @@ library Execution {
         _position.lastUpdate = uint64(block.timestamp);
         if (_isIncrease) {
             // Increase the Position's collateral
-            _position.collateralAmount += _collateralDelta;
+            // @audit - different units, can't directly add here.
+            _position.collateral += _collateralDeltaUsd;
             if (_sizeDelta > 0) {
                 _position.weightedAvgEntryPrice = MarketUtils.calculateWeightedAverageEntryPrice(
-                    _position.weightedAvgEntryPrice, _position.positionSize, _sizeDelta.toInt256(), _impactedPrice
+                    _position.weightedAvgEntryPrice, _position.size, _sizeDelta.toInt256(), _impactedPrice
                 );
-                _position.positionSize += _sizeDelta;
+                _position.size += _sizeDelta;
             }
         } else {
-            _position.collateralAmount -= _collateralDelta;
+            // @audit - different units, can't directly subtract here.
+            _position.collateral -= _collateralDeltaUsd;
             if (_sizeDelta > 0) {
                 _position.weightedAvgEntryPrice = MarketUtils.calculateWeightedAverageEntryPrice(
-                    _position.weightedAvgEntryPrice, _position.positionSize, -_sizeDelta.toInt256(), _impactedPrice
+                    _position.weightedAvgEntryPrice, _position.size, -_sizeDelta.toInt256(), _impactedPrice
                 );
-                _position.positionSize -= _sizeDelta;
+                _position.size -= _sizeDelta;
             }
         }
         return _position;
@@ -569,15 +568,11 @@ library Execution {
         returns (bool isLiquidatable)
     {
         // Get the value of all collateral remaining in the position
-        uint256 collateralValueUsd =
-            _position.collateralAmount.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
+        // @audit - redundant
+        uint256 collateralValueUsd = _position.collateral;
         // Get the PNL for the position
         int256 pnl = Position.getPositionPnl(
-            _position.positionSize,
-            _position.weightedAvgEntryPrice,
-            _prices.indexPrice,
-            _prices.indexBaseUnit,
-            _position.isLong
+            _position.size, _position.weightedAvgEntryPrice, _prices.indexPrice, _prices.indexBaseUnit, _position.isLong
         );
 
         // Get the Borrow Fees Owed in USD
@@ -603,7 +598,7 @@ library Execution {
         returns (int256 pnl)
     {
         pnl = Position.getRealizedPnl(
-            _position.positionSize,
+            _position.size,
             _sizeDelta,
             _position.weightedAvgEntryPrice,
             _prices.impactedPrice,
@@ -669,31 +664,31 @@ library Execution {
 
     function _initiateLiquidation(
         Position.Settlement memory _params,
-        DecreaseState memory _decreaseState,
         Prices calldata _prices,
         FeeState memory _feeState,
         uint256 _positionSize,
         uint256 _collateralAmount,
         uint256 _liquidationFee
-    ) private pure returns (Position.Settlement memory, DecreaseState memory, FeeState memory) {
+    ) private pure returns (Position.Settlement memory, FeeState memory) {
         // 1. Set Collateral and Size delta to max
-        _params.request.input.collateralDelta = _collateralAmount;
+        _params.request.input.collateralDelta =
+            _collateralAmount.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
         _params.request.input.sizeDelta = _positionSize;
         // 2. Calculate the Fees Owed to the User
-        _decreaseState.amountOwedToUser = _feeState.fundingFee > 0
+        _feeState.amountOwedToUser = _feeState.fundingFee > 0
             ? _feeState.fundingFee.fromUsdSigned(_prices.collateralPrice, _prices.collateralBaseUnit)
             : 0;
-        if (_feeState.realizedPnl > 0) _decreaseState.amountOwedToUser += _feeState.realizedPnl.abs();
+        if (_feeState.realizedPnl > 0) _feeState.amountOwedToUser += _feeState.realizedPnl.abs();
         // 3. Calculate the Fees to Accumulate
-        _decreaseState.feesToAccumulate = _feeState.borrowFee + _feeState.positionFee;
+        _feeState.feesToAccumulate = _feeState.borrowFee + _feeState.positionFee;
         // 4. Calculate the Liquidation Fee
-        _feeState.feeForExecutor = _collateralAmount.percentage(_liquidationFee);
+        _feeState.feeForExecutor = _params.request.input.collateralDelta.percentage(_liquidationFee);
         // 5. Set Affiliate Fees to 0
         _feeState.affiliateRebate = 0;
         // 6. Set the Liquidation Flag
         _feeState.isLiquidation = true;
 
-        return (_params, _decreaseState, _feeState);
+        return (_params, _feeState);
     }
 
     function _initiateDecreasePosition(
@@ -705,8 +700,9 @@ library Execution {
         uint256 _minCollateralUsd,
         bool _isFullDecrease
     ) private view returns (Position.Data memory, uint256) {
-        uint256 initialCollateral = _position.collateralAmount;
-        uint256 initialSize = _position.positionSize;
+        // @audit - this invariant check will be wrong now
+        uint256 initialCollateral = _position.collateral;
+        uint256 initialSize = _position.size;
         // Calculate After Fee Amount
         _feeState.afterFeeAmount = _calculateAmountAfterFees(
             _params.request.input.collateralDelta,
@@ -716,10 +712,12 @@ library Execution {
             _feeState.borrowFee,
             _feeState.fundingFee
         );
+        console2.log("Collateral Delta: ", _params.request.input.collateralDelta);
+        console2.log("Size Delta: ", _params.request.input.sizeDelta);
         // Decrease Case
         _position = _updatePosition(
             _position,
-            _params.request.input.collateralDelta,
+            _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit),
             _params.request.input.sizeDelta,
             _prices.impactedPrice,
             false
@@ -731,24 +729,27 @@ library Execution {
             : _feeState.afterFeeAmount - _feeState.realizedPnl.abs();
 
         _validatePositionDecrease(
-            _position, _feeState, _params.request.input.sizeDelta, initialCollateral, initialSize, _feeState.realizedPnl
+            _position,
+            _feeState,
+            _prices,
+            _params.request.input.sizeDelta,
+            initialCollateral,
+            initialSize,
+            _feeState.realizedPnl
         );
 
         // Check if the Decrease puts the position below the min collateral threshold
         // Only check these if it's not a full decrease
         if (!_isFullDecrease) {
             // Get remaining collateral in USD
-            uint256 remainingCollateralUsd =
-                _position.collateralAmount.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
-            if (remainingCollateralUsd < _minCollateralUsd) revert Execution_MinCollateralThreshold();
+            if (_position.collateral < _minCollateralUsd) revert Execution_MinCollateralThreshold();
             // Check Leverage
-            Position.checkLeverage(market, _position.ticker, _position.positionSize, remainingCollateralUsd);
+            Position.checkLeverage(market, _position.ticker, _position.size, _position.collateral);
         }
 
         return (_position, _feeState.afterFeeAmount);
     }
 
-    // @audit - something wrong with this
     function _calculatePositionFees(
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
@@ -785,26 +786,40 @@ library Execution {
         );
     }
 
+    function _validatePositionIncrease(
+        Position.Data memory _position,
+        FeeState memory _feeState,
+        Prices memory _prices,
+        Position.Settlement memory _params,
+        uint256 _collateralDeltaUsd,
+        uint256 _initialCollateral,
+        uint256 _initialSize
+    ) private pure {
+        Position.validateIncreasePosition(
+            _position,
+            _feeState,
+            _prices,
+            _params.request.input.collateralDelta,
+            _collateralDeltaUsd,
+            _initialCollateral,
+            _initialSize,
+            _params.request.input.sizeDelta
+        );
+    }
+
     /// @dev private function to prevent STD Err
     function _validatePositionDecrease(
         Position.Data memory _position,
         FeeState memory _feeState,
+        Prices memory _prices,
         uint256 _sizeDelta,
         uint256 _initialCollateral,
         uint256 _initialSize,
         int256 _decreasePnl
     ) private pure {
+        // @audit - this invariant check will be wrong now
         Position.validateDecreasePosition(
-            _position, _feeState, _initialCollateral, _initialSize, _sizeDelta, _decreasePnl
-        );
-    }
-
-    function _checkLeverage(IMarket market, Position.Data memory _position, Prices calldata _prices) private view {
-        Position.checkLeverage(
-            market,
-            _position.ticker,
-            _position.positionSize,
-            _position.collateralAmount.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit) // Collat in USD
+            _position, _feeState, _prices, _initialCollateral, _initialSize, _sizeDelta, _decreasePnl
         );
     }
 
@@ -852,6 +867,7 @@ library Execution {
         int256 _fundingFee
     ) private pure returns (uint256 afterFeeAmount) {
         uint256 totalFees = _positionFee + _feeForExecutor + _affiliateRebate + _borrowFee;
+
         // Account for any Positive Funding
         if (_fundingFee < 0) totalFees += _fundingFee.abs();
         else afterFeeAmount += _fundingFee.abs();
@@ -861,23 +877,44 @@ library Execution {
         afterFeeAmount = _collateralDelta - totalFees;
     }
 
-    function _validateCollateralDelta(Position.Data memory _position, Position.Settlement memory _params)
-        private
-        pure
-        returns (uint256 collateralDelta, uint256 sizeDelta, bool isFullDecrease)
-    {
+    function _validateCollateralDelta(
+        Position.Data memory _position,
+        Position.Settlement memory _params,
+        Prices memory _prices
+    ) private pure returns (uint256 collateralDelta, uint256 sizeDelta, bool isFullDecrease) {
         // Full Close Case
         if (
-            _params.request.input.sizeDelta >= _position.positionSize
-                || _params.request.input.collateralDelta >= _position.collateralAmount
+            _params.request.input.sizeDelta >= _position.size
+                || _params.request.input.collateralDelta >= _position.collateral
         ) {
-            collateralDelta = _position.collateralAmount;
-            sizeDelta = _position.positionSize;
+            collateralDelta = _position.collateral.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
+            sizeDelta = _position.size;
             isFullDecrease = true;
         } else if (_params.request.input.collateralDelta == 0) {
             // If no collateral delta specified, calculate it for a proportional decrease
-            collateralDelta =
-                _position.collateralAmount.percentage(_params.request.input.sizeDelta, _position.positionSize);
+            collateralDelta = _position.collateral.percentage(_params.request.input.sizeDelta, _position.size).fromUsd(
+                _prices.collateralPrice, _prices.collateralBaseUnit
+            );
+            sizeDelta = _params.request.input.sizeDelta;
+        } else {
+            collateralDelta = _params.request.input.collateralDelta;
+            sizeDelta = _params.request.input.sizeDelta;
         }
+    }
+
+    /// @dev - Function adjusts the ADL so that the fees are covered by the user.
+    function _adjustAdlForFees(Position.Request memory _request, FeeState memory _feeState, Prices memory _prices)
+        private
+        pure
+        returns (Position.Request memory)
+    {
+        // If collateral delta is insufficient to cover fees, adjust the size / collateral delta to cover the fees
+        uint256 totalFees =
+            _feeState.positionFee + _feeState.feeForExecutor + _feeState.affiliateRebate + _feeState.borrowFee;
+        // Increase the collateral / size delta to cover all fees
+        _request.input.collateralDelta += totalFees;
+        _request.input.sizeDelta += totalFees.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
+
+        return _request;
     }
 }

@@ -79,6 +79,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     string[] private tickers;
 
     // Store the Collateral Amount for each User
+    // @audit - need to rethink for new collateral (usd)
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
     EnumerableMap.MarketRequestMap private requests;
@@ -259,14 +260,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
-        uint256 _collateralPrice,
-        uint256 _indexBaseUnit,
         bool _isLong,
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
-        MarketLogic.updateMarketState(
-            _ticker, _sizeDelta, _indexPrice, _impactedPrice, _collateralPrice, _indexBaseUnit, _isLong, _isIncrease
-        );
+        MarketLogic.updateMarketState(_ticker, _sizeDelta, _indexPrice, _impactedPrice, _isLong, _isIncrease);
     }
 
     /**
@@ -329,6 +326,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
+    // @audit - need to rethink for new collateral (usd)
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease)
         external
         onlyTradeStorage(address(this))
@@ -336,7 +334,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         if (_isIncrease) {
             collateralAmounts[_user][_isLong] += _amount;
         } else {
-            if (_amount > collateralAmounts[_user][_isLong]) revert Market_InsufficientCollateral();
+            if (_amount >= collateralAmounts[_user][_isLong]) collateralAmounts[_user][_isLong] = 0;
             else collateralAmounts[_user][_isLong] -= _amount;
         }
     }
