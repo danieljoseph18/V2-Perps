@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {RoleStorage} from "../../../src/access/RoleStorage.sol";
 import {Market, IMarket, IMarketToken} from "../../../src/markets/Market.sol";
@@ -22,8 +22,11 @@ import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
 import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 import {mulDiv} from "@prb/math/Common.sol";
+import {MathUtils} from "../../../src/libraries/MathUtils.sol";
 
 contract TestAltOrders is Test {
+    using MathUtils for uint256;
+
     RoleStorage roleStorage;
 
     MarketFactory marketFactory;
@@ -105,7 +108,7 @@ contract TestAltOrders is Test {
         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
         // Set Prices
         ethPrices =
-            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 30000e30, max: 3000e30});
+            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 3000e30, max: 3000e30});
         usdcPrices = IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 1e30, med: 1e30, max: 1e30});
         prices.push(ethPrices);
         prices.push(usdcPrices);
@@ -128,7 +131,7 @@ contract TestAltOrders is Test {
     }
 
     /**
-     * ================================== Stop Loss ==================================
+     * ================================== Limit / Stop Loss / Take Profit ==================================
      */
     function testStopLossTakeProfitOrdersCanBeAttachedToOpenPositions(
         uint256 _sizeDelta,
@@ -174,7 +177,7 @@ contract TestAltOrders is Test {
             }
         } else {
             _sizeDelta = bound(_sizeDelta, 210e30, 1_000_000e30);
-            collateralDelta = mulDiv(_sizeDelta / _leverage, 1e6, 1e30);
+            collateralDelta = (_sizeDelta / _leverage).fromUsd(1e30, 1e6);
             input = Position.Input({
                 ticker: ethTicker,
                 collateralToken: usdc,
@@ -242,5 +245,109 @@ contract TestAltOrders is Test {
         key = tradeStorage.getOrderAtIndex(0, true);
         vm.prank(OWNER);
         positionManager.executePosition(market, key, requestId, OWNER);
+    }
+
+    /**
+     * ================================== Liquidations ==================================
+     */
+    function testLiquidatingPositionsThatGoUnder(
+        uint256 _sizeDelta,
+        uint256 _leverage,
+        uint256 _newPrice,
+        bool _isLong,
+        bool _shouldWrap
+    ) public setUpMarkets {
+        // Create Request
+        Position.Input memory input;
+        uint256 collateralDelta;
+        _leverage = bound(_leverage, 2, 15);
+        if (_isLong) {
+            _sizeDelta = bound(_sizeDelta, 210e30, 1_000_000e30);
+            collateralDelta = mulDiv(_sizeDelta / _leverage, 1e18, 3000e30);
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: weth,
+                collateralDelta: collateralDelta,
+                sizeDelta: _sizeDelta,
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: _shouldWrap,
+                triggerAbove: false
+            });
+            if (_shouldWrap) {
+                vm.prank(OWNER);
+                router.createPositionRequest{value: collateralDelta + 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+            } else {
+                vm.startPrank(OWNER);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+            }
+        } else {
+            _sizeDelta = bound(_sizeDelta, 210e30, 1_000_000e30);
+            collateralDelta = (_sizeDelta / _leverage).fromUsd(1e30, 1e6);
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: usdc,
+                collateralDelta: collateralDelta,
+                sizeDelta: _sizeDelta, // 10x leverage
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: false,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: false,
+                triggerAbove: false
+            });
+
+            vm.startPrank(OWNER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        }
+
+        // Execute Request
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        positionManager.executePosition(market, key, bytes32(0), OWNER);
+
+        // determine the threshold for liquidation
+        // get the position
+        bytes32 positionKey = keccak256(abi.encode(ethTicker, OWNER, _isLong));
+        Position.Data memory position = tradeStorage.getPosition(positionKey);
+
+        // get the liquidation price
+        uint256 liquidationPrice;
+        if (_isLong) {
+            liquidationPrice = Position.getLiquidationPrice(position, ethPrices.med, 1e18);
+            // bound price below liquidation price
+            _newPrice = bound(_newPrice, 1, liquidationPrice);
+        } else {
+            liquidationPrice = Position.getLiquidationPrice(position, usdcPrices.med, 1e6);
+            // bound price above liquidation price
+            _newPrice = bound(_newPrice, liquidationPrice, 100_000e30);
+        }
+
+        // sign the new price
+        ethPrices.med = _newPrice;
+        ethPrices.max = _newPrice;
+        ethPrices.min = _newPrice;
+        prices[0] = ethPrices;
+        bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
+        priceFeed.updatePrices(requestId, tickers, prices);
+        // liquidate the position
+        vm.prank(OWNER);
+        positionManager.liquidatePosition(market, positionKey, requestId);
     }
 }

@@ -11,7 +11,6 @@ import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {console2} from "forge-std/Test.sol";
 
 library TradeLogic {
     using SignedMath for int256;

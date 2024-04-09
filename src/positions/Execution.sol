@@ -16,7 +16,6 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -85,6 +84,13 @@ library Execution {
 
     /**
      * ========================= Construction Functions =========================
+     */
+    /**
+     * audit - probably need additional checks for size delta and collateral delta
+     * 1. If create new position --> leverage should be 1-100x
+     * 2. if increase position --> leverage should be 1-100x
+     * 3. if decrease position --> leverage should be 1-100x
+     * 4. if edit collateral --> leverage should be 1-100x after edit
      */
     function initiate(
         ITradeStorage tradeStorage,
@@ -442,15 +448,7 @@ library Execution {
         (position, feeState.borrowFee) = _processBorrowFees(market, position, _prices);
         // Process any Outstanding Funding Fees
         (position, feeState.fundingFee) = _processFundingFees(market, position, _params, _prices);
-        // Settle outstanding fees
-        feeState.afterFeeAmount = _calculateAmountAfterFees(
-            _params.request.input.collateralDelta,
-            feeState.positionFee,
-            feeState.feeForExecutor,
-            feeState.affiliateRebate,
-            feeState.borrowFee,
-            feeState.fundingFee
-        );
+        // No Calculation for After Fee Amount here --> liquidations can be insolvent, so it's only checked for decrease case.
         // Calculate Pnl for decrease
         feeState.realizedPnl = _calculatePnl(_prices, position, _params.request.input.sizeDelta);
 
@@ -473,7 +471,7 @@ library Execution {
         } else {
             // Decrease Case
             (position, feeState.afterFeeAmount) = _initiateDecreasePosition(
-                _params, position, _prices, feeState, _minCollateralUsd, decreaseState.isFullDecrease
+                market, _params, position, _prices, feeState, _minCollateralUsd, decreaseState.isFullDecrease
             );
         }
     }
@@ -699,6 +697,7 @@ library Execution {
     }
 
     function _initiateDecreasePosition(
+        IMarket market,
         Position.Settlement memory _params,
         Position.Data memory _position,
         Prices calldata _prices,
@@ -708,6 +707,15 @@ library Execution {
     ) private view returns (Position.Data memory, uint256) {
         uint256 initialCollateral = _position.collateralAmount;
         uint256 initialSize = _position.positionSize;
+        // Calculate After Fee Amount
+        _feeState.afterFeeAmount = _calculateAmountAfterFees(
+            _params.request.input.collateralDelta,
+            _feeState.positionFee,
+            _feeState.feeForExecutor,
+            _feeState.affiliateRebate,
+            _feeState.borrowFee,
+            _feeState.fundingFee
+        );
         // Decrease Case
         _position = _updatePosition(
             _position,
@@ -733,6 +741,8 @@ library Execution {
             uint256 remainingCollateralUsd =
                 _position.collateralAmount.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
             if (remainingCollateralUsd < _minCollateralUsd) revert Execution_MinCollateralThreshold();
+            // Check Leverage
+            Position.checkLeverage(market, _position.ticker, _position.positionSize, remainingCollateralUsd);
         }
 
         return (_position, _feeState.afterFeeAmount);
@@ -842,8 +852,6 @@ library Execution {
         int256 _fundingFee
     ) private pure returns (uint256 afterFeeAmount) {
         uint256 totalFees = _positionFee + _feeForExecutor + _affiliateRebate + _borrowFee;
-        console2.log("TotalFees: ", totalFees);
-        console2.log("CollateralDelta: ", _collateralDelta);
         // Account for any Positive Funding
         if (_fundingFee < 0) totalFees += _fundingFee.abs();
         else afterFeeAmount += _fundingFee.abs();

@@ -105,7 +105,7 @@ contract TestDepositWithdrawals is Test {
         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
         // Set Prices
         ethPrices =
-            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 30000e30, max: 3000e30});
+            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 3000e30, max: 3000e30});
         usdcPrices = IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 1e30, med: 1e30, max: 1e30});
         prices.push(ethPrices);
         prices.push(usdcPrices);

@@ -12,7 +12,6 @@ import {Execution} from "../positions/Execution.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {console2} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -279,11 +278,9 @@ library Position {
         // Account for funding / pnl paid out from collateral
         if (_pnl < 0) expectedCollateralDelta += _pnl.abs();
         else if (_pnl > 0) expectedCollateralDelta -= _pnl.abs();
-        console2.log("PNL: ", _pnl);
+
         if (_feeState.fundingFee < 0) expectedCollateralDelta += _feeState.fundingFee.abs();
-        console2.log("Initial Collateral: ", _initialCollateral);
-        console2.log("Expected Collateral Delta: ", expectedCollateralDelta);
-        console2.log("Position Collateral: ", _position.collateralAmount);
+
         if (_initialCollateral != _position.collateralAmount + expectedCollateralDelta) {
             revert Position_DecreasePositionCollateral();
         }
@@ -656,6 +653,34 @@ library Position {
         decreasePositionPnl = realizedPnl.fromUsdToSigned(_collateralTokenPrice, _collateralBaseUnit);
     }
 
+    function getLiquidationPrice(Data memory _position, uint256 _collateralPrice, uint256 _collateralBaseUnit)
+        external
+        pure
+        returns (uint256 liquidationPrice)
+    {
+        uint256 collateralUsd = _position.collateralAmount.toUsd(_collateralPrice, _collateralBaseUnit);
+
+        if (_position.isLong) {
+            // For long positions, liquidation price is when:
+            // collateral + PNL = 0
+            // Solving for liquidation price:
+            // (liquidationPrice - entryPrice) * (positionSize / entryPrice) + collateralUsd = 0
+            // liquidationPrice = entryPrice - (collateralUsd * entryPrice) / positionSize
+
+            liquidationPrice = _position.weightedAvgEntryPrice
+                - mulDiv(collateralUsd, _position.weightedAvgEntryPrice, _position.positionSize);
+        } else {
+            // For short positions, liquidation price is when:
+            // collateral - PNL = 0
+            // Solving for liquidation price:
+            // (entryPrice - liquidationPrice) * (positionSize / entryPrice) - collateralUsd = 0
+            // liquidationPrice = entryPrice + (collateralUsd * entryPrice) / positionSize
+
+            liquidationPrice = _position.weightedAvgEntryPrice
+                + mulDiv(collateralUsd, _position.weightedAvgEntryPrice, _position.positionSize);
+        }
+    }
+
     /**
      * @dev Calculates the Percentage to ADL a position by based on the PNL to Pool Ratio.
      * Percentage to ADL = 1 - e ** (-excessRatio(positionPnl/positionSize))
@@ -884,9 +909,6 @@ library Position {
             // If user gained pnl, pool should decrease
             else if (_feeState.realizedPnl > 0) expectedMarketBalance += _feeState.realizedPnl.abs();
 
-            console2.log("Pool Balance (increase): ", _marketAfter.poolBalance);
-            console2.log("Expected Balance (increase): ", expectedMarketBalance);
-
             if (_marketAfter.poolBalance != expectedMarketBalance) {
                 revert Position_InvalidPoolUpdate();
             }
@@ -916,11 +938,6 @@ library Position {
                 // If user gained pnl, pool should decrease
                 else if (_feeState.realizedPnl > 0) expectedMarketBalance -= _feeState.realizedPnl.abs();
             }
-
-            console2.log("Pool Balance (decrease): ", _marketAfter.poolBalance);
-            console2.log("Expected Balance (decrease): ", expectedMarketBalance);
-            console2.log("Funding Fee: ", _feeState.fundingFee);
-            console2.log("Realized PNL: ", _feeState.realizedPnl);
 
             if (_marketAfter.poolBalance != expectedMarketBalance) {
                 revert Position_InvalidPoolUpdate();
