@@ -362,7 +362,8 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         bool _isLong,
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
-        MarketLogic.updateMarketState(_ticker, _sizeDelta, _indexPrice, _impactedPrice, _isLong, _isIncrease);
+        MarketStorage storage self = marketStorage[keccak256(abi.encode(_ticker))];
+        MarketLogic.updateMarketState(self, _ticker, _sizeDelta, _indexPrice, _impactedPrice, _isLong, _isIncrease);
     }
 
     function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorageOrMarket(address(this)) {
@@ -398,16 +399,36 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
-    // @audit - need to rethink for new collateral (usd)
-    function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease)
+    function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external
         onlyTradeStorage(address(this))
     {
         if (_isIncrease) {
+            // Case 1: Increase the collateral amount
             collateralAmounts[_user][_isLong] += _amount;
         } else {
-            if (_amount > collateralAmounts[_user][_isLong]) revert Market_InsufficientCollateral();
-            else collateralAmounts[_user][_isLong] -= _amount;
+            // Case 2: Decrease the collateral amount
+            uint256 currentCollateral = collateralAmounts[_user][_isLong];
+
+            if (_amount > currentCollateral) {
+                // Amount to decrease is greater than stored collateral
+                uint256 excess = _amount - currentCollateral;
+                collateralAmounts[_user][_isLong] = 0;
+                // Subtract the extra amount from the pool
+                _isLong ? longTokenBalance -= excess : shortTokenBalance -= excess;
+            } else {
+                // Amount to decrease is less than or equal to stored collateral
+                collateralAmounts[_user][_isLong] -= _amount;
+            }
+
+            if (_isFullClose) {
+                // Transfer any remaining collateral to the pool
+                uint256 remaining = collateralAmounts[_user][_isLong];
+                if (remaining > 0) {
+                    collateralAmounts[_user][_isLong] = 0;
+                    _isLong ? longTokenBalance += remaining : shortTokenBalance += remaining;
+                }
+            }
         }
     }
 

@@ -42,7 +42,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint64 public tradingFee;
     uint64 public feeForExecution; // Percentage of the Trading Fee, 18 D.P
     uint256 public minCollateralUsd;
-    // @gas - consider changing to uint64
     uint64 public minCancellationTime;
     // Minimum time a keeper must execute their reserved transaction before it is
     // made available to the broader network.

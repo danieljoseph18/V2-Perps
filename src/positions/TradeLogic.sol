@@ -45,11 +45,19 @@ library TradeLogic {
     uint256 private constant MAX_FEE_FOR_EXECUTION = 0.3e18; // 30%
     uint256 private constant MIN_FEE_FOR_EXECUTION = 0.05e18; // 5%
 
+    struct Invariants {
+        IMarket.MarketStorage initialStorage;
+        IMarket.MarketStorage updatedStorage;
+        IMarket.State initialState;
+        IMarket.State updatedState;
+        uint256 storedCollateral;
+    }
+
     /**
      * ========================= Validation Functions =========================
      */
     function validateFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
-        external
+        internal
         pure
     {
         if (_liquidationFee > MAX_LIQUIDATION_FEE || _liquidationFee < MIN_LIQUIDATION_FEE) {
@@ -71,7 +79,7 @@ library TradeLogic {
      */
 
     /// @notice Creates a new Order Request
-    function createOrderRequest(Position.Request calldata _request) external {
+    function createOrderRequest(Position.Request calldata _request) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Create the order
         bytes32 orderKey = tradeStorage.createOrder(_request);
@@ -89,14 +97,13 @@ library TradeLogic {
         bytes32 _orderKey,
         bytes32 _requestId,
         address _feeReceiver
-    ) external returns (Execution.FeeState memory feeState, Position.Request memory request) {
+    ) internal returns (Execution.FeeState memory feeState, Position.Request memory request) {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Initiate the execution
         Execution.Prices memory prices;
         (prices, request) = Execution.initiate(tradeStorage, market, priceFeed, _orderKey, _requestId, _feeReceiver);
         // Cache the State of the Market Before the Position
-        IMarket.MarketStorage memory initialStorage = market.getStorage(request.input.ticker);
-        IMarket.State memory initialState = market.getState(request.input.isLong);
+        Invariants memory invariants = _getInvariants(market, request.input.ticker, request.user, request.input.isLong);
         // Delete the Order from Storage
         tradeStorage.deleteOrder(_orderKey, request.input.isLimit);
         // Update the Market State for the Request
@@ -166,12 +173,20 @@ library TradeLogic {
         priceFeed.clearSignedPrices(market, request.requestId);
 
         // Cache the State of the Market After the Position
-        IMarket.MarketStorage memory updatedStorage = market.getStorage(request.input.ticker);
-        IMarket.State memory updatedState = market.getState(request.input.isLong);
+        invariants.updatedStorage = market.getStorage(request.input.ticker);
+        invariants.updatedState = market.getState(request.input.isLong);
 
         // Invariant Checks
-        Position.validateMarketDelta(initialStorage, updatedStorage, request);
-        Position.validatePoolDelta(feeState, initialState, updatedState, request.input.isIncrease);
+        Position.validateMarketDelta(invariants.initialStorage, invariants.updatedStorage, request);
+        Position.validatePoolDelta(
+            feeState,
+            invariants.initialState,
+            invariants.updatedState,
+            request.input.collateralDelta,
+            invariants.storedCollateral,
+            request.input.isIncrease,
+            feeState.isFullDecrease
+        );
     }
 
     function executeAdl(
@@ -181,16 +196,17 @@ library TradeLogic {
         bytes32 _positionKey,
         bytes32 _requestId,
         address _feeReceiver
-    ) external {
+    ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Initiate the Adl order
         // @audit - fee for executor isn't stored anywhere -> should be maintained for the decrease
-        (
-            Execution.Prices memory prices,
-            Position.Settlement memory params,
-            Position.Data memory position,
-            int256 startingPnlFactor
-        ) = Execution.initiateAdlOrder(market, tradeStorage, priceFeed, _positionKey, _requestId, _feeReceiver);
+        (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) =
+            Execution.initiateAdlOrder(market, tradeStorage, priceFeed, _positionKey, _requestId, _feeReceiver);
+
+        console2.log("Adl Size Delta: ", params.request.input.sizeDelta);
+        console2.log("Market: ", address(market));
+        console2.log("Ticker: ", params.request.input.ticker);
+        console2.log("Size Delta: ", params.request.input.sizeDelta);
 
         // Update the Market State
         _updateMarketState(
@@ -217,11 +233,15 @@ library TradeLogic {
         priceFeed.clearSignedPrices(market, _requestId);
 
         // Validate the Adl
-        Execution.validateAdl(market, prices, startingPnlFactor, params.request.input.ticker, position.isLong);
+        Execution.validateAdl(
+            market, prices, startingPnlFactor, params.request.input.ticker, params.request.input.isLong
+        );
 
-        emit AdlExecuted(address(market), _positionKey, params.request.input.sizeDelta, position.isLong);
+        emit AdlExecuted(address(market), _positionKey, params.request.input.sizeDelta, params.request.input.isLong);
     }
 
+    // @audit - need to make it so liquidations happen slightly before losses > collateral
+    // otherwise we'll be left paying for insolvent liqs every time.
     function liquidatePosition(
         IMarket market,
         IReferralStorage referralStorage,
@@ -229,7 +249,7 @@ library TradeLogic {
         bytes32 _positionKey,
         bytes32 _requestId,
         address _liquidator
-    ) external {
+    ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Fetch the Position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
@@ -246,7 +266,7 @@ library TradeLogic {
         Position.Settlement memory params = Position.createLiquidationOrder(
             position, prices.collateralPrice, prices.collateralBaseUnit, _liquidator, _requestId
         );
-        console2.log("Initial Collateral Delta: ", params.request.input.collateralDelta);
+
         // Execute the Liquidation
         _decreasePosition(
             tradeStorage,
@@ -282,7 +302,9 @@ library TradeLogic {
         (position, feeState) =
             Execution.increaseCollateral(market, tradeStorage, referralStorage, _params, _prices, positionKey);
         // Add Value to Stored Collateral Amount in Market
-        market.updateCollateralAmount(feeState.afterFeeAmount, _params.request.user, _params.request.input.isLong, true);
+        market.updateCollateralAmount(
+            feeState.afterFeeAmount, _params.request.user, _params.request.input.isLong, true, false
+        );
         // Account for Fees in Storage
         _accumulateFees(market, referralStorage, feeState, position.isLong);
         // Update Final Storage
@@ -315,7 +337,7 @@ library TradeLogic {
 
         // Decrease the Collateral Amount in the Market by the full delta
         market.updateCollateralAmount(
-            _params.request.input.collateralDelta, _params.request.user, _params.request.input.isLong, false
+            _params.request.input.collateralDelta, _params.request.user, _params.request.input.isLong, false, false
         );
         // Account for Fees in Storage
         _accumulateFees(market, referralStorage, feeState, position.isLong);
@@ -367,7 +389,8 @@ library TradeLogic {
             _prices.collateralBaseUnit,
             position.user,
             _params.request.input.isLong,
-            true
+            true,
+            false
         );
         // Update Final Storage
         tradeStorage.createPosition(position, positionKey);
@@ -409,7 +432,8 @@ library TradeLogic {
             _prices.collateralBaseUnit,
             position.user,
             _params.request.input.isLong,
-            true
+            true,
+            false
         );
         // Update Final Storage
         tradeStorage.updatePosition(position, positionKey);
@@ -425,7 +449,6 @@ library TradeLogic {
         emit IncreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
     }
 
-    // @audit - what happens if a user accidentally liquidates themselves?
     function _decreasePosition(
         ITradeStorage tradeStorage,
         IMarket market,
@@ -443,8 +466,6 @@ library TradeLogic {
             market, tradeStorage, referralStorage, _params, _prices, _minCollateralUsd, _liquidationFee, positionKey
         );
 
-        console2.log("Collateral Delta before Update: ", _params.request.input.collateralDelta);
-
         // Unreserve Liquidity for the position
         _updateLiquidity(
             market,
@@ -454,9 +475,10 @@ library TradeLogic {
             _prices.collateralBaseUnit,
             position.user,
             _params.request.input.isLong,
-            false
+            false,
+            feeState.isFullDecrease
         );
-        console2.log("Is Liquidation in Trade Logic? ", feeState.isLiquidation);
+
         if (feeState.isLiquidation) {
             // Liquidate the Position
             feeState = _handleLiquidation(
@@ -544,6 +566,8 @@ library TradeLogic {
         _accumulateFees(market, referralStorage, _feeState, _position.isLong);
 
         // Update Pool for Profit / Loss -> Loss = Decrease Pool, Profit = Increase Pool
+        console2.log("Trader Pnl: ", _feeState.realizedPnl);
+
         market.updatePoolBalance(_feeState.realizedPnl.abs(), _position.isLong, _feeState.realizedPnl < 0);
 
         // Delete the Position if Full Decrease
@@ -569,6 +593,8 @@ library TradeLogic {
     /**
      * ========================= Private Helper Functions =========================
      */
+
+    /// @dev - Can fail on insolvency.
     function _transferTokensForDecrease(
         IMarket market,
         Execution.FeeState memory _feeState,
@@ -582,7 +608,6 @@ library TradeLogic {
         if (_feeState.feeForExecutor > 0) {
             market.transferOutTokens(_executor, _feeState.feeForExecutor, _isLong, true);
         }
-
         // Transfer Rebate to Referrer
         if (_feeState.affiliateRebate > 0) {
             market.transferOutTokens(
@@ -623,7 +648,8 @@ library TradeLogic {
         uint256 _collateralBaseUnit,
         address _user,
         bool _isLong,
-        bool _isReserve
+        bool _isReserve,
+        bool _isFullDecrease
     ) private {
         // Units Size Delta USD to Collateral Tokens
         uint256 reserveDelta = _sizeDeltaUsd.fromUsd(_collateralPrice, _collateralBaseUnit);
@@ -637,7 +663,7 @@ library TradeLogic {
          * Excess gained / loss needs to be tracked here, and realized into the pool
          * @audit
          */
-        market.updateCollateralAmount(_collateralDelta, _user, _isLong, _isReserve);
+        market.updateCollateralAmount(_collateralDelta, _user, _isLong, _isReserve, _isFullDecrease);
     }
 
     /**
@@ -730,5 +756,15 @@ library TradeLogic {
         _feeState.afterFeeAmount = _remainingCollateral;
 
         return _feeState;
+    }
+
+    function _getInvariants(IMarket market, string memory _ticker, address _user, bool _isLong)
+        private
+        view
+        returns (Invariants memory invariants)
+    {
+        invariants.initialStorage = market.getStorage(_ticker);
+        invariants.initialState = market.getState(_isLong);
+        invariants.storedCollateral = market.collateralAmounts(_user, _isLong);
     }
 }

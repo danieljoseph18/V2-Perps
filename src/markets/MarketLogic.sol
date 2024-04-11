@@ -12,11 +12,13 @@ import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 
 library MarketLogic {
     using SafeERC20 for IERC20;
     using SafeERC20 for IMarketToken;
     using MathUtils for uint256;
+    using SignedMath for int256;
 
     error MarketLogic_InvalidLeverage();
     error MarketLogic_InvalidReserveFactor();
@@ -41,6 +43,7 @@ library MarketLogic {
     error MarketLogic_MinimumAssetsReached();
     error MarketLogic_FailedToRemoveAssetId();
     error MarketLogic_FailedToTransferETH();
+    error MarketLogic_InvalidOpenInterestDelta();
 
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
     event DepositExecuted(
@@ -94,7 +97,8 @@ library MarketLogic {
         }
     }
 
-    function validateConfig(IMarket.Config calldata _config) public pure {
+    // @audit - can make private and move validation function into here
+    function validateConfig(IMarket.Config calldata _config) internal pure {
         /* 1. Validate the initial inputs */
         // Check Leverage is within bounds
         if (_config.maxLeverage < MIN_LEVERAGE || _config.maxLeverage > MAX_LEVERAGE) {
@@ -176,7 +180,7 @@ library MarketLogic {
         uint256 _availableTokens,
         bool _isLongToken,
         bool _shouldUnwrap
-    ) public {
+    ) internal {
         if (_amount > _availableTokens) revert MarketLogic_InsufficientAvailableTokens();
         if (_isLongToken) {
             if (_shouldUnwrap) {
@@ -253,7 +257,7 @@ library MarketLogic {
         string memory _ticker,
         uint256[] calldata _newAllocations,
         bytes32 _priceRequestId
-    ) external {
+    ) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
         if (market.getAssetsInMarket() >= MAX_ASSETS) revert MarketLogic_MaxAssetsReached();
@@ -275,7 +279,7 @@ library MarketLogic {
         string memory _ticker,
         uint256[] calldata _newAllocations,
         bytes32 _priceRequestId
-    ) external {
+    ) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
         if (!market.isAssetInMarket(_ticker)) revert MarketLogic_TokenDoesNotExist();
@@ -291,7 +295,7 @@ library MarketLogic {
 
     /// @dev - Caller must've requested a price before calling this function
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    function reallocate(IPriceFeed priceFeed, uint256[] memory _allocations, bytes32 _priceRequestId) public {
+    function reallocate(IPriceFeed priceFeed, uint256[] memory _allocations, bytes32 _priceRequestId) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
         // Fetch token prices
@@ -332,7 +336,7 @@ library MarketLogic {
     }
 
     function executeDeposit(IPriceFeed priceFeed, IMarket.ExecuteDeposit calldata _params, address _tokenIn)
-        external
+        internal
         validAction(_params.deposit.amountIn, 0, _params.deposit.isLongToken, true)
     {
         if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
@@ -361,7 +365,7 @@ library MarketLogic {
         IMarket.ExecuteWithdrawal calldata _params,
         address _tokenOut,
         uint256 _availableTokens // tokenBalance - tokensReserved
-    ) external validAction(_params.withdrawal.amountIn, _params.amountOut, _params.withdrawal.isLongToken, false) {
+    ) internal validAction(_params.withdrawal.amountIn, _params.amountOut, _params.withdrawal.isLongToken, false) {
         if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
         // Transfer Market Tokens in from msg.sender
         IMarketToken(_params.marketToken).safeTransferFrom(msg.sender, address(this), _params.withdrawal.amountIn);
@@ -400,22 +404,24 @@ library MarketLogic {
     }
 
     function updateMarketState(
+        IMarket.MarketStorage storage marketStorage,
         string calldata _ticker,
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
         bool _isLong,
         bool _isIncrease
-    ) external {
+    ) internal {
         IMarket market = IMarket(address(this));
         // If invalid ticker, revert
         if (!market.isAssetInMarket(_ticker)) revert MarketLogic_InvalidTicker();
         // 1. Depends on Open Interest Delta to determine Skew
-        _updateFundingRate(market, _ticker, _indexPrice);
+        marketStorage.funding = Funding.updateState(market, marketStorage.funding, _ticker, _indexPrice);
         if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
             // 2. Relies on Open Interest Delta
             _updateWeightedAverages(
+                marketStorage,
                 market,
                 _ticker,
                 _impactedPrice == 0 ? _indexPrice : _impactedPrice, // If no price impact, set to the index price
@@ -423,28 +429,31 @@ library MarketLogic {
                 _isLong
             );
             // 3. Updated pre-borrowing rate if size delta > 0
-            market.updateOpenInterest(_ticker, _sizeDelta, _isLong, _isIncrease);
+            if (_isIncrease) {
+                if (_isLong) {
+                    marketStorage.openInterest.longOpenInterest += _sizeDelta;
+                } else {
+                    marketStorage.openInterest.shortOpenInterest += _sizeDelta;
+                }
+            } else {
+                if (_isLong) {
+                    marketStorage.openInterest.longOpenInterest -= _sizeDelta;
+                } else {
+                    marketStorage.openInterest.shortOpenInterest -= _sizeDelta;
+                }
+            }
         }
         // 4. Relies on Updated Open interest
-        _updateBorrowingRate(market, _ticker, _isLong);
+        marketStorage.borrowing = Borrowing.updateState(market, marketStorage.borrowing, _ticker, _isLong);
         // Fire Event
         emit MarketStateUpdated(_ticker, _isLong);
-    }
-
-    function _updateFundingRate(IMarket market, string calldata _ticker, uint256 _indexPrice) private {
-        IMarket.FundingValues memory funding = market.getStorage(_ticker).funding;
-        market.setFunding(Funding.updateState(market, funding, _ticker, _indexPrice), _ticker);
-    }
-
-    function _updateBorrowingRate(IMarket market, string calldata _ticker, bool _isLong) private {
-        IMarket.BorrowingValues memory borrowing = market.getStorage(_ticker).borrowing;
-        market.setBorrowing(Borrowing.updateState(market, borrowing, _ticker, _isLong), _ticker);
     }
 
     /**
      * Updates the weighted average values for the market. Both rely on the market condition pre-open interest update.
      */
     function _updateWeightedAverages(
+        IMarket.MarketStorage storage marketStorage,
         IMarket market,
         string calldata _ticker,
         uint256 _priceUsd,
@@ -454,26 +463,24 @@ library MarketLogic {
         if (_priceUsd == 0) revert MarketLogic_PriceIsZero();
         if (_sizeDeltaUsd == 0) return;
 
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-
         if (_isLong) {
-            uint256 averageEntryPrice = MarketUtils.calculateWeightedAverageEntryPrice(
+            marketStorage.pnl.longAverageEntryPriceUsd = MarketUtils.calculateWeightedAverageEntryPrice(
                 marketStorage.pnl.longAverageEntryPriceUsd,
                 marketStorage.openInterest.longOpenInterest,
                 _sizeDeltaUsd,
                 _priceUsd
             );
-            uint256 weightedAvgCumulative = Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, true);
-            market.setWeightedAverages(averageEntryPrice, weightedAvgCumulative, _ticker, true);
+            marketStorage.borrowing.weightedAvgCumulativeLong =
+                Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, true);
         } else {
-            uint256 averageEntryPrice = MarketUtils.calculateWeightedAverageEntryPrice(
+            marketStorage.pnl.shortAverageEntryPriceUsd = MarketUtils.calculateWeightedAverageEntryPrice(
                 marketStorage.pnl.shortAverageEntryPriceUsd,
                 marketStorage.openInterest.shortOpenInterest,
                 _sizeDeltaUsd,
                 _priceUsd
             );
-            uint256 weightedAvgCumulative = Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, false);
-            market.setWeightedAverages(averageEntryPrice, weightedAvgCumulative, _ticker, false);
+            marketStorage.borrowing.weightedAvgCumulativeShort =
+                Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, false);
         }
     }
 

@@ -263,10 +263,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     function executeAdl(IMarket market, bytes32 _requestId, bytes32 _positionKey) external payable onlyAdlKeeper {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the ADL
-        try tradeStorage.executeAdl(_positionKey, _requestId, msg.sender) {}
-        catch {
-            revert PositionManager_AdlFailed();
-        }
+        tradeStorage.executeAdl(_positionKey, _requestId, msg.sender);
     }
 
     function transferTokensForIncrease(

@@ -4,7 +4,6 @@ pragma solidity 0.8.23;
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {console2} from "forge-std/Test.sol";
 
 library MathUtils {
     using SignedMath for int256;
@@ -21,9 +20,6 @@ library MathUtils {
 
     /// @dev Converts an Amount in USD (uint) to an amount in Tokens
     function fromUsd(uint256 _usdAmount, uint256 _price, uint256 _baseUnit) internal pure returns (uint256) {
-        console2.log("Usd Amount: ", _usdAmount);
-        console2.log("Price: ", _price);
-        console2.log("Base Unit: ", _baseUnit);
         return mulDiv(_usdAmount, _baseUnit, _price);
     }
 

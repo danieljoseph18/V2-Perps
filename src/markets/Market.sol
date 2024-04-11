@@ -19,6 +19,7 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {MarketLogic} from "./MarketLogic.sol";
+import {console2} from "forge-std/Test.sol";
 
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -79,7 +80,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     string[] private tickers;
 
     // Store the Collateral Amount for each User
-    // @audit - need to rethink for new collateral (usd)
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
     EnumerableMap.MarketRequestMap private requests;
@@ -240,16 +240,24 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         onlyCallback
     {
         // Update the open interest
-        bytes32 assetId = keccak256(abi.encode(_ticker));
+        OpenInterestValues storage openInterest = marketStorage[keccak256(abi.encode(_ticker))].openInterest;
+        console2.log("Updating Open Interest (before long): ", openInterest.longOpenInterest);
+        console2.log("Updating Open Interest (before short): ", openInterest.shortOpenInterest);
         if (_shouldAdd) {
-            _isLong
-                ? marketStorage[assetId].openInterest.longOpenInterest += _sizeDeltaUsd
-                : marketStorage[assetId].openInterest.shortOpenInterest += _sizeDeltaUsd;
+            if (_isLong) {
+                openInterest.longOpenInterest += _sizeDeltaUsd;
+            } else {
+                openInterest.shortOpenInterest += _sizeDeltaUsd;
+            }
         } else {
-            _isLong
-                ? marketStorage[assetId].openInterest.longOpenInterest -= _sizeDeltaUsd
-                : marketStorage[assetId].openInterest.shortOpenInterest -= _sizeDeltaUsd;
+            if (_isLong) {
+                openInterest.longOpenInterest -= _sizeDeltaUsd;
+            } else {
+                openInterest.shortOpenInterest -= _sizeDeltaUsd;
+            }
         }
+        console2.log("Updating Open Interest (after long): ", openInterest.longOpenInterest);
+        console2.log("Updating Open Interest (after short): ", openInterest.shortOpenInterest);
     }
 
     /**
@@ -263,7 +271,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         bool _isLong,
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
-        MarketLogic.updateMarketState(_ticker, _sizeDelta, _indexPrice, _impactedPrice, _isLong, _isIncrease);
+        MarketStorage storage self = marketStorage[keccak256(abi.encode(_ticker))];
+        MarketLogic.updateMarketState(self, _ticker, _sizeDelta, _indexPrice, _impactedPrice, _isLong, _isIncrease);
     }
 
     /**
@@ -326,16 +335,46 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
-    // @audit - need to rethink for new collateral (usd)
-    function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease)
+    /**
+     * Store the amount of collateral the user provided for their position.
+     * This is used to handle the accounting of collateral as it can fluctuate in value.
+     *
+     * Position collateral is a snapshot of the amount of collateral held by the position at
+     * entry, so stays constant.
+     *
+     * Any excess collateral will be absorbed by the pool.
+     * Any deficit will be taken from the pool.
+     */
+    function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external
         onlyTradeStorage(address(this))
     {
         if (_isIncrease) {
+            // Case 1: Increase the collateral amount
             collateralAmounts[_user][_isLong] += _amount;
         } else {
-            if (_amount >= collateralAmounts[_user][_isLong]) collateralAmounts[_user][_isLong] = 0;
-            else collateralAmounts[_user][_isLong] -= _amount;
+            // Case 2: Decrease the collateral amount
+            uint256 currentCollateral = collateralAmounts[_user][_isLong];
+
+            if (_amount > currentCollateral) {
+                // Amount to decrease is greater than stored collateral
+                uint256 excess = _amount - currentCollateral;
+                collateralAmounts[_user][_isLong] = 0;
+                // Subtract the extra amount from the pool
+                _isLong ? longTokenBalance -= excess : shortTokenBalance -= excess;
+            } else {
+                // Amount to decrease is less than or equal to stored collateral
+                collateralAmounts[_user][_isLong] -= _amount;
+            }
+
+            if (_isFullClose) {
+                // Transfer any remaining collateral to the pool
+                uint256 remaining = collateralAmounts[_user][_isLong];
+                if (remaining > 0) {
+                    collateralAmounts[_user][_isLong] = 0;
+                    _isLong ? longTokenBalance += remaining : shortTokenBalance += remaining;
+                }
+            }
         }
     }
 

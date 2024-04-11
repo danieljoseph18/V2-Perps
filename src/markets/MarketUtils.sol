@@ -9,6 +9,8 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {Position} from "../positions/Position.sol";
 import {console2} from "forge-std/Test.sol";
 
 library MarketUtils {
@@ -37,6 +39,7 @@ library MarketUtils {
     error MarketUtils_InvalidAmountOut(uint256 amountOut, uint256 expectedOut);
     error MarketUtils_TokenMintFailed();
     error MarketUtils_InsufficientFreeLiquidity();
+    error MarketUtils_AdlCantOccur();
 
     struct FeeParams {
         IMarket market;
@@ -153,7 +156,7 @@ library MarketUtils {
     }
 
     function calculateDepositAmounts(IMarket.ExecuteDeposit calldata _params)
-        external
+        internal
         view
         returns (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount)
     {
@@ -186,7 +189,7 @@ library MarketUtils {
     }
 
     function calculateWithdrawalAmounts(IMarket.ExecuteWithdrawal memory _params)
-        external
+        internal
         view
         returns (uint256 tokenAmountOut)
     {
@@ -220,11 +223,11 @@ library MarketUtils {
     }
 
     function validateDeposit(
-        IMarket.State calldata _initialState,
-        IMarket.State calldata _updatedState,
+        IMarket.State memory _initialState,
+        IMarket.State memory _updatedState,
         uint256 _amountIn,
         bool _isLongToken
-    ) external pure {
+    ) internal pure {
         if (_isLongToken) {
             // Market's WETH Balance should increase by AmountIn
             if (_updatedState.wethBalance != _initialState.wethBalance + _amountIn) {
@@ -248,12 +251,12 @@ library MarketUtils {
      * - The vault balance should decrease by the amount out
      */
     function validateWithdrawal(
-        IMarket.State calldata _initialState,
-        IMarket.State calldata _updatedState,
+        IMarket.State memory _initialState,
+        IMarket.State memory _updatedState,
         uint256 _marketTokenAmountIn,
         uint256 _amountOut,
         bool _isLongToken
-    ) external pure {
+    ) internal pure {
         uint256 minFee = _amountOut.percentage(BASE_FEE);
         uint256 maxFee = _amountOut.percentage(BASE_FEE + FEE_SCALE);
         if (_initialState.totalSupply != _updatedState.totalSupply + _marketTokenAmountIn) {
@@ -291,7 +294,7 @@ library MarketUtils {
         uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl,
         bool _isLongToken
-    ) public view returns (uint256 marketTokenAmount) {
+    ) internal view returns (uint256 marketTokenAmount) {
         // Maximize the AUM
         uint256 marketTokenPrice = getMarketTokenPrice(
             market,
@@ -328,7 +331,7 @@ library MarketUtils {
         uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl,
         bool _isLongToken
-    ) public view returns (uint256 tokenAmount) {
+    ) internal view returns (uint256 tokenAmount) {
         // Minimize the AUM
         uint256 marketTokenPrice = getMarketTokenPrice(
             market,
@@ -382,7 +385,7 @@ library MarketUtils {
         uint256 _shortTokenPrice,
         uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl
-    ) public view returns (uint256 aum) {
+    ) internal view returns (uint256 aum) {
         // Get Values in USD -> Subtract reserved amounts from AUM
         aum += (market.longTokenBalance() - market.longTokensReserved()).toUsd(_longTokenPrice, LONG_BASE_UNIT);
         aum += (market.shortTokenBalance() - market.shortTokensReserved()).toUsd(_shortTokenPrice, SHORT_BASE_UNIT);
@@ -628,12 +631,14 @@ library MarketUtils {
     ) external view returns (int256 pnlFactor) {
         // get pool usd (if 0 return 0)
         uint256 poolUsd = getPoolBalanceUsd(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+        console2.log("Pool Balance: ", poolUsd);
         if (poolUsd == 0) {
             return 0;
         }
 
         // get pnl
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
+        console2.log("Market Pnl: ", pnl);
 
         // (PNL / Pool USD)
         uint256 factor = pnl.abs().ceilDiv(poolUsd);
@@ -664,15 +669,67 @@ library MarketUtils {
         // Calculate the maximum PNL allowed based on the pool balance and max PNL factor
         uint256 maxProfit = poolUsd.percentage(MAX_PNL_FACTOR);
 
-        // Calculate the ADL price based on the maximum PNL allowed
+        uint256 priceDelta = averageEntryPrice.mulDivCeil(maxProfit, openInterest);
+
         if (_isLong) {
             // For long positions, ADL price is:
             // averageEntryPrice + (maxProfit * averageEntryPrice) / openInterest
-            adlPrice = averageEntryPrice + averageEntryPrice.mulDivCeil(maxProfit, openInterest);
+            adlPrice = averageEntryPrice + priceDelta;
         } else {
             // For short positions, ADL price is:
             // averageEntryPrice - (maxProfit * averageEntryPrice) / openInterest
-            adlPrice = averageEntryPrice - averageEntryPrice.mulDivCeil(maxProfit, openInterest);
+            // if price delta > average entry price, it's impossible, as price can't be 0.
+            if (priceDelta > averageEntryPrice) revert MarketUtils_AdlCantOccur();
+            adlPrice = averageEntryPrice - priceDelta;
+        }
+    }
+
+    /**
+     * Loop through all open positions on the market, calculate the pnl for the position.
+     * Then calculate the ADL Target score for each position, returning the position key
+     * with the highest ADL Target Score, which is essentially the position that is next
+     * in priority for ADL.
+     *
+     * The formula is adapted from Bybit's as:
+     *
+     * ADL Target Score = ( Position Size / Total Pool Size) * (Position PnL / Position Size)
+     *
+     * This function requires loops, so should *never* be used onchain. It is simply a queryable
+     * function from frontends to determine the next optimal position to be adl'd. Also,
+     * optimistically assumes accurate pricing data.
+     *
+     * Users are incentivized to target these positions as they'll generate them the
+     * most profit in the event of ADL.
+     */
+    function getNextAdlTarget(
+        ITradeStorage tradeStorage,
+        string memory _ticker,
+        uint256 _indexPrice,
+        uint256 _indexBaseUnit,
+        uint256 _totalPoolSizeUsd,
+        bool _isLong
+    ) external view returns (bytes32 positionKey) {
+        // Get all Position Keys
+        bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(_isLong);
+        uint256 len = positionKeys.length;
+        uint256 highestAdlScore;
+        for (uint256 i = 0; i < len;) {
+            Position.Data memory position = tradeStorage.getPosition(positionKeys[i]);
+            if (keccak256(abi.encode(position.ticker)) != keccak256(abi.encode(_ticker))) continue;
+            // Get the PNL for the position
+            int256 pnl = Position.getPositionPnl(
+                position.size, position.weightedAvgEntryPrice, _indexPrice, _indexBaseUnit, _isLong
+            );
+            if (pnl < 0) continue;
+            // Calculate the ADL Target Score
+            uint256 adlTargetScore = (position.size / _totalPoolSizeUsd) * (pnl.abs() / position.size);
+            if (adlTargetScore > highestAdlScore) {
+                highestAdlScore = adlTargetScore;
+                positionKey = positionKeys[i];
+            }
+            unchecked {
+                ++i;
+            }
         }
     }
 

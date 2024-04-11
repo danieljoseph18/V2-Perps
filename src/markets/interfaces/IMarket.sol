@@ -222,7 +222,8 @@ interface IMarket {
     function accumulateFees(uint256 _amount, bool _isLong) external;
     function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) external;
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) external;
-    function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease) external;
+    function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
+        external;
 
     // Deposit execution
     function executeDeposit(ExecuteDeposit memory _params) external;
@@ -300,4 +301,5 @@ interface IMarket {
     function setConfig(string calldata _ticker, Config calldata _config) external;
     function setLastUpdate(string calldata _ticker) external;
     function getState(bool _isLong) external view returns (State memory);
+    function collateralAmounts(address _user, bool _isLong) external view returns (uint256);
 }

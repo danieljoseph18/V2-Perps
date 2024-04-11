@@ -16,7 +16,9 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {mulDiv} from "@prb/math/Common.sol";
 import {console2} from "forge-std/Test.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -79,6 +81,7 @@ library Execution {
     uint64 private constant SHORT_BASE_UNIT = 1e6;
     uint64 private constant PRECISION = 1e18;
     uint64 private constant MAX_PNL_FACTOR = 0.45e18;
+    uint64 private constant TARGET_PNL_FACTOR = 0.35e18;
 
     /**
      * ========================= Construction Functions =========================
@@ -97,7 +100,7 @@ library Execution {
         bytes32 _orderKey,
         bytes32 _requestId,
         address _feeReceiver
-    ) external view returns (Prices memory prices, Position.Request memory request) {
+    ) internal view returns (Prices memory prices, Position.Request memory request) {
         // Fetch and validate request from key
         request = tradeStorage.getOrder(_orderKey);
         // Validate the request before continuing execution
@@ -138,29 +141,19 @@ library Execution {
         bytes32 _positionKey,
         bytes32 _priceRequestId,
         address _feeReceiver
-    )
-        external
-        view
-        returns (
-            Prices memory prices,
-            Position.Settlement memory params,
-            Position.Data memory position,
-            int256 startingPnlFactor
-        )
-    {
+    ) internal view returns (Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) {
         // Check the position in question is active
-        position = tradeStorage.getPosition(_positionKey);
+        Position.Data memory position = tradeStorage.getPosition(_positionKey);
         if (position.size == 0) revert Execution_PositionNotActive();
         // Get current MarketUtils and token data
         prices = getTokenPrices(priceFeed, position.ticker, _priceRequestId, position.isLong, false);
 
-        // Set the impacted price to the index price => 0 price impact on ADLs
-        prices.impactedPrice = prices.indexPrice;
-        prices.priceImpactUsd = 0;
         // Get starting PNL Factor
         startingPnlFactor = _getPnlFactor(market, prices, position.ticker, position.isLong);
 
         // Check the PNL Factor is greater than the max PNL Factor
+        // While we could cache this, it will result in an STD err
+        // @audit - gas optimize
         if (startingPnlFactor.abs() < MAX_PNL_FACTOR || startingPnlFactor < 0) {
             revert Execution_PnlToPoolRatioNotExceeded(startingPnlFactor, MAX_PNL_FACTOR);
         }
@@ -169,12 +162,20 @@ library Execution {
         int256 pnl = Position.getPositionPnl(
             position.size, position.weightedAvgEntryPrice, prices.indexPrice, prices.indexBaseUnit, position.isLong
         );
-        if (pnl < 0) revert Execution_PositionNotProfitable();
 
-        // @audit - also need to make sure the adl percentage is sufficient to cover all fees
+        if (pnl < 0) revert Execution_PositionNotProfitable();
 
         // Calculate the Percentage to ADL
         uint256 adlPercentage = Position.calculateAdlPercentage(startingPnlFactor.abs(), pnl, position.size);
+        // Execute the ADL impact
+        uint256 poolUsd = MarketUtils.getPoolBalanceUsd(
+            market, position.ticker, prices.collateralPrice, prices.collateralBaseUnit, position.isLong
+        );
+        prices.impactedPrice = _executeAdlImpact(
+            prices.indexPrice, pnl.abs().percentage(adlPercentage), poolUsd, startingPnlFactor.abs(), position.isLong
+        );
+
+        prices.priceImpactUsd = 0;
         // Calculate the Size Delta
         uint256 sizeDelta = position.size.percentage(adlPercentage);
         // Calculate the collateral delta
@@ -185,6 +186,45 @@ library Execution {
     }
 
     /**
+     * Simulated slippage for ADLd positions to give them a less favourable execution price,
+     * realizing less PNL than they would've otherwise.
+     * This enables us to decrease the pnl to pool ratio effectively, as otherwise, in
+     * certain scenarios, pnl:pool deductions would remain at a constant ratio, as
+     * the pnl and pool would both decrease proportionally.
+     *
+     * price +- ((realizedPnl / pool size) * price * accelerationFactor)
+     * where accelerationFactor = (1 + ((currentPnlToPoolRatio - TARGET_PNL_RATIO) / TARGET_PNL_RATIO))
+     *
+     * @dev - Calculation accuracy not critical, so regular math operations used to save on gas.
+     *
+     * Goal: Come up with a more optimized solution for calculating the impact to price on ADLs.
+     * Should take into account how far the pnl to pool ratio is from the ideal, as well as how much
+     * profit this position accounts for from the total profit in the market.
+     *
+     * Somewhere along the lines of using an acceleration factor, but it can't be so rapid that
+     * price is able to over-underflow.
+     */
+    function _executeAdlImpact(
+        uint256 _indexPrice,
+        uint256 _pnlBeingRealized,
+        uint256 _poolUsd,
+        uint256 _pnlToPoolRatio,
+        bool _isLong
+    ) private pure returns (uint256 impactedPrice) {
+        if (_pnlBeingRealized >= _poolUsd) revert Execution_InvalidAdlDelta();
+        uint256 accelerationFactor = ((_pnlToPoolRatio - TARGET_PNL_FACTOR) * PRECISION / TARGET_PNL_FACTOR);
+        // Max 100%
+        if (accelerationFactor > PRECISION) accelerationFactor = PRECISION;
+        console2.log("Acceleration Factor: ", accelerationFactor);
+        uint256 priceDelta = _indexPrice * (_pnlBeingRealized / _poolUsd);
+        if (accelerationFactor > 0) priceDelta += (priceDelta * accelerationFactor / PRECISION);
+        console2.log("Price Delta: ", priceDelta);
+        if (_isLong) impactedPrice = _indexPrice - priceDelta;
+        else impactedPrice = _indexPrice + priceDelta;
+        console2.log("Impacted Price: ", impactedPrice);
+    }
+
+    /**
      * ========================= Main Execution Functions =========================
      */
     function increaseCollateral(
@@ -192,9 +232,9 @@ library Execution {
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Prices calldata _prices,
+        Prices memory _prices,
         bytes32 _positionKey
-    ) external view returns (Position.Data memory position, FeeState memory feeState) {
+    ) internal view returns (Position.Data memory position, FeeState memory feeState) {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
@@ -241,10 +281,10 @@ library Execution {
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Prices calldata _prices,
+        Prices memory _prices,
         uint256 _minCollateralUsd,
         bytes32 _positionKey
-    ) external view returns (Position.Data memory position, FeeState memory feeState) {
+    ) internal view returns (Position.Data memory position, FeeState memory feeState) {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
@@ -295,10 +335,10 @@ library Execution {
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Prices calldata _prices,
+        Prices memory _prices,
         uint256 _minCollateralUsd,
         bytes32 _positionKey
-    ) external view returns (Position.Data memory position, FeeState memory feeState) {
+    ) internal view returns (Position.Data memory position, FeeState memory feeState) {
         if (tradeStorage.getPosition(_positionKey).user != address(0)) revert Execution_PositionExists();
 
         // Calculate Fee + Fee for executor
@@ -348,9 +388,9 @@ library Execution {
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Prices calldata _prices,
+        Prices memory _prices,
         bytes32 _positionKey
-    ) external view returns (FeeState memory feeState, Position.Data memory position) {
+    ) internal view returns (FeeState memory feeState, Position.Data memory position) {
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
         // @audit - this invariant check will be wrong now
@@ -403,11 +443,11 @@ library Execution {
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Prices calldata _prices,
+        Prices memory _prices,
         uint256 _minCollateralUsd,
         uint256 _liquidationFee,
         bytes32 _positionKey
-    ) external view returns (Position.Data memory position, FeeState memory feeState) {
+    ) internal view returns (Position.Data memory position, FeeState memory feeState) {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
@@ -476,16 +516,15 @@ library Execution {
      */
     function validateAdl(
         IMarket market,
-        Prices calldata _prices,
+        Prices memory _prices,
         int256 _startingPnlFactor,
         string memory _ticker,
         bool _isLong
-    ) external view {
+    ) internal view {
         // Get the new PNL to pool ratio
         int256 newPnlFactor = _getPnlFactor(market, _prices, _ticker, _isLong);
         // PNL to pool has reduced
-        console2.log("New Pnl Factor: ", newPnlFactor);
-        console2.log("Starting Pnl Factor: ", _startingPnlFactor);
+
         if (newPnlFactor >= _startingPnlFactor) revert Execution_PNLFactorNotReduced();
     }
 
@@ -562,7 +601,7 @@ library Execution {
         return _position;
     }
 
-    function _checkIsLiquidatable(IMarket market, Position.Data memory _position, Prices calldata _prices)
+    function _checkIsLiquidatable(IMarket market, Position.Data memory _position, Prices memory _prices)
         public
         view
         returns (bool isLiquidatable)
@@ -592,7 +631,7 @@ library Execution {
         }
     }
 
-    function _calculatePnl(Prices calldata _prices, Position.Data memory _position, uint256 _sizeDelta)
+    function _calculatePnl(Prices memory _prices, Position.Data memory _position, uint256 _sizeDelta)
         private
         pure
         returns (int256 pnl)
@@ -625,7 +664,7 @@ library Execution {
         IMarket market,
         Position.Data memory _position,
         Position.Settlement memory _params,
-        Prices calldata _prices
+        Prices memory _prices
     ) private view returns (Position.Data memory, int256 fundingFee) {
         // Calculate and subtract the funding fee
         (int256 fundingFeeUsd, int256 nextFundingAccrued) = Position.getFundingFeeDelta(
@@ -647,7 +686,7 @@ library Execution {
         return (_position, fundingFee);
     }
 
-    function _processBorrowFees(IMarket market, Position.Data memory _position, Prices calldata _prices)
+    function _processBorrowFees(IMarket market, Position.Data memory _position, Prices memory _prices)
         private
         view
         returns (Position.Data memory, uint256 borrowFee)
@@ -664,7 +703,7 @@ library Execution {
 
     function _initiateLiquidation(
         Position.Settlement memory _params,
-        Prices calldata _prices,
+        Prices memory _prices,
         FeeState memory _feeState,
         uint256 _positionSize,
         uint256 _collateralAmount,
@@ -673,6 +712,7 @@ library Execution {
         // 1. Set Collateral and Size delta to max
         _params.request.input.collateralDelta =
             _collateralAmount.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
+
         _params.request.input.sizeDelta = _positionSize;
         // 2. Calculate the Fees Owed to the User
         _feeState.amountOwedToUser = _feeState.fundingFee > 0
@@ -682,11 +722,15 @@ library Execution {
         // 3. Calculate the Fees to Accumulate
         _feeState.feesToAccumulate = _feeState.borrowFee + _feeState.positionFee;
         // 4. Calculate the Liquidation Fee
+
         _feeState.feeForExecutor = _params.request.input.collateralDelta.percentage(_liquidationFee);
+
         // 5. Set Affiliate Fees to 0
         _feeState.affiliateRebate = 0;
         // 6. Set the Liquidation Flag
         _feeState.isLiquidation = true;
+        // 7. Set is Full Decrease
+        _feeState.isFullDecrease = true;
 
         return (_params, _feeState);
     }
@@ -695,7 +739,7 @@ library Execution {
         IMarket market,
         Position.Settlement memory _params,
         Position.Data memory _position,
-        Prices calldata _prices,
+        Prices memory _prices,
         FeeState memory _feeState,
         uint256 _minCollateralUsd,
         bool _isFullDecrease
@@ -712,8 +756,7 @@ library Execution {
             _feeState.borrowFee,
             _feeState.fundingFee
         );
-        console2.log("Collateral Delta: ", _params.request.input.collateralDelta);
-        console2.log("Size Delta: ", _params.request.input.sizeDelta);
+
         // Decrease Case
         _position = _updatePosition(
             _position,
