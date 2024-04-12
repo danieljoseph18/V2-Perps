@@ -11,7 +11,6 @@ import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {console2} from "forge-std/Test.sol";
 
 library TradeLogic {
     using SignedMath for int256;
@@ -202,11 +201,6 @@ library TradeLogic {
         // @audit - fee for executor isn't stored anywhere -> should be maintained for the decrease
         (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) =
             Execution.initiateAdlOrder(market, tradeStorage, priceFeed, _positionKey, _requestId, _feeReceiver);
-
-        console2.log("Adl Size Delta: ", params.request.input.sizeDelta);
-        console2.log("Market: ", address(market));
-        console2.log("Ticker: ", params.request.input.ticker);
-        console2.log("Size Delta: ", params.request.input.sizeDelta);
 
         // Update the Market State
         _updateMarketState(
@@ -566,7 +560,6 @@ library TradeLogic {
         _accumulateFees(market, referralStorage, _feeState, _position.isLong);
 
         // Update Pool for Profit / Loss -> Loss = Decrease Pool, Profit = Increase Pool
-        console2.log("Trader Pnl: ", _feeState.realizedPnl);
 
         market.updatePoolBalance(_feeState.realizedPnl.abs(), _position.isLong, _feeState.realizedPnl < 0);
 

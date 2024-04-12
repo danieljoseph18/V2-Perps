@@ -17,7 +17,6 @@ import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {console2} from "forge-std/Test.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 // Library for Handling Trade related logic
@@ -82,6 +81,8 @@ library Execution {
     uint64 private constant PRECISION = 1e18;
     uint64 private constant MAX_PNL_FACTOR = 0.45e18;
     uint64 private constant TARGET_PNL_FACTOR = 0.35e18;
+    uint64 private constant MAX_SLIPPAGE = 0.66e18;
+    uint64 private constant MIN_PROFIT_PERCENTAGE = 0.05e18;
 
     /**
      * ========================= Construction Functions =========================
@@ -172,7 +173,12 @@ library Execution {
             market, position.ticker, prices.collateralPrice, prices.collateralBaseUnit, position.isLong
         );
         prices.impactedPrice = _executeAdlImpact(
-            prices.indexPrice, pnl.abs().percentage(adlPercentage), poolUsd, startingPnlFactor.abs(), position.isLong
+            prices.indexPrice,
+            position.weightedAvgEntryPrice,
+            pnl.abs(),
+            poolUsd,
+            startingPnlFactor.abs(),
+            position.isLong
         );
 
         prices.priceImpactUsd = 0;
@@ -186,42 +192,54 @@ library Execution {
     }
 
     /**
-     * Simulated slippage for ADLd positions to give them a less favourable execution price,
-     * realizing less PNL than they would've otherwise.
-     * This enables us to decrease the pnl to pool ratio effectively, as otherwise, in
-     * certain scenarios, pnl:pool deductions would remain at a constant ratio, as
-     * the pnl and pool would both decrease proportionally.
+     * Adjusts the execution price for ADL'd positions within specific boundaries to maintain market health.
+     * Impacted price is clamped between the average entry price (adjusted for a min profit) & index price.
      *
-     * price +- ((realizedPnl / pool size) * price * accelerationFactor)
-     * where accelerationFactor = (1 + ((currentPnlToPoolRatio - TARGET_PNL_RATIO) / TARGET_PNL_RATIO))
+     * Steps:
+     * 1. Calculate acceleration factor based on the delta between the current PnL to pool ratio and the target ratio.
+     *    accelerationFactor = (pnl to pool ratio - target pnl ratio) / target pnl ratio
      *
-     * @dev - Calculation accuracy not critical, so regular math operations used to save on gas.
+     * 2. Compute the effective PnL impact adjusted by this acceleration factor.
+     *    pnlImpact = pnlBeingRealized * accelerationFactor
      *
-     * Goal: Come up with a more optimized solution for calculating the impact to price on ADLs.
-     * Should take into account how far the pnl to pool ratio is from the ideal, as well as how much
-     * profit this position accounts for from the total profit in the market.
+     * 3. Determine the impact this PnL has as a percentage of the total pool.
+     *    poolImpact = pnlImpact / _poolUsd (Capped at 100%)
      *
-     * Somewhere along the lines of using an acceleration factor, but it can't be so rapid that
-     * price is able to over-underflow.
+     * 4. Calculate min profit price (price where profit = minProfitPercentage)
+     *    minProfitPrice = _averageEntryPrice +- (_averageEntryPrice * minProfitPercentage)
+     *
+     * 5. Calculate the price delta based on the pool impact.
+     *    priceDelta = (_indexPrice - minProfitPrice) * poolImpact --> returns a % of the max price delta
+     *
+     * 6. Apply the price delta to the index price.
+     *    impactedPrice = _indexPrice =- priceDelta
+     *
+     * This function is crucial for ensuring market solvency in extreme situations.
      */
     function _executeAdlImpact(
         uint256 _indexPrice,
+        uint256 _averageEntryPrice,
         uint256 _pnlBeingRealized,
         uint256 _poolUsd,
         uint256 _pnlToPoolRatio,
         bool _isLong
     ) private pure returns (uint256 impactedPrice) {
-        if (_pnlBeingRealized >= _poolUsd) revert Execution_InvalidAdlDelta();
-        uint256 accelerationFactor = ((_pnlToPoolRatio - TARGET_PNL_FACTOR) * PRECISION / TARGET_PNL_FACTOR);
-        // Max 100%
-        if (accelerationFactor > PRECISION) accelerationFactor = PRECISION;
-        console2.log("Acceleration Factor: ", accelerationFactor);
-        uint256 priceDelta = _indexPrice * (_pnlBeingRealized / _poolUsd);
-        if (accelerationFactor > 0) priceDelta += (priceDelta * accelerationFactor / PRECISION);
-        console2.log("Price Delta: ", priceDelta);
+        // Calculate the acceleration factor --> accelerate the effective price impact
+        uint256 accelerationFactor = (_pnlToPoolRatio - TARGET_PNL_FACTOR).percentage(TARGET_PNL_FACTOR);
+        // Calculate the effective pnl impact
+        uint256 pnlImpact = _pnlBeingRealized * accelerationFactor / PRECISION;
+        // Calculate the pnl to pool impact factor
+        uint256 poolImpact = pnlImpact.percentage(_poolUsd);
+        if (poolImpact > PRECISION) poolImpact = PRECISION;
+        // Calculate the minimum profit price for the position (where profit = 5% of position) --> so average entry price + 5%
+        uint256 minProfitPrice = _isLong
+            ? _averageEntryPrice + (_averageEntryPrice.percentage(MIN_PROFIT_PERCENTAGE))
+            : _averageEntryPrice - (_averageEntryPrice.percentage(MIN_PROFIT_PERCENTAGE));
+        // Apply the pool impact to the scale of the price
+        uint256 priceDelta = (_indexPrice.delta(minProfitPrice) * poolImpact) / PRECISION;
+        // Apply the price delta to the index price
         if (_isLong) impactedPrice = _indexPrice - priceDelta;
         else impactedPrice = _indexPrice + priceDelta;
-        console2.log("Impacted Price: ", impactedPrice);
     }
 
     /**
@@ -483,8 +501,10 @@ library Execution {
         feeState.realizedPnl = _calculatePnl(_prices, position, _params.request.input.sizeDelta);
         // If ADL, adjust the collateral / size delta to cover fees
 
+        // @audit - for ADLs we need to make sure the computed collateral delta is always
+        // enough to cover fees.
+        // Fees should probably be deducted from any realized pnl.
         if (_params.isAdl) {
-            _params.request = _adjustAdlForFees(_params.request, feeState, _prices);
             feeState.feeForExecutor = _calculateFeeForAdl(
                 _params.request.input.sizeDelta,
                 _prices.collateralPrice,
@@ -524,7 +544,6 @@ library Execution {
         // Get the new PNL to pool ratio
         int256 newPnlFactor = _getPnlFactor(market, _prices, _ticker, _isLong);
         // PNL to pool has reduced
-
         if (newPnlFactor >= _startingPnlFactor) revert Execution_PNLFactorNotReduced();
     }
 
@@ -580,7 +599,6 @@ library Execution {
         _position.lastUpdate = uint64(block.timestamp);
         if (_isIncrease) {
             // Increase the Position's collateral
-            // @audit - different units, can't directly add here.
             _position.collateral += _collateralDeltaUsd;
             if (_sizeDelta > 0) {
                 _position.weightedAvgEntryPrice = MarketUtils.calculateWeightedAverageEntryPrice(
@@ -589,7 +607,6 @@ library Execution {
                 _position.size += _sizeDelta;
             }
         } else {
-            // @audit - different units, can't directly subtract here.
             _position.collateral -= _collateralDeltaUsd;
             if (_sizeDelta > 0) {
                 _position.weightedAvgEntryPrice = MarketUtils.calculateWeightedAverageEntryPrice(
@@ -748,6 +765,7 @@ library Execution {
         uint256 initialCollateral = _position.collateral;
         uint256 initialSize = _position.size;
         // Calculate After Fee Amount
+
         _feeState.afterFeeAmount = _calculateAmountAfterFees(
             _params.request.input.collateralDelta,
             _feeState.positionFee,
@@ -756,8 +774,8 @@ library Execution {
             _feeState.borrowFee,
             _feeState.fundingFee
         );
-
         // Decrease Case
+
         _position = _updatePosition(
             _position,
             _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit),
@@ -767,6 +785,7 @@ library Execution {
         );
         // Add / Subtract PNL
         // @audit - what about funding?
+
         _feeState.afterFeeAmount = _feeState.realizedPnl > 0
             ? _feeState.afterFeeAmount + _feeState.realizedPnl.abs()
             : _feeState.afterFeeAmount - _feeState.realizedPnl.abs();
@@ -926,9 +945,11 @@ library Execution {
         Prices memory _prices
     ) private pure returns (uint256 collateralDelta, uint256 sizeDelta, bool isFullDecrease) {
         // Full Close Case
+
         if (
             _params.request.input.sizeDelta >= _position.size
-                || _params.request.input.collateralDelta >= _position.collateral
+                || _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit)
+                    >= _position.collateral
         ) {
             collateralDelta = _position.collateral.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
             sizeDelta = _position.size;
@@ -943,21 +964,5 @@ library Execution {
             collateralDelta = _params.request.input.collateralDelta;
             sizeDelta = _params.request.input.sizeDelta;
         }
-    }
-
-    /// @dev - Function adjusts the ADL so that the fees are covered by the user.
-    function _adjustAdlForFees(Position.Request memory _request, FeeState memory _feeState, Prices memory _prices)
-        private
-        pure
-        returns (Position.Request memory)
-    {
-        // If collateral delta is insufficient to cover fees, adjust the size / collateral delta to cover the fees
-        uint256 totalFees =
-            _feeState.positionFee + _feeState.feeForExecutor + _feeState.affiliateRebate + _feeState.borrowFee;
-        // Increase the collateral / size delta to cover all fees
-        _request.input.collateralDelta += totalFees;
-        _request.input.sizeDelta += totalFees.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
-
-        return _request;
     }
 }

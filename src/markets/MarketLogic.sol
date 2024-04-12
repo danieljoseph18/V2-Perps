@@ -13,12 +13,15 @@ import {Borrowing} from "../libraries/Borrowing.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 
 library MarketLogic {
     using SafeERC20 for IERC20;
     using SafeERC20 for IMarketToken;
     using MathUtils for uint256;
     using SignedMath for int256;
+    using EnumerableMap for EnumerableMap.MarketRequestMap;
 
     error MarketLogic_InvalidLeverage();
     error MarketLogic_InvalidReserveFactor();
@@ -44,6 +47,8 @@ library MarketLogic {
     error MarketLogic_FailedToRemoveAssetId();
     error MarketLogic_FailedToTransferETH();
     error MarketLogic_InvalidOpenInterestDelta();
+    error MarketLogic_FailedToRemoveRequest();
+    error MarketLogic_FailedToAddRequest();
 
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
     event DepositExecuted(
@@ -196,6 +201,7 @@ library MarketLogic {
     }
 
     function createRequest(
+        EnumerableMap.MarketRequestMap storage requests,
         address _owner,
         address _transferToken, // Token In for Deposits, Out for Withdrawals
         uint256 _amountIn,
@@ -218,14 +224,18 @@ library MarketLogic {
             priceRequestId: _priceRequestId,
             pnlRequestId: _pnlRequestId
         });
-        IMarket(address(this)).addRequest(request);
+        if (!requests.set(request.key, request)) revert MarketLogic_FailedToAddRequest();
         emit RequestCreated(request.key, _owner, _transferToken, _amountIn, _isDeposit);
     }
 
-    function cancelRequest(bytes32 _key, address _caller, address _weth, address _usdc, address _marketToken)
-        external
-        returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
-    {
+    function cancelRequest(
+        EnumerableMap.MarketRequestMap storage requests,
+        bytes32 _key,
+        address _caller,
+        address _weth,
+        address _usdc,
+        address _marketToken
+    ) external returns (address tokenOut, uint256 amountOut, bool shouldUnwrap) {
         IMarket market = IMarket(address(this));
         // Check the Request Exists
         if (!market.requestExists(_key)) revert MarketLogic_InvalidKey();
@@ -235,7 +245,7 @@ library MarketLogic {
         // Ensure the request has passed the expiration time
         if (request.expirationTimestamp > block.timestamp) revert MarketLogic_RequestNotExpired();
         // Delete the request
-        market.deleteRequest(_key);
+        if (!requests.remove(_key)) revert MarketLogic_FailedToRemoveRequest();
         // Set Token Out and Should Unwrap
         if (request.isDeposit) {
             // If is deposit, token out is the token in
@@ -253,6 +263,7 @@ library MarketLogic {
 
     function addToken(
         IPriceFeed priceFeed,
+        IMarket.MarketStorage storage marketStorage,
         IMarket.Config calldata _config,
         string memory _ticker,
         uint256[] calldata _newAllocations,
@@ -269,8 +280,9 @@ library MarketLogic {
         // Reallocate
         reallocate(priceFeed, _newAllocations, _priceRequestId);
         // Initialize Storage
-        market.setConfig(_ticker, _config);
-        market.setLastUpdate(_ticker);
+        marketStorage.config = _config;
+        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
+        marketStorage.borrowing.lastBorrowUpdate = uint48(block.timestamp);
         emit TokenAdded(_ticker);
     }
 
@@ -295,6 +307,7 @@ library MarketLogic {
 
     /// @dev - Caller must've requested a price before calling this function
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
+    // @audit - can we use a storage pointer for this?
     function reallocate(IPriceFeed priceFeed, uint256[] memory _allocations, bytes32 _priceRequestId) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
@@ -335,15 +348,17 @@ library MarketLogic {
         priceFeed.clearSignedPrices(market, _priceRequestId);
     }
 
-    function executeDeposit(IPriceFeed priceFeed, IMarket.ExecuteDeposit calldata _params, address _tokenIn)
-        internal
-        validAction(_params.deposit.amountIn, 0, _params.deposit.isLongToken, true)
-    {
+    function executeDeposit(
+        IPriceFeed priceFeed,
+        EnumerableMap.MarketRequestMap storage requests,
+        IMarket.ExecuteDeposit calldata _params,
+        address _tokenIn
+    ) internal validAction(_params.deposit.amountIn, 0, _params.deposit.isLongToken, true) {
         if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
         // Transfer deposit tokens from msg.sender
         IERC20(_tokenIn).safeTransferFrom(msg.sender, address(this), _params.deposit.amountIn);
         // Delete Deposit Request -> keep
-        _params.market.deleteRequest(_params.key);
+        if (!requests.remove(_params.key)) revert MarketLogic_FailedToRemoveRequest();
 
         (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount) = MarketUtils.calculateDepositAmounts(_params);
 
@@ -362,6 +377,7 @@ library MarketLogic {
 
     function executeWithdrawal(
         IPriceFeed priceFeed,
+        EnumerableMap.MarketRequestMap storage requests,
         IMarket.ExecuteWithdrawal calldata _params,
         address _tokenOut,
         uint256 _availableTokens // tokenBalance - tokensReserved
@@ -370,7 +386,7 @@ library MarketLogic {
         // Transfer Market Tokens in from msg.sender
         IMarketToken(_params.marketToken).safeTransferFrom(msg.sender, address(this), _params.withdrawal.amountIn);
         // Delete the Withdrawal from Storage
-        _params.market.deleteRequest(_params.key);
+        if (!requests.remove(_params.key)) revert MarketLogic_FailedToRemoveRequest();
 
         // Calculate Amount Out after Fee
         uint256 transferAmountOut = MarketUtils.calculateWithdrawalAmounts(_params);

@@ -11,7 +11,6 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {Position} from "../positions/Position.sol";
-import {console2} from "forge-std/Test.sol";
 
 library MarketUtils {
     using SignedMath for int256;
@@ -631,14 +630,13 @@ library MarketUtils {
     ) external view returns (int256 pnlFactor) {
         // get pool usd (if 0 return 0)
         uint256 poolUsd = getPoolBalanceUsd(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
-        console2.log("Pool Balance: ", poolUsd);
+
         if (poolUsd == 0) {
             return 0;
         }
 
         // get pnl
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
-        console2.log("Market Pnl: ", pnl);
 
         // (PNL / Pool USD)
         uint256 factor = pnl.abs().ceilDiv(poolUsd);

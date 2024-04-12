@@ -61,7 +61,7 @@ library Position {
     // Max and Min Price Slippage
     uint128 private constant MIN_SLIPPAGE = 0.0001e30; // 0.01%
     uint128 private constant MAX_SLIPPAGE = 0.9999e30; // 99.99%
-    uint256 private constant MAX_ADL_PERCENTAGE = 0.5e18; // 50%
+    uint256 private constant MAX_ADL_PERCENTAGE = 0.66e18; // 66%
 
     // Data for an Open Position
     struct Data {
@@ -669,7 +669,7 @@ library Position {
         uint256 _positionSizeUsd,
         uint256 _sizeDeltaUsd,
         uint256 _weightedAvgEntryPrice,
-        uint256 _indexPrice,
+        uint256 _impactedPrice,
         uint256 _indexBaseUnit,
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
@@ -677,7 +677,7 @@ library Position {
     ) external pure returns (int256 decreasePositionPnl) {
         // Calculate whole position Pnl
         int256 positionPnl =
-            getPositionPnl(_positionSizeUsd, _weightedAvgEntryPrice, _indexPrice, _indexBaseUnit, _isLong);
+            getPositionPnl(_positionSizeUsd, _weightedAvgEntryPrice, _impactedPrice, _indexBaseUnit, _isLong);
 
         // Get (% realised) * pnl
         int256 realizedPnl = positionPnl.percentageSigned(_sizeDeltaUsd, _positionSizeUsd);
@@ -710,7 +710,7 @@ library Position {
 
     /**
      * @dev Calculates the Percentage to ADL a position by based on the PNL to Pool Ratio.
-     * Percentage to ADL = 1 - e ** (-excessRatio(positionPnl/positionSize))
+     * Percentage to ADL = 1 - e ** (-sqrt(excessRatio) * (positionPnl/positionSize))
      * where excessRatio = (currentPnlToPoolRatio/targetPnlToPoolRatio) - 1
      *
      * The maximum pnl to pool ratio is configured to 0.45e18, or 45%. We introduce
@@ -723,7 +723,7 @@ library Position {
         pure
         returns (uint256 adlPercentage)
     {
-        uint256 excessRatio = _pnlToPoolRatio.percentage(PRECISION, TARGET_PNL_RATIO) - PRECISION;
+        uint256 excessRatio = (_pnlToPoolRatio.mulDivCeil(PRECISION, TARGET_PNL_RATIO) - PRECISION).squared();
         SD59x18 exponent = sd(-excessRatio.toInt256()).mul(sd(_positionProfit)).div(sd(_positionSize.toInt256()));
         adlPercentage = PRECISION - unwrap(exp(exponent)).toUint256();
         if (adlPercentage > MAX_ADL_PERCENTAGE) adlPercentage = MAX_ADL_PERCENTAGE;

@@ -150,7 +150,12 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         bytes32 _priceRequestId
     ) external onlyConfigurator(address(this)) nonReentrant {
         MarketLogic.addToken(
-            ITradeStorage(tradeStorage).priceFeed(), _config, _ticker, _newAllocations, _priceRequestId
+            ITradeStorage(tradeStorage).priceFeed(),
+            marketStorage[keccak256(abi.encode(_ticker))],
+            _config,
+            _ticker,
+            _newAllocations,
+            _priceRequestId
         );
     }
 
@@ -198,6 +203,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         bool _isDeposit
     ) external payable onlyRouter {
         MarketLogic.createRequest(
+            requests,
             _owner,
             _transferToken,
             _amountIn,
@@ -215,7 +221,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
     {
-        return MarketLogic.cancelRequest(_key, _caller, WETH, USDC, address(MARKET_TOKEN));
+        return MarketLogic.cancelRequest(requests, _key, _caller, WETH, USDC, address(MARKET_TOKEN));
     }
 
     function executeDeposit(ExecuteDeposit calldata _params)
@@ -225,7 +231,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         nonReentrant
     {
         MarketLogic.executeDeposit(
-            ITradeStorage(tradeStorage).priceFeed(), _params, _params.deposit.isLongToken ? WETH : USDC
+            ITradeStorage(tradeStorage).priceFeed(), requests, _params, _params.deposit.isLongToken ? WETH : USDC
         );
     }
 
@@ -237,11 +243,15 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     {
         if (_params.withdrawal.isLongToken) {
             MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), _params, WETH, longTokenBalance - longTokensReserved
+                ITradeStorage(tradeStorage).priceFeed(), requests, _params, WETH, longTokenBalance - longTokensReserved
             );
         } else {
             MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), _params, USDC, shortTokenBalance - shortTokensReserved
+                ITradeStorage(tradeStorage).priceFeed(),
+                requests,
+                _params,
+                USDC,
+                shortTokenBalance - shortTokensReserved
             );
         }
     }
@@ -249,43 +259,9 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Callback Functions  =========================
      */
-    function setFunding(FundingValues calldata _funding, string calldata _ticker) external onlyCallback {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        marketStorage[assetId].funding = _funding;
-    }
-
-    function setBorrowing(BorrowingValues calldata _borrowing, string calldata _ticker) external onlyCallback {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        marketStorage[assetId].borrowing = _borrowing;
-    }
-
-    function setWeightedAverages(
-        uint256 _averageEntryPrice,
-        uint256 _weightedAvgCumulative,
-        string calldata _ticker,
-        bool _isLong
-    ) external onlyCallback {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        if (_isLong) {
-            marketStorage[assetId].pnl.longAverageEntryPriceUsd = _averageEntryPrice;
-            marketStorage[assetId].borrowing.weightedAvgCumulativeLong = _weightedAvgCumulative;
-        } else {
-            marketStorage[assetId].pnl.shortAverageEntryPriceUsd = _averageEntryPrice;
-            marketStorage[assetId].borrowing.weightedAvgCumulativeShort = _weightedAvgCumulative;
-        }
-    }
-
     function setAllocationShare(string calldata _ticker, uint256 _allocationShare) external onlyCallback {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         marketStorage[assetId].allocationShare = _allocationShare;
-    }
-
-    function deleteRequest(bytes32 _key) external onlyCallback {
-        if (!requests.remove(_key)) revert Market_FailedToRemoveRequest();
-    }
-
-    function addRequest(Input calldata _request) external onlyCallback {
-        if (!requests.set(_request.key, _request)) revert Market_FailedToAddRequest();
     }
 
     function addAsset(string calldata _ticker) external onlyCallback {
@@ -312,34 +288,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         }
         // Remove storage
         delete marketStorage[assetId];
-    }
-
-    function setConfig(string calldata _ticker, Config calldata _config) external onlyCallback {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        marketStorage[assetId].config = _config;
-    }
-
-    function setLastUpdate(string calldata _ticker) external onlyCallback {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
-        marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
-    }
-
-    function updateOpenInterest(string calldata _ticker, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
-        external
-        onlyCallback
-    {
-        // Update the open interest
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        if (_shouldAdd) {
-            _isLong
-                ? marketStorage[assetId].openInterest.longOpenInterest += _sizeDeltaUsd
-                : marketStorage[assetId].openInterest.shortOpenInterest += _sizeDeltaUsd;
-        } else {
-            _isLong
-                ? marketStorage[assetId].openInterest.longOpenInterest -= _sizeDeltaUsd
-                : marketStorage[assetId].openInterest.shortOpenInterest -= _sizeDeltaUsd;
-        }
     }
 
     /**

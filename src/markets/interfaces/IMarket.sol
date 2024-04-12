@@ -281,25 +281,10 @@ interface IMarket {
     function FUNDING_VELOCITY_CLAMP() external view returns (uint64);
     function MAX_PNL_FACTOR() external view returns (uint64);
     function MAX_ADL_PERCENTAGE() external view returns (uint64);
-
-    function deleteRequest(bytes32 _key) external;
-    function addRequest(Input calldata _request) external;
     function requestExists(bytes32 _key) external view returns (bool);
-    function setFunding(FundingValues calldata _funding, string calldata _ticker) external;
-    function setBorrowing(BorrowingValues calldata _borrowing, string calldata _ticker) external;
-    function setWeightedAverages(
-        uint256 _averageEntryPrice,
-        uint256 _weightedAvgCumulative,
-        string calldata _ticker,
-        bool _isLong
-    ) external;
-    function updateOpenInterest(string calldata _ticker, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
-        external;
     function setAllocationShare(string calldata _ticker, uint256 _allocationShare) external;
     function addAsset(string calldata _ticker) external;
     function removeAsset(string calldata _ticker) external;
-    function setConfig(string calldata _ticker, Config calldata _config) external;
-    function setLastUpdate(string calldata _ticker) external;
     function getState(bool _isLong) external view returns (State memory);
     function collateralAmounts(address _user, bool _isLong) external view returns (uint256);
 }

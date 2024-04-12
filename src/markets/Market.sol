@@ -19,7 +19,6 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {MarketLogic} from "./MarketLogic.sol";
-import {console2} from "forge-std/Test.sol";
 
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -171,44 +170,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Callback Functions  =========================
      */
-    function setFunding(FundingValues calldata _funding, string calldata _ticker) external onlyCallback {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        marketStorage[assetId].funding = _funding;
-    }
-
-    function setBorrowing(BorrowingValues calldata _borrowing, string calldata _ticker) external onlyCallback {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        marketStorage[assetId].borrowing = _borrowing;
-    }
-
-    function setWeightedAverages(
-        uint256 _averageEntryPrice,
-        uint256 _weightedAvgCumulative,
-        string calldata _ticker,
-        bool _isLong
-    ) external onlyCallback {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        if (_isLong) {
-            marketStorage[assetId].pnl.longAverageEntryPriceUsd = _averageEntryPrice;
-            marketStorage[assetId].borrowing.weightedAvgCumulativeLong = _weightedAvgCumulative;
-        } else {
-            marketStorage[assetId].pnl.shortAverageEntryPriceUsd = _averageEntryPrice;
-            marketStorage[assetId].borrowing.weightedAvgCumulativeShort = _weightedAvgCumulative;
-        }
-    }
-
     function setAllocationShare(string calldata, uint256) external onlyCallback {
         // Redundant action to prevent compiler warning
         delete marketStorage[bytes32(0)].allocationShare;
         revert Market_SingleAssetMarket();
-    }
-
-    function deleteRequest(bytes32 _key) external onlyCallback {
-        if (!requests.remove(_key)) revert Market_FailedToRemoveRequest();
-    }
-
-    function addRequest(Input calldata _request) external onlyCallback {
-        if (!requests.set(_request.key, _request)) revert Market_FailedToAddRequest();
     }
 
     function addAsset(string calldata) external onlyCallback {
@@ -221,43 +186,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         // Redundant action to prevent compiler warning
         delete marketStorage[bytes32(0)].allocationShare;
         revert Market_SingleAssetMarket();
-    }
-
-    function setConfig(string calldata, Config calldata) external onlyCallback {
-        // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationShare;
-        revert Market_SingleAssetMarket();
-    }
-
-    function setLastUpdate(string calldata) external onlyCallback {
-        // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationShare;
-        revert Market_SingleAssetMarket();
-    }
-
-    function updateOpenInterest(string calldata _ticker, uint256 _sizeDeltaUsd, bool _isLong, bool _shouldAdd)
-        external
-        onlyCallback
-    {
-        // Update the open interest
-        OpenInterestValues storage openInterest = marketStorage[keccak256(abi.encode(_ticker))].openInterest;
-        console2.log("Updating Open Interest (before long): ", openInterest.longOpenInterest);
-        console2.log("Updating Open Interest (before short): ", openInterest.shortOpenInterest);
-        if (_shouldAdd) {
-            if (_isLong) {
-                openInterest.longOpenInterest += _sizeDeltaUsd;
-            } else {
-                openInterest.shortOpenInterest += _sizeDeltaUsd;
-            }
-        } else {
-            if (_isLong) {
-                openInterest.longOpenInterest -= _sizeDeltaUsd;
-            } else {
-                openInterest.shortOpenInterest -= _sizeDeltaUsd;
-            }
-        }
-        console2.log("Updating Open Interest (after long): ", openInterest.longOpenInterest);
-        console2.log("Updating Open Interest (after short): ", openInterest.shortOpenInterest);
     }
 
     /**
@@ -399,6 +327,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         bool _isDeposit
     ) external payable onlyRouter {
         MarketLogic.createRequest(
+            requests,
             _owner,
             _transferToken,
             _amountIn,
@@ -416,7 +345,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
     {
-        return MarketLogic.cancelRequest(_key, _caller, WETH, USDC, address(MARKET_TOKEN));
+        return MarketLogic.cancelRequest(requests, _key, _caller, WETH, USDC, address(MARKET_TOKEN));
     }
 
     function executeDeposit(ExecuteDeposit calldata _params)
@@ -426,7 +355,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         nonReentrant
     {
         MarketLogic.executeDeposit(
-            ITradeStorage(tradeStorage).priceFeed(), _params, _params.deposit.isLongToken ? WETH : USDC
+            ITradeStorage(tradeStorage).priceFeed(), requests, _params, _params.deposit.isLongToken ? WETH : USDC
         );
     }
 
@@ -438,11 +367,15 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     {
         if (_params.withdrawal.isLongToken) {
             MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), _params, WETH, longTokenBalance - longTokensReserved
+                ITradeStorage(tradeStorage).priceFeed(), requests, _params, WETH, longTokenBalance - longTokensReserved
             );
         } else {
             MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), _params, USDC, shortTokenBalance - shortTokensReserved
+                ITradeStorage(tradeStorage).priceFeed(),
+                requests,
+                _params,
+                USDC,
+                shortTokenBalance - shortTokensReserved
             );
         }
     }

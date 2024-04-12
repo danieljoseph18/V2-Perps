@@ -180,7 +180,7 @@ library EnumerableMap {
      * @dev Adds a key-value pair to a map, or updates the value for an existing
      * key. O(1).
      */
-    function set(MarketRequestMap storage map, bytes32 key, IMarket.Input calldata value) internal returns (bool) {
+    function set(MarketRequestMap storage map, bytes32 key, IMarket.Input memory value) internal returns (bool) {
         map._values[key] = value;
         return map._keys.add(key);
     }
