@@ -261,6 +261,8 @@ interface IMarket {
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
         bool _isLong,
         bool _isIncrease
     ) external;

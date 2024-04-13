@@ -309,7 +309,8 @@ library TradeLogic {
             _params.request.input.collateralToken,
             _params.request.input.collateralDelta,
             feeState.affiliateRebate,
-            feeState.feeForExecutor
+            feeState.feeForExecutor,
+            _params.feeReceiver
         );
         emit CollateralEdited(positionKey, _params.request.input.collateralDelta, _params.request.input.isIncrease);
     }
@@ -341,6 +342,7 @@ library TradeLogic {
         // Handle Token Transfers
         _transferTokensForDecrease(
             market,
+            referralStorage,
             feeState,
             feeState.afterFeeAmount,
             _params.feeReceiver,
@@ -394,7 +396,8 @@ library TradeLogic {
             _params.request.input.collateralToken,
             _params.request.input.collateralDelta,
             feeState.affiliateRebate,
-            feeState.feeForExecutor
+            feeState.feeForExecutor,
+            _params.feeReceiver
         );
         // Fire Event
         emit PositionCreated(positionKey);
@@ -437,7 +440,8 @@ library TradeLogic {
             _params.request.input.collateralToken,
             _params.request.input.collateralDelta,
             feeState.affiliateRebate,
-            feeState.feeForExecutor
+            feeState.feeForExecutor,
+            _params.feeReceiver
         );
         // Fire event
         emit IncreasePosition(positionKey, _params.request.input.collateralDelta, _params.request.input.sizeDelta);
@@ -534,6 +538,7 @@ library TradeLogic {
 
         _transferTokensForDecrease(
             market,
+            referralStorage,
             _feeState,
             _feeState.amountOwedToUser,
             _liquidator,
@@ -579,7 +584,14 @@ library TradeLogic {
 
         // Handle Token Transfers
         _transferTokensForDecrease(
-            market, _feeState, _feeState.afterFeeAmount, _executor, _position.user, _position.isLong, _reverseWrap
+            market,
+            referralStorage,
+            _feeState,
+            _feeState.afterFeeAmount,
+            _executor,
+            _position.user,
+            _position.isLong,
+            _reverseWrap
         );
     }
 
@@ -590,6 +602,7 @@ library TradeLogic {
     /// @dev - Can fail on insolvency.
     function _transferTokensForDecrease(
         IMarket market,
+        IReferralStorage referralStorage,
         Execution.FeeState memory _feeState,
         uint256 _amountOut,
         address _executor,
@@ -601,10 +614,10 @@ library TradeLogic {
         if (_feeState.feeForExecutor > 0) {
             market.transferOutTokens(_executor, _feeState.feeForExecutor, _isLong, true);
         }
-        // Transfer Rebate to Referrer
+        // Transfer Rebate to Referral Storage
         if (_feeState.affiliateRebate > 0) {
             market.transferOutTokens(
-                _feeState.referrer,
+                address(referralStorage),
                 _feeState.affiliateRebate,
                 _isLong,
                 false // Leave unwrapped by default
@@ -625,7 +638,16 @@ library TradeLogic {
         bool _isIncrease
     ) private {
         // Update the Market State
-        market.updateMarketState(_ticker, _sizeDelta, _prices.indexPrice, _prices.impactedPrice, _isLong, _isIncrease);
+        market.updateMarketState(
+            _ticker,
+            _sizeDelta,
+            _prices.indexPrice,
+            _prices.impactedPrice,
+            _prices.collateralPrice,
+            _prices.collateralBaseUnit,
+            _isLong,
+            _isIncrease
+        );
         // If Price Impact is Negative, add to the impact Pool
         // If Price Impact is Positive, Subtract from the Impact Pool
         // Impact Pool Delta = -1 * Price Impact

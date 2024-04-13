@@ -82,6 +82,7 @@ contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
         onlyTradeStorage(_market)
     {
         affiliateRewards[_account][_isLongToken] += _amount;
+        emit AffiliateRewardsAccumulated(_account, _isLongToken, _amount);
     }
 
     function claimAffiliateRewards() external nonReentrant {

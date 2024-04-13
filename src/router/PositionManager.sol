@@ -271,13 +271,14 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         address _collateralToken,
         uint256 _collateralDelta,
         uint256 _affiliateRebate,
-        uint256 _feeForExecutor
+        uint256 _feeForExecutor,
+        address _executor
     ) external onlyTradeStorage(address(market)) {
         uint256 transferAmount = _collateralDelta;
         // Transfer Fee to Executor
         if (_feeForExecutor > 0) {
             transferAmount -= _feeForExecutor;
-            IERC20(_collateralToken).safeTransfer(msg.sender, _feeForExecutor);
+            IERC20(_collateralToken).safeTransfer(_executor, _feeForExecutor);
         }
         // Transfer Fee Discount to Referral Storage
         if (_affiliateRebate > 0) {

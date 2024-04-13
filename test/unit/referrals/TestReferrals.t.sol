@@ -1,274 +1,301 @@
-// // SPDX-License-Identifier: MIT
-// pragma solidity 0.8.23;
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
 
-// import {Test, console, console2} from "forge-std/Test.sol";
-// import {Deploy} from "../../../script/Deploy.s.sol";
-// import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-// import {Market, IMarket} from "../../../src/markets/Market.sol";
-// import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
-// import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-// import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
-// import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-// import {PositionManager} from "../../../src/router/PositionManager.sol";
-// import {Router} from "../../../src/router/Router.sol";
-// import {WETH} from "../../../src/tokens/WETH.sol";
-// import {Oracle} from "../../../src/oracle/Oracle.sol";
-// import {MockUSDC} from "../../mocks/MockUSDC.sol";
-// import {Position} from "../../../src/positions/Position.sol";
-// import {Gas} from "../../../src/libraries/Gas.sol";
-// import {Funding} from "../../../src/libraries/Funding.sol";
-// import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
-// import {Borrowing} from "../../../src/libraries/Borrowing.sol";
-// import {mulDiv} from "@prb/math/Common.sol";
-// import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-// import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
-// import {Referral} from "../../../src/referrals/Referral.sol";
-// import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
+import {Deploy} from "../../../script/Deploy.s.sol";
+import {RoleStorage} from "../../../src/access/RoleStorage.sol";
+import {Market, IMarket, IMarketToken} from "../../../src/markets/Market.sol";
+import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
+import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
+import {PositionManager} from "../../../src/router/PositionManager.sol";
+import {Router} from "../../../src/router/Router.sol";
+import {WETH} from "../../../src/tokens/WETH.sol";
+import {Oracle} from "../../../src/oracle/Oracle.sol";
+import {MockUSDC} from "../../mocks/MockUSDC.sol";
+import {Position} from "../../../src/positions/Position.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
+import {RewardTracker} from "../../../src/rewards/RewardTracker.sol";
+import {LiquidityLocker} from "../../../src/rewards/LiquidityLocker.sol";
+import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
+import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
+import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
+import {mulDiv} from "@prb/math/Common.sol";
+import {MathUtils} from "../../../src/libraries/MathUtils.sol";
+import {Referral} from "../../../src/referrals/Referral.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-// contract TestReferrals is Test {
-//     using SignedMath for int256;
+contract TestReferrals is Test {
+    using MathUtils for uint256;
 
-//     RoleStorage roleStorage;
+    RoleStorage roleStorage;
 
-//     MarketFactory marketFactory;
-//     IPriceFeed priceFeed; // Deployed in Helper Config
-//     ITradeStorage tradeStorage;
-//     ReferralStorage referralStorage;
-//     PositionManager positionManager;
-//     Router router;
-//     address OWNER;
-//     Market market;
-//     address feeDistributor;
+    MarketFactory marketFactory;
+    MockPriceFeed priceFeed; // Deployed in Helper Config
+    ITradeStorage tradeStorage;
+    ReferralStorage referralStorage;
+    PositionManager positionManager;
+    Router router;
+    address OWNER;
+    Market market;
+    FeeDistributor feeDistributor;
+    TransferStakedTokens transferStakedTokens;
+    RewardTracker rewardTracker;
+    LiquidityLocker liquidityLocker;
 
-//     address weth;
-//     address usdc;
-//     bytes32 ethPriceId;
-//     bytes32 usdcPriceId;
+    address weth;
+    address usdc;
+    address link;
 
-//     bytes[] tokenUpdateData;
-//     uint256[] allocations;
-//     bytes32[] assetIds;
-//     uint256[] compactedPrices;
+    string ethTicker = "ETH";
+    string usdcTicker = "USDC";
+    string[] tickers;
 
-//     address USER = makeAddr("USER");
+    address USER = makeAddr("USER");
+    address USER1 = makeAddr("USER1");
+    address USER2 = makeAddr("USER2");
 
-//     bytes32 ethAssetId = keccak256(abi.encode("ETH"));
-//     bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
+    IPriceFeed.Price ethPrices;
+    IPriceFeed.Price usdcPrices;
+    IPriceFeed.Price[] prices;
 
-//     function setUp() public {
-//         Deploy deploy = new Deploy();
-//         Deploy.Contracts memory contracts = deploy.run();
-//         roleStorage = contracts.roleStorage;
+    function setUp() public {
+        Deploy deploy = new Deploy();
+        Deploy.Contracts memory contracts = deploy.run();
+        roleStorage = contracts.roleStorage;
 
-//         marketFactory = contracts.marketFactory;
-//         priceFeed = contracts.priceFeed;
-//         referralStorage = contracts.referralStorage;
-//         positionManager = contracts.positionManager;
-//         router = contracts.router;
-//         feeDistributor = address(contracts.feeDistributor);
-//         OWNER = contracts.owner;
-//         (weth, usdc, ethPriceId, usdcPriceId,,,,) = deploy.activeNetworkConfig();
-//         // Pass some time so block timestamp isn't 0
-//         vm.warp(block.timestamp + 1 days);
-//         vm.roll(block.number + 1);
-//         // Set Update Data
-//         assetIds.push(ethAssetId);
-//         assetIds.push(usdcAssetId);
-//     }
+        marketFactory = contracts.marketFactory;
+        priceFeed = MockPriceFeed(address(contracts.priceFeed));
+        referralStorage = contracts.referralStorage;
+        positionManager = contracts.positionManager;
+        router = contracts.router;
+        feeDistributor = contracts.feeDistributor;
+        transferStakedTokens = contracts.transferStakedTokens;
+        OWNER = contracts.owner;
+        (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
+        tickers.push(ethTicker);
+        tickers.push(usdcTicker);
+        // Pass some time so block timestamp isn't 0
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+    }
 
-//     receive() external payable {}
+    receive() external payable {}
 
-//     modifier setUpMarkets() {
-//         vm.deal(OWNER, 1_000_000 ether);
-//         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
-//         vm.deal(USER, 1_000_000 ether);
-//         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
-//         vm.startPrank(OWNER);
-//         WETH(weth).deposit{value: 50 ether}();
-//         IMarketFactory.MarketRequest memory request = IMarketFactory.MarketRequest({
-//             owner: OWNER,
-//             indexTokenTicker: "ETH",
-//             marketTokenName: "BRRR",
-//             marketTokenSymbol: "BRRR"
-//         });
-//         marketFactory.requestNewMarket{value: 0.01 ether}(request);
-//         // Set primary prices for ref price
-//         priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
-//         // Clear them
-//         priceFeed.clearPrimaryPrices();
-//         marketFactory.executeNewMarket(marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker));
-//         vm.stopPrank();
-//         market = Market(payable(marketFactory.tokenToMarket(ethAssetId)));
-//         tradeStorage = ITradeStorage(market.tradeStorage());
-//         // Call the deposit function with sufficient gas
-//         vm.prank(OWNER);
-//         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-//         vm.prank(OWNER);
-//         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+    modifier setUpMarkets() {
+        vm.deal(OWNER, 2_000_000 ether);
+        MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
+        vm.deal(USER, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER, 1_000_000_000e6);
+        vm.deal(USER1, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER1, 1_000_000_000e6);
+        vm.deal(USER2, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER2, 1_000_000_000e6);
+        vm.prank(USER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER1);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER2);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.startPrank(OWNER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        IMarketFactory.DeployRequest memory request = IMarketFactory.DeployRequest({
+            isMultiAsset: false,
+            owner: OWNER,
+            indexTokenTicker: "ETH",
+            marketTokenName: "BRRR",
+            marketTokenSymbol: "BRRR",
+            baseUnit: 1e18
+        });
+        marketFactory.requestNewMarket{value: 0.01 ether}(request);
+        market = Market(
+            payable(
+                marketFactory.executeNewMarket(
+                    marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker)
+                )
+            )
+        );
+        vm.stopPrank();
+        tradeStorage = ITradeStorage(market.tradeStorage());
+        rewardTracker = RewardTracker(address(market.rewardTracker()));
+        liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
+        // Set Prices
+        ethPrices =
+            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 3000e30, max: 3000e30});
+        usdcPrices = IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 1e30, med: 1e30, max: 1e30});
+        prices.push(ethPrices);
+        prices.push(usdcPrices);
+        bytes32 priceRequestId = keccak256(abi.encode("PRICE REQUEST"));
+        bytes32 pnlRequestId = keccak256(abi.encode("PNL REQUEST"));
+        priceFeed.updatePrices(priceRequestId, tickers, prices);
+        priceFeed.updatePnl(market, 0, pnlRequestId);
+        // Call the deposit function with sufficient gas
+        vm.prank(OWNER);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
+        vm.prank(OWNER);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
-//         vm.startPrank(OWNER);
-//         MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-//         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
-//         vm.stopPrank();
-//         vm.startPrank(OWNER);
-//         allocations.push(10000 << 240);
-//         assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
-//         vm.stopPrank();
-//         _;
-//     }
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        vm.stopPrank();
+        _;
+    }
 
-//     /**
-//      * Tests Required:
-//      *
-//      *     - Using a referral code for a fee discount
-//      *     - Receiving affiliate rewards for referring another user
-//      */
+    /**
+     * To tests:
+     *
+     * - Calculations for applying a fee discount
+     * - Positions accumulate affiliate rewards
+     * - Affiliates can claim their rewards
+     */
+    function testApplyingAReferralFeeDiscount(uint256 _tier, uint256 _fee) public setUpMarkets {
+        _tier = bound(_tier, 0, 2);
+        // Set a random fee tier
+        vm.startPrank(OWNER);
+        referralStorage.registerCode(bytes32(bytes("CODE")));
+        referralStorage.setReferrerTier(OWNER, _tier);
+        vm.stopPrank();
+        // Use the code from the USER
+        vm.prank(USER);
+        referralStorage.setTraderReferralCodeByUser(bytes32(bytes("CODE")));
 
-//     /**
-//      * function calculateForPosition(
-//      *     ITradeStorage tradeStorage,
-//      *     uint256 _sizeDelta,
-//      *     uint256 _collateralDelta,
-//      *     uint256 _indexPrice,
-//      *     uint256 _indexBaseUnit,
-//      *     uint256 _collateralPrice,
-//      *     uint256 _collateralBaseUnit
-//      * )
-//      */
-//     function testUsingAReferralCodeGrantsAFeeDiscount() public setUpMarkets {
-//         // register an affiliate code
-//         // create a position
-//         // use the fee estimation calculation to compare
-//         // a) the fee with the affiliate code
-//         // b) the fee without the affiliate code
+        // get the code and make sure it was set
+        (bytes32 code, address codeOwner) = referralStorage.getTraderReferralInfo(USER);
+        assertEq(code, bytes32(bytes("CODE")), "Invalid Code");
 
-//         // register an affiliate code from the owner
-//         bytes32 code = keccak256(abi.encode("CODE"));
-//         vm.prank(OWNER);
-//         referralStorage.registerCode(code);
+        // Check the new fee and affiliate rebate values
+        uint256 newFee;
+        uint256 affiliateRebate;
+        (newFee, affiliateRebate, codeOwner) = Referral.applyFeeDiscount(referralStorage, USER, _fee);
+        // Discounts = 5, 10, 15
+        // Check the new fee is correct
+        uint256 discountPercentage;
+        if (_tier == 0) {
+            discountPercentage = 0.05e18;
+        } else if (_tier == 1) {
+            discountPercentage = 0.1e18;
+        } else {
+            discountPercentage = 0.15e18;
+        }
+        uint256 totalReduction = _fee.percentage(discountPercentage);
+        uint256 discount = totalReduction / 2;
+        assertEq(newFee, _fee - discount, "Invalid New Fee");
+        // Check the affiliate rebate is correct
+        assertEq(affiliateRebate, totalReduction - discount, "Invalid Rebate");
+        // Check the code owner is correct
+        assertEq(codeOwner, OWNER, "Invalid Code Owner");
+    }
 
-//         Position.Input memory input = Position.Input({
-//             assetId: ethAssetId,
-//             collateralToken: weth,
-//             collateralDelta: 0.5 ether,
-//             sizeDelta: 10_000e30,
-//             limitPrice: 0,
-//             maxSlippage: 0.4e30,
-//             executionFee: 0.01 ether,
-//             isLong: true,
-//             isLimit: false,
-//             isIncrease: true,
-//             reverseWrap: true,
-//             conditionals: Position.Conditionals({
-//                 stopLossSet: false,
-//                 takeProfitSet: false,
-//                 stopLossPrice: 0,
-//                 takeProfitPrice: 0,
-//                 stopLossPercentage: 0,
-//                 takeProfitPercentage: 0
-//             })
-//         });
+    struct ReferralCache {
+        Position.Input input;
+        address collateralToken;
+        uint256 collateralDelta;
+        uint256 priceMultiplier;
+        uint256 priceDivider;
+        uint256 discountPercentage;
+        uint256 affiliateRebate;
+    }
 
-//         uint256 fee = Position.calculateFee(tradeStorage, input.sizeDelta, input.collateralDelta, 1e18, 1e6);
+    function testWhetherPositionsAccumulateAffiliateRewards(uint256 _tier, bool _isLong) public setUpMarkets {
+        vm.assume(_tier < 3);
+        // Set a random fee tier
+        vm.startPrank(OWNER);
+        referralStorage.registerCode(bytes32(bytes("CODE")));
+        referralStorage.setReferrerTier(OWNER, _tier);
+        vm.stopPrank();
+        // Use the code from the USER
+        vm.prank(USER);
+        referralStorage.setTraderReferralCodeByUser(bytes32(bytes("CODE")));
+        // Create Request
+        ReferralCache memory cache;
+        if (_isLong) {
+            cache.collateralToken = weth;
+            cache.collateralDelta = 0.5 ether;
+            cache.priceMultiplier = 3000e30;
+            cache.priceDivider = 1e18;
+            cache.input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: cache.collateralToken,
+                collateralDelta: cache.collateralDelta,
+                sizeDelta: 5000e30, // 4x leverage
+                limitPrice: 0,
+                maxSlippage: 0.03e30, // 3%
+                executionFee: 0.01 ether,
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: true,
+                triggerAbove: false
+            });
+            vm.prank(USER);
+            router.createPositionRequest{value: 0.51 ether}(
+                market, cache.input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+        } else {
+            cache.collateralToken = usdc;
+            cache.collateralDelta = 500e6;
+            cache.priceMultiplier = 1e30;
+            cache.priceDivider = 1e6;
+            cache.input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: cache.collateralToken,
+                collateralDelta: cache.collateralDelta,
+                sizeDelta: 5000e30, // 10x leverage
+                limitPrice: 0,
+                maxSlippage: 0.03e30, // 3%
+                executionFee: 0.01 ether,
+                isLong: false,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: false,
+                triggerAbove: false
+            });
 
-//         (uint256 feeWithoutReferralCode,,) = Referral.applyFeeDiscount(referralStorage, USER, fee);
+            vm.startPrank(USER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, cache.input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        }
+        // Execute Request
+        vm.prank(OWNER);
+        positionManager.executePosition(market, tradeStorage.getOrderAtIndex(0, false), bytes32(0), OWNER);
+        // check the referral storage: a) has the correct amount of funds from the discount b) has the correct funds in storage
+        uint256 discountPercentage;
+        if (_tier == 0) {
+            discountPercentage = 0.05e18;
+        } else if (_tier == 1) {
+            discountPercentage = 0.1e18;
+        } else {
+            discountPercentage = 0.15e18;
+        }
+        (uint256 fee,) = Position.calculateFee(
+            tradeStorage, 5000e30, cache.collateralDelta, cache.priceMultiplier, cache.priceDivider
+        );
+        uint256 affiliateRebate = (fee.percentage(discountPercentage)) - (fee.percentage(discountPercentage) / 2);
 
-//         // set the referral code for the user
-//         vm.prank(USER);
-//         referralStorage.setTraderReferralCodeByUser(code);
+        assertEq(
+            IERC20(cache.collateralToken).balanceOf(address(referralStorage)),
+            affiliateRebate,
+            "Invalid Referral Balance"
+        );
 
-//         (uint256 feeWithReferralCode,,) = Referral.applyFeeDiscount(referralStorage, USER, fee);
+        // Check the affiliate rebate is correct
+        uint256 claimableRewards = referralStorage.getClaimableAffiliateRewards(OWNER, _isLong);
+        assertEq(claimableRewards, affiliateRebate, "Invalid Rebate");
 
-//         assertGt(feeWithoutReferralCode, feeWithReferralCode);
-//     }
+        // Try claiming the rewards
+        uint256 balBeforeClaim = IERC20(cache.collateralToken).balanceOf(OWNER);
+        vm.prank(OWNER);
+        referralStorage.claimAffiliateRewards();
 
-//     /**
-//      * audit - What happened to the 4 wei
-//      *     - Why is the user not receiving their funds
-//      */
-//     function testReceivingReferralRewardsFromAnAffiliateAccount() public setUpMarkets {
-//         // register an affiliate code
-//         bytes32 code = keccak256(abi.encode("CODE"));
-//         vm.prank(OWNER);
-//         referralStorage.registerCode(code);
-//         // set the referral code for the user
-//         vm.prank(USER);
-//         referralStorage.setTraderReferralCodeByUser(code);
-//         // open a position from the user with the fee discount applied
-//         Position.Input memory input = Position.Input({
-//             assetId: ethAssetId,
-//             collateralToken: weth,
-//             collateralDelta: 0.5 ether,
-//             sizeDelta: 10_000e30,
-//             limitPrice: 0,
-//             maxSlippage: 0.4e30,
-//             executionFee: 0.01 ether,
-//             isLong: true,
-//             isLimit: false,
-//             isIncrease: true,
-//             reverseWrap: true,
-//             conditionals: Position.Conditionals({
-//                 stopLossSet: false,
-//                 takeProfitSet: false,
-//                 stopLossPrice: 0,
-//                 takeProfitPrice: 0,
-//                 stopLossPercentage: 0,
-//                 takeProfitPercentage: 0
-//             })
-//         });
-//         vm.prank(USER);
-//         router.createPositionRequest{value: 0.51 ether}(input);
-//         // execute the position
-//         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-//         vm.prank(OWNER);
-//         positionManager.executePosition{value: 0.0001 ether}(market, orderKey, OWNER);
-//         // check and claim the affiliate rewards from the owner
-//         assertGt(referralStorage.getClaimableAffiliateRewards(OWNER, true), 0, "Owner should have claimable rewards");
-//         uint256 balBeforeClaim = WETH(weth).balanceOf(OWNER);
-//         vm.prank(OWNER);
-//         referralStorage.claimAffiliateRewards();
-//         assertEq(referralStorage.getClaimableAffiliateRewards(OWNER, true), 0, "Owner should have no claimable rewards");
-//         assertGt(WETH(weth).balanceOf(OWNER), balBeforeClaim, "Owner should have received rewards");
-//     }
-
-//     function testIfAPositionRequestIsCancelledAffiliateRewardsCantbeClaimed() public setUpMarkets {
-//         // register an affiliate code
-//         bytes32 code = keccak256(abi.encode("CODE"));
-//         vm.prank(OWNER);
-//         referralStorage.registerCode(code);
-//         // set the referral code for the user
-//         vm.prank(USER);
-//         referralStorage.setTraderReferralCodeByUser(code);
-//         // open a position from the user with the fee discount applied
-//         Position.Input memory input = Position.Input({
-//             assetId: ethAssetId,
-//             collateralToken: weth,
-//             collateralDelta: 0.5 ether,
-//             sizeDelta: 10_000e30,
-//             limitPrice: 0,
-//             maxSlippage: 0.4e30,
-//             executionFee: 0.01 ether,
-//             isLong: true,
-//             isLimit: false,
-//             isIncrease: true,
-//             reverseWrap: true,
-//             conditionals: Position.Conditionals({
-//                 stopLossSet: false,
-//                 takeProfitSet: false,
-//                 stopLossPrice: 0,
-//                 takeProfitPrice: 0,
-//                 stopLossPercentage: 0,
-//                 takeProfitPercentage: 0
-//             })
-//         });
-//         vm.prank(USER);
-//         router.createPositionRequest{value: 0.51 ether}(input);
-//         // execute the position
-//         bytes32 orderKey = tradeStorage.getOrderAtIndex(0, false);
-//         // check and claim the affiliate rewards from the owner
-//         vm.prank(OWNER);
-//         positionManager.cancelOrderRequest(market, orderKey, false);
-//         assertEq(referralStorage.getClaimableAffiliateRewards(OWNER, true), 0);
-//     }
-// }
+        // Check storage has reset and owner has received funds
+        uint256 balAfterClaim = IERC20(cache.collateralToken).balanceOf(OWNER);
+        assertEq(balAfterClaim, balBeforeClaim + affiliateRebate, "Invalid Claimed Rebate");
+        assertEq(referralStorage.getClaimableAffiliateRewards(OWNER, _isLong), 0, "Invalid Claimed Rebate");
+    }
+}

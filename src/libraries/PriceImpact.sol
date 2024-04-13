@@ -20,7 +20,7 @@ library PriceImpact {
 
     error PriceImpact_InvalidTotalImpact(int256 totalImpact);
     error PriceImpact_SizeDeltaIsZero();
-    error PriceImpact_NoAvailableLiquidity();
+    error PriceImpact_InsufficientLiquidity();
     error PriceImpact_InvalidState();
     error PriceImpact_SlippageExceedsMax();
     error PriceImpact_InvalidDecrease();
@@ -39,6 +39,7 @@ library PriceImpact {
         int256 priceImpactUsd;
         int256 oiPercentage;
         int256 availableOi;
+        int256 sizeDeltaUsd;
     }
 
     /**
@@ -59,29 +60,40 @@ library PriceImpact {
         state.longOi = MarketUtils.getOpenInterest(market, _request.input.ticker, true);
         state.shortOi = MarketUtils.getOpenInterest(market, _request.input.ticker, false);
         // Used to calculate the impact on available liquidity
-        state.availableOi = MarketUtils.getTotalAvailableOiUsd(
-            market,
-            _request.input.ticker,
-            _prices.indexPrice,
-            _prices.longMarketTokenPrice,
-            _prices.shortMarketTokenPrice,
-            _prices.indexBaseUnit
-        ).toInt256();
-        if (state.availableOi == 0) revert PriceImpact_NoAvailableLiquidity();
+        if (_request.input.isLong) {
+            state.availableOi = MarketUtils.getAvailableOiUsd(
+                market,
+                _request.input.ticker,
+                _prices.indexPrice,
+                _prices.longMarketTokenPrice,
+                _prices.indexBaseUnit,
+                true
+            ).toInt256();
+        } else {
+            state.availableOi = MarketUtils.getAvailableOiUsd(
+                market,
+                _request.input.ticker,
+                _prices.indexPrice,
+                _prices.shortMarketTokenPrice,
+                _prices.indexBaseUnit,
+                false
+            ).toInt256();
+        }
 
         state.initialTotalOi = state.longOi + state.shortOi;
 
-        int256 sizeDeltaUsd;
+        state.initialSkew = state.longOi.diff(state.shortOi);
         if (_request.input.isIncrease) {
-            sizeDeltaUsd = _request.input.sizeDelta.toInt256();
+            if (_request.input.sizeDelta > state.availableOi.toUint256()) revert PriceImpact_InsufficientLiquidity();
+            state.sizeDeltaUsd = _request.input.sizeDelta.toInt256();
             state.updatedTotalOi = state.initialTotalOi + _request.input.sizeDelta;
+            _request.input.isLong ? state.longOi += _request.input.sizeDelta : state.shortOi += _request.input.sizeDelta;
         } else {
             if (_request.input.sizeDelta > state.initialTotalOi) revert PriceImpact_InvalidDecrease();
-            sizeDeltaUsd = -_request.input.sizeDelta.toInt256();
+            state.sizeDeltaUsd = -_request.input.sizeDelta.toInt256();
             state.updatedTotalOi = state.initialTotalOi - _request.input.sizeDelta;
+            _request.input.isLong ? state.longOi -= _request.input.sizeDelta : state.shortOi -= _request.input.sizeDelta;
         }
-        state.initialSkew = state.longOi.diff(state.shortOi);
-        _request.input.isLong ? state.longOi += _request.input.sizeDelta : state.shortOi += _request.input.sizeDelta;
         state.updatedSkew = state.longOi.diff(state.shortOi);
 
         // Compare the MSBs to determine whether a skew flip has occurred
@@ -94,25 +106,27 @@ library PriceImpact {
              */
             // Calculate positive impact before the sign flips
             int256 positiveImpact = _calculateImpact(
-                sizeDeltaUsd,
+                state.sizeDeltaUsd,
                 0,
                 state.initialSkew,
                 state.impact.positiveSkewScalar,
                 state.impact.positiveLiquidityScalar,
                 state.initialTotalOi,
                 state.updatedTotalOi,
-                state.availableOi
+                state.availableOi,
+                _request.input.isIncrease
             );
             // Calculate negative impact after the sign flips
             int256 negativeImpact = _calculateImpact(
-                sizeDeltaUsd,
+                state.sizeDeltaUsd,
                 state.updatedSkew,
                 0,
                 state.impact.negativeSkewScalar,
                 state.impact.negativeLiquidityScalar,
                 state.initialTotalOi,
                 state.updatedTotalOi,
-                state.availableOi
+                state.availableOi,
+                _request.input.isIncrease
             );
             // priceImpactUsd = positive expression - the negative expression
             priceImpactUsd = positiveImpact - negativeImpact;
@@ -134,14 +148,15 @@ library PriceImpact {
             }
             // Calculate the impact within bounds
             priceImpactUsd = _calculateImpact(
-                sizeDeltaUsd,
+                state.sizeDeltaUsd,
                 state.updatedSkew,
                 state.initialSkew,
                 skewScalar,
                 liquidityScalar,
                 state.initialTotalOi,
                 state.updatedTotalOi,
-                state.availableOi
+                state.availableOi,
+                _request.input.isIncrease
             );
         }
 
@@ -174,7 +189,8 @@ library PriceImpact {
         int256 _liquidityScalar,
         uint256 _initialTotalOi,
         uint256 _updatedTotalOi,
-        int256 _availableOi
+        int256 _availableOi,
+        bool _isIncrease
     ) private pure returns (int256 priceImpactUsd) {
         /**
          * If initialTotalOi is 0, the (initialSkew/initialTotalOi) term is cancelled out.
@@ -186,14 +202,22 @@ library PriceImpact {
             : mulDivSigned(_initialSkew, _skewScalar, _initialTotalOi.toInt256())
                 - mulDivSigned(_updatedSkew, _skewScalar, _updatedTotalOi.toInt256());
 
-        if (_sizeDeltaUsd > _availableOi) revert PriceImpact_InvalidState();
-        int256 liquidityFactor = mulDivSigned(_sizeDeltaUsd, _liquidityScalar, _availableOi);
+        /**
+         * If position is a decrease, the liquidity factor can be ignored, as the
+         * available open interest isn't a limiting factor.
+         */
+        if (_isIncrease) {
+            if (_sizeDeltaUsd > _availableOi) revert PriceImpact_InvalidState();
+            int256 liquidityFactor = mulDivSigned(_sizeDeltaUsd, _liquidityScalar, _availableOi);
 
-        // Calculates the cumulative impact on both skew, and liquidity as a percentage.
-        int256 cumulativeImpact = mulDivSigned(skewFactor, liquidityFactor, SIGNED_PRICE_PRECISION);
+            // Calculates the cumulative impact on both skew, and liquidity as a percentage.
+            int256 cumulativeImpact = mulDivSigned(skewFactor, liquidityFactor, SIGNED_PRICE_PRECISION);
 
-        // Calculate the Price Impact
-        priceImpactUsd = mulDivSigned(_sizeDeltaUsd, cumulativeImpact, SIGNED_PRICE_PRECISION);
+            // Calculate the Price Impact
+            priceImpactUsd = mulDivSigned(_sizeDeltaUsd, cumulativeImpact, SIGNED_PRICE_PRECISION);
+        } else {
+            priceImpactUsd = mulDivSigned(_sizeDeltaUsd, skewFactor, SIGNED_PRICE_PRECISION);
+        }
     }
 
     function _calculateImpactedPrice(uint256 _sizeDeltaUsd, uint256 _indexPrice, int256 _priceImpactUsd, bool _isLong)
@@ -203,6 +227,7 @@ library PriceImpact {
     {
         // Get the price impact as a percentage
         uint256 percentageImpact = PRICE_PRECISION.percentage(_priceImpactUsd.abs(), _sizeDeltaUsd);
+
         // Impact the price by the same percentage
         uint256 impactToPrice = _indexPrice.percentage(percentageImpact, PRICE_PRECISION);
 
@@ -239,9 +264,9 @@ library PriceImpact {
     }
 
     function _checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) private pure {
-        uint256 impactDelta =
-            _signedPrice > _impactedPrice ? _signedPrice - _impactedPrice : _impactedPrice - _signedPrice;
+        uint256 impactDelta = _signedPrice.delta(_impactedPrice);
         uint256 slippage = PRICE_PRECISION.percentage(impactDelta, _signedPrice);
+
         if (slippage > _maxSlippage) {
             revert PriceImpact_SlippageExceedsMax();
         }

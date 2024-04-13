@@ -1,428 +1,431 @@
-// // SPDX-License-Identifier: MIT
-// pragma solidity 0.8.23;
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
 
-// import {Test, console, console2, stdStorage, StdStorage} from "forge-std/Test.sol";
-// import {Deploy} from "../../../script/Deploy.s.sol";
-// import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-// import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
-// import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-// import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
-// import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-// import {PositionManager} from "../../../src/router/PositionManager.sol";
-// import {Router} from "../../../src/router/Router.sol";
-// import {WETH} from "../../../src/tokens/WETH.sol";
-// import {Oracle} from "../../../src/oracle/Oracle.sol";
-// import {MockUSDC} from "../../mocks/MockUSDC.sol";
-// import {Position} from "../../../src/positions/Position.sol";
-// import {Market, IMarket} from "../../../src/markets/Market.sol";
-// import {Gas} from "../../../src/libraries/Gas.sol";
-// import {Funding} from "../../../src/libraries/Funding.sol";
-// import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
-// import {Borrowing} from "../../../src/libraries/Borrowing.sol";
-// import {Execution} from "../../../src/positions/Execution.sol";
-// import {mulDiv} from "@prb/math/Common.sol";
-// import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
+import {Deploy} from "../../../script/Deploy.s.sol";
+import {RoleStorage} from "../../../src/access/RoleStorage.sol";
+import {Market, IMarket, IMarketToken} from "../../../src/markets/Market.sol";
+import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
+import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
+import {PositionManager} from "../../../src/router/PositionManager.sol";
+import {Router} from "../../../src/router/Router.sol";
+import {WETH} from "../../../src/tokens/WETH.sol";
+import {Oracle} from "../../../src/oracle/Oracle.sol";
+import {MockUSDC} from "../../mocks/MockUSDC.sol";
+import {Position} from "../../../src/positions/Position.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
+import {RewardTracker} from "../../../src/rewards/RewardTracker.sol";
+import {LiquidityLocker} from "../../../src/rewards/LiquidityLocker.sol";
+import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
+import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
+import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
+import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
+import {MathUtils} from "../../../src/libraries/MathUtils.sol";
+import {Referral} from "../../../src/referrals/Referral.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Execution} from "../../../src/positions/Execution.sol";
+import {Funding} from "../../../src/libraries/Funding.sol";
+import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 
-// contract TestBorrowing is Test {
-//     using stdStorage for StdStorage;
+contract TestBorrowing is Test {
+    using MathUtils for uint256;
 
-//     RoleStorage roleStorage;
+    RoleStorage roleStorage;
 
-//     MarketFactory marketFactory;
-//     IPriceFeed priceFeed; // Deployed in Helper Config
-//     ITradeStorage tradeStorage;
-//     ReferralStorage referralStorage;
-//     PositionManager positionManager;
-//     Router router;
-//     address OWNER;
-//     Market market;
-//     address feeDistributor;
+    MarketFactory marketFactory;
+    MockPriceFeed priceFeed; // Deployed in Helper Config
+    ITradeStorage tradeStorage;
+    ReferralStorage referralStorage;
+    PositionManager positionManager;
+    Router router;
+    address OWNER;
+    Market market;
+    FeeDistributor feeDistributor;
+    TransferStakedTokens transferStakedTokens;
+    RewardTracker rewardTracker;
+    LiquidityLocker liquidityLocker;
 
-//     address weth;
-//     address usdc;
-//     bytes32 ethPriceId;
-//     bytes32 usdcPriceId;
+    address weth;
+    address usdc;
+    address link;
 
-//     bytes[] tokenUpdateData;
-//     uint256[] allocations;
-//     bytes32[] assetIds;
-//     uint256[] compactedPrices;
+    string ethTicker = "ETH";
+    string usdcTicker = "USDC";
+    string[] tickers;
 
-//     address USER = makeAddr("USER");
+    address USER = makeAddr("USER");
+    address USER1 = makeAddr("USER1");
+    address USER2 = makeAddr("USER2");
 
-//     bytes32 ethAssetId = keccak256(abi.encode("ETH"));
-//     bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
+    IPriceFeed.Price ethPrices;
+    IPriceFeed.Price usdcPrices;
+    IPriceFeed.Price[] prices;
 
-//     function setUp() public {
-//         Deploy deploy = new Deploy();
-//         Deploy.Contracts memory contracts = deploy.run();
-//         roleStorage = contracts.roleStorage;
+    function setUp() public {
+        Deploy deploy = new Deploy();
+        Deploy.Contracts memory contracts = deploy.run();
+        roleStorage = contracts.roleStorage;
 
-//         marketFactory = contracts.marketFactory;
-//         priceFeed = contracts.priceFeed;
-//         referralStorage = contracts.referralStorage;
-//         positionManager = contracts.positionManager;
-//         router = contracts.router;
-//         feeDistributor = address(contracts.feeDistributor);
-//         OWNER = contracts.owner;
-//         (weth, usdc, ethPriceId, usdcPriceId,,) = deploy.activeNetworkConfig();
-//         // Pass some time so block timestamp isn't 0
-//         vm.warp(block.timestamp + 1 days);
-//         vm.roll(block.number + 1);
-//         assetIds.push(ethAssetId);
-//         assetIds.push(usdcAssetId);
-//     }
+        marketFactory = contracts.marketFactory;
+        priceFeed = MockPriceFeed(address(contracts.priceFeed));
+        referralStorage = contracts.referralStorage;
+        positionManager = contracts.positionManager;
+        router = contracts.router;
+        feeDistributor = contracts.feeDistributor;
+        transferStakedTokens = contracts.transferStakedTokens;
+        OWNER = contracts.owner;
+        (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
+        tickers.push(ethTicker);
+        tickers.push(usdcTicker);
+        // Pass some time so block timestamp isn't 0
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+    }
 
-//     receive() external payable {}
+    receive() external payable {}
 
-//     modifier setUpMarkets() {
-//         vm.deal(OWNER, 1_000_000 ether);
-//         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
-//         vm.deal(USER, 1_000_000 ether);
-//         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
-//         vm.startPrank(OWNER);
-//         WETH(weth).deposit{value: 50 ether}();
+    modifier setUpMarkets() {
+        vm.deal(OWNER, 2_000_000 ether);
+        MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
+        vm.deal(USER, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER, 1_000_000_000e6);
+        vm.deal(USER1, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER1, 1_000_000_000e6);
+        vm.deal(USER2, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER2, 1_000_000_000e6);
+        vm.prank(USER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER1);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER2);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.startPrank(OWNER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        IMarketFactory.DeployRequest memory request = IMarketFactory.DeployRequest({
+            isMultiAsset: false,
+            owner: OWNER,
+            indexTokenTicker: "ETH",
+            marketTokenName: "BRRR",
+            marketTokenSymbol: "BRRR",
+            baseUnit: 1e18
+        });
+        marketFactory.requestNewMarket{value: 0.01 ether}(request);
+        market = Market(
+            payable(
+                marketFactory.executeNewMarket(
+                    marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker)
+                )
+            )
+        );
+        vm.stopPrank();
+        tradeStorage = ITradeStorage(market.tradeStorage());
+        rewardTracker = RewardTracker(address(market.rewardTracker()));
+        liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
+        // Set Prices
+        ethPrices =
+            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 3000e30, max: 3000e30});
+        usdcPrices = IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 1e30, med: 1e30, max: 1e30});
+        prices.push(ethPrices);
+        prices.push(usdcPrices);
+        bytes32 priceRequestId = keccak256(abi.encode("PRICE REQUEST"));
+        bytes32 pnlRequestId = keccak256(abi.encode("PNL REQUEST"));
+        priceFeed.updatePrices(priceRequestId, tickers, prices);
+        priceFeed.updatePnl(market, 0, pnlRequestId);
+        // Call the deposit function with sufficient gas
+        vm.prank(OWNER);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
+        vm.prank(OWNER);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
-//         IMarketFactory.MarketRequest memory request = IMarketFactory.MarketRequest({
-//             owner: OWNER,
-//             indexTokenTicker: "ETH",
-//             marketTokenName: "BRRR",
-//             marketTokenSymbol: "BRRR",
-//             baseUnit: 1e18
-//         });
-//         marketFactory.requestNewMarket{value: 0.01 ether}(request);
-//         // Set primary prices for ref price
-//         // priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
-//         // Clear them
-//         // priceFeed.clearPrimaryPrices();
-//         marketFactory.executeNewMarket(marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker));
-//         vm.stopPrank();
-//         // market = Market(payable(marketFactory.tokenToMarket(ethAssetId)));
-//         tradeStorage = ITradeStorage(market.tradeStorage());
-//         // Call the deposit function with sufficient gas
-//         vm.prank(OWNER);
-//         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-//         vm.prank(OWNER);
-//         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        vm.stopPrank();
+        _;
+    }
 
-//         vm.startPrank(OWNER);
-//         MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-//         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
-//         vm.stopPrank();
-//         vm.startPrank(OWNER);
-//         allocations.push(10000 << 240);
+    function testCalculateBorrowFeesSinceUpdateForDifferentDistances(uint256 _distance) public {
+        _distance = bound(_distance, 1, 3650000 days); // 10000 years
+        uint256 rate = 0.001e18;
+        vm.warp(block.timestamp + _distance);
+        vm.roll(block.number + 1);
+        uint256 lastUpdate = block.timestamp - _distance;
+        uint256 computedVal = Borrowing.calculateFeesSinceUpdate(rate, lastUpdate);
+        assertEq(computedVal, (rate * _distance) / 86400, "Unmatched Values");
+    }
 
-//         // assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
-//         vm.stopPrank();
-//         _;
-//     }
+    function testCalculatingTotalFeesOwedInCollateralTokensNoExistingCumulative(uint256 _collateral, uint256 _leverage)
+        public
+        setUpMarkets
+    {
+        Execution.Prices memory borrowPrices;
+        // Open a position to alter the borrowing rate
+        Position.Input memory input = Position.Input({
+            ticker: ethTicker,
+            collateralToken: weth,
+            collateralDelta: 0.5 ether,
+            sizeDelta: 10_000e30,
+            limitPrice: 0,
+            maxSlippage: 0.4e30,
+            executionFee: 0.01 ether,
+            isLong: true,
+            isLimit: false,
+            isIncrease: true,
+            reverseWrap: true,
+            triggerAbove: false
+        });
+        vm.prank(USER);
+        router.createPositionRequest{value: 0.51 ether}(market, input, Position.Conditionals(false, false, 0, 0, 0, 0));
 
-//     function testCalculateBorrowFeesSinceUpdateForDifferentDistances(uint256 _distance) public {
-//         _distance = bound(_distance, 1, 3650000 days); // 10000 years
-//         uint256 rate = 0.001e18;
-//         vm.warp(block.timestamp + _distance);
-//         vm.roll(block.number + 1);
-//         uint256 lastUpdate = block.timestamp - _distance;
-//         uint256 computedVal = Borrowing.calculateFeesSinceUpdate(rate, lastUpdate);
-//         assertEq(computedVal, (rate * _distance) / 86400, "Unmatched Values");
-//     }
+        vm.prank(OWNER);
+        positionManager.executePosition{value: 0.01 ether}(
+            market, tradeStorage.getOrderAtIndex(0, false), bytes32(0), OWNER
+        );
+        // Get the current rate
 
-//     function testCalculatingTotalFeesOwedInCollateralTokensNoExistingCumulative(uint256 _collateral, uint256 _leverage)
-//         public
-//         setUpMarkets
-//     {
-//         Execution.State memory state;
-//         // Open a position to alter the borrowing rate
-//         Position.Input memory input = Position.Input({
-//             assetId: ethAssetId,
-//             collateralToken: weth,
-//             collateralDelta: 0.5 ether,
-//             sizeDelta: 10_000e30,
-//             limitPrice: 0,
-//             maxSlippage: 0.4e30,
-//             executionFee: 0.01 ether,
-//             isLong: true,
-//             isLimit: false,
-//             isIncrease: true,
-//             reverseWrap: true,
-//             conditionals: Position.Conditionals({
-//                 stopLossSet: false,
-//                 takeProfitSet: false,
-//                 stopLossPrice: 0,
-//                 takeProfitPrice: 0,
-//                 stopLossPercentage: 0,
-//                 takeProfitPercentage: 0
-//             })
-//         });
-//         vm.prank(USER);
-//         router.createPositionRequest{value: 0.51 ether}(input);
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
 
-//         vm.prank(OWNER);
-//         positionManager.executePosition{value: 0.01 ether}(market, tradeStorage.getOrderAtIndex(0, false), OWNER);
-//         // Get the current rate
+        // Create an arbitrary position
+        _collateral = bound(_collateral, 1e30, 300_000_000e30);
+        _leverage = bound(_leverage, 1, 100);
+        uint256 positionSize = (_collateral * _leverage) / 1e30;
 
-//         vm.warp(block.timestamp + 1 days);
-//         vm.roll(block.number + 1);
+        Position.Data memory position = Position.Data(
+            ethTicker,
+            USER,
+            weth,
+            true,
+            _collateral,
+            positionSize,
+            3000e30,
+            uint64(block.timestamp),
+            Position.FundingParams(MarketUtils.getFundingAccrued(market, ethTicker), 0),
+            Position.BorrowingParams(0, 0, 0),
+            bytes32(0),
+            bytes32(0)
+        );
 
-//         // Create an arbitrary position
-//         _collateral = bound(_collateral, 1, 100_000 ether);
-//         _leverage = bound(_leverage, 1, 100);
-//         uint256 positionSize = (_collateral * _leverage) * 2500e30 / 1e18;
+        // state necessary Variables
+        borrowPrices.indexPrice = 3000e30;
+        borrowPrices.indexBaseUnit = 1e18;
+        borrowPrices.collateralBaseUnit = 1e18;
+        borrowPrices.collateralPrice = 3000e30;
 
-//         Position.Data memory position = Position.Data(
-//             ethAssetId,
-//             USER,
-//             weth,
-//             _collateral,
-//             positionSize,
-//             2500e30,
-//             block.timestamp,
-//             true,
-//             Position.FundingParams(MarketUtils.getFundingAccrued(market, ethAssetId), 0),
-//             Position.BorrowingParams(0, 0, 0),
-//             bytes32(0),
-//             bytes32(0)
-//         );
+        // Calculate Fees Owed
+        uint256 feesOwed = Position.getTotalBorrowFees(market, position, borrowPrices);
+        // Index Tokens == Collateral Tokens
+        uint256 expectedFees = mulDiv(
+            ((MarketUtils.getBorrowingRate(market, ethTicker, true) * 1 days) * positionSize) / 1e18,
+            borrowPrices.collateralBaseUnit,
+            borrowPrices.collateralPrice
+        );
+        assertEq(feesOwed, expectedFees);
+    }
 
-//         // state necessary Variables
-//         state.indexPrice = 2500e30;
-//         state.indexBaseUnit = 1e18;
-//         state.collateralBaseUnit = 1e18;
-//         state.collateralPrice = 2500e30;
+    function testCalculatingTotalFeesOwedInCollateralTokensWithExistingCumulative(
+        uint256 _collateral,
+        uint256 _leverage
+    ) public setUpMarkets {
+        Execution.Prices memory borrowPrices;
 
-//         // Calculate Fees Owed
-//         uint256 feesOwed = Position.getTotalBorrowFees(market, position, state);
-//         // Index Tokens == Collateral Tokens
-//         uint256 expectedFees = mulDiv(
-//             ((MarketUtils.getBorrowingRate(market, ethAssetId, true) * 1 days) * positionSize) / 1e18,
-//             state.collateralBaseUnit,
-//             state.collateralPrice
-//         );
-//         assertEq(feesOwed, expectedFees);
-//     }
+        // Create an arbitrary position
+        _collateral = bound(_collateral, 1, 100_000 ether);
+        _leverage = bound(_leverage, 1, 100);
+        uint256 positionSize = (_collateral * _leverage) * 3000e30 / 1e18;
+        Position.Data memory position = Position.Data(
+            ethTicker,
+            USER,
+            weth,
+            true,
+            _collateral,
+            positionSize,
+            3000e30,
+            uint64(block.timestamp),
+            Position.FundingParams(MarketUtils.getFundingAccrued(market, ethTicker), 0),
+            Position.BorrowingParams(0, 1e18, 0), // Set entry cumulative to 1e18
+            bytes32(0),
+            bytes32(0)
+        );
 
-//     function testCalculatingTotalFeesOwedInCollateralTokensWithExistingCumulative(
-//         uint256 _collateral,
-//         uint256 _leverage
-//     ) public setUpMarkets {
-//         Execution.State memory state;
+        // Amount the user should be charged for
+        uint256 bonusCumulative = 0.000003e18;
 
-//         // Create an arbitrary position
-//         _collateral = bound(_collateral, 1, 100_000 ether);
-//         _leverage = bound(_leverage, 1, 100);
-//         uint256 positionSize = (_collateral * _leverage) * 2500e30 / 1e18;
-//         Position.Data memory position = Position.Data(
-//             ethAssetId,
-//             USER,
-//             weth,
-//             _collateral,
-//             positionSize,
-//             2500e30,
-//             block.timestamp,
-//             true,
-//             Position.FundingParams(MarketUtils.getFundingAccrued(market, ethAssetId), 0),
-//             Position.BorrowingParams(0, 1e18, 0), // Set entry cumulative to 1e18
-//             bytes32(0),
-//             bytes32(0)
-//         );
+        // get market storage
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethTicker);
+        mockedMarketStorage.borrowing.longCumulativeBorrowFees = 1e18 + bonusCumulative;
 
-//         // Amount the user should be charged for
-//         uint256 bonusCumulative = 0.000003e18;
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getStorage.selector, ethTicker),
+            abi.encode(mockedMarketStorage) // Mock return value
+        );
 
-//         // get market storage
-//         IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
-//         mockedMarketStorage.borrowing.longCumulativeBorrowFees = 1e18 + bonusCumulative;
+        // state necessary Variables
+        borrowPrices.indexPrice = 3000e30;
+        borrowPrices.indexBaseUnit = 1e18;
+        borrowPrices.collateralBaseUnit = 1e18;
+        borrowPrices.collateralPrice = 3000e30;
 
-//         vm.mockCall(
-//             address(market),
-//             abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
-//             abi.encode(mockedMarketStorage) // Mock return value
-//         );
+        // Calculate Fees Owed
+        uint256 feesOwed = Position.getTotalBorrowFees(market, position, borrowPrices);
+        // Index Tokens == Collateral Tokens
+        uint256 expectedFees = mulDiv(bonusCumulative, positionSize, 1e18);
+        expectedFees = mulDiv(expectedFees, borrowPrices.collateralBaseUnit, borrowPrices.collateralPrice);
+        assertEq(feesOwed, expectedFees);
+    }
 
-//         // state necessary Variables
-//         state.indexPrice = 2500e30;
-//         state.indexBaseUnit = 1e18;
-//         state.collateralBaseUnit = 1e18;
-//         state.collateralPrice = 2500e30;
+    function testBorrowingRateCalculation(uint256 _openInterest, bool _isLong) public setUpMarkets {
+        uint256 collateralPrice = _isLong ? 3000e30 : 1e30;
+        uint256 collateralBaseUnit = _isLong ? 1e18 : 1e6;
+        uint256 maxOi = MarketUtils.getMaxOpenInterest(market, ethTicker, collateralPrice, collateralBaseUnit, _isLong);
+        _openInterest = bound(_openInterest, 0, maxOi);
 
-//         // Calculate Fees Owed
-//         uint256 feesOwed = Position.getTotalBorrowFees(market, position, state);
-//         // Index Tokens == Collateral Tokens
-//         uint256 expectedFees = mulDiv(bonusCumulative, positionSize, 1e18);
-//         expectedFees = mulDiv(expectedFees, state.collateralBaseUnit, state.collateralPrice);
-//         assertEq(feesOwed, expectedFees);
-//     }
+        // Mock the open interest and available open interest on the market
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethTicker);
+        if (_isLong) {
+            mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
+        } else {
+            mockedMarketStorage.openInterest.shortOpenInterest = _openInterest;
+        }
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getStorage.selector, ethTicker),
+            abi.encode(mockedMarketStorage) // Mock return value
+        );
+        // calculate the expected rate
+        console2.log("Borrow Scale: ", market.borrowScale());
+        console2.log("Open Interest: ", _openInterest);
+        console2.log("Max Open Interest: ", maxOi);
+        uint256 expectedRate = market.borrowScale().percentage(_openInterest, maxOi);
+        // compare with the actual rate
+        uint256 actualRate = Borrowing.calculateRate(market, ethTicker, collateralPrice, collateralBaseUnit, _isLong);
+        // Check off by 1 for round down
+        assertApproxEqAbs(actualRate, expectedRate, 1, "Unmatched Values");
+    }
 
-//     /**
-//      * function calculateRate(
-//      *     IMarket market,
-//      *     bytes32 _assetId,
-//      *     uint256 _collateralPrice,
-//      *     uint256 _collateralBaseUnit,
-//      *     bool _isLong
-//      * ) public view returns (uint256 borrowRatePerDay) {
-//      *     uint256 factor = mulDiv(
-//      *         MarketUtils.getOpenInterest(market, _assetId, _isLong),
-//      *         PRECISION,
-//      *         MarketUtils.getAvailableOiUsd(market, _assetId, _collateralPrice, _collateralBaseUnit, _isLong)
-//      *     );
-//      *     borrowRatePerDay = mulDiv(market.borrowScale(), factor, PRECISION);
-//      * }
-//      */
-//     function testBorrowingRateCalculation(uint256 _openInterest, uint256 _poolBalance, bool _isLong)
-//         public
-//         setUpMarkets
-//     {
-//         vm.assume(_poolBalance < 100_000 ether);
-//         uint256 collateralPrice = _isLong ? 2500e30 : 1e30;
-//         uint256 collateralBaseUnit = _isLong ? 1e18 : 1e6;
-//         uint256 maxOi = mulDiv(mulDiv(_poolBalance, collateralPrice, collateralBaseUnit), 8, 10);
-//         vm.assume(_openInterest < maxOi);
+    function testGetNextAverageCumulativeCalculationLong(
+        uint256 _lastCumulative,
+        uint256 _prevAverageCumulative,
+        uint256 _openInterest,
+        int256 _sizeDelta,
+        uint256 _borrowingRate
+    ) public setUpMarkets {
+        // bound inputs
+        vm.assume(_lastCumulative < 1000e18);
+        vm.assume(_prevAverageCumulative < 1000e18);
+        vm.assume(_openInterest < 1_000_000_000_000e30);
+        _sizeDelta = bound(_sizeDelta, -int256(_openInterest), int256(_openInterest));
+        _borrowingRate = bound(_borrowingRate, 0, 0.1e18);
+        // Get Market storage
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethTicker);
+        mockedMarketStorage.borrowing.longCumulativeBorrowFees = _lastCumulative;
+        mockedMarketStorage.borrowing.weightedAvgCumulativeLong = _prevAverageCumulative;
+        mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
+        mockedMarketStorage.borrowing.longBorrowingRate = _borrowingRate;
 
-//         // Mock the open interest and available open interest on the market
-//         IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
-//         if (_isLong) {
-//             mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
-//         } else {
-//             mockedMarketStorage.openInterest.shortOpenInterest = _openInterest;
-//         }
-//         vm.mockCall(
-//             address(market),
-//             abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
-//             abi.encode(mockedMarketStorage) // Mock return value
-//         );
-//         vm.mockCall(
-//             address(market),
-//             abi.encodeWithSelector(market.totalAvailableLiquidity.selector, _isLong),
-//             abi.encode(_poolBalance)
-//         );
-//         // calculate the expected rate
-//         uint256 expectedRate = mulDiv(market.borrowScale(), _openInterest, maxOi);
-//         // compare with the actual rate
-//         uint256 actualRate = Borrowing.calculateRate(market, ethAssetId, collateralPrice, collateralBaseUnit, _isLong);
-//         // Check off by 1 for round down
-//         assertApproxEqAbs(actualRate, expectedRate, 1, "Unmatched Values");
-//     }
+        // mock the rate
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getStorage.selector, ethTicker),
+            abi.encode(mockedMarketStorage)
+        );
 
-//     function testGetNextAverageCumulativeCalculationLong(
-//         uint256 _lastCumulative,
-//         uint256 _prevAverageCumulative,
-//         uint256 _openInterest,
-//         int256 _sizeDelta,
-//         uint256 _borrowingRate
-//     ) public setUpMarkets {
-//         // bound inputs
-//         vm.assume(_lastCumulative < 1000e18);
-//         vm.assume(_prevAverageCumulative < 1000e18);
-//         vm.assume(_openInterest < 1_000_000_000_000e30);
-//         _sizeDelta = bound(_sizeDelta, -int256(_openInterest), int256(_openInterest));
-//         _borrowingRate = bound(_borrowingRate, 0, 0.1e18);
-//         // Get Market storage
-//         IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
-//         mockedMarketStorage.borrowing.longCumulativeBorrowFees = _lastCumulative;
-//         mockedMarketStorage.borrowing.weightedAvgCumulativeLong = _prevAverageCumulative;
-//         mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
-//         mockedMarketStorage.borrowing.longBorrowingRate = _borrowingRate;
+        // Pass some time
+        vm.warp(block.timestamp + 1000 seconds);
+        vm.roll(block.number + 1);
+        // expected value
 
-//         // mock the rate
-//         vm.mockCall(
-//             address(market),
-//             abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
-//             abi.encode(mockedMarketStorage)
-//         );
+        uint256 ev = _calculateEv(mockedMarketStorage, _sizeDelta);
 
-//         // Pass some time
-//         vm.warp(block.timestamp + 1000 seconds);
-//         vm.roll(block.number + 1);
-//         // expected value
+        // test calculation value vs expected
+        uint256 nextAverageCumulative = Borrowing.getNextAverageCumulative(market, ethTicker, _sizeDelta, true);
+        // assert eq
+        assertEq(nextAverageCumulative, ev, "Unmatched Values");
+    }
 
-//         uint256 ev = _calculateEv(mockedMarketStorage, _sizeDelta);
+    function _calculateEv(IMarket.MarketStorage memory mockedMarketStorage, int256 _sizeDelta)
+        internal
+        pure
+        returns (uint256 ev)
+    {
+        uint256 currentCumulative = mockedMarketStorage.borrowing.longCumulativeBorrowFees
+            + (1000 * mockedMarketStorage.borrowing.longBorrowingRate);
+        uint256 absSizeDelta = _sizeDelta < 0 ? uint256(-_sizeDelta) : uint256(_sizeDelta);
+        if (
+            mockedMarketStorage.openInterest.longOpenInterest == 0
+                || mockedMarketStorage.borrowing.weightedAvgCumulativeLong == 0
+        ) {
+            ev = currentCumulative;
+        } else if (_sizeDelta < 0 && absSizeDelta == mockedMarketStorage.openInterest.longOpenInterest) {
+            ev = 0;
+        } else if (_sizeDelta < 0) {
+            ev = mockedMarketStorage.borrowing.weightedAvgCumulativeLong;
+        } else {
+            // If this point in execution is reached -> calculate the next average cumulative
+            // Get the percentage of the new position size relative to the total open interest
+            uint256 relativeSize = mulDiv(absSizeDelta, 1e18, mockedMarketStorage.openInterest.longOpenInterest);
+            // Calculate the new weighted average entry cumulative fee
+            ev = mulDiv(mockedMarketStorage.borrowing.weightedAvgCumulativeLong, 1e18 - relativeSize, 1e18)
+                + mulDiv(currentCumulative, relativeSize, 1e18);
+        }
+    }
 
-//         // test calculation value vs expected
-//         uint256 nextAverageCumulative = Borrowing.getNextAverageCumulative(market, ethAssetId, _sizeDelta, true);
-//         // assert eq
-//         assertEq(nextAverageCumulative, ev, "Unmatched Values");
-//     }
+    function testGettingTheTotalFeesOwedByAMarket(
+        uint256 _cumulativeFee,
+        uint256 _avgCumulativeFee,
+        uint256 _openInterest
+    ) public setUpMarkets {
+        vm.assume(_cumulativeFee < 1e30);
+        vm.assume(_avgCumulativeFee < _cumulativeFee);
+        vm.assume(_openInterest < 1_000_000_000_000e30);
+        // Get market storage
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethTicker);
+        mockedMarketStorage.borrowing.longCumulativeBorrowFees = _cumulativeFee;
+        mockedMarketStorage.borrowing.weightedAvgCumulativeLong = _avgCumulativeFee;
+        mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
+        // mock the previous cumulative
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getStorage.selector, ethTicker),
+            abi.encode(mockedMarketStorage) // Mock return value
+        );
+        // Assert Eq EV vs Actual
+        uint256 val = Borrowing.getTotalFeesOwedByMarket(market, ethTicker, true);
 
-//     function _calculateEv(IMarket.MarketStorage memory mockedMarketStorage, int256 _sizeDelta)
-//         internal
-//         pure
-//         returns (uint256 ev)
-//     {
-//         uint256 currentCumulative = mockedMarketStorage.borrowing.longCumulativeBorrowFees
-//             + (1000 * mockedMarketStorage.borrowing.longBorrowingRate);
-//         uint256 absSizeDelta = _sizeDelta < 0 ? uint256(-_sizeDelta) : uint256(_sizeDelta);
-//         if (
-//             mockedMarketStorage.openInterest.longOpenInterest == 0
-//                 || mockedMarketStorage.borrowing.weightedAvgCumulativeLong == 0
-//         ) {
-//             ev = currentCumulative;
-//         } else if (_sizeDelta < 0 && absSizeDelta == mockedMarketStorage.openInterest.longOpenInterest) {
-//             ev = 0;
-//         } else if (_sizeDelta < 0) {
-//             ev = mockedMarketStorage.borrowing.weightedAvgCumulativeLong;
-//         } else {
-//             // If this point in execution is reached -> calculate the next average cumulative
-//             // Get the percentage of the new position size relative to the total open interest
-//             uint256 relativeSize = mulDiv(absSizeDelta, 1e18, mockedMarketStorage.openInterest.longOpenInterest);
-//             // Calculate the new weighted average entry cumulative fee
-//             ev = mulDiv(mockedMarketStorage.borrowing.weightedAvgCumulativeLong, 1e18 - relativeSize, 1e18)
-//                 + mulDiv(currentCumulative, relativeSize, 1e18);
-//         }
-//     }
+        uint256 ev = mulDiv(_cumulativeFee - _avgCumulativeFee, _openInterest, 1e18);
 
-//     function testGettingTheTotalFeesOwedByAMarket(
-//         uint256 _cumulativeFee,
-//         uint256 _avgCumulativeFee,
-//         uint256 _openInterest
-//     ) public setUpMarkets {
-//         vm.assume(_cumulativeFee < 1e30);
-//         vm.assume(_avgCumulativeFee < _cumulativeFee);
-//         vm.assume(_openInterest < 1_000_000_000_000e30);
-//         // Get market storage
-//         IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
-//         mockedMarketStorage.borrowing.longCumulativeBorrowFees = _cumulativeFee;
-//         mockedMarketStorage.borrowing.weightedAvgCumulativeLong = _avgCumulativeFee;
-//         mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
-//         // mock the previous cumulative
-//         vm.mockCall(
-//             address(market),
-//             abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
-//             abi.encode(mockedMarketStorage) // Mock return value
-//         );
-//         // Assert Eq EV vs Actual
-//         uint256 val = Borrowing.getTotalFeesOwedByMarket(market, ethAssetId, true);
+        assertEq(val, ev, "Unmatched Values");
+    }
 
-//         uint256 ev = mulDiv(_cumulativeFee - _avgCumulativeFee, _openInterest, 1e18);
+    function testGettingTheTotalFeesOwedByMultipleMarketsReturnsTheSame(
+        uint256 _cumulativeFee,
+        uint256 _avgCumulativeFee,
+        uint256 _openInterest
+    ) public setUpMarkets {
+        vm.assume(_cumulativeFee < 1e30);
+        vm.assume(_avgCumulativeFee < _cumulativeFee);
+        vm.assume(_openInterest < 1_000_000_000_000e30);
+        // get market storage
+        IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethTicker);
+        mockedMarketStorage.borrowing.longCumulativeBorrowFees = _cumulativeFee;
+        mockedMarketStorage.borrowing.weightedAvgCumulativeLong = _avgCumulativeFee;
+        mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
+        // mock the previous cumulative
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getStorage.selector, ethTicker),
+            abi.encode(mockedMarketStorage) // Mock return value
+        );
+        // Assert Eq EV vs Actual
+        uint256 val = Borrowing.getTotalFeesOwedByMarkets(market, true);
 
-//         assertEq(val, ev, "Unmatched Values");
-//     }
+        uint256 ev = mulDiv(_cumulativeFee - _avgCumulativeFee, _openInterest, 1e18);
 
-//     function testGettingTheTotalFeesOwedByMultipleMarketsReturnsTheSame(
-//         uint256 _cumulativeFee,
-//         uint256 _avgCumulativeFee,
-//         uint256 _openInterest
-//     ) public setUpMarkets {
-//         vm.assume(_cumulativeFee < 1e30);
-//         vm.assume(_avgCumulativeFee < _cumulativeFee);
-//         vm.assume(_openInterest < 1_000_000_000_000e30);
-//         // get market storage
-//         IMarket.MarketStorage memory mockedMarketStorage = market.getStorage(ethAssetId);
-//         mockedMarketStorage.borrowing.longCumulativeBorrowFees = _cumulativeFee;
-//         mockedMarketStorage.borrowing.weightedAvgCumulativeLong = _avgCumulativeFee;
-//         mockedMarketStorage.openInterest.longOpenInterest = _openInterest;
-//         // mock the previous cumulative
-//         vm.mockCall(
-//             address(market),
-//             abi.encodeWithSelector(market.getStorage.selector, ethAssetId),
-//             abi.encode(mockedMarketStorage) // Mock return value
-//         );
-//         // Assert Eq EV vs Actual
-//         uint256 val = Borrowing.getTotalFeesOwedByMarkets(market, true);
-
-//         uint256 ev = mulDiv(_cumulativeFee - _avgCumulativeFee, _openInterest, 1e18);
-
-//         assertEq(val, ev, "Unmatched Values");
-//     }
-// }
+        assertEq(val, ev, "Unmatched Values");
+    }
+}

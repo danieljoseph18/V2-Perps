@@ -18,16 +18,18 @@ library Borrowing {
         IMarket market,
         IMarket.BorrowingValues memory borrowing,
         string calldata _ticker,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
         bool _isLong
     ) external view returns (IMarket.BorrowingValues memory) {
         if (_isLong) {
             borrowing.longCumulativeBorrowFees +=
                 calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.longBorrowingRate = calculateRate(market, _ticker, true);
+            borrowing.longBorrowingRate = calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, true);
         } else {
             borrowing.shortCumulativeBorrowFees +=
                 calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.shortBorrowingRate = calculateRate(market, _ticker, false);
+            borrowing.shortBorrowingRate = calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, false);
         }
 
         borrowing.lastBorrowUpdate = uint48(block.timestamp);
@@ -41,16 +43,25 @@ library Borrowing {
      * The calculation for the factor is simply (open interest usd / max open interest usd).
      * If OI is low, fee will be low, if OI is close to max, fee will be close to max.
      */
-    function calculateRate(IMarket market, string calldata _ticker, bool _isLong)
-        public
-        view
-        returns (uint256 borrowRatePerDay)
-    {
+    function calculateRate(
+        IMarket market,
+        string calldata _ticker,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) public view returns (uint256 borrowRatePerDay) {
         // Factor = (open interest usd / max open interest usd)
-        uint256 factor = MarketUtils.getOpenInterest(market, _ticker, _isLong).div(
-            MarketUtils.getMaxOpenInterest(market, _ticker, _isLong)
-        );
-        borrowRatePerDay = market.borrowScale().percentage(factor);
+        uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
+
+        uint256 maxOi = MarketUtils.getMaxOpenInterest(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+
+        uint256 factor = openInterest.div(maxOi);
+
+        borrowRatePerDay = market.borrowScale();
+        // Opposite case shouldn't be possible, so just return max rate if it does occur
+        if (openInterest < maxOi) {
+            borrowRatePerDay = borrowRatePerDay.percentage(factor);
+        }
     }
 
     function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) public view returns (uint256 fee) {

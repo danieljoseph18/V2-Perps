@@ -52,6 +52,7 @@ interface IPositionManager {
         address _collateralToken,
         uint256 _collateralDelta,
         uint256 _affiliateRebate,
-        uint256 _feeForExecutor
+        uint256 _feeForExecutor,
+        address _executor
     ) external;
 }

@@ -1,1016 +1,636 @@
-// // SPDX-License-Identifier: MIT
-// pragma solidity 0.8.23;
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
 
-// import {Test, console, console2} from "forge-std/Test.sol";
-// import {Deploy} from "../../../script/Deploy.s.sol";
-// import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-// import {Market, IMarket} from "../../../src/markets/Market.sol";
-// import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
-// import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-// import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
-// import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-// import {PositionManager} from "../../../src/router/PositionManager.sol";
-// import {Router} from "../../../src/router/Router.sol";
-// import {WETH} from "../../../src/tokens/WETH.sol";
-// import {Oracle} from "../../../src/oracle/Oracle.sol";
-// import {MockUSDC} from "../../mocks/MockUSDC.sol";
-// import {Position} from "../../../src/positions/Position.sol";
-// import {Gas} from "../../../src/libraries/Gas.sol";
-// import {Funding} from "../../../src/libraries/Funding.sol";
-// import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
-// import {Borrowing} from "../../../src/libraries/Borrowing.sol";
-// import {Execution} from "../../../src/positions/Execution.sol";
-// import {mulDiv} from "@prb/math/Common.sol";
-// import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-// import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
-// import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
+import {Deploy} from "../../../script/Deploy.s.sol";
+import {RoleStorage} from "../../../src/access/RoleStorage.sol";
+import {Market, IMarket, IMarketToken} from "../../../src/markets/Market.sol";
+import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
+import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
+import {PositionManager} from "../../../src/router/PositionManager.sol";
+import {Router} from "../../../src/router/Router.sol";
+import {WETH} from "../../../src/tokens/WETH.sol";
+import {Oracle} from "../../../src/oracle/Oracle.sol";
+import {MockUSDC} from "../../mocks/MockUSDC.sol";
+import {Position} from "../../../src/positions/Position.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
+import {RewardTracker} from "../../../src/rewards/RewardTracker.sol";
+import {LiquidityLocker} from "../../../src/rewards/LiquidityLocker.sol";
+import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
+import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
+import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
+import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
+import {MathUtils} from "../../../src/libraries/MathUtils.sol";
+import {Referral} from "../../../src/referrals/Referral.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Execution} from "../../../src/positions/Execution.sol";
+import {Funding} from "../../../src/libraries/Funding.sol";
+import {Borrowing} from "../../../src/libraries/Borrowing.sol";
 
-// contract TestVaultAccounting is Test {
-//     using SignedMath for int256;
+contract TestVaultAccounting is Test {
+    using MathUtils for uint256;
 
-//     RoleStorage roleStorage;
+    RoleStorage roleStorage;
 
-//     MarketFactory marketFactory;
-//     IPriceFeed priceFeed; // Deployed in Helper Config
-//     ITradeStorage tradeStorage;
-//     ReferralStorage referralStorage;
-//     PositionManager positionManager;
-//     Router router;
-//     address OWNER;
-//     Market market;
-//     address feeDistributor;
+    MarketFactory marketFactory;
+    MockPriceFeed priceFeed; // Deployed in Helper Config
+    ITradeStorage tradeStorage;
+    ReferralStorage referralStorage;
+    PositionManager positionManager;
+    Router router;
+    address OWNER;
+    Market market;
+    FeeDistributor feeDistributor;
+    TransferStakedTokens transferStakedTokens;
+    RewardTracker rewardTracker;
+    LiquidityLocker liquidityLocker;
 
-//     address weth;
-//     address usdc;
-//     bytes32 ethPriceId;
-//     bytes32 usdcPriceId;
+    address weth;
+    address usdc;
+    address link;
 
-//     bytes32 ethAssetId = keccak256(abi.encode("ETH"));
-//     bytes32 usdcAssetId = keccak256(abi.encode("USDC"));
+    string ethTicker = "ETH";
+    string usdcTicker = "USDC";
+    string[] tickers;
 
-//     bytes[] tokenUpdateData;
-//     uint256[] allocations;
-//     bytes32[] assetIds;
-//     uint256[] compactedPrices;
+    address USER = makeAddr("USER");
+    address USER1 = makeAddr("USER1");
+    address USER2 = makeAddr("USER2");
 
-//     address USER = makeAddr("USER");
+    IPriceFeed.Price ethPrices;
+    IPriceFeed.Price usdcPrices;
+    IPriceFeed.Price[] prices;
 
-//     function setUp() public {
-//         Deploy deploy = new Deploy();
-//         Deploy.Contracts memory contracts = deploy.run();
-//         roleStorage = contracts.roleStorage;
+    function setUp() public {
+        Deploy deploy = new Deploy();
+        Deploy.Contracts memory contracts = deploy.run();
+        roleStorage = contracts.roleStorage;
 
-//         marketFactory = contracts.marketFactory;
-//         priceFeed = contracts.priceFeed;
-//         referralStorage = contracts.referralStorage;
-//         positionManager = contracts.positionManager;
-//         router = contracts.router;
-//         feeDistributor = address(contracts.feeDistributor);
-//         OWNER = contracts.owner;
-//         (weth, usdc, ethPriceId, usdcPriceId,,) = deploy.activeNetworkConfig();
-//         // Pass some time so block timestamp isn't 0
-//         vm.warp(block.timestamp + 1 days);
-//         vm.roll(block.number + 1);
-//         assetIds.push(ethAssetId);
-//         assetIds.push(usdcAssetId);
-//     }
+        marketFactory = contracts.marketFactory;
+        priceFeed = MockPriceFeed(address(contracts.priceFeed));
+        referralStorage = contracts.referralStorage;
+        positionManager = contracts.positionManager;
+        router = contracts.router;
+        feeDistributor = contracts.feeDistributor;
+        transferStakedTokens = contracts.transferStakedTokens;
+        OWNER = contracts.owner;
+        (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
+        tickers.push(ethTicker);
+        tickers.push(usdcTicker);
+        // Pass some time so block timestamp isn't 0
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+    }
 
-//     receive() external payable {}
+    receive() external payable {}
 
-//     modifier setUpMarkets() {
-//         vm.deal(OWNER, 1_000_000 ether);
-//         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
-//         vm.deal(USER, 1_000_000 ether);
-//         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
-//         vm.startPrank(OWNER);
-//         WETH(weth).deposit{value: 50 ether}();
+    modifier setUpMarkets() {
+        vm.deal(OWNER, 2_000_000 ether);
+        MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
+        vm.deal(USER, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER, 1_000_000_000e6);
+        vm.deal(USER1, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER1, 1_000_000_000e6);
+        vm.deal(USER2, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER2, 1_000_000_000e6);
+        vm.prank(USER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER1);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER2);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.startPrank(OWNER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        IMarketFactory.DeployRequest memory request = IMarketFactory.DeployRequest({
+            isMultiAsset: false,
+            owner: OWNER,
+            indexTokenTicker: "ETH",
+            marketTokenName: "BRRR",
+            marketTokenSymbol: "BRRR",
+            baseUnit: 1e18
+        });
+        marketFactory.requestNewMarket{value: 0.01 ether}(request);
+        market = Market(
+            payable(
+                marketFactory.executeNewMarket(
+                    marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker)
+                )
+            )
+        );
+        vm.stopPrank();
+        tradeStorage = ITradeStorage(market.tradeStorage());
+        rewardTracker = RewardTracker(address(market.rewardTracker()));
+        liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
+        // Set Prices
+        ethPrices =
+            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 3000e30, max: 3000e30});
+        usdcPrices = IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 1e30, med: 1e30, max: 1e30});
+        prices.push(ethPrices);
+        prices.push(usdcPrices);
+        bytes32 priceRequestId = keccak256(abi.encode("PRICE REQUEST"));
+        bytes32 pnlRequestId = keccak256(abi.encode("PNL REQUEST"));
+        priceFeed.updatePrices(priceRequestId, tickers, prices);
+        priceFeed.updatePnl(market, 0, pnlRequestId);
+        // Call the deposit function with sufficient gas
+        vm.prank(OWNER);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
+        vm.prank(OWNER);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
-//         IMarketFactory.MarketRequest memory request = IMarketFactory.MarketRequest({
-//             owner: OWNER,
-//             indexTokenTicker: "ETH",
-//             marketTokenName: "BRRR",
-//             marketTokenSymbol: "BRRR",
-//             baseUnit: 1e18
-//         });
-//         marketFactory.requestNewMarket{value: 0.01 ether}(request);
-//         // Set primary prices for ref price
-//         // priceFeed.setPrimaryPrices{value: 0.01 ether}(assetIds, tokenUpdateData, compactedPrices);
-//         // Clear them
-//         // priceFeed.clearPrimaryPrices();
-//         marketFactory.executeNewMarket(marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker));
-//         vm.stopPrank();
-//         // market = Market(payable(marketFactory.tokenToMarket(ethAssetId)));
-//         tradeStorage = ITradeStorage(market.tradeStorage());
-//         // Call the deposit function with sufficient gas
-//         vm.prank(OWNER);
-//         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-//         vm.prank(OWNER);
-//         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        vm.stopPrank();
+        _;
+    }
 
-//         vm.startPrank(OWNER);
-//         MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-//         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
-//         vm.stopPrank();
-//         vm.startPrank(OWNER);
-//         allocations.push(10000 << 240);
+    struct TokenBalances {
+        uint256 marketBalanceBefore;
+        uint256 executorBalanceBefore;
+        uint256 referralStorageBalanceBefore;
+        uint256 marketBalanceAfter;
+        uint256 executorBalanceAfter;
+        uint256 referralStorageBalanceAfter;
+    }
 
-//         // assertEq(MarketUtils.getAllocation(market, ethAssetId), 10000);
-//         vm.stopPrank();
-//         _;
-//     }
+    struct VaultTest {
+        uint256 sizeDelta;
+        uint256 collateralDelta;
+        uint256 leverage;
+        uint256 tier;
+        uint256 collateralPrice;
+        uint256 collateralBaseUnit;
+        bytes32 key;
+        address collateralToken;
+        uint256 positionFee;
+        uint256 feeForExecutor;
+        uint256 affiliateRebate;
+        bool isLong;
+        bool shouldWrap;
+    }
 
-//     struct VaultState {
-//         uint256 longTokenBalance;
-//         uint256 shortTokenBalance;
-//         uint256 longTokensReserved;
-//         uint256 shortTokensReserved;
-//         uint256 longAccumulatedFees;
-//         uint256 shortAccumulatedFees;
-//         uint256 userCollateral;
-//     }
+    // Request a new fuzzed postition
+    // Cache the expected accounting values for each contract
+    // Execute the position
+    // Compare the expected values to the actual values
+    function testCreateNewPositionAccounting(VaultTest memory _vaultTest) public setUpMarkets {
+        // Create Request
+        Position.Input memory input;
+        TokenBalances memory tokenBalances;
+        _vaultTest.leverage = bound(_vaultTest.leverage, 1, 90);
+        _vaultTest.tier = bound(_vaultTest.tier, 0, 2);
+        // Set a random fee tier
+        vm.startPrank(OWNER);
+        referralStorage.registerCode(bytes32(bytes("CODE")));
+        referralStorage.setReferrerTier(OWNER, _vaultTest.tier);
+        vm.stopPrank();
+        // Use the code from the USER
+        vm.prank(USER);
+        referralStorage.setTraderReferralCodeByUser(bytes32(bytes("CODE")));
 
-//     function testCreatingLongNewPositionAccounting(uint256 _leverage, uint256 _collateralDelta) public setUpMarkets {
-//         // Bound Inputs to realistic values
-//         // _collateralDelta = bound(_collateralDelta, 0.001 ether, 140 ether);
-//         // _leverage = bound(_leverage, 1, 90);
-//         // // Create a Position
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: _collateralDelta,
-//         //     sizeDelta: mulDiv(_collateralDelta * _leverage, 2500e30, 1e18),
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.prank(OWNER);
-//         // router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input);
-//         // // Store the Vault State Before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
-//         // // Execute the Position
-//         // vm.prank(OWNER);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // // Fetch the Position
-//         // Position.Data memory position = tradeStorage.getPosition(keccak256(abi.encode(ethAssetId, OWNER, true)));
-//         // // Compare the Vault State after to the expected values
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
+        if (_vaultTest.isLong) {
+            _vaultTest.sizeDelta = bound(_vaultTest.sizeDelta, 210e30, 1_000_000e30);
+            _vaultTest.collateralDelta = (_vaultTest.sizeDelta / _vaultTest.leverage).fromUsd(3000e30, 1e18);
+            _vaultTest.collateralToken = weth;
+            _vaultTest.collateralPrice = 3000e30;
+            _vaultTest.collateralBaseUnit = 1e18;
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: weth,
+                collateralDelta: _vaultTest.collateralDelta,
+                sizeDelta: _vaultTest.sizeDelta,
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: _vaultTest.shouldWrap,
+                triggerAbove: false
+            });
+            if (_vaultTest.shouldWrap) {
+                vm.prank(USER);
+                router.createPositionRequest{value: _vaultTest.collateralDelta + 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+            } else {
+                vm.startPrank(USER);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+            }
+        } else {
+            _vaultTest.sizeDelta = bound(_vaultTest.sizeDelta, 210e30, 1_000_000e30);
+            _vaultTest.collateralDelta = (_vaultTest.sizeDelta / _vaultTest.leverage).fromUsd(1e30, 1e6);
+            _vaultTest.collateralToken = usdc;
+            _vaultTest.collateralPrice = 1e30;
+            _vaultTest.collateralBaseUnit = 1e6;
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: usdc,
+                collateralDelta: _vaultTest.collateralDelta,
+                sizeDelta: _vaultTest.sizeDelta, // 10x leverage
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: false,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: false,
+                triggerAbove: false
+            });
 
-//         // // Long Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // // Long Tokens Reserved Should Increase by Size in USD (Price used is collateral price - spread for min)
-//         // assertEq(
-//         //     stateAfter.longTokensReserved,
-//         //     stateBefore.longTokensReserved + mulDiv(position.positionSize, 1e18, 2499500000000000000000000000000000),
-//         //     "Long Tokens Reserved"
-//         // );
-//         // // Short Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.shortTokensReserved, stateBefore.shortTokensReserved, "Short Tokens Reserved");
-//         // // Long Accumulated Fees Should Increase by the Fees for a Create Position
-//         // assertEq(
-//         //     stateAfter.longAccumulatedFees,
-//         //     stateBefore.longAccumulatedFees + (input.collateralDelta - position.collateralAmount),
-//         //     "Long Accumulated Fees"
-//         // );
-//         // // Short Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.shortAccumulatedFees, stateBefore.shortAccumulatedFees, "Short Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees and price impact
-//         // assertEq(stateAfter.userCollateral, position.collateralAmount, "User Collateral");
-//     }
+            vm.startPrank(USER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        }
+        // Cache State of the Vault
+        tokenBalances.marketBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.executorBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
+        tokenBalances.referralStorageBalanceBefore =
+            IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
+        // Execute Request
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        positionManager.executePosition(market, key, bytes32(0), OWNER);
 
-//     function testCreatingShortNewPositionAccounting(uint256 _leverage, uint256 _collateralDelta) public setUpMarkets {
-//         // // Bound Inputs to realistic values (2.5 usdc - 350k)
-//         // _collateralDelta = bound(_collateralDelta, 2.5e6, 350_000e6);
-//         // _leverage = bound(_leverage, 1, 90);
-//         // // Create a Position
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: usdc,
-//         //     collateralDelta: _collateralDelta,
-//         //     sizeDelta: mulDiv(_collateralDelta * _leverage, 1e30, 1e6),
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: false,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: false,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         // router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input);
-//         // vm.stopPrank();
-//         // // Store the Vault State Before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, false)
-//         // });
-//         // // Execute the Position
-//         // vm.prank(OWNER);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // // Fetch the Position
-//         // Position.Data memory position = tradeStorage.getPosition(keccak256(abi.encode(ethAssetId, OWNER, false)));
-//         // // Compare the Vault State after to the expected values
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, false)
-//         // });
+        // Cache State of the Vault
+        tokenBalances.marketBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.executorBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
+        tokenBalances.referralStorageBalanceAfter =
+            IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
 
-//         // // Short Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // // Short Tokens Reserved Should Increase by Size in USD (Price used is collateral price - spread for min)
-//         // assertEq(
-//         //     stateAfter.shortTokensReserved,
-//         //     stateBefore.shortTokensReserved + mulDiv(position.positionSize, 1e6, 1e30),
-//         //     "Short Tokens Reserved"
-//         // );
-//         // // Long Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.longTokensReserved, stateBefore.longTokensReserved, "Long Tokens Reserved");
-//         // // Short Accumulated Fees Should Increase by the Fees for a Create Position
-//         // assertEq(
-//         //     stateAfter.shortAccumulatedFees,
-//         //     stateBefore.shortAccumulatedFees + (input.collateralDelta - position.collateralAmount),
-//         //     "Short Accumulated Fees"
-//         // );
-//         // // Long Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.longAccumulatedFees, stateBefore.longAccumulatedFees, "Long Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees and price impact
-//         // assertEq(stateAfter.userCollateral, position.collateralAmount, "User Collateral");
-//     }
+        // Check the Vault Accounting
+        // 1. Calculate afterFeeAmount and check that the marketCollateral after = before + afterFeeAmount
+        // 2. Check exector balance after has increased by feeForExecutor
+        // 3. Check referralStorage balance increased by affiliateReward
 
-//     function testIncreasePositionAccountingLong(uint256 _leverage, uint256 _collateralDelta) public setUpMarkets {
-//         // // Bound Inputs to realistic values
-//         // _collateralDelta = bound(_collateralDelta, 0.001 ether, 140 ether);
-//         // _leverage = bound(_leverage, 1, 90);
-//         // // Open a regular position and execute it
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: 1 ether,
-//         //     sizeDelta: 25_000e30,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: 1.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Store the vault state before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
-//         // // Increase the position and store the vault state after
-//         // input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: _collateralDelta,
-//         //     sizeDelta: mulDiv(_collateralDelta * _leverage, 2499500000000000000000000000000000, 1e18),
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Get the Expected Collateral Delta (Collateral Delta - Fees)
-//         // uint256 expectedCollateralDelta = input.collateralDelta
-//         //     - Fee.calculateForPosition(
-//         //         tradeStorage,
-//         //         mulDiv(_collateralDelta * _leverage, 2499500000000000000000000000000000, 1e18),
-//         //         _collateralDelta,
-//         //         2499500000000000000000000000000000,
-//         //         1e18
-//         //     );
+        // Calculate the expected market delta
+        (_vaultTest.positionFee, _vaultTest.feeForExecutor) = Position.calculateFee(
+            tradeStorage,
+            _vaultTest.sizeDelta,
+            input.collateralDelta,
+            _vaultTest.collateralPrice,
+            _vaultTest.collateralBaseUnit
+        );
 
-//         // // Get Vault State After
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
-//         // // Compare Values to Expected Values
-//         // // Long Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // // Long Tokens Reserved Should Increase by Size in USD (Price used is collateral price - spread for min)
-//         // assertEq(
-//         //     stateAfter.longTokensReserved,
-//         //     stateBefore.longTokensReserved + mulDiv(input.sizeDelta, 1e18, 2499500000000000000000000000000000),
-//         //     "Long Tokens Reserved"
-//         // );
-//         // // Short Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.shortTokensReserved, stateBefore.shortTokensReserved, "Short Tokens Reserved");
-//         // // Long Accumulated Fees Should Increase by the Fees for a Create Position
-//         // assertEq(
-//         //     stateAfter.longAccumulatedFees,
-//         //     stateBefore.longAccumulatedFees + (input.collateralDelta - expectedCollateralDelta),
-//         //     "Long Accumulated Fees"
-//         // );
-//         // // Short Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.shortAccumulatedFees, stateBefore.shortAccumulatedFees, "Short Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees
-//         // assertEq(stateAfter.userCollateral, stateBefore.userCollateral + expectedCollateralDelta, "User Collateral");
-//     }
+        // Calculate & Apply Fee Discount for Referral Code
+        (_vaultTest.positionFee, _vaultTest.affiliateRebate,) =
+            Referral.applyFeeDiscount(referralStorage, USER, _vaultTest.positionFee);
 
-//     function testIncreasePositionAccountingShort(uint256 _leverage, uint256 _collateralDelta) public setUpMarkets {
-//         // // Bound Inputs to realistic values
-//         // _collateralDelta = bound(_collateralDelta, 2.5e6, 350_000e6);
-//         // _leverage = bound(_leverage, 1, 90);
-//         // // Open a regular position and execute it
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: usdc,
-//         //     collateralDelta: 1000e6,
-//         //     sizeDelta: 10_000e30,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: false,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: false,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         // router.createPositionRequest{value: 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Store the vault state before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, false)
-//         // });
-//         // // Increase the position and store the vault state after
-//         // input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: usdc,
-//         //     collateralDelta: _collateralDelta,
-//         //     sizeDelta: mulDiv(_collateralDelta * _leverage, 1e30, 1e6),
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: false,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: false,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         // router.createPositionRequest{value: 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Get the Expected Collateral Delta (Collateral Delta - Fees)
-//         // uint256 expectedCollateralDelta = input.collateralDelta
-//         //     - Fee.calculateForPosition(
-//         //         tradeStorage, mulDiv(_collateralDelta * _leverage, 1e30, 1e6), _collateralDelta, 1e30, 1e6
-//         //     );
+        // Market should equal --> collateral + position fee
 
-//         // // Get Vault State After
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, false)
-//         // });
+        // Check the market balance
+        assertEq(
+            tokenBalances.marketBalanceAfter,
+            tokenBalances.marketBalanceBefore + input.collateralDelta - _vaultTest.feeForExecutor
+                - _vaultTest.affiliateRebate,
+            "Market Balance"
+        );
+        // Check the executor balance
+        assertEq(
+            tokenBalances.executorBalanceAfter,
+            tokenBalances.executorBalanceBefore + _vaultTest.feeForExecutor,
+            "Executor Balance"
+        );
+        // Check the referralStorage balance
+        assertEq(
+            tokenBalances.referralStorageBalanceAfter,
+            tokenBalances.referralStorageBalanceBefore + _vaultTest.affiliateRebate,
+            "Referral Storage Balance"
+        );
+    }
 
-//         // // Compare Values to Expected Values
-//         // // Short Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // // Short Tokens Reserved Should Increase by Size in USD (Price used is collateral price - spread for min)
-//         // assertEq(
-//         //     stateAfter.shortTokensReserved,
-//         //     stateBefore.shortTokensReserved + mulDiv(input.sizeDelta, 1e6, 1e30),
-//         //     "Short Tokens Reserved"
-//         // );
-//         // // Long Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.longTokensReserved, stateBefore.longTokensReserved, "Long Tokens Reserved");
-//         // // Short Accumulated Fees Should Increase by the Fees for a Create Position
-//         // assertEq(
-//         //     stateAfter.shortAccumulatedFees,
-//         //     stateBefore.shortAccumulatedFees + (input.collateralDelta - expectedCollateralDelta),
-//         //     "Short Accumulated Fees"
-//         // );
-//         // // Long Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.longAccumulatedFees, stateBefore.longAccumulatedFees, "Long Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees
-//         // assertEq(stateAfter.userCollateral, stateBefore.userCollateral + expectedCollateralDelta, "User Collateral");
-//     }
+    function testIncreasePositionAccounting(VaultTest memory _vaultTest) public setUpMarkets {
+        // Create Request
+        Position.Input memory input;
+        TokenBalances memory tokenBalances;
+        _vaultTest.leverage = bound(_vaultTest.leverage, 1, 90);
+        _vaultTest.tier = bound(_vaultTest.tier, 0, 2);
+        // Set a random fee tier
+        vm.startPrank(OWNER);
+        referralStorage.registerCode(bytes32(bytes("CODE")));
+        referralStorage.setReferrerTier(OWNER, _vaultTest.tier);
+        vm.stopPrank();
+        // Use the code from the USER
+        vm.prank(USER);
+        referralStorage.setTraderReferralCodeByUser(bytes32(bytes("CODE")));
 
-//     function testDecreasePositionAccountingLong(uint256 _percentageToDecrease) public setUpMarkets {
-//         // _percentageToDecrease = bound(_percentageToDecrease, 10000, 0.95e18); // Keep collat above min threshold
-//         // // Open a regular position and execute it
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: 10 ether,
-//         //     sizeDelta: 250_000e30,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: 10.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Store the vault state before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
-//         // // Get the position
-//         // Position.Data memory position = tradeStorage.getPosition(keccak256(abi.encode(ethAssetId, OWNER, true)));
-//         // // Decrease the position and store the vault state after
-//         // uint256 sizeDelta = mulDiv(position.positionSize, _percentageToDecrease, 1e18);
-//         // input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: mulDiv(position.collateralAmount, _percentageToDecrease, 1e18),
-//         //     sizeDelta: sizeDelta,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: false,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
+        uint256 collateralDelta;
 
-//         // // Get Vault State After
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
+        if (_vaultTest.isLong) {
+            _vaultTest.sizeDelta = bound(_vaultTest.sizeDelta, 210e30, 1_000_000e30);
+            collateralDelta = (_vaultTest.sizeDelta / _vaultTest.leverage).fromUsd(3000e30, 1e18);
+            _vaultTest.collateralToken = weth;
+            _vaultTest.collateralPrice = 3000e30;
+            _vaultTest.collateralBaseUnit = 1e18;
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: weth,
+                collateralDelta: collateralDelta,
+                sizeDelta: _vaultTest.sizeDelta,
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: _vaultTest.shouldWrap,
+                triggerAbove: false
+            });
+            if (_vaultTest.shouldWrap) {
+                vm.prank(USER);
+                router.createPositionRequest{value: collateralDelta + 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+            } else {
+                vm.startPrank(USER);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+            }
+        } else {
+            _vaultTest.sizeDelta = bound(_vaultTest.sizeDelta, 210e30, 1_000_000e30);
+            collateralDelta = (_vaultTest.sizeDelta / _vaultTest.leverage).fromUsd(1e30, 1e6);
+            _vaultTest.collateralToken = usdc;
+            _vaultTest.collateralPrice = 1e30;
+            _vaultTest.collateralBaseUnit = 1e6;
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: usdc,
+                collateralDelta: collateralDelta,
+                sizeDelta: _vaultTest.sizeDelta, // 10x leverage
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: false,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: false,
+                triggerAbove: false
+            });
 
-//         // // Use max price
-//         // uint256 sizeDeltaTokens = mulDiv(input.sizeDelta, 1e18, 2500500000000000000000000000000000);
-//         // uint256 fee = Fee.calculateForPosition(
-//         //     tradeStorage, sizeDelta, input.collateralDelta, 2500500000000000000000000000000000, 1e18
-//         // );
+            vm.startPrank(USER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        }
+        // Execute Request
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        positionManager.executePosition(market, key, bytes32(0), OWNER);
 
-//         // // Compare Values to Expected Values
-//         // // Long Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // // Long Tokens Reserved Should Decrease by Size in USD (Price used is collateral price - spread for max)
-//         // assertEq(
-//         //     stateAfter.longTokensReserved, stateBefore.longTokensReserved - sizeDeltaTokens, "Long Tokens Reserved"
-//         // );
-//         // // Short Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.shortTokensReserved, stateBefore.shortTokensReserved, "Short Tokens Reserved");
-//         // // Long Accumulated Fees Should Increase by the Fees for a Create Position
-//         // assertEq(stateAfter.longAccumulatedFees, stateBefore.longAccumulatedFees + fee, "Long Accumulated Fees");
-//         // // Short Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.shortAccumulatedFees, stateBefore.shortAccumulatedFees, "Short Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees
-//         // assertEq(stateAfter.userCollateral, stateBefore.userCollateral - input.collateralDelta, "User Collateral");
-//     }
+        // Cache State of the Vault
+        tokenBalances.marketBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.executorBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
+        tokenBalances.referralStorageBalanceBefore =
+            IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
 
-//     function testDecreasePositionAccountingShort(uint256 _percentageToDecrease) public setUpMarkets {
-//         // _percentageToDecrease = bound(_percentageToDecrease, 100000000000000, 0.95e18); // Keep collat above min threshold
-//         // // Open a regular position and execute it
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: usdc,
-//         //     collateralDelta: 1000e6,
-//         //     sizeDelta: 10_000e30,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: false,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: false,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         // router.createPositionRequest{value: 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Store the vault state before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, false)
-//         // });
-//         // // Get the position
-//         // Position.Data memory position = tradeStorage.getPosition(keccak256(abi.encode(ethAssetId, OWNER, false)));
-//         // // Decrease the position and store the vault state after
-//         // uint256 sizeDelta = mulDiv(position.positionSize, _percentageToDecrease, 1e18);
-//         // input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: usdc,
-//         //     collateralDelta: mulDiv(position.collateralAmount, _percentageToDecrease, 1e18),
-//         //     sizeDelta: sizeDelta,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: false,
-//         //     isLimit: false,
-//         //     isIncrease: false,
-//         //     reverseWrap: false,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         // router.createPositionRequest{value: 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
+        // Create Increase Request
+        if (_vaultTest.isLong) {
+            if (_vaultTest.shouldWrap) {
+                vm.prank(USER);
+                router.createPositionRequest{value: collateralDelta + 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+            } else {
+                vm.startPrank(USER);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+            }
+        } else {
+            vm.startPrank(USER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        }
+        // Execute Request
+        key = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        positionManager.executePosition(market, key, bytes32(0), OWNER);
 
-//         // // Get Vault State After
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, false)
-//         // });
+        // Cache State of the Vault
+        tokenBalances.marketBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.executorBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
+        tokenBalances.referralStorageBalanceAfter =
+            IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
 
-//         // // Use max price
-//         // uint256 sizeDeltaTokens = mulDiv(input.sizeDelta, 1e6, 1e30);
-//         // uint256 fee = Fee.calculateForPosition(tradeStorage, sizeDelta, input.collateralDelta, 1e30, 1e6);
+        // Check the Vault Accounting
+        // 1. Calculate afterFeeAmount and check that the marketCollateral after = before + afterFeeAmount
+        // 2. Check exector balance after has increased by feeForExecutor
+        // 3. Check referralStorage balance increased by affiliateReward
 
-//         // // Compare Values to Expected Values
-//         // // Short Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // // Short Tokens Reserved Should Decrease by Size in USD (Price used is collateral price - spread for max)
-//         // assertEq(
-//         //     stateAfter.shortTokensReserved, stateBefore.shortTokensReserved - sizeDeltaTokens, "Short Tokens Reserved"
-//         // );
-//         // // Long Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.longTokensReserved, stateBefore.longTokensReserved, "Long Tokens Reserved");
-//         // // Short Accumulated Fees Should Increase by the Fees for a Create Position
-//         // assertEq(stateAfter.shortAccumulatedFees, stateBefore.shortAccumulatedFees + fee, "Short Accumulated Fees");
-//         // // Long Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.longAccumulatedFees, stateBefore.longAccumulatedFees, "Long Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees
-//         // assertEq(stateAfter.userCollateral, stateBefore.userCollateral - input.collateralDelta, "User Collateral");
-//     }
+        // Calculate the expected market delta
+        (uint256 positionFee, uint256 feeForExecutor) = Position.calculateFee(
+            tradeStorage,
+            _vaultTest.sizeDelta,
+            input.collateralDelta,
+            _vaultTest.collateralPrice,
+            _vaultTest.collateralBaseUnit
+        );
 
-//     function testDecreasePositionAccountingForFullDecreaseLong() public setUpMarkets {
-//         // // Open a regular position and execute it
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: 10 ether,
-//         //     sizeDelta: 250_000e30,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: 10.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Store the vault state before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
-//         // // Get the position
-//         // Position.Data memory position = tradeStorage.getPosition(keccak256(abi.encode(ethAssetId, OWNER, true)));
-//         // // Decrease the position and store the vault state after
-//         // input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: position.collateralAmount,
-//         //     sizeDelta: position.positionSize,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: false,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
+        // Calculate & Apply Fee Discount for Referral Code
+        uint256 affiliateRebate;
+        (positionFee, affiliateRebate,) = Referral.applyFeeDiscount(referralStorage, USER, positionFee);
 
-//         // // Get Vault State After
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
+        // Market should equal --> collateral + position fee
 
-//         // // Use max price
-//         // uint256 sizeDeltaTokens = mulDiv(input.sizeDelta, 1e18, 2500500000000000000000000000000000);
-//         // uint256 fee = Fee.calculateForPosition(
-//         //     tradeStorage, position.positionSize, input.collateralDelta, 2500500000000000000000000000000000, 1e18
-//         // );
+        // Check the market balance
+        assertEq(
+            tokenBalances.marketBalanceAfter,
+            tokenBalances.marketBalanceBefore + input.collateralDelta - feeForExecutor - affiliateRebate,
+            "Market Balance"
+        );
+        // Check the executor balance
+        assertEq(
+            tokenBalances.executorBalanceAfter, tokenBalances.executorBalanceBefore + feeForExecutor, "Executor Balance"
+        );
+        // Check the referralStorage balance
+        assertEq(
+            tokenBalances.referralStorageBalanceAfter,
+            tokenBalances.referralStorageBalanceBefore + affiliateRebate,
+            "Referral Storage Balance"
+        );
+    }
 
-//         // // Compare Values to Expected Values
-//         // // Long Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // // Long Tokens Reserved Should Decrease by Size in USD (Price used is collateral price - spread for max)
-//         // assertEq(
-//         //     stateAfter.longTokensReserved, stateBefore.longTokensReserved - sizeDeltaTokens, "Long Tokens Reserved"
-//         // );
-//         // // Short Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.shortTokensReserved, stateBefore.shortTokensReserved, "Short Tokens Reserved");
-//         // // Long Accumulated Fees Should Increase by the Fees for a Create Position
-//         // assertEq(stateAfter.longAccumulatedFees, stateBefore.longAccumulatedFees + fee, "Long Accumulated Fees");
-//         // // Short Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.shortAccumulatedFees, stateBefore.shortAccumulatedFees, "Short Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees
-//         // assertEq(stateAfter.userCollateral, stateBefore.userCollateral - input.collateralDelta, "User Collateral");
-//     }
+    function testDecreasePositionAccounting(VaultTest memory _vaultTest, uint256 _decreasePercentage)
+        public
+        setUpMarkets
+    {
+        _decreasePercentage = bound(_decreasePercentage, 0.001e18, 1e18);
+        // Create Request
+        Position.Input memory input;
+        TokenBalances memory tokenBalances;
+        _vaultTest.leverage = bound(_vaultTest.leverage, 1, 90);
+        _vaultTest.tier = bound(_vaultTest.tier, 0, 2);
+        // Set a random fee tier
+        vm.startPrank(OWNER);
+        referralStorage.registerCode(bytes32(bytes("CODE")));
+        referralStorage.setReferrerTier(OWNER, _vaultTest.tier);
+        vm.stopPrank();
+        // Use the code from the USER
+        vm.prank(USER);
+        referralStorage.setTraderReferralCodeByUser(bytes32(bytes("CODE")));
 
-//     function testDecreasePositionAccountingForFullDecreaseShort() public setUpMarkets {
-//         // // Open a regular position and execute it
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: usdc,
-//         //     collateralDelta: 1000e6,
-//         //     sizeDelta: 10_000e30,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: false,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: false,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         // router.createPositionRequest{value: 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Store the vault state before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, false)
-//         // });
-//         // // Get the position
-//         // Position.Data memory position = tradeStorage.getPosition(keccak256(abi.encode(ethAssetId, OWNER, false)));
-//         // // Decrease the position and store the vault state after
-//         // input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: usdc,
-//         //     collateralDelta: position.collateralAmount,
-//         //     sizeDelta: position.positionSize,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: false,
-//         //     isLimit: false,
-//         //     isIncrease: false,
-//         //     reverseWrap: false,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         // router.createPositionRequest{value: 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
+        if (_vaultTest.isLong) {
+            _vaultTest.sizeDelta = bound(_vaultTest.sizeDelta, 210e30, 1_000_000e30);
+            _vaultTest.collateralDelta = (_vaultTest.sizeDelta / _vaultTest.leverage).fromUsd(3000e30, 1e18);
+            _vaultTest.collateralToken = weth;
+            _vaultTest.collateralPrice = 3000e30;
+            _vaultTest.collateralBaseUnit = 1e18;
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: weth,
+                collateralDelta: _vaultTest.collateralDelta,
+                sizeDelta: _vaultTest.sizeDelta,
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: _vaultTest.shouldWrap,
+                triggerAbove: false
+            });
+            if (_vaultTest.shouldWrap) {
+                vm.prank(USER);
+                router.createPositionRequest{value: _vaultTest.collateralDelta + 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+            } else {
+                vm.startPrank(USER);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+            }
+        } else {
+            _vaultTest.sizeDelta = bound(_vaultTest.sizeDelta, 210e30, 1_000_000e30);
+            _vaultTest.collateralDelta = (_vaultTest.sizeDelta / _vaultTest.leverage).fromUsd(1e30, 1e6);
+            _vaultTest.collateralToken = usdc;
+            _vaultTest.collateralPrice = 1e30;
+            _vaultTest.collateralBaseUnit = 1e6;
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: usdc,
+                collateralDelta: _vaultTest.collateralDelta,
+                sizeDelta: _vaultTest.sizeDelta, // 10x leverage
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: false,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: false,
+                triggerAbove: false
+            });
 
-//         // // Get Vault State After
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, false)
-//         // });
+            vm.startPrank(USER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        }
+        // Execute Request
+        _vaultTest.key = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        positionManager.executePosition(market, _vaultTest.key, bytes32(0), OWNER);
 
-//         // // Use max price
-//         // uint256 sizeDeltaTokens = mulDiv(input.sizeDelta, 1e6, 1e30);
-//         // uint256 fee = Fee.calculateForPosition(tradeStorage, position.positionSize, input.collateralDelta, 1e30, 1e6);
+        // Cache State of the Vault
+        tokenBalances.marketBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.executorBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
+        tokenBalances.referralStorageBalanceBefore =
+            IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
 
-//         // // Compare Values to Expected Values
-//         // // Short Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // // Short Tokens Reserved Should Decrease by Size in USD (Price used is collateral price - spread for max)
-//         // assertEq(
-//         //     stateAfter.shortTokensReserved, stateBefore.shortTokensReserved - sizeDeltaTokens, "Short Tokens Reserved"
-//         // );
-//         // // Long Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.longTokensReserved, stateBefore.longTokensReserved, "Long Tokens Reserved");
-//         // // Short Accumulated Fees Should Increase by the Fees for a Create Position
-//         // assertEq(stateAfter.shortAccumulatedFees, stateBefore.shortAccumulatedFees + fee, "Short Accumulated Fees");
-//         // // Long Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.longAccumulatedFees, stateBefore.longAccumulatedFees, "Long Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees
-//         // assertEq(stateAfter.userCollateral, stateBefore.userCollateral - input.collateralDelta, "User Collateral");
-//     }
+        // Get the Position's collateral
+        Position.Data memory position =
+            tradeStorage.getPosition(keccak256(abi.encode(input.ticker, USER, input.isLong)));
+        uint256 collateral = position.collateral.fromUsd(_vaultTest.collateralPrice, _vaultTest.collateralBaseUnit);
 
-//     function testAccountingForCollateralIncrease(uint256 _collateralDelta) public setUpMarkets {
-//         // _collateralDelta = bound(_collateralDelta, 0.001 ether, 140 ether);
-//         // // Open an existing position
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: 100 ether,
-//         //     sizeDelta: 2_500_000e30,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: 100.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Store the vault state before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
-//         // // Increase the collateral and store the vault state after
-//         // input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: _collateralDelta,
-//         //     sizeDelta: 0,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: _collateralDelta + 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
+        // Get position pnl
+        uint256 pnl = uint256(
+            Position.getPositionPnl(position.size, position.weightedAvgEntryPrice, 3000e30, 1e18, input.isLong)
+        ).fromUsd(_vaultTest.collateralPrice, _vaultTest.collateralBaseUnit);
 
-//         // // Get Vault State After
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
+        // Create Decrease Request
+        input.isIncrease = false;
+        if (_decreasePercentage < 0.99e18) {
+            input.collateralDelta = collateral * _decreasePercentage / 1e18;
+            input.sizeDelta = _vaultTest.sizeDelta * _decreasePercentage / 1e18;
+            pnl = pnl * _decreasePercentage / 1e18;
+        } else {
+            input.collateralDelta = collateral;
+        }
+        vm.prank(USER);
+        router.createPositionRequest{value: 0.01 ether}(market, input, Position.Conditionals(false, false, 0, 0, 0, 0));
 
-//         // uint256 fee =
-//         //     Fee.calculateForPosition(tradeStorage, 0, _collateralDelta, 2500500000000000000000000000000000, 1e18);
+        // Execute Request
+        _vaultTest.key = tradeStorage.getOrderAtIndex(0, false);
+        vm.prank(OWNER);
+        positionManager.executePosition(market, _vaultTest.key, bytes32(0), OWNER);
 
-//         // // Compare Values to Expected Values
-//         // // Long Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // // Long Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.longTokensReserved, stateBefore.longTokensReserved, "Long Tokens Reserved");
-//         // // Short Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.shortTokensReserved, stateBefore.shortTokensReserved, "Short Tokens Reserved");
-//         // // Long Accumulated Fees Should Increase by the Fees for a collateral increase
-//         // assertEq(stateAfter.longAccumulatedFees, stateBefore.longAccumulatedFees + fee, "Long Accumulated Fees");
-//         // // Short Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.shortAccumulatedFees, stateBefore.shortAccumulatedFees, "Short Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees
-//         // assertEq(stateAfter.userCollateral, stateBefore.userCollateral + (_collateralDelta - fee), "User Collateral");
-//     }
+        // Cache State of the Vault
+        tokenBalances.marketBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.executorBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
+        tokenBalances.referralStorageBalanceAfter =
+            IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
 
-//     function testAccountingForCollateralDecrease(uint256 _collateralDelta) public setUpMarkets {
-//         // // Max leverage 100x -> Can only reduce collateral to 1 ether
-//         // _collateralDelta = bound(_collateralDelta, 0.001 ether, 98.5 ether);
-//         // // Open an existing position
-//         // Position.Input memory input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: 100 ether,
-//         //     sizeDelta: 250_000e30,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: true,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: 100.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
-//         // // Store the vault state before
-//         // VaultState memory stateBefore = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
-//         // // Decrease the collateral and store the vault state after
-//         // input = Position.Input({
-//         //     assetId: ethAssetId,
-//         //     collateralToken: weth,
-//         //     collateralDelta: _collateralDelta,
-//         //     sizeDelta: 0,
-//         //     limitPrice: 0,
-//         //     maxSlippage: 0.99e30,
-//         //     executionFee: 0.01 ether,
-//         //     isLong: true,
-//         //     isLimit: false,
-//         //     isIncrease: false,
-//         //     reverseWrap: true,
-//         //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0)
-//         // });
-//         // vm.startPrank(OWNER);
-//         // router.createPositionRequest{value: 0.01 ether}(input);
-//         // positionManager.executePosition{value: 0.01 ether}(
-//         //     market, tradeStorage.getOrderAtIndex(0, false), msg.sender, ethPriceData
-//         // );
-//         // vm.stopPrank();
+        // Check the Vault Accounting
+        // 1. Calculate afterFeeAmount and check that the marketCollateral after = before + afterFeeAmount
+        // 2. Check exector balance after has increased by feeForExecutor
+        // 3. Check referralStorage balance increased by affiliateReward
 
-//         // // Get Vault State After
-//         // VaultState memory stateAfter = VaultState({
-//         //     longTokenBalance: market.longTokenBalance(),
-//         //     shortTokenBalance: market.shortTokenBalance(),
-//         //     longTokensReserved: market.longTokensReserved(),
-//         //     shortTokensReserved: market.shortTokensReserved(),
-//         //     longAccumulatedFees: market.longAccumulatedFees(),
-//         //     shortAccumulatedFees: market.shortAccumulatedFees(),
-//         //     userCollateral: market.collateralAmounts(OWNER, true)
-//         // });
+        // Calculate the expected market delta
+        (_vaultTest.positionFee, _vaultTest.feeForExecutor) = Position.calculateFee(
+            tradeStorage,
+            _vaultTest.sizeDelta,
+            input.collateralDelta,
+            _vaultTest.collateralPrice,
+            _vaultTest.collateralBaseUnit
+        );
 
-//         // uint256 fee =
-//         //     Fee.calculateForPosition(tradeStorage, 0, _collateralDelta, 2499500000000000000000000000000000, 1e18);
+        // Calculate & Apply Fee Discount for Referral Code
+        (_vaultTest.positionFee, _vaultTest.affiliateRebate,) =
+            Referral.applyFeeDiscount(referralStorage, USER, _vaultTest.positionFee);
 
-//         // // Compare Values to Expected Values
-//         // // Long Token Balances Should Strictly Stay Constant
-//         // assertEq(stateAfter.longTokenBalance, stateBefore.longTokenBalance, "Long Token Balance");
-//         // assertEq(stateAfter.shortTokenBalance, stateBefore.shortTokenBalance, "Short Token Balance");
-//         // // Long Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.longTokensReserved, stateBefore.longTokensReserved, "Long Tokens Reserved");
-//         // // Short Tokens Reserved Should Stay Constant
-//         // assertEq(stateAfter.shortTokensReserved, stateBefore.shortTokensReserved, "Short Tokens Reserved");
-//         // // Long Accumulated Fees Should Increase by the Fees for a collateral decrease
-//         // assertEq(stateAfter.longAccumulatedFees, stateBefore.longAccumulatedFees + fee, "Long Accumulated Fees");
-//         // // Short Accumulated Fees Should Stay Constant
-//         // assertEq(stateAfter.shortAccumulatedFees, stateBefore.shortAccumulatedFees, "Short Accumulated Fees");
-//         // // User Collateral Should Increase by the Collateral Delta after fees
-//         // assertEq(stateAfter.userCollateral, stateBefore.userCollateral - _collateralDelta, "User Collateral");
-//     }
-// }
+        // Check the market balance
+        assertApproxEqAbs(
+            tokenBalances.marketBalanceAfter,
+            tokenBalances.marketBalanceBefore + input.collateralDelta + pnl,
+            0.5e18,
+            "Market Balance"
+        );
+        // Check the executor balance
+        assertEq(
+            tokenBalances.executorBalanceAfter,
+            tokenBalances.executorBalanceBefore + _vaultTest.feeForExecutor,
+            "Executor Balance"
+        );
+        // Check the referralStorage balance
+        assertEq(
+            tokenBalances.referralStorageBalanceAfter,
+            tokenBalances.referralStorageBalanceBefore + _vaultTest.affiliateRebate,
+            "Referral Storage Balance"
+        );
+    }
+}

@@ -196,11 +196,23 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
         bool _isLong,
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
         MarketStorage storage self = marketStorage[keccak256(abi.encode(_ticker))];
-        MarketLogic.updateMarketState(self, _ticker, _sizeDelta, _indexPrice, _impactedPrice, _isLong, _isIncrease);
+        MarketLogic.updateMarketState(
+            self,
+            _ticker,
+            _sizeDelta,
+            _indexPrice,
+            _impactedPrice,
+            _collateralPrice,
+            _collateralBaseUnit,
+            _isLong,
+            _isIncrease
+        );
     }
 
     /**

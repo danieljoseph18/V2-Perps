@@ -11,6 +11,7 @@ interface IReferralStorage {
     event SetCodeOwner(address account, address newAccount, bytes32 code);
     event GovSetCodeOwner(bytes32 code, address newAccount);
     event AffiliateRewardsClaimed(address account, uint256 longTokenAmount, uint256 shortTokenAmount);
+    event AffiliateRewardsAccumulated(address account, bool isLongToken, uint256 amount);
 
     error ReferralStorage_InvalidTotalDiscount();
     error ReferralStorage_InvalidCode();

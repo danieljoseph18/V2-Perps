@@ -425,6 +425,8 @@ library MarketLogic {
         uint256 _sizeDelta,
         uint256 _indexPrice,
         uint256 _impactedPrice,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
         bool _isLong,
         bool _isIncrease
     ) internal {
@@ -460,7 +462,9 @@ library MarketLogic {
             }
         }
         // 4. Relies on Updated Open interest
-        marketStorage.borrowing = Borrowing.updateState(market, marketStorage.borrowing, _ticker, _isLong);
+        marketStorage.borrowing = Borrowing.updateState(
+            market, marketStorage.borrowing, _ticker, _collateralPrice, _collateralBaseUnit, _isLong
+        );
         // Fire Event
         emit MarketStateUpdated(_ticker, _isLong);
     }
@@ -512,16 +516,14 @@ library MarketLogic {
         uint256 indexPrice = priceFeed.getPrices(_priceRequestId, _ticker).med;
         uint256 indexBaseUnit = priceFeed.baseUnits(_ticker);
         // Get the Long Max Oi
-        uint256 longMaxOi = MarketUtils.getAvailableOiUsd(
-            market, _ticker, indexPrice, _longSignedPrice, indexBaseUnit, LONG_BASE_UNIT, true
-        );
+        uint256 longMaxOi =
+            MarketUtils.getAvailableOiUsd(market, _ticker, indexPrice, _longSignedPrice, indexBaseUnit, true);
         IMarket.OpenInterestValues memory oi = market.getStorage(_ticker).openInterest;
         // Get the Current oi
         if (longMaxOi < oi.longOpenInterest) revert MarketLogic_InvalidAllocation();
         // Get the Short Max Oi
-        uint256 shortMaxOi = MarketUtils.getAvailableOiUsd(
-            market, _ticker, indexPrice, _shortSignedPrice, indexBaseUnit, SHORT_BASE_UNIT, false
-        );
+        uint256 shortMaxOi =
+            MarketUtils.getAvailableOiUsd(market, _ticker, indexPrice, _shortSignedPrice, indexBaseUnit, false);
         // Get the Current oi
         if (shortMaxOi < oi.shortOpenInterest) revert MarketLogic_InvalidAllocation();
     }

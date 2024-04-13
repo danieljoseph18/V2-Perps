@@ -521,6 +521,7 @@ library MarketUtils {
         uint256 allocationShare = getAllocation(market, _ticker);
         // get the total liquidity available for that side
         uint256 totalAvailableLiquidity = market.totalAvailableLiquidity(_isLong);
+
         // calculate liquidity allocated to the market for that side
         poolAmount = totalAvailableLiquidity.percentage(allocationShare, MAX_ALLOCATION);
     }
@@ -532,10 +533,7 @@ library MarketUtils {
         uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 poolUsd) {
-        // get the liquidity allocated to the market for that side
-        uint256 allocationInTokens = getPoolBalance(market, _ticker, _isLong);
-        // convert to usd
-        poolUsd = allocationInTokens.toUsd(_collateralTokenPrice, _collateralBaseUnit);
+        poolUsd = getPoolBalance(market, _ticker, _isLong).toUsd(_collateralTokenPrice, _collateralBaseUnit);
     }
 
     function validateAllocation(
@@ -545,13 +543,11 @@ library MarketUtils {
         uint256 _indexPrice,
         uint256 _collateralTokenPrice,
         uint256 _indexBaseUnit,
-        uint256 _collateralBaseUnit,
         bool _isLong
     ) external view {
         // Get Max OI for side
-        uint256 availableUsd = getAvailableOiUsd(
-            market, _ticker, _indexPrice, _collateralTokenPrice, _indexBaseUnit, _collateralBaseUnit, _isLong
-        );
+        uint256 availableUsd =
+            getAvailableOiUsd(market, _ticker, _indexPrice, _collateralTokenPrice, _indexBaseUnit, _isLong);
         // Check SizeDelta USD won't push the OI over the max
 
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
@@ -565,10 +561,8 @@ library MarketUtils {
         uint256 _shortTokenPrice,
         uint256 _indexBaseUnit
     ) external view returns (uint256 totalAvailableOiUsd) {
-        uint256 longOiUsd =
-            getAvailableOiUsd(market, _ticker, _indexPrice, _longTokenPrice, _indexBaseUnit, LONG_BASE_UNIT, true);
-        uint256 shortOiUsd =
-            getAvailableOiUsd(market, _ticker, _indexPrice, _shortTokenPrice, _indexBaseUnit, SHORT_BASE_UNIT, false);
+        uint256 longOiUsd = getAvailableOiUsd(market, _ticker, _indexPrice, _longTokenPrice, _indexBaseUnit, true);
+        uint256 shortOiUsd = getAvailableOiUsd(market, _ticker, _indexPrice, _shortTokenPrice, _indexBaseUnit, false);
         totalAvailableOiUsd = longOiUsd + shortOiUsd;
     }
 
@@ -579,12 +573,12 @@ library MarketUtils {
         uint256 _indexPrice,
         uint256 _collateralTokenPrice,
         uint256 _indexBaseUnit,
-        uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 availableOi) {
+        uint256 collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
         // get the allocation and subtract by the markets reserveFactor
         uint256 remainingAllocationUsd =
-            getPoolBalanceUsd(market, _ticker, _collateralTokenPrice, _collateralBaseUnit, _isLong);
+            getPoolBalanceUsd(market, _ticker, _collateralTokenPrice, collateralBaseUnit, _isLong);
 
         availableOi = remainingAllocationUsd - remainingAllocationUsd.percentage(getReserveFactor(market, _ticker));
 
@@ -601,21 +595,21 @@ library MarketUtils {
         // no negative case, as OI hasn't been freed / realised
     }
 
-    function getMaxOpenInterest(IMarket market, string calldata _ticker, bool _isLong)
-        external
-        view
-        returns (uint256 maxOpenInterest)
-    {
-        // get the allocation percentage
-        uint256 allocationShare = getAllocation(market, _ticker);
+    function getMaxOpenInterest(
+        IMarket market,
+        string calldata _ticker,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) external view returns (uint256 maxOpenInterest) {
         // get the total liquidity available for that side
         uint256 totalAvailableLiquidity = market.totalAvailableLiquidity(_isLong);
         // calculate liquidity allocated to the market for that side
-        uint256 poolAmount = totalAvailableLiquidity.percentage(allocationShare, MAX_ALLOCATION);
-        // get the reserve factor
-        uint256 reserveFactor = getReserveFactor(market, _ticker);
-        // subtract the reserve factor from the pool amount
-        maxOpenInterest = poolAmount - poolAmount.percentage(reserveFactor);
+        uint256 poolAmount = totalAvailableLiquidity.percentage(getAllocation(market, _ticker), MAX_ALLOCATION);
+        // subtract the reserve factor from the pool amount and convert to USD
+        maxOpenInterest = (poolAmount - poolAmount.percentage(getReserveFactor(market, _ticker))).toUsd(
+            _collateralPrice, _collateralBaseUnit
+        );
     }
 
     // The pnl factor is the ratio of the pnl to the pool usd

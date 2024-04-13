@@ -8,10 +8,6 @@ import {MathUtils} from "../libraries/MathUtils.sol";
 library Referral {
     using MathUtils for uint256;
 
-    /**
-     * Precision loss - Fee discount should be 5% of the fee
-     *     currently works out to 5.263157894736825%
-     */
     function applyFeeDiscount(IReferralStorage referralStorage, address _account, uint256 _fee)
         external
         view

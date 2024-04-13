@@ -17,7 +17,6 @@ import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -128,7 +127,6 @@ library Execution {
                     prices.indexPrice,
                     prices.collateralPrice,
                     prices.indexBaseUnit,
-                    prices.collateralBaseUnit,
                     request.input.isLong
                 );
             }
@@ -368,8 +366,9 @@ library Execution {
             _params.request.input.collateralDelta,
             _prices.collateralPrice,
             _prices.collateralBaseUnit,
-            position.user
+            _params.request.user
         );
+
         // Calculate Amount After Fees
         feeState.afterFeeAmount = _calculateAmountAfterFees(
             _params.request.input.collateralDelta,
