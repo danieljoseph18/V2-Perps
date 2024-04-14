@@ -152,7 +152,7 @@ library Execution {
 
         // Check the PNL Factor is greater than the max PNL Factor
         // While we could cache this, it will result in an STD err
-        // @audit - gas optimize
+        // @audit - gas optimize --> other ways to prevent STD err
         if (startingPnlFactor.abs() < MAX_PNL_FACTOR || startingPnlFactor < 0) {
             revert Execution_PnlToPoolRatioNotExceeded(startingPnlFactor, MAX_PNL_FACTOR);
         }
@@ -255,7 +255,6 @@ library Execution {
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
         // Store the initial collateral amount
-        // @audit - this invariant check will be wrong now
         uint256 initialCollateral = position.collateral;
         // Calculate Fee + Fee for executor
         (feeState.positionFee, feeState.feeForExecutor, feeState.affiliateRebate, feeState.referrer) =
@@ -304,7 +303,6 @@ library Execution {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
-        // @audit - this invariant check will be wrong now
         uint256 initialCollateral = position.collateral;
         // Calculate Fee + Fee for executor
         (feeState.positionFee, feeState.feeForExecutor, feeState.affiliateRebate, feeState.referrer) =
@@ -410,7 +408,6 @@ library Execution {
     ) internal view returns (FeeState memory feeState, Position.Data memory position) {
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
-        // @audit - this invariant check will be wrong now
         uint256 initialCollateral = position.collateral;
         uint256 initialSize = position.size;
 
@@ -453,7 +450,6 @@ library Execution {
         );
     }
 
-    // @audit - if is ADL, need to also cover the fees with the decrease
     // @audit - need to adl ADL fees to this function --> can replace the fee for executor.
     function decreasePosition(
         IMarket market,
@@ -519,7 +515,6 @@ library Execution {
 
         // Liquidation Case
         if (losses.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit) >= position.collateral) {
-            // @audit - this function call will be wrong now
             (_params, feeState) =
                 _initiateLiquidation(_params, _prices, feeState, position.size, position.collateral, _liquidationFee);
         } else {
@@ -622,9 +617,6 @@ library Execution {
         view
         returns (bool isLiquidatable)
     {
-        // Get the value of all collateral remaining in the position
-        // @audit - redundant
-        uint256 collateralValueUsd = _position.collateral;
         // Get the PNL for the position
         int256 pnl = Position.getPositionPnl(
             _position.size, _position.weightedAvgEntryPrice, _prices.indexPrice, _prices.indexBaseUnit, _position.isLong
@@ -640,7 +632,7 @@ library Execution {
         int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd;
 
         // Check if the losses exceed the collateral value
-        if (losses < 0 && losses.abs() > collateralValueUsd) {
+        if (losses < 0 && losses.abs() > _position.collateral) {
             isLiquidatable = true;
         } else {
             isLiquidatable = false;
@@ -760,7 +752,6 @@ library Execution {
         uint256 _minCollateralUsd,
         bool _isFullDecrease
     ) private view returns (Position.Data memory, uint256) {
-        // @audit - this invariant check will be wrong now
         uint256 initialCollateral = _position.collateral;
         uint256 initialSize = _position.size;
         // Calculate After Fee Amount
@@ -878,7 +869,6 @@ library Execution {
         uint256 _initialSize,
         int256 _decreasePnl
     ) private pure {
-        // @audit - this invariant check will be wrong now
         Position.validateDecreasePosition(
             _position, _feeState, _prices, _initialCollateral, _initialSize, _sizeDelta, _decreasePnl
         );

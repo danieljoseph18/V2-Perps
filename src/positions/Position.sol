@@ -235,7 +235,6 @@ library Position {
         }
     }
 
-    // @audit - wrong --> need to handle conversions between collateral & usd
     function validateNewPosition(
         uint256 _collateralIn,
         uint256 _afterFeeAmount,
@@ -323,8 +322,6 @@ library Position {
         if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
 
-    // @audit - can an order get mischaracterized as an SL vs TP? Can this cause harm?
-    // @audit - probably rethink this
     /**
      * We can add a bool for execute above / below. This should make categorization
      * and execution easier.

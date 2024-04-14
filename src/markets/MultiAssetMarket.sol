@@ -76,7 +76,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     string[] private tickers;
 
     // Store the Collateral Amount for each User
-    // @audit - need to rethink for new collateral (usd)
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
     EnumerableMap.MarketRequestMap private requests;
@@ -84,6 +83,11 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     // Each Asset's storage is tracked through this mapping
     mapping(bytes32 assetId => MarketStorage assetStorage) private marketStorage;
 
+    /**
+     * ideally, we want to remove dynamic allocations all together. instead, just have a fixed max
+     * open interest, and cumulatively, all assets in the market can represent a maximum of that.
+     * Try to avoid looping at all costs --> may have to store cumulative openinterest
+     */
     modifier orderExists(bytes32 _key) {
         if (!requests.contains(_key)) revert Market_InvalidKey();
         _;
