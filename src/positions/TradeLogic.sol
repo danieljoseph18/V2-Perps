@@ -11,6 +11,7 @@ import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {console2} from "forge-std/Test.sol";
 
 library TradeLogic {
     using SignedMath for int256;
@@ -50,6 +51,8 @@ library TradeLogic {
         IMarket.State initialState;
         IMarket.State updatedState;
         uint256 storedCollateral;
+        uint256 balanceBefore;
+        uint256 balanceAfter;
     }
 
     /**
@@ -174,15 +177,18 @@ library TradeLogic {
         // Cache the State of the Market After the Position
         invariants.updatedStorage = market.getStorage(request.input.ticker);
         invariants.updatedState = market.getState(request.input.isLong);
+        invariants.balanceAfter = market.getVaultBalance(request.input.isLong);
 
         // Invariant Checks
-        Position.validateMarketDelta(invariants.initialStorage, invariants.updatedStorage, request);
+        Position.validateMarketDelta(market, invariants.initialStorage, invariants.updatedStorage, request);
         Position.validatePoolDelta(
             feeState,
             invariants.initialState,
             invariants.updatedState,
             request.input.collateralDelta,
             invariants.storedCollateral,
+            invariants.balanceBefore,
+            invariants.balanceAfter,
             request.input.isIncrease,
             feeState.isFullDecrease
         );
@@ -198,7 +204,6 @@ library TradeLogic {
     ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Initiate the Adl order
-        // @audit - fee for executor isn't stored anywhere -> should be maintained for the decrease
         (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) =
             Execution.initiateAdlOrder(market, tradeStorage, priceFeed, _positionKey, _requestId, _feeReceiver);
 
@@ -234,8 +239,6 @@ library TradeLogic {
         emit AdlExecuted(address(market), _positionKey, params.request.input.sizeDelta, params.request.input.isLong);
     }
 
-    // @audit - need to make it so liquidations happen slightly before losses > collateral
-    // otherwise we'll be left paying for insolvent liqs every time.
     function liquidatePosition(
         IMarket market,
         IReferralStorage referralStorage,
@@ -536,6 +539,8 @@ library TradeLogic {
             market.updatePoolBalance(_feeState.amountOwedToUser, _position.isLong, false);
         }
 
+        console2.log("Is Liquidation");
+
         _transferTokensForDecrease(
             market,
             referralStorage,
@@ -582,6 +587,8 @@ library TradeLogic {
             market, _feeState.afterFeeAmount + _feeState.affiliateRebate + _feeState.feeForExecutor, _position.isLong
         );
 
+        console2.log("Is Regular Decrease");
+
         // Handle Token Transfers
         _transferTokensForDecrease(
             market,
@@ -611,10 +618,12 @@ library TradeLogic {
         bool _reverseWrap
     ) private {
         // Transfer the Fee to the Executor
+        console2.log("Fee For Executor: ", _feeState.feeForExecutor);
         if (_feeState.feeForExecutor > 0) {
-            market.transferOutTokens(_executor, _feeState.feeForExecutor, _isLong, true);
+            market.transferOutTokens(_executor, _feeState.feeForExecutor, _isLong, false);
         }
         // Transfer Rebate to Referral Storage
+        console2.log("Fee For Affiliate: ", _feeState.affiliateRebate);
         if (_feeState.affiliateRebate > 0) {
             market.transferOutTokens(
                 address(referralStorage),
@@ -624,6 +633,7 @@ library TradeLogic {
             );
         }
         // Transfer Tokens to User
+        console2.log("Amount Out: ", _amountOut);
         if (_amountOut > 0) {
             market.transferOutTokens(_user, _amountOut, _isLong, _reverseWrap);
         }
@@ -675,8 +685,7 @@ library TradeLogic {
          * Store collateral for the user. Let's us keep track of any collateral as it may
          * fluctuate in price.
          * When the user creates a position, a snapshot is taken of the collateral amount.
-         * Excess gained / loss needs to be tracked here, and realized into the pool
-         * @audit
+         * Excess gained / loss is accounted for and settled via the pool
          */
         market.updateCollateralAmount(_collateralDelta, _user, _isLong, _isReserve, _isFullDecrease);
     }
@@ -781,5 +790,6 @@ library TradeLogic {
         invariants.initialStorage = market.getStorage(_ticker);
         invariants.initialState = market.getState(_isLong);
         invariants.storedCollateral = market.collateralAmounts(_user, _isLong);
+        invariants.balanceBefore = market.getVaultBalance(_isLong);
     }
 }

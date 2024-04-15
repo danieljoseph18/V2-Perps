@@ -13,16 +13,20 @@ import {ISwapRouter} from "./interfaces/ISwapRouter.sol";
 import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV2V3Interface.sol";
+import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Oracle} from "./Oracle.sol";
 
 /// @dev - Needs LINK / subscription to fulfill requests -> need to put this cost onto users
-// @audit - needs to be upgradeable for new releases of Chainlink Functions
-contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
+contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using EnumerableMap for EnumerableMap.PriceRequestMap;
 
     uint256 public constant PRICE_DECIMALS = 30;
+    // Length of 1 Bytes32 Word
+    uint8 private constant WORD = 32;
+    uint8 private constant MIN_EXPIRATION_TIME = 2 minutes;
+    uint64 private constant LINK_BASE_UNIT = 1e18;
     // Uniswap V3 Router address on Network
     address public immutable UNISWAP_V3_ROUTER;
     // Uniswap V3 Factory address on Network
@@ -64,17 +68,23 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     uint256 public timeToExpiration;
 
     // State variable to store the returned character information
-    mapping(bytes32 requestId => mapping(string ticker => Price priceResponse)) private prices;
-    mapping(bytes32 requestId => string[] tickers) assetsWithPrices;
-    mapping(bytes32 requestId => Pnl cumulativePnl) public cumulativePnl;
+    mapping(string ticker => mapping(uint48 blockTimestamp => Price priceResponse)) private prices;
+    mapping(address market => mapping(uint48 blockTimestamp => Pnl cumulativePnl)) public cumulativePnl;
     // store who requested the data and what type of data was requested
     // only the keeper who requested can fill the order for non market orders
     // all pricing should be cleared once the request is filled
     // data should be tied only to the request as its specific to the request
     mapping(string ticker => uint256 baseUnit) public baseUnits;
-    // Can probably purge some of these
+    /**
+     * audit - to prevent multiple requests for the same action, we can perhaps store a generic
+     * request signature. If a request already exists for the same action, we can prevent the
+     * request from processing and save the end user some gas.
+     */
+    // Dictionary to enable clearing of the RequestKey
+    mapping(bytes32 id => bytes32 key) private idToKey;
     EnumerableMap.PriceRequestMap private requestData;
     EnumerableSet.Bytes32Set private assetIds;
+    EnumerableSet.Bytes32Set private requestKeys;
 
     /**
      * @notice Initializes the contract with the Chainlink router address and sets the contract owner
@@ -187,10 +197,15 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         external
         payable
         onlyRouter
+        nonReentrant
         returns (bytes32 requestId)
     {
         Oracle.isSequencerUp(this);
+        // Compute the key and check if the same request exists
+        bytes32 priceRequestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
+        if (requestKeys.contains(priceRequestKey)) return bytes32(0);
         // Convert ETH into Link
+        // @audit - convert to arbitrage version
         _convertEthToLink(msg.value);
         // Initialize the request
         FunctionsRequest.Request memory req;
@@ -200,8 +215,15 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         // Send the request and store the request ID
         requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, DON_ID);
 
-        RequestData memory data = RequestData({requester: _requester, requestType: RequestType.PRICE_UPDATE});
+        RequestData memory data = RequestData({
+            requester: _requester,
+            blockTimestamp: _blockTimestamp(),
+            requestType: RequestType.PRICE_UPDATE
+        });
 
+        // Add the Request to Storage
+        requestKeys.add(priceRequestKey);
+        idToKey[requestId] = priceRequestKey;
         requestData.set(requestId, data);
 
         return requestId;
@@ -212,13 +234,17 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         external
         payable
         onlyRouter
+        nonReentrant
         returns (bytes32 requestId)
     {
         // Need to check the market is valid
         // If the market is not valid, revert
         if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
+        // Compute the key and check if the same request exists
+        bytes32 cumulativePnlRequestKey = _generateKey(abi.encode(market, _requester, _blockTimestamp()));
+        if (requestKeys.contains(cumulativePnlRequestKey)) return bytes32(0);
 
-        // Convert ETH into Link
+        // @audit - convert to arbitrage version
         _convertEthToLink(msg.value);
 
         // get all of the assets from the market
@@ -233,8 +259,15 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         // Send the request and store the request ID
         requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, DON_ID);
 
-        RequestData memory data = RequestData({requester: _requester, requestType: RequestType.CUMULATIVE_PNL});
+        RequestData memory data = RequestData({
+            requester: _requester,
+            blockTimestamp: _blockTimestamp(),
+            requestType: RequestType.CUMULATIVE_PNL
+        });
 
+        // Add the Request to Storage
+        requestKeys.add(cumulativePnlRequestKey);
+        idToKey[requestId] = cumulativePnlRequestKey;
         requestData.set(requestId, data);
 
         return requestId;
@@ -248,45 +281,48 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
      */
     // Decode the response, according to the structure of the request
     // Try to avoid reverting, and instead return without storing the price response if invalid.
+    // @audit - what if the request for the block failed --> how can users price their assets?
+    // @audit - what if the data is already in storage? How do we prevent the consumer from running?
     function fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
         // Return if invalid requestId
         if (!requestData.contains(requestId)) return;
         // Return if an error is thrown
+        // @audit - What if an error is thrown but the response is still valid?
         if (err.length > 0) return;
         // Remove the RequestId from storage and return if fail
-        bool success = requestData.remove(requestId);
-        if (!success) return;
+        // @audit - could this clearing cause issues as it's a struct?
+        if (!requestData.remove(requestId)) return;
+        requestKeys.remove(idToKey[requestId]);
+        delete idToKey[requestId];
         // Get the request type of the request
         RequestData memory data = requestData.get(requestId);
         if (data.requestType == RequestType.PRICE_UPDATE) {
             // Fulfill the price update request
-            UnpackedPriceResponse[] memory unpackedResponse = abi.decode(response, (UnpackedPriceResponse[]));
-            uint256 len = unpackedResponse.length;
+            uint256 len = response.length;
+            if (len % WORD != 0) revert PriceFeed_InvalidResponseLength();
             for (uint256 i = 0; i < len;) {
-                uint256 compactedPriceData = unpackedResponse[i].compactedPrices;
+                Price memory price;
+                (price.ticker, price.precision, price.variance, price.timestamp, price.med) =
+                    abi.decode(response, (bytes15, uint8, uint16, uint48, uint64));
 
-                Price storage price = prices[requestId][unpackedResponse[i].ticker];
-
-                // Prices compacted as: uint64 minPrice, uint64 medPrice, uint64 maxPrice, uint8 priceDecimals
-                // use bitshifting to unpack the prices
-                uint256 decimals = (compactedPriceData >> 192) & 0xFF;
-                price.min = (compactedPriceData & 0xFFFFFFFF) * (10 ** (PRICE_DECIMALS - decimals));
-                price.med = ((compactedPriceData >> 64) & 0xFFFFFFFF) * (10 ** (PRICE_DECIMALS - decimals));
-                price.max = ((compactedPriceData >> 128) & 0xFFFFFFFF) * (10 ** (PRICE_DECIMALS - decimals));
-                price.expirationTimestamp = block.timestamp + timeToExpiration;
-
-                // Add the asset to the list of assets with prices
-                assetsWithPrices[requestId].push(unpackedResponse[i].ticker);
+                // Store the price in storage
+                prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
 
                 unchecked {
-                    ++i;
+                    i += WORD;
                 }
             }
         } else if (data.requestType == RequestType.CUMULATIVE_PNL) {
-            // Fulfill the cumulative pnl request
-            UnpackedPnlResponse memory unpackedResponse = abi.decode(response, (UnpackedPnlResponse));
-            cumulativePnl[requestId].cumulativePnl = unpackedResponse.cumulativePnl;
-            cumulativePnl[requestId].wasSigned = true;
+            // Fulfill the cumulative PNL request
+            uint256 len = response.length;
+            if (len != WORD) revert PriceFeed_InvalidResponseLength();
+
+            Pnl memory pnl;
+            (pnl.precision, pnl.market, pnl.timestamp, pnl.cumulativePnl) =
+                abi.decode(response, (uint8, address, uint48, int40));
+
+            // Store the cumulative PNL in the mapping
+            cumulativePnl[pnl.market][pnl.timestamp] = pnl;
         } else {
             revert PriceFeed_InvalidRequestType();
         }
@@ -295,34 +331,12 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         emit Response(requestId, data, response, err);
     }
 
-    function clearSignedPrices(IMarket market, bytes32 _requestId) external onlyTradeStorageOrMarket(address(market)) {
-        if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
-        // loop through the assets with prices and clear them from storage
-        string[] memory assets = assetsWithPrices[_requestId];
-        uint256 len = assets.length;
-        for (uint256 i = 0; i < len;) {
-            // Can pop in any order as assets isn't a storage ref
-            assetsWithPrices[_requestId].pop();
-            delete prices[_requestId][assets[i]];
-            unchecked {
-                ++i;
-            }
-        }
-        emit AssetPricesCleared();
-    }
-
-    function clearCumulativePnl(IMarket market, bytes32 _requestId) external onlyMarket(address(market)) {
-        if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
-        delete cumulativePnl[_requestId];
-        emit PnlCleared(address(market));
-    }
-
     function estimateRequestCost() external view returns (uint256) {
         // Get the current gas price
         uint256 gasPrice = tx.gasprice;
 
         // Calculate the overestimated gas price
-        uint256 overestimatedGasPrice = gasPrice * 110 / 100;
+        uint256 overestimatedGasPrice = (gasPrice * 110) / 100;
 
         // Calculate the total estimated gas cost in native units
         uint256 totalEstimatedGasCost = overestimatedGasPrice * (gasOverhead + callbackGasLimit);
@@ -330,7 +344,7 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         // Convert the total estimated gas cost to LINK using the price feed or fallback ratio
         uint256 totalEstimatedGasCostInLink;
         try AggregatorV2V3Interface(nativeLinkPriceFeed).latestAnswer() returns (int256 answer) {
-            totalEstimatedGasCostInLink = totalEstimatedGasCost * uint256(answer) / 1e18;
+            totalEstimatedGasCostInLink = totalEstimatedGasCost * uint256(answer) / LINK_BASE_UNIT;
         } catch {
             totalEstimatedGasCostInLink = totalEstimatedGasCost / fallbackWeiToLinkRatio;
         }
@@ -344,6 +358,14 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
     /**
      * When Ether is received, it needs to be swapped for LINK to pay for the fee of the request.
      * The execution fee should be sufficient to cover the cost of the request in LINK.
+     */
+    // @audit
+    /**
+     * Can make this an open function that anyone can call to convert ETH to LINK,
+     * then get paid a small settlement fee for doing so. Basically incentivize
+     * users to settle all Ether on the contract accumulated for LINK.
+     *
+     * Need to punish people from manipulating the AMM to extract value from the contract.
      */
     function _convertEthToLink(uint256 _ethAmount) private {
         // Get the Uniswap V3 router instance
@@ -365,7 +387,7 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
         uint24 feeTier = 3000;
 
         // Swap WETH for LINK
-        uniswapRouter.exactInput(
+        uint256 amountOut = uniswapRouter.exactInput(
             ISwapRouter.ExactInputParams({
                 path: abi.encodePacked(path[0], feeTier, path[1]),
                 recipient: address(this),
@@ -374,17 +396,26 @@ contract PriceFeed is FunctionsClient, RoleValidation, IPriceFeed {
                 amountOutMinimum: 0
             })
         );
+        if (amountOut == 0) revert PriceFeed_SwapFailed();
     }
 
-    function getPrices(bytes32 _requestId, string memory _ticker) external view returns (Price memory signedPrices) {
-        signedPrices = prices[_requestId][_ticker];
-        if (signedPrices.med == 0) revert PriceFeed_PriceNotSigned();
-        if (signedPrices.expirationTimestamp < block.timestamp) revert PriceFeed_PriceExpired();
+    function _blockTimestamp() internal view returns (uint48) {
+        return uint48(block.timestamp);
     }
 
-    function getCumulativePnl(bytes32 _requestId) external view returns (int256 pnl) {
-        pnl = cumulativePnl[_requestId].cumulativePnl;
-        if (!cumulativePnl[_requestId].wasSigned) revert PriceFeed_PnlNotSigned();
+    function _generateKey(bytes memory _args) internal pure returns (bytes32) {
+        return keccak256(_args);
+    }
+
+    function getPrices(string memory _ticker, uint48 _timestamp) external view returns (Price memory signedPrices) {
+        signedPrices = prices[_ticker][_timestamp];
+        if (signedPrices.timestamp == 0) revert PriceFeed_PriceNotSigned();
+        if (signedPrices.timestamp + MIN_EXPIRATION_TIME < block.timestamp) revert PriceFeed_PriceExpired();
+    }
+
+    function getCumulativePnl(address _market, uint48 _timestamp) external view returns (int256 pnl) {
+        pnl = cumulativePnl[_market][_timestamp].cumulativePnl;
+        if (cumulativePnl[_market][_timestamp].market == address(0)) revert PriceFeed_PnlNotSigned();
     }
 
     function priceUpdateRequested(bytes32 _requestId) external view returns (bool) {

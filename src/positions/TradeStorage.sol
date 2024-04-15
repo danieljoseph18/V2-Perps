@@ -107,6 +107,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit FeesSet(_liquidationFee, _positionFee);
     }
 
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyAdmin {
+        priceFeed = _priceFeed;
+    }
+
     /**
      * ===================================== Order Functions =====================================
      */

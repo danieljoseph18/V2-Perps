@@ -83,7 +83,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
-    function executeDeposit(IMarket market, bytes32 _key) external payable nonReentrant onlyKeeper {
+    function executeDeposit(IMarket market, bytes32 _key) external payable nonReentrant {
         // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
 
@@ -120,7 +120,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         if (feeToRefund > 0) payable(msg.sender).sendValue(feeToRefund);
     }
 
-    function executeWithdrawal(IMarket market, bytes32 _key) external payable nonReentrant onlyKeeper {
+    function executeWithdrawal(IMarket market, bytes32 _key) external payable nonReentrant {
         // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
 
@@ -192,7 +192,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         external
         payable
         nonReentrant
-        onlyKeeper
     {
         // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
@@ -219,11 +218,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     // Only person who requested the pricing for an order should be able to initiate the liquidation,
     // up until a certain time buffer. After that time buffer, any user should be able to.
     /// @dev - Caller needs to call Router.requestExecutionPricing before
-    function liquidatePosition(IMarket market, bytes32 _positionKey, bytes32 _requestId)
-        external
-        payable
-        onlyLiquidationKeeper
-    {
+    function liquidatePosition(IMarket market, bytes32 _positionKey, bytes32 _requestId) external payable {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // liquidate the position
         try tradeStorage.liquidatePosition(_positionKey, _requestId, msg.sender) {}
@@ -232,21 +227,17 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         }
     }
 
-    /// @dev - Only callable from Keeper or Request Owner
     function cancelOrderRequest(IMarket market, bytes32 _key, bool _isLimit) external payable nonReentrant {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Fetch the Request
         Position.Request memory request = tradeStorage.getOrder(_key);
         // Check it exists
         if (request.user == address(0)) revert PositionManager_RequestDoesNotExist();
-        // Check if the caller's permissions
-        if (!roleStorage.hasRole(Roles.KEEPER, msg.sender)) {
-            // Check the caller is the position owner
-            if (msg.sender != request.user) revert PositionManager_NotPositionOwner();
-            // Check sufficient time has passed
-            if (block.timestamp < request.requestTimestamp + tradeStorage.minCancellationTime()) {
-                revert PositionManager_InsufficientDelay();
-            }
+        // Check the caller is the position owner
+        if (msg.sender != request.user) revert PositionManager_NotPositionOwner();
+        // Check sufficient time has passed
+        if (block.timestamp < request.requestTimestamp + tradeStorage.minCancellationTime()) {
+            revert PositionManager_InsufficientDelay();
         }
         // Cancel the Request
         tradeStorage.cancelOrderRequest(_key, _isLimit);
@@ -260,7 +251,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     // Only person who requested the pricing for an order should be able to initiate the adl,
     // up until a certain time buffer. After that time buffer, any user should be able to.
     /// @dev - Caller needs to call Router.requestExecutionPricing before and provide a valid requestId
-    function executeAdl(IMarket market, bytes32 _requestId, bytes32 _positionKey) external payable onlyAdlKeeper {
+    function executeAdl(IMarket market, bytes32 _requestId, bytes32 _positionKey) external payable {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the ADL
         tradeStorage.executeAdl(_positionKey, _requestId, msg.sender);

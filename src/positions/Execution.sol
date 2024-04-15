@@ -17,6 +17,7 @@ import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {mulDiv} from "@prb/math/Common.sol";
+import {console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -303,6 +304,11 @@ library Execution {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
+        // If collateral delta > collateral, revert
+        if (
+            _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit)
+                > position.collateral
+        ) revert Execution_InvalidPosition();
         uint256 initialCollateral = position.collateral;
         // Calculate Fee + Fee for executor
         (feeState.positionFee, feeState.feeForExecutor, feeState.affiliateRebate, feeState.referrer) =
@@ -450,7 +456,6 @@ library Execution {
         );
     }
 
-    // @audit - need to adl ADL fees to this function --> can replace the fee for executor.
     function decreasePosition(
         IMarket market,
         ITradeStorage tradeStorage,
@@ -494,11 +499,7 @@ library Execution {
         // No Calculation for After Fee Amount here --> liquidations can be insolvent, so it's only checked for decrease case.
         // Calculate Pnl for decrease
         feeState.realizedPnl = _calculatePnl(_prices, position, _params.request.input.sizeDelta);
-        // If ADL, adjust the collateral / size delta to cover fees
 
-        // @audit - for ADLs we need to make sure the computed collateral delta is always
-        // enough to cover fees.
-        // Fees should probably be deducted from any realized pnl.
         if (_params.isAdl) {
             feeState.feeForExecutor = _calculateFeeForAdl(
                 _params.request.input.sizeDelta,
@@ -512,9 +513,10 @@ library Execution {
         uint256 losses = feeState.borrowFee + feeState.positionFee + feeState.feeForExecutor + feeState.affiliateRebate;
         if (feeState.realizedPnl < 0) losses += feeState.realizedPnl.abs();
         if (feeState.fundingFee < 0) losses += feeState.fundingFee.abs();
+        uint256 maintenanceCollateral = _getMaintenanceCollateral(market, position);
 
         // Liquidation Case
-        if (losses.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit) >= position.collateral) {
+        if (losses.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit) >= maintenanceCollateral) {
             (_params, feeState) =
                 _initiateLiquidation(_params, _prices, feeState, position.size, position.collateral, _liquidationFee);
         } else {
@@ -773,9 +775,8 @@ library Execution {
             _prices.impactedPrice,
             false
         );
-        // Add / Subtract PNL
-        // @audit - what about funding?
 
+        // Add / Subtract PNL
         _feeState.afterFeeAmount = _feeState.realizedPnl > 0
             ? _feeState.afterFeeAmount + _feeState.realizedPnl.abs()
             : _feeState.afterFeeAmount - _feeState.realizedPnl.abs();
@@ -933,8 +934,6 @@ library Execution {
         Position.Settlement memory _params,
         Prices memory _prices
     ) private pure returns (uint256 collateralDelta, uint256 sizeDelta, bool isFullDecrease) {
-        // Full Close Case
-
         if (
             _params.request.input.sizeDelta >= _position.size
                 || _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit)
@@ -953,5 +952,14 @@ library Execution {
             collateralDelta = _params.request.input.collateralDelta;
             sizeDelta = _params.request.input.sizeDelta;
         }
+    }
+
+    function _getMaintenanceCollateral(IMarket market, Position.Data memory _position)
+        private
+        view
+        returns (uint256 maintenanceCollateral)
+    {
+        maintenanceCollateral =
+            _position.collateral.percentage(MarketUtils.getMaintenanceMargin(market, _position.ticker));
     }
 }

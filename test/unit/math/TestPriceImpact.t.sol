@@ -111,13 +111,7 @@ contract TestPriceImpact is Test {
             baseUnit: 1e18
         });
         marketFactory.requestNewMarket{value: 0.01 ether}(request);
-        market = Market(
-            payable(
-                marketFactory.executeNewMarket(
-                    marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker)
-                )
-            )
-        );
+        market = Market(payable(marketFactory.executeNewMarket(marketFactory.getRequestKeys()[0])));
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.rewardTracker()));
@@ -172,13 +166,7 @@ contract TestPriceImpact is Test {
             baseUnit: 1e18
         });
         marketFactory.requestNewMarket{value: 0.01 ether}(request);
-        market = Market(
-            payable(
-                marketFactory.executeNewMarket(
-                    marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker)
-                )
-            )
-        );
+        market = Market(payable(marketFactory.executeNewMarket(marketFactory.getRequestKeys()[0])));
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.rewardTracker()));
@@ -241,11 +229,13 @@ contract TestPriceImpact is Test {
         vm.assume(_test.sizeDelta > 0);
 
         // Mock Storage
-        IMarket.MarketStorage memory marketStorage = market.getStorage(ethTicker);
-        marketStorage.openInterest.longOpenInterest = _test.longOi;
-        marketStorage.openInterest.shortOpenInterest = _test.shortOi;
+        IMarket.OpenInterestValues memory openInterest = market.getOpenInterestValues(ethTicker);
+        openInterest.longOpenInterest = _test.longOi;
+        openInterest.shortOpenInterest = _test.shortOi;
         vm.mockCall(
-            address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(marketStorage)
+            address(market),
+            abi.encodeWithSelector(market.getOpenInterestValues.selector, ethTicker),
+            abi.encode(openInterest)
         );
         vm.mockCall(
             address(market),

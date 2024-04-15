@@ -49,6 +49,7 @@ library MarketLogic {
     error MarketLogic_InvalidOpenInterestDelta();
     error MarketLogic_FailedToRemoveRequest();
     error MarketLogic_FailedToAddRequest();
+    error MarketLogic_AllocationLength();
 
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
     event DepositExecuted(
@@ -63,13 +64,15 @@ library MarketLogic {
     event TokenAdded(string ticker);
     event TokenRemoved(string ticker);
 
-    uint256 private constant BITMASK_16 = type(uint256).max >> (256 - 16);
-    uint16 private constant TOTAL_ALLOCATION = 10000;
+    uint256 private constant BITMASK_8 = type(uint256).max >> (256 - 8);
+    uint8 private constant TOTAL_ALLOCATION = 100;
     // Max 100 assets per market (could fit 12 more in last uint256, but 100 used for simplicity)
     // Fits 16 allocations per uint256
     uint8 private constant MAX_ASSETS = 100;
     uint32 private constant MIN_LEVERAGE = 100; // Min 1x Leverage
     uint32 private constant MAX_LEVERAGE = 1000_00; // Max 1000x leverage
+    uint64 private constant MIN_MAINTENANCE_MARGIN = 0.005e18; // 0.5%
+    uint64 private constant MAX_MAINTENANCE_MARGIN = 0.1e18; // 10%
     uint64 private constant MIN_RESERVE_FACTOR = 0.1e18; // 10% reserve factor
     uint64 private constant MAX_RESERVE_FACTOR = 0.5e18; // 50% reserve factor
     int64 private constant MIN_VELOCITY = 0.001e18; // 0.1% per day
@@ -102,11 +105,14 @@ library MarketLogic {
         }
     }
 
-    // @audit - can make private and move validation function into here
-    function validateConfig(IMarket.Config calldata _config) internal pure {
+    function validateConfig(IMarket.Config calldata _config) external pure {
         /* 1. Validate the initial inputs */
         // Check Leverage is within bounds
         if (_config.maxLeverage < MIN_LEVERAGE || _config.maxLeverage > MAX_LEVERAGE) {
+            revert MarketLogic_InvalidLeverage();
+        }
+        // Check maintenance margin is within bounds
+        if (_config.maintenanceMargin < MIN_MAINTENANCE_MARGIN || _config.maintenanceMargin > MAX_MAINTENANCE_MARGIN) {
             revert MarketLogic_InvalidLeverage();
         }
         // Check the Reserve Factor is within bounds
@@ -266,15 +272,13 @@ library MarketLogic {
         IMarket.MarketStorage storage marketStorage,
         IMarket.Config calldata _config,
         string memory _ticker,
-        uint256[] calldata _newAllocations,
+        bytes calldata _newAllocations,
         bytes32 _priceRequestId
     ) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
         if (market.getAssetsInMarket() >= MAX_ASSETS) revert MarketLogic_MaxAssetsReached();
         if (market.isAssetInMarket(_ticker)) revert MarketLogic_TokenAlreadyExists();
-        // Valdiate Config
-        validateConfig(_config);
         // Add asset to storage
         market.addAsset(_ticker);
         // Reallocate
@@ -289,7 +293,7 @@ library MarketLogic {
     function removeToken(
         IPriceFeed priceFeed,
         string memory _ticker,
-        uint256[] calldata _newAllocations,
+        bytes calldata _newAllocations,
         bytes32 _priceRequestId
     ) internal {
         IMarket market = IMarket(address(this));
@@ -307,43 +311,37 @@ library MarketLogic {
 
     /// @dev - Caller must've requested a price before calling this function
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    // @audit - can we use a storage pointer for this?
-    function reallocate(IPriceFeed priceFeed, uint256[] memory _allocations, bytes32 _priceRequestId) internal {
+    function reallocate(IPriceFeed priceFeed, bytes calldata _allocations, bytes32 _priceRequestId) internal {
         IMarket market = IMarket(address(this));
-        if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
+
         // Fetch token prices
         if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert MarketLogic_InvalidPriceRequest();
+
         uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
         uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
+
         // Copy tickers to memory
         string[] memory assetTickers = market.getTickers();
-        uint256 assetLen = assetTickers.length;
-        uint256 total;
-        uint256 len = _allocations.length;
-        for (uint256 i = 0; i < len;) {
-            uint256 allocation = _allocations[i];
-            for (uint256 j = 0; j < 16 && i * 16 + j < assetLen;) {
-                // Extract Allocation Value using bitshifting
-                uint256 allocationValue = (allocation >> (240 - j * 16)) & BITMASK_16;
-                // Increment Total
-                total += allocationValue;
-                // Update Storage
-                market.setAllocationShare(assetTickers[i * 16 + j], allocationValue);
-                // Check the allocation value -> new max open interest must be > current open interest
-                _validateOpenInterest(
-                    market, priceFeed, assetTickers[i * 16 + j], _priceRequestId, longTokenPrice, shortTokenPrice
-                );
-                // Iterate
-                unchecked {
-                    ++j;
-                }
-            }
+        if (_allocations.length != assetTickers.length) revert MarketLogic_AllocationLength();
+
+        uint8 total = 0;
+
+        // Iterate over each byte in allocations calldata
+        for (uint256 i = 0; i < _allocations.length;) {
+            uint8 allocationValue = uint8(_allocations[i]);
+            // Update Storage
+            market.setAllocationShare(assetTickers[i], allocationValue);
+            // Check the allocation value -> new max open interest must be > current open interest
+            _validateOpenInterest(market, priceFeed, assetTickers[i], _priceRequestId, longTokenPrice, shortTokenPrice);
+            // Increment total
+            total += allocationValue;
             unchecked {
                 ++i;
             }
         }
 
         if (total != TOTAL_ALLOCATION) revert MarketLogic_InvalidCumulativeAllocation();
+
         // Clear the prices
         priceFeed.clearSignedPrices(market, _priceRequestId);
     }
@@ -518,7 +516,7 @@ library MarketLogic {
         // Get the Long Max Oi
         uint256 longMaxOi =
             MarketUtils.getAvailableOiUsd(market, _ticker, indexPrice, _longSignedPrice, indexBaseUnit, true);
-        IMarket.OpenInterestValues memory oi = market.getStorage(_ticker).openInterest;
+        IMarket.OpenInterestValues memory oi = market.getOpenInterestValues(_ticker);
         // Get the Current oi
         if (longMaxOi < oi.longOpenInterest) revert MarketLogic_InvalidAllocation();
         // Get the Short Max Oi
@@ -530,9 +528,9 @@ library MarketLogic {
 
     function _generateKey(address _owner, address _tokenIn, uint256 _tokenAmount, bool _isDeposit)
         private
-        pure
+        view
         returns (bytes32)
     {
-        return keccak256(abi.encode(_owner, _tokenIn, _tokenAmount, _isDeposit));
+        return keccak256(abi.encode(_owner, _tokenIn, _tokenAmount, _isDeposit, block.timestamp));
     }
 }

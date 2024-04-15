@@ -107,13 +107,7 @@ contract TestAltOrders is Test {
             baseUnit: 1e18
         });
         marketFactory.requestNewMarket{value: 0.01 ether}(request);
-        market = Market(
-            payable(
-                marketFactory.executeNewMarket(
-                    marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker)
-                )
-            )
-        );
+        market = Market(payable(marketFactory.executeNewMarket(marketFactory.getRequestKeys()[0])));
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.rewardTracker()));
@@ -484,18 +478,18 @@ contract TestAltOrders is Test {
         positionManager.executePosition(market, key, bytes32(0), OWNER);
         vm.stopPrank();
 
-        IMarket.MarketStorage memory marketStorage = market.getStorage(ethTicker);
+        IMarket.PnlValues memory pnl = market.getPnlValues(ethTicker);
         if (_isLong) {
-            marketStorage.pnl.longAverageEntryPriceUsd = 1000e30;
+            pnl.longAverageEntryPriceUsd = 1000e30;
             _newPrice = bound(_newPrice, 5000e30, 100_000e30);
         } else {
-            marketStorage.pnl.shortAverageEntryPriceUsd = 10_000e30;
+            pnl.shortAverageEntryPriceUsd = 10_000e30;
             _newPrice = bound(_newPrice, 1e30, 2000e30);
         }
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(MarketUtils.getAverageEntryPrice.selector, market, ethTicker, _isLong),
-            abi.encode(marketStorage)
+            abi.encodeWithSelector(market.getPnlValues.selector, market, ethTicker, _isLong),
+            abi.encode(pnl)
         );
 
         // sign the new price

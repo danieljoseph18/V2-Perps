@@ -5,6 +5,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {MathUtils} from "./MathUtils.sol";
+import {console2} from "forge-std/Test.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
@@ -52,16 +53,23 @@ library Borrowing {
     ) public view returns (uint256 borrowRatePerDay) {
         // Factor = (open interest usd / max open interest usd)
         uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
+        console2.log("Oi in Rate: ", openInterest);
 
         uint256 maxOi = MarketUtils.getMaxOpenInterest(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
 
+        console2.log("Max Oi in Rate: ", maxOi);
+
         uint256 factor = openInterest.div(maxOi);
 
+        console2.log("Factor in Rate: ", factor);
+
         borrowRatePerDay = market.borrowScale();
-        // Opposite case shouldn't be possible, so just return max rate if it does occur
+
+        // Opposite case cann occur if collateral decreases in value significantly.
         if (openInterest < maxOi) {
             borrowRatePerDay = borrowRatePerDay.percentage(factor);
         }
+        console2.log("Borrow Rate Per Day: ", borrowRatePerDay);
     }
 
     function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) public view returns (uint256 fee) {

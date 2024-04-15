@@ -46,6 +46,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     address public feeReceiver;
     uint256 public marketCreationFee;
     uint256 cumulativeMarketIndex;
+    uint256 requestNonce;
 
     constructor(address _weth, address _usdc, address _roleStorage) RoleValidation(_roleStorage) {
         WETH = _weth;
@@ -100,6 +101,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         multiAssetsEnabled = _multiAssetsEnabled;
     }
 
+    // @audit - need to cap ticker length to 15 bytes
     function requestNewMarket(DeployRequest calldata _request) external payable nonReentrant {
         /* Validate the Inputs */
         // 1. Msg.value should be > marketCreationFee
@@ -116,7 +118,8 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         }
 
         /* Generate a differentiated Request Key based on the inputs */
-        bytes32 requestKey = getMarketRequestKey(msg.sender, _request.indexTokenTicker);
+        bytes32 requestKey = _getMarketRequestKey(msg.sender, _request.indexTokenTicker);
+        ++requestNonce;
 
         // Add the request to storage
         if (!requests.set(requestKey, _request)) revert MarketFactory_FailedToAddMarket();
@@ -197,7 +200,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         ++cumulativeMarketIndex;
 
         // Set Up Roles -> Enable Caller to control Market
-        roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender, msg.sender));
+        roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender));
         roleStorage.setMinter(address(marketToken), address(market));
 
         // Send Market Creation Fee to Executor
@@ -219,14 +222,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Getter Functions =========================
      */
-    function getMarketRequestKey(address _user, string calldata _indexTokenTicker)
-        public
-        pure
-        returns (bytes32 requestKey)
-    {
-        return keccak256(abi.encodePacked(_user, _indexTokenTicker));
-    }
-
     function generateAssetId(string memory _indexTokenTicker) public pure returns (bytes32) {
         return keccak256(abi.encode(_indexTokenTicker));
     }
@@ -250,6 +245,16 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Private Functions =========================
      */
+    /// @dev - Each key has to be 100% unique, as deletion from the map can leave corrupted data
+    /// Uses requestNonce as a nonce, and block.timestamp to ensure uniqueness
+    function _getMarketRequestKey(address _user, string calldata _indexTokenTicker)
+        private
+        view
+        returns (bytes32 requestKey)
+    {
+        return keccak256(abi.encodePacked(_user, _indexTokenTicker, block.timestamp, requestNonce));
+    }
+
     function _deleteMarketRequest(bytes32 _requestKey) private {
         if (!requests.remove(_requestKey)) revert MarketFactory_FailedToRemoveRequest();
     }

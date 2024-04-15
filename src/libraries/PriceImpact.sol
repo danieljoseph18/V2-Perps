@@ -131,11 +131,6 @@ library PriceImpact {
             // priceImpactUsd = positive expression - the negative expression
             priceImpactUsd = positiveImpact - negativeImpact;
         } else {
-            /**
-             * Fully reducing the open interest technically brings the market to perfect harmony.
-             * To avoid incentivizing this case with positive impact, the price impact is set to 0.
-             */
-            if (state.updatedTotalOi == 0) return (_prices.indexPrice, 0);
             // Get the skew scalar and liquidity scalar, depending on direction of price impact
             int256 skewScalar;
             int256 liquidityScalar;
@@ -192,6 +187,11 @@ library PriceImpact {
         int256 _availableOi,
         bool _isIncrease
     ) private pure returns (int256 priceImpactUsd) {
+        /**
+         * Fully reducing the open interest technically brings the market to perfect harmony.
+         * To avoid incentivizing this case with positive impact, the price impact is set to 0.
+         */
+        if (_updatedTotalOi == 0) return 0;
         /**
          * If initialTotalOi is 0, the (initialSkew/initialTotalOi) term is cancelled out.
          * Price impact will always be negative when total oi before is 0.
@@ -255,7 +255,7 @@ library PriceImpact {
         view
         returns (int256)
     {
-        int256 impactPoolUsd = MarketUtils.getImpactPool(market, _ticker).toInt256();
+        int256 impactPoolUsd = market.getImpactPool(_ticker).toInt256();
         if (_priceImpactUsd > impactPoolUsd) {
             return impactPoolUsd;
         } else {

@@ -256,7 +256,6 @@ contract Router is ReentrancyGuard, RoleValidation {
     function requestExecutionPricing(IMarket market, bytes32 _key, bool _isPositionKey)
         external
         payable
-        onlyKeeper
         returns (bytes32 priceRequestId)
     {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
@@ -280,7 +279,7 @@ contract Router is ReentrancyGuard, RoleValidation {
      * 2. market.removeToken
      * 3. market.reallocate
      */
-    function requestPricingForMarket(IMarket market) external payable onlyKeeper returns (bytes32 priceRequestId) {
+    function requestPricingForMarket(IMarket market) external payable returns (bytes32 priceRequestId) {
         string[] memory tickers = market.getTickers();
         uint256 priceUpdateFee = priceFeed.estimateRequestCost();
         if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();

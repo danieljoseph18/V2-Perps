@@ -23,7 +23,7 @@ library MarketUtils {
     uint64 public constant FEE_SCALE = 0.01e18; // 1%
     uint64 private constant LONG_BASE_UNIT = 1e18;
 
-    uint16 public constant MAX_ALLOCATION = 10000;
+    uint8 public constant MAX_ALLOCATION = 100;
     uint32 private constant SHORT_BASE_UNIT = 1e6;
     uint64 private constant SHORT_CONVERSION_FACTOR = 1e18;
     uint64 private constant MAX_PNL_FACTOR = 0.45e18;
@@ -108,7 +108,6 @@ library MarketUtils {
     }
 
     /// @dev - Med price used, as in the case of a full withdrawal, a spread between max / min could cause amount to be > pool value
-    // @audit - failing when token amount > pool amount
     function calculateWithdrawalFee(
         uint256 _longPrice,
         uint256 _shortPrice,
@@ -443,7 +442,9 @@ library MarketUtils {
         }
     }
 
-    // @audit - move to external computation
+    /**
+     * Only to be called externally. Very gas inefficient, as it loops through all positions.
+     */
     function calculateCumulativeMarketPnl(
         IMarket market,
         IPriceFeed priceFeed,
@@ -733,8 +734,8 @@ library MarketUtils {
         view
         returns (uint256 longCumulativeBorrowFees, uint256 shortCumulativeBorrowFees)
     {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return (marketStorage.borrowing.longCumulativeBorrowFees, marketStorage.borrowing.shortCumulativeBorrowFees);
+        IMarket.BorrowingValues memory borrowing = market.getBorrowingValues(_ticker);
+        return (borrowing.longCumulativeBorrowFees, borrowing.shortCumulativeBorrowFees);
     }
 
     function getCumulativeBorrowFee(IMarket market, string calldata _ticker, bool _isLong)
@@ -742,15 +743,13 @@ library MarketUtils {
         view
         returns (uint256)
     {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return _isLong
-            ? marketStorage.borrowing.longCumulativeBorrowFees
-            : marketStorage.borrowing.shortCumulativeBorrowFees;
+            ? market.getBorrowingValues(_ticker).longCumulativeBorrowFees
+            : market.getBorrowingValues(_ticker).shortCumulativeBorrowFees;
     }
 
     function getLastFundingUpdate(IMarket market, string calldata _ticker) external view returns (uint48) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.funding.lastFundingUpdate;
+        return market.getFundingValues(_ticker).lastFundingUpdate;
     }
 
     function getFundingRates(IMarket market, string calldata _ticker)
@@ -758,37 +757,30 @@ library MarketUtils {
         view
         returns (int256 rate, int256 velocity)
     {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return (marketStorage.funding.fundingRate, marketStorage.funding.fundingRateVelocity);
+        IMarket.FundingValues memory funding = market.getFundingValues(_ticker);
+        return (funding.fundingRate, funding.fundingRateVelocity);
     }
 
     function getFundingAccrued(IMarket market, string calldata _ticker) external view returns (int256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.funding.fundingAccruedUsd;
+        return market.getFundingValues(_ticker).fundingAccruedUsd;
     }
 
     function getLastBorrowingUpdate(IMarket market, string calldata _ticker) external view returns (uint48) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.borrowing.lastBorrowUpdate;
+        return market.getBorrowingValues(_ticker).lastBorrowUpdate;
     }
 
     function getBorrowingRate(IMarket market, string calldata _ticker, bool _isLong) external view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return _isLong ? marketStorage.borrowing.longBorrowingRate : marketStorage.borrowing.shortBorrowingRate;
+        return _isLong
+            ? market.getBorrowingValues(_ticker).longBorrowingRate
+            : market.getBorrowingValues(_ticker).shortBorrowingRate;
     }
 
     function getConfig(IMarket market, string calldata _ticker) external view returns (IMarket.Config memory) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.config;
+        return market.getConfig(_ticker);
     }
 
-    function getFundingConfig(IMarket market, string calldata _ticker)
-        external
-        view
-        returns (IMarket.FundingConfig memory)
-    {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.config.funding;
+    function getMaintenanceMargin(IMarket market, string calldata _ticker) external view returns (uint256) {
+        return market.getConfig(_ticker).maintenanceMargin;
     }
 
     function getImpactConfig(IMarket market, string calldata _ticker)
@@ -796,33 +788,39 @@ library MarketUtils {
         view
         returns (IMarket.ImpactConfig memory)
     {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.config.impact;
+        return market.getConfig(_ticker).impact;
+    }
+
+    function getFundingConfig(IMarket market, string calldata _ticker)
+        external
+        view
+        returns (IMarket.FundingConfig memory)
+    {
+        return market.getConfig(_ticker).funding;
     }
 
     function getReserveFactor(IMarket market, string calldata _ticker) public view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.config.reserveFactor;
+        return market.getConfig(_ticker).reserveFactor;
     }
 
     function getMaxLeverage(IMarket market, string calldata _ticker) external view returns (uint32) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.config.maxLeverage;
+        return market.getConfig(_ticker).maxLeverage;
     }
 
     function getAllocation(IMarket market, string calldata _ticker) public view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.allocationShare;
+        return market.getStorage(_ticker).allocationShare;
     }
 
     function getOpenInterest(IMarket market, string memory _ticker, bool _isLong) public view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return _isLong ? marketStorage.openInterest.longOpenInterest : marketStorage.openInterest.shortOpenInterest;
+        return _isLong
+            ? market.getOpenInterestValues(_ticker).longOpenInterest
+            : market.getOpenInterestValues(_ticker).shortOpenInterest;
     }
 
     function getAverageEntryPrice(IMarket market, string memory _ticker, bool _isLong) public view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return _isLong ? marketStorage.pnl.longAverageEntryPriceUsd : marketStorage.pnl.shortAverageEntryPriceUsd;
+        return _isLong
+            ? market.getPnlValues(_ticker).longAverageEntryPriceUsd
+            : market.getPnlValues(_ticker).shortAverageEntryPriceUsd;
     }
 
     function getAverageCumulativeBorrowFee(IMarket market, string calldata _ticker, bool _isLong)
@@ -830,15 +828,9 @@ library MarketUtils {
         view
         returns (uint256)
     {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
         return _isLong
-            ? marketStorage.borrowing.weightedAvgCumulativeLong
-            : marketStorage.borrowing.weightedAvgCumulativeShort;
-    }
-
-    function getImpactPool(IMarket market, string calldata _ticker) external view returns (uint256) {
-        IMarket.MarketStorage memory marketStorage = market.getStorage(_ticker);
-        return marketStorage.impactPool;
+            ? market.getBorrowingValues(_ticker).weightedAvgCumulativeLong
+            : market.getBorrowingValues(_ticker).weightedAvgCumulativeShort;
     }
 
     function generateAssetId(string memory _ticker) external pure returns (bytes32) {
@@ -848,6 +840,18 @@ library MarketUtils {
     function hasSufficientLiquidity(IMarket market, uint256 _amount, bool _isLong) external view {
         if (market.totalAvailableLiquidity(_isLong) < _amount) {
             revert MarketUtils_InsufficientFreeLiquidity();
+        }
+    }
+
+    /// @dev - Allocations are in the same order as the tickers in the market array.
+    /// Only used to externally encode desired allocations to input into a function call.
+    function encodeAllocations(uint8[] calldata _allocs) public pure returns (bytes memory allocations) {
+        allocations = new bytes(_allocs.length);
+        for (uint256 i = 0; i < _allocs.length;) {
+            allocations[i] = bytes1(_allocs[i]);
+            unchecked {
+                ++i;
+            }
         }
     }
 }

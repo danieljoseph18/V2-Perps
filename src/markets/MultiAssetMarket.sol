@@ -150,9 +150,10 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     function addToken(
         Config calldata _config,
         string memory _ticker,
-        uint256[] calldata _newAllocations,
+        bytes calldata _newAllocations,
         bytes32 _priceRequestId
     ) external onlyConfigurator(address(this)) nonReentrant {
+        MarketLogic.validateConfig(_config);
         MarketLogic.addToken(
             ITradeStorage(tradeStorage).priceFeed(),
             marketStorage[keccak256(abi.encode(_ticker))],
@@ -163,7 +164,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         );
     }
 
-    function removeToken(string memory _ticker, uint256[] calldata _newAllocations, bytes32 _priceRequestId)
+    function removeToken(string memory _ticker, bytes calldata _newAllocations, bytes32 _priceRequestId)
         external
         onlyConfigurator(address(this))
         nonReentrant
@@ -263,6 +264,8 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Callback Functions  =========================
      */
+    // @audit - have a min allocation of 100 (1%) --> what other checks and balances do we need to make
+    // this truly permissionless?
     function setAllocationShare(string calldata _ticker, uint256 _allocationShare) external onlyCallback {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         marketStorage[assetId].allocationShare = _allocationShare;
@@ -270,7 +273,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
 
     function addAsset(string calldata _ticker) external onlyCallback {
         bytes32 assetId = keccak256(abi.encode(_ticker));
-        assetIds.add(assetId);
+        if (!assetIds.add(assetId)) revert Market_FailedToAddAssetId();
         tickers.push(_ticker);
         emit TokenAdded(assetId);
     }
@@ -298,7 +301,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
      * ========================= External State Functions  =========================
      */
     /// @dev - Caller must've requested a price before calling this function
-    function reallocate(uint256[] memory _allocations, bytes32 _priceRequestId)
+    function reallocate(bytes calldata _allocations, bytes32 _priceRequestId)
         external
         onlyConfigurator(address(this))
         nonReentrant
@@ -454,6 +457,41 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         return marketStorage[assetId];
     }
 
+    function getConfig(string calldata _ticker) external view returns (Config memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].config;
+    }
+
+    function getFundingValues(string calldata _ticker) external view returns (FundingValues memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].funding;
+    }
+
+    function getBorrowingValues(string calldata _ticker) external view returns (BorrowingValues memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].borrowing;
+    }
+
+    function getOpenInterestValues(string calldata _ticker) external view returns (OpenInterestValues memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].openInterest;
+    }
+
+    function getPnlValues(string calldata _ticker) external view returns (PnlValues memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].pnl;
+    }
+
+    function getImpactPool(string calldata _ticker) external view returns (uint256) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].impactPool;
+    }
+
+    function getAllocationShare(string calldata _ticker) external view returns (uint256) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].allocationShare;
+    }
+
     function getRequest(bytes32 _key) external view returns (Input memory) {
         return requests.get(_key);
     }
@@ -472,6 +510,10 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
 
     function requestExists(bytes32 _key) external view returns (bool) {
         return requests.contains(_key);
+    }
+
+    function getVaultBalance(bool _isLong) external view returns (uint256) {
+        return _isLong ? IERC20(WETH).balanceOf(address(this)) : IERC20(USDC).balanceOf(address(this));
     }
 
     function getState(bool _isLong) external view returns (State memory) {
@@ -499,8 +541,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
      */
 
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    function _reallocate(uint256[] memory _allocations, bytes32 _priceRequestId) private {
-        // function reallocate(IMarket market, IPriceFeed priceFeed, uint256[] memory _allocations, bytes32 _priceRequestId)
+    function _reallocate(bytes calldata _allocations, bytes32 _priceRequestId) private {
         MarketLogic.reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _priceRequestId);
     }
 }

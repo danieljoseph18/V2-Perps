@@ -29,6 +29,8 @@ library Oracle {
 
     string private constant LONG_TICKER = "ETH";
     string private constant SHORT_TICKER = "USDC";
+    uint8 private constant PRICE_DECIMALS = 30;
+    uint16 private constant MAX_VARIANCE = 10_000;
 
     function isSequencerUp(IPriceFeed priceFeed) external view {
         address sequencerUptimeFeed = priceFeed.sequencerUptimeFeed();
@@ -54,57 +56,56 @@ library Oracle {
         }
     }
 
-    function getPrice(IPriceFeed priceFeed, bytes32 _requestId, string calldata _ticker)
+    function getPrice(IPriceFeed priceFeed, string calldata _ticker, uint48 _blockTimestamp)
         external
         view
-        returns (uint256 price)
+        returns (uint256 medPrice)
     {
-        price = priceFeed.getPrices(_requestId, _ticker).med;
-        if (price == 0) revert Oracle_PriceNotSet();
+        IPriceFeed.Price memory price = priceFeed.getPrices(_ticker, _blockTimestamp);
+        medPrice = price.med * (10 ** (PRICE_DECIMALS - price.precision));
     }
 
-    function getMaxPrice(IPriceFeed priceFeed, bytes32 _requestId, string calldata _ticker)
-        external
+    function getMaxPrice(IPriceFeed priceFeed, string memory _ticker, uint48 _blockTimestamp)
+        public
         view
         returns (uint256 maxPrice)
     {
-        maxPrice = priceFeed.getPrices(_requestId, _ticker).max;
-        if (maxPrice == 0) revert Oracle_PriceNotSet();
+        IPriceFeed.Price memory price = priceFeed.getPrices(_ticker, _blockTimestamp);
+        uint256 medPrice = price.med * (10 ** (PRICE_DECIMALS - price.precision));
+        maxPrice = medPrice + mulDiv(medPrice, price.variance, MAX_VARIANCE);
     }
 
-    function getMinPrice(IPriceFeed priceFeed, bytes32 _requestId, string calldata _ticker)
-        external
+    function getMinPrice(IPriceFeed priceFeed, string memory _ticker, uint48 _blockTimestamp)
+        public
         view
         returns (uint256 minPrice)
     {
-        minPrice = priceFeed.getPrices(_requestId, _ticker).min;
-        if (minPrice == 0) revert Oracle_PriceNotSet();
+        IPriceFeed.Price memory price = priceFeed.getPrices(_ticker, _blockTimestamp);
+        uint256 medPrice = price.med * (10 ** (PRICE_DECIMALS - price.precision));
+        minPrice = medPrice - mulDiv(medPrice, price.variance, MAX_VARIANCE);
     }
 
-    function getMarketTokenPrices(IPriceFeed priceFeed, bytes32 _requestId, bool _maximise)
+    function getMarketTokenPrices(IPriceFeed priceFeed, bool _maximise, uint48 _blockTimestamp)
         external
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
-        (IPriceFeed.Price memory longPrices, IPriceFeed.Price memory shortPrices) =
-            getMarketTokenPrices(priceFeed, _requestId);
         if (_maximise) {
-            longPrice = longPrices.max;
-            shortPrice = shortPrices.max;
+            longPrice = getMaxPrice(priceFeed, LONG_TICKER, _blockTimestamp);
+            shortPrice = getMaxPrice(priceFeed, SHORT_TICKER, _blockTimestamp);
         } else {
-            longPrice = longPrices.min;
-            shortPrice = shortPrices.min;
+            longPrice = getMinPrice(priceFeed, LONG_TICKER, _blockTimestamp);
+            shortPrice = getMinPrice(priceFeed, SHORT_TICKER, _blockTimestamp);
         }
-        if (longPrice == 0 || shortPrice == 0) revert Oracle_PriceNotSet();
     }
 
-    function getMarketTokenPrices(IPriceFeed priceFeed, bytes32 _requestId)
+    function getMarketTokenPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
         public
         view
         returns (IPriceFeed.Price memory _longPrices, IPriceFeed.Price memory _shortPrices)
     {
-        _longPrices = priceFeed.getPrices(_requestId, LONG_TICKER);
-        _shortPrices = priceFeed.getPrices(_requestId, SHORT_TICKER);
+        _longPrices = priceFeed.getPrices(LONG_TICKER, _blockTimestamp);
+        _shortPrices = priceFeed.getPrices(SHORT_TICKER, _blockTimestamp);
     }
 
     function getBaseUnit(IPriceFeed priceFeed, string calldata _ticker) external view returns (uint256 baseUnit) {

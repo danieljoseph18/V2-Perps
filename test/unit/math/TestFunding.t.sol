@@ -112,13 +112,7 @@ contract TestFunding is Test {
             baseUnit: 1e18
         });
         marketFactory.requestNewMarket{value: 0.01 ether}(request);
-        market = Market(
-            payable(
-                marketFactory.executeNewMarket(
-                    marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker)
-                )
-            )
-        );
+        market = Market(payable(marketFactory.executeNewMarket(marketFactory.getRequestKeys()[0])));
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.rewardTracker()));
@@ -209,12 +203,14 @@ contract TestFunding is Test {
         _longOi = bound(_longOi, 1e30, 1_000_000_000_000e30); // Bound between $1 and $1 Trillion
         _shortOi = bound(_shortOi, 1e30, 1_000_000_000_000e30); // Bound between $1 and $1 Trillion
         // Get market storage
-        IMarket.MarketStorage memory marketStorage = market.getStorage(ethTicker);
-        marketStorage.openInterest.longOpenInterest = _longOi;
-        marketStorage.openInterest.shortOpenInterest = _shortOi;
+        IMarket.OpenInterestValues memory openInterest = market.getOpenInterestValues(ethTicker);
+        openInterest.longOpenInterest = _longOi;
+        openInterest.shortOpenInterest = _shortOi;
         // Mock Fuzz long & short Oi
         vm.mockCall(
-            address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(marketStorage)
+            address(market),
+            abi.encodeWithSelector(market.getOpenInterestValues.selector, ethTicker),
+            abi.encode(openInterest)
         );
         // Skew should be long oi - short oi
         int256 skew = Funding.calculateSkewUsd(market, ethTicker);
@@ -224,13 +220,13 @@ contract TestFunding is Test {
 
     function testGettingTheCurrentFundingRateChangesOverTimeWithVelocity() public setUpMarkets {
         // Get market storage
-        IMarket.MarketStorage memory marketStorage = market.getStorage(ethTicker);
-        marketStorage.funding.fundingRate = 0;
-        marketStorage.funding.fundingRateVelocity = 0.0025e18;
-        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
+        IMarket.FundingValues memory funding = market.getFundingValues(ethTicker);
+        funding.fundingRate = 0;
+        funding.fundingRateVelocity = 0.0025e18;
+        funding.lastFundingUpdate = uint48(block.timestamp);
         // Mock an existing rate and velocity
         vm.mockCall(
-            address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(marketStorage)
+            address(market), abi.encodeWithSelector(market.getFundingValues.selector, ethTicker), abi.encode(funding)
         );
         // get current funding rate
         int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
@@ -284,14 +280,14 @@ contract TestFunding is Test {
     // Test funding trajectory with sign flip
     function testGettingTheCurrentFundingRateIsConsistentAfterASignFlip() public setUpMarkets {
         // Get market storage
-        IMarket.MarketStorage memory marketStorage = market.getStorage(ethTicker);
-        marketStorage.funding.fundingRate = -0.0005e18;
-        marketStorage.funding.fundingRateVelocity = 0.0025e18;
-        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
+        IMarket.FundingValues memory funding = market.getFundingValues(ethTicker);
+        funding.fundingRate = -0.0005e18;
+        funding.fundingRateVelocity = 0.0025e18;
+        funding.lastFundingUpdate = uint48(block.timestamp);
 
         // Mock an existing negative rate and positive velocity
         vm.mockCall(
-            address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(marketStorage)
+            address(market), abi.encodeWithSelector(market.getFundingValues.selector, ethTicker), abi.encode(funding)
         );
         // get current funding rate
         int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
@@ -369,15 +365,15 @@ contract TestFunding is Test {
         values.fundingVelocity = bound(_fundingVelocity, -1e18, 1e18); // Between -100% and 100%
 
         // Get market storage
-        IMarket.MarketStorage memory marketStorage = market.getStorage(ethTicker);
-        marketStorage.funding.fundingRate = values.fundingRate;
-        marketStorage.funding.fundingRateVelocity = values.fundingVelocity;
-        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
-        marketStorage.funding.fundingAccruedUsd = values.entryFundingAccrued;
+        IMarket.FundingValues memory funding = market.getFundingValues(ethTicker);
+        funding.fundingRate = values.fundingRate;
+        funding.fundingRateVelocity = values.fundingVelocity;
+        funding.lastFundingUpdate = uint48(block.timestamp);
+        funding.fundingAccruedUsd = values.entryFundingAccrued;
 
         // Mock the necessary market functions
         vm.mockCall(
-            address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(marketStorage)
+            address(market), abi.encodeWithSelector(market.getFundingValues.selector, ethTicker), abi.encode(funding)
         );
 
         // Pass some time
@@ -407,14 +403,14 @@ contract TestFunding is Test {
         _entryFundingAccrued = bound(_entryFundingAccrued, -1e30, 1e30); // Between -$1 and $1
         _indexPrice = bound(_indexPrice, 100e30, 100_000e30);
         // Get market storage
-        IMarket.MarketStorage memory marketStorage = market.getStorage(ethTicker);
-        marketStorage.funding.fundingRate = _fundingRate;
-        marketStorage.funding.fundingRateVelocity = _fundingVelocity;
-        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
-        marketStorage.funding.fundingAccruedUsd = _entryFundingAccrued;
+        IMarket.FundingValues memory funding = market.getFundingValues(ethTicker);
+        funding.fundingRate = _fundingRate;
+        funding.fundingRateVelocity = _fundingVelocity;
+        funding.lastFundingUpdate = uint48(block.timestamp);
+        funding.fundingAccruedUsd = _entryFundingAccrued;
         // Mock the necessary market functions
         vm.mockCall(
-            address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(marketStorage)
+            address(market), abi.encodeWithSelector(market.getFundingValues.selector, ethTicker), abi.encode(funding)
         );
 
         vm.warp(block.timestamp + 10_000);

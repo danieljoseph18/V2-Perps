@@ -130,6 +130,12 @@ interface IMarket {
          */
         uint32 maxLeverage;
         /**
+         * Percentage of the position that must be maintained as margin.
+         * Used to prevent liquidation threshold from being at the point
+         * of insolvency.
+         */
+        uint64 maintenanceMargin;
+        /**
          * % of liquidity that can't be allocated to positions
          * Reserves should be higher for more volatile markets.
          * Value as a percentage, where 100% = 1e18.
@@ -288,5 +294,13 @@ interface IMarket {
     function addAsset(string calldata _ticker) external;
     function removeAsset(string calldata _ticker) external;
     function getState(bool _isLong) external view returns (State memory);
+    function getConfig(string calldata _ticker) external view returns (Config memory);
+    function getFundingValues(string calldata _ticker) external view returns (FundingValues memory);
+    function getBorrowingValues(string calldata _ticker) external view returns (BorrowingValues memory);
+    function getOpenInterestValues(string calldata _ticker) external view returns (OpenInterestValues memory);
+    function getPnlValues(string calldata _ticker) external view returns (PnlValues memory);
+    function getImpactPool(string calldata _ticker) external view returns (uint256);
+    function getAllocationShare(string calldata _ticker) external view returns (uint256);
+    function getVaultBalance(bool _isLong) external view returns (uint256);
     function collateralAmounts(address _user, bool _isLong) external view returns (uint256);
 }

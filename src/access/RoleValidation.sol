@@ -4,7 +4,6 @@ pragma solidity 0.8.23;
 import {RoleStorage} from "./RoleStorage.sol";
 import {Roles} from "./Roles.sol";
 
-// @audit - remove all keeper modifiers once the roles are properly set up
 contract RoleValidation {
     RoleStorage public immutable roleStorage;
 
@@ -57,28 +56,8 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyKeeper() {
-        if (!roleStorage.hasRole(Roles.KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
     modifier onlyRouter() {
         if (!roleStorage.hasRole(Roles.ROUTER, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
-    modifier onlyStateKeeper() {
-        if (!roleStorage.hasRole(Roles.STATE_KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
-    modifier onlyLiquidationKeeper() {
-        if (!roleStorage.hasRole(Roles.LIQUIDATOR, msg.sender)) revert RoleValidation_AccessDenied();
-        _;
-    }
-
-    modifier onlyAdlKeeper() {
-        if (!roleStorage.hasRole(Roles.ADL_KEEPER, msg.sender)) revert RoleValidation_AccessDenied();
         _;
     }
 

@@ -109,13 +109,7 @@ contract TestReferrals is Test {
             baseUnit: 1e18
         });
         marketFactory.requestNewMarket{value: 0.01 ether}(request);
-        market = Market(
-            payable(
-                marketFactory.executeNewMarket(
-                    marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker)
-                )
-            )
-        );
+        market = Market(payable(marketFactory.executeNewMarket(marketFactory.getRequestKeys()[0])));
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.rewardTracker()));

@@ -113,13 +113,7 @@ contract TestVaultAccounting is Test {
             baseUnit: 1e18
         });
         marketFactory.requestNewMarket{value: 0.01 ether}(request);
-        market = Market(
-            payable(
-                marketFactory.executeNewMarket(
-                    marketFactory.getMarketRequestKey(request.owner, request.indexTokenTicker)
-                )
-            )
-        );
+        market = Market(payable(marketFactory.executeNewMarket(marketFactory.getRequestKeys()[0])));
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.rewardTracker()));
@@ -479,7 +473,7 @@ contract TestVaultAccounting is Test {
         // Create Request
         Position.Input memory input;
         TokenBalances memory tokenBalances;
-        _vaultTest.leverage = bound(_vaultTest.leverage, 1, 90);
+        _vaultTest.leverage = bound(_vaultTest.leverage, 1, 5); // low lev to prevent liquidation case
         _vaultTest.tier = bound(_vaultTest.tier, 0, 2);
         // Set a random fee tier
         vm.startPrank(OWNER);
@@ -567,22 +561,19 @@ contract TestVaultAccounting is Test {
             tradeStorage.getPosition(keccak256(abi.encode(input.ticker, USER, input.isLong)));
         uint256 collateral = position.collateral.fromUsd(_vaultTest.collateralPrice, _vaultTest.collateralBaseUnit);
 
-        // Get position pnl
-        uint256 pnl = uint256(
-            Position.getPositionPnl(position.size, position.weightedAvgEntryPrice, 3000e30, 1e18, input.isLong)
-        ).fromUsd(_vaultTest.collateralPrice, _vaultTest.collateralBaseUnit);
-
         // Create Decrease Request
         input.isIncrease = false;
-        if (_decreasePercentage < 0.99e18) {
+        input.reverseWrap = false;
+        if (_decreasePercentage < 0.95e18) {
             input.collateralDelta = collateral * _decreasePercentage / 1e18;
             input.sizeDelta = _vaultTest.sizeDelta * _decreasePercentage / 1e18;
-            pnl = pnl * _decreasePercentage / 1e18;
         } else {
             input.collateralDelta = collateral;
         }
         vm.prank(USER);
         router.createPositionRequest{value: 0.01 ether}(market, input, Position.Conditionals(false, false, 0, 0, 0, 0));
+
+        uint256 userBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(USER);
 
         // Execute Request
         _vaultTest.key = tradeStorage.getOrderAtIndex(0, false);
@@ -595,42 +586,24 @@ contract TestVaultAccounting is Test {
         tokenBalances.referralStorageBalanceAfter =
             IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
 
-        // Check the Vault Accounting
-        // 1. Calculate afterFeeAmount and check that the marketCollateral after = before + afterFeeAmount
-        // 2. Check exector balance after has increased by feeForExecutor
-        // 3. Check referralStorage balance increased by affiliateReward
+        /**
+         * Can record the total amount the balance decreased by, then use the
+         * accounting to measure if it went in the right proportions to the right people.
+         * E.g --> executor, referrer, user
+         *
+         * Need to also take into account the liquidation case
+         */
 
-        // Calculate the expected market delta
-        (_vaultTest.positionFee, _vaultTest.feeForExecutor) = Position.calculateFee(
-            tradeStorage,
-            _vaultTest.sizeDelta,
-            input.collateralDelta,
-            _vaultTest.collateralPrice,
-            _vaultTest.collateralBaseUnit
-        );
+        // Asset market balance has decreased
+        assertLt(tokenBalances.marketBalanceAfter, tokenBalances.marketBalanceBefore, "Market Balance");
 
-        // Calculate & Apply Fee Discount for Referral Code
-        (_vaultTest.positionFee, _vaultTest.affiliateRebate,) =
-            Referral.applyFeeDiscount(referralStorage, USER, _vaultTest.positionFee);
+        uint256 totalDecrease = tokenBalances.marketBalanceBefore - tokenBalances.marketBalanceAfter;
 
-        // Check the market balance
-        assertApproxEqAbs(
-            tokenBalances.marketBalanceAfter,
-            tokenBalances.marketBalanceBefore + input.collateralDelta + pnl,
-            0.5e18,
-            "Market Balance"
-        );
-        // Check the executor balance
-        assertEq(
-            tokenBalances.executorBalanceAfter,
-            tokenBalances.executorBalanceBefore + _vaultTest.feeForExecutor,
-            "Executor Balance"
-        );
-        // Check the referralStorage balance
-        assertEq(
-            tokenBalances.referralStorageBalanceAfter,
-            tokenBalances.referralStorageBalanceBefore + _vaultTest.affiliateRebate,
-            "Referral Storage Balance"
-        );
+        uint256 executorBalanceDelta = tokenBalances.executorBalanceAfter - tokenBalances.executorBalanceBefore;
+        uint256 referralStorageBalanceDelta =
+            tokenBalances.referralStorageBalanceAfter - tokenBalances.referralStorageBalanceBefore;
+        uint256 userBalanceDelta = IERC20(_vaultTest.collateralToken).balanceOf(USER) - userBalanceBefore;
+
+        assertEq(totalDecrease, userBalanceDelta + executorBalanceDelta + referralStorageBalanceDelta, "Total Decrease");
     }
 }

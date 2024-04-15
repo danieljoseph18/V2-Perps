@@ -127,6 +127,7 @@ contract Deploy is Script {
         IMarket.Config memory defaultMarketConfig = IMarket.Config({
             maxLeverage: 10000, // 100x
             reserveFactor: 0.2e18,
+            maintenanceMargin: 0.005e18, // 0.5%
             // Skew Scale = Skew for Max Velocity
             funding: IMarket.FundingConfig({
                 maxVelocity: 0.09e18, // 9% per day
@@ -163,10 +164,6 @@ contract Deploy is Script {
         contracts.roleStorage.grantRole(Roles.POSITION_MANAGER, address(contracts.positionManager));
         contracts.roleStorage.grantRole(Roles.ROUTER, address(contracts.router));
         contracts.roleStorage.grantRole(Roles.DEFAULT_ADMIN_ROLE, contracts.owner);
-        contracts.roleStorage.grantRole(Roles.STATE_KEEPER, contracts.owner);
-        contracts.roleStorage.grantRole(Roles.ADL_KEEPER, contracts.owner);
-        contracts.roleStorage.grantRole(Roles.KEEPER, contracts.owner);
-        contracts.roleStorage.grantRole(Roles.LIQUIDATOR, contracts.owner);
         contracts.roleStorage.grantRole(Roles.MARKET_KEEPER, contracts.owner);
 
         vm.stopBroadcast();

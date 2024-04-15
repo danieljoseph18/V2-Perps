@@ -32,10 +32,6 @@ contract RoleStorage is AccessControl {
         return marketRoles[_market].tradeStorage == _account;
     }
 
-    function hasStateKeeperRole(address _market, address _account) external view returns (bool) {
-        return marketRoles[_market].stateKeeper == _account;
-    }
-
     function hasConfiguratorRole(address _market, address _account) external view returns (bool) {
         return marketRoles[_market].configurator == _account;
     }

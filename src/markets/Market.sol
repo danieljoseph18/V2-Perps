@@ -20,6 +20,9 @@ import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {MarketLogic} from "./MarketLogic.sol";
 
+// @audit - what other currently hard-coded values can we give to the user to configure?
+// liquidation fee? trading fee? etc.
+// want to give as much customization to the user as possible
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using EnumerableMap for EnumerableMap.MarketRequestMap;
@@ -81,6 +84,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     // Store the Collateral Amount for each User
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
+    // @audit - need to ensure this can't return corrupted data from old requests
     EnumerableMap.MarketRequestMap private requests;
 
     // Each Asset's storage is tracked through this mapping
@@ -117,7 +121,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         // Add Ticker
         tickers.push(_ticker);
         // Initialize Storage
-        marketStorage[assetId].allocationShare = 10000;
+        marketStorage[assetId].allocationShare = 100;
         marketStorage[assetId].config = _config;
         marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
         marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
@@ -413,6 +417,41 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         return marketStorage[assetId];
     }
 
+    function getConfig(string calldata _ticker) external view returns (Config memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].config;
+    }
+
+    function getFundingValues(string calldata _ticker) external view returns (FundingValues memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].funding;
+    }
+
+    function getBorrowingValues(string calldata _ticker) external view returns (BorrowingValues memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].borrowing;
+    }
+
+    function getOpenInterestValues(string calldata _ticker) external view returns (OpenInterestValues memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].openInterest;
+    }
+
+    function getPnlValues(string calldata _ticker) external view returns (PnlValues memory) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].pnl;
+    }
+
+    function getImpactPool(string calldata _ticker) external view returns (uint256) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].impactPool;
+    }
+
+    function getAllocationShare(string calldata _ticker) external view returns (uint256) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return marketStorage[assetId].allocationShare;
+    }
+
     function getRequest(bytes32 _key) external view returns (Input memory) {
         return requests.get(_key);
     }
@@ -431,6 +470,10 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function requestExists(bytes32 _key) external view returns (bool) {
         return requests.contains(_key);
+    }
+
+    function getVaultBalance(bool _isLong) external view returns (uint256) {
+        return _isLong ? IERC20(WETH).balanceOf(address(this)) : IERC20(USDC).balanceOf(address(this));
     }
 
     function getState(bool _isLong) external view returns (State memory) {
