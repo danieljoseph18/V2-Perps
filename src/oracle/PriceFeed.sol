@@ -17,6 +17,7 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Oracle} from "./Oracle.sol";
 
 /// @dev - Needs LINK / subscription to fulfill requests -> need to put this cost onto users
+// @audit - need to introduce a reference price source to ensure the validity of the price output.
 contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -28,6 +29,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     uint8 private constant MIN_EXPIRATION_TIME = 2 minutes;
     uint40 private constant MSB1 = 0x8000000000;
     uint64 private constant LINK_BASE_UNIT = 1e18;
+    uint16 private constant MAX_DATA_LENGTH = 3296;
     // Uniswap V3 Router address on Network
     address public immutable UNISWAP_V3_ROUTER;
     // Uniswap V3 Factory address on Network
@@ -75,7 +77,8 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     // only the keeper who requested can fill the order for non market orders
     // all pricing should be cleared once the request is filled
     // data should be tied only to the request as its specific to the request
-    mapping(string ticker => uint256 baseUnit) public baseUnits;
+    mapping(string ticker => TokenData) private tokenData;
+    mapping(string ticker => bytes32 pythId) public pythIds;
     /**
      * audit - to prevent multiple requests for the same action, we can perhaps store a generic
      * request signature. If a request already exists for the same action, we can prevent the
@@ -157,21 +160,29 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         cumulativePnlSource = _cumulativePnlSource;
     }
 
-    function supportAsset(string memory _ticker, uint256 _baseUnit) external onlyMarketFactory {
+    function supportAsset(string memory _ticker, TokenData memory _tokenData, bytes32 _pythId)
+        external
+        onlyMarketFactory
+    {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (assetIds.contains(assetId)) return; // Return if already supported
+        if (_tokenData.feedType == FeedType.PYTH) {
+            pythIds[_ticker] = _pythId;
+        }
         bool success = assetIds.add(assetId);
         if (!success) revert PriceFeed_AssetSupportFailed();
-        baseUnits[_ticker] = _baseUnit;
-        emit AssetSupported(_ticker, _baseUnit);
+        tokenData[_ticker] = _tokenData;
+        emit AssetSupported(_ticker, _tokenData.tokenDecimals);
     }
 
+    /// @dev - No need to unsupport Pyth Ids --> save gas if asset is re-supported
     function unsupportAsset(string memory _ticker) external onlyAdmin {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (!assetIds.contains(assetId)) return; // Return if not supported
         bool success = assetIds.remove(assetId);
         if (!success) revert PriceFeed_AssetRemovalFailed();
-        delete baseUnits[_ticker];
+        // @audit - corruptible? might need to remove 1 by 1
+        delete tokenData[_ticker];
         emit SupportRemoved(_ticker);
     }
 
@@ -298,71 +309,9 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         // Get the request type of the request
         RequestData memory data = requestData.get(requestId);
         if (data.requestType == RequestType.PRICE_UPDATE) {
-            // Fulfill the price update request
-            uint256 len = response.length;
-            if (len % WORD != 0) revert PriceFeed_InvalidResponseLength();
-            // @audit - response can contain a number of prices to update
-            // need to loop through in 32 byte words and deconstruct as shown.
-            // max length is 100 assets * 32 byte words = 3200 --> uint16 sufficient
-            for (uint16 i = 0; i < len;) {
-                Price memory price;
-                // Decode the encodedPrice into a bytes32
-                // @audit - wrong, needs to be 32 bytes of the current word
-                bytes32 responseBytes = bytes32(response);
-
-                // Extract the values from the bytes32 and store them in the Price struct
-                // truncate first 15 bytes of the response
-                price.ticker = bytes15(responseBytes);
-                // shift response 15 bytes left, then truncate the first byte
-                price.precision = uint8(bytes1((responseBytes << 120)));
-                // shift the response another byte left, then truncate the first 2 bytes
-                price.variance = uint16(bytes2(responseBytes << 128));
-                // shift the response another 2 bytes left, then truncate the first 6 bytes
-                price.timestamp = uint48(bytes6(responseBytes << 144));
-                // shift the response another 6 bytes left, then truncate the first 8 bytes
-                price.med = uint64(bytes8(responseBytes << 192));
-
-                // Store the price in storage
-                prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
-
-                unchecked {
-                    i += WORD;
-                }
-            }
+            _decodeAndStorePrices(response);
         } else if (data.requestType == RequestType.CUMULATIVE_PNL) {
-            // Fulfill the cumulative PNL request
-            uint256 len = response.length;
-            if (len != WORD) revert PriceFeed_InvalidResponseLength();
-
-            Pnl memory pnl;
-
-            bytes32 responseBytes = bytes32(response);
-            // shift the response 1 byte left, then truncate the first byte
-            pnl.precision = uint8(bytes1(responseBytes));
-            // shift the response another byte left, then truncate the first 20 bytes
-            pnl.market = address(bytes20(responseBytes << 8));
-            // shift the response another 20 bytes left, then truncate the first 6 bytes
-            pnl.timestamp = uint48(bytes6(responseBytes << 168));
-            // shift the response another 6 bytes left, then truncate the first 5 bytes
-            // Extract the cumulativePnl as uint40 as we can't directly extract
-            // an int40 from bytes.
-            uint40 pnlValue = uint40(bytes5(responseBytes << 216));
-
-            // Check if the most significant bit is 1 or 0
-            // 0x800... in binary is 1000000... The msb is 1, and all of the rest are 0
-            // Using the & operator, we check if the msb matches
-            // If they match, the number is negative, else positive.
-            if (pnlValue & MSB1 != 0) {
-                // If msb is 1, this indicates the number is negative.
-                // In this case, we flip all of the bits and add 1 to convert from +ve to -ve
-                pnl.cumulativePnl = -int40(~pnlValue + 1);
-            } else {
-                // If msb is 0, the value is positive, so we convert and return as is.
-                pnl.cumulativePnl = int40(pnlValue);
-            }
-
-            // Store the cumulative PNL in the mapping
-            cumulativePnl[pnl.market][pnl.timestamp] = pnl;
+            _decodeAndStorePnl(response);
         } else {
             revert PriceFeed_InvalidRequestType();
         }
@@ -371,6 +320,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         emit Response(requestId, data, response, err);
     }
 
+    // @audit - wrong --> doesn't account for the decimals of a chainlink price
     function estimateRequestCost() external view returns (uint256) {
         // Get the current gas price
         uint256 gasPrice = tx.gasprice;
@@ -382,17 +332,93 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         uint256 totalEstimatedGasCost = overestimatedGasPrice * (gasOverhead + callbackGasLimit);
 
         // Convert the total estimated gas cost to LINK using the price feed or fallback ratio
-        uint256 totalEstimatedGasCostInLink;
+        uint256 estimatedCostInLink;
         try AggregatorV2V3Interface(nativeLinkPriceFeed).latestAnswer() returns (int256 answer) {
-            totalEstimatedGasCostInLink = totalEstimatedGasCost * uint256(answer) / LINK_BASE_UNIT;
+            estimatedCostInLink = totalEstimatedGasCost * uint256(answer) / LINK_BASE_UNIT;
         } catch {
-            totalEstimatedGasCostInLink = totalEstimatedGasCost / fallbackWeiToLinkRatio;
+            estimatedCostInLink = totalEstimatedGasCost / fallbackWeiToLinkRatio;
         }
 
         // Add the premium fee to get the total estimated cost in LINK
-        uint256 totalEstimatedCost = totalEstimatedGasCostInLink + premiumFee;
+        uint256 totalEstimatedCost = estimatedCostInLink + premiumFee;
 
         return totalEstimatedCost;
+    }
+
+    /**
+     * ================================== Private Functions ==================================
+     */
+    function _decodeAndStorePrices(bytes memory _encodedPrices) private {
+        if (_encodedPrices.length > MAX_DATA_LENGTH) revert PriceFeed_PriceUpdateLength();
+        if (_encodedPrices.length % WORD != 0) revert PriceFeed_PriceUpdateLength();
+
+        uint256 numPrices = _encodedPrices.length / 32;
+
+        for (uint16 i = 0; i < numPrices;) {
+            bytes32 encodedPrice;
+
+            // Use yul to extract the encoded price from the bytes
+            // offset = (32 * i) + 32 (first 32 bytes are the length of the byte string)
+            // encodedPrice = mload(encodedPrices[offset:offset+32])
+            assembly {
+                encodedPrice := mload(add(_encodedPrices, add(32, mul(i, 32))))
+            }
+
+            Price memory price = Price(
+                // First 15 bytes are the ticker
+                bytes15(encodedPrice),
+                // Next byte is the precision
+                uint8(encodedPrice[15]),
+                // Shift recorded values to the left and store the first 2 bytes (variance)
+                uint16(bytes2(encodedPrice << 128)),
+                // Shift recorded values to the left and store the first 6 bytes (timestamp)
+                uint48(bytes6(encodedPrice << 144)),
+                // Shift recorded values to the left and store the first 8 bytes (median price)
+                uint64(bytes8(encodedPrice << 192))
+            );
+            // Store the constructed price struct in the mapping
+            prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
+
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _decodeAndStorePnl(bytes memory _encodedPnl) private {
+        // Fulfill the cumulative PNL request
+        uint256 len = _encodedPnl.length;
+        if (len != WORD) revert PriceFeed_InvalidResponseLength();
+
+        Pnl memory pnl;
+
+        bytes32 responseBytes = bytes32(_encodedPnl);
+        // shift the response 1 byte left, then truncate the first byte
+        pnl.precision = uint8(bytes1(responseBytes));
+        // shift the response another byte left, then truncate the first 20 bytes
+        pnl.market = address(bytes20(responseBytes << 8));
+        // shift the response another 20 bytes left, then truncate the first 6 bytes
+        pnl.timestamp = uint48(bytes6(responseBytes << 168));
+        // shift the response another 6 bytes left, then truncate the first 5 bytes
+        // Extract the cumulativePnl as uint40 as we can't directly extract
+        // an int40 from bytes.
+        uint40 pnlValue = uint40(bytes5(responseBytes << 216));
+
+        // Check if the most significant bit is 1 or 0
+        // 0x800... in binary is 1000000... The msb is 1, and all of the rest are 0
+        // Using the & operator, we check if the msb matches
+        // If they match, the number is negative, else positive.
+        if (pnlValue & MSB1 != 0) {
+            // If msb is 1, this indicates the number is negative.
+            // In this case, we flip all of the bits and add 1 to convert from +ve to -ve
+            pnl.cumulativePnl = -int40(~pnlValue + 1);
+        } else {
+            // If msb is 0, the value is positive, so we convert and return as is.
+            pnl.cumulativePnl = int40(pnlValue);
+        }
+
+        // Store the cumulative PNL in the mapping
+        cumulativePnl[pnl.market][pnl.timestamp] = pnl;
     }
 
     /**
@@ -447,15 +473,61 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         return keccak256(_args);
     }
 
+    /**
+     * ================================== External / Getter Functions ==================================
+     */
+
+    // Used to pack price data into a single bytes32 word for fulfillment
+    function encodePrices(
+        string[] calldata _tickers,
+        uint8[] calldata _precisions,
+        uint16[] calldata _variances,
+        uint48[] calldata _timestamps,
+        uint64[] calldata _meds
+    ) external pure returns (bytes memory) {
+        uint16 len = uint16(_tickers.length);
+        bytes32[] memory encodedPrices = new bytes32[](len);
+        // Loop through the prices and encode them into a single bytes32 word
+        for (uint16 i = 0; i < len;) {
+            bytes32 encodedPrice = bytes32(
+                abi.encodePacked(bytes15(bytes(_tickers[i])), _precisions[i], _variances[i], _timestamps[i], _meds[i])
+            );
+            encodedPrices[i] = encodedPrice;
+            unchecked {
+                ++i;
+            }
+        }
+        // Concatenate the encoded prices into a single bytes string
+        return abi.encodePacked(encodedPrices);
+    }
+
+    // Used to pack cumulative PNL into a single bytes32 word for fulfillment
+    function encodePnl(uint8 _precision, address _market, uint48 _timestamp, int40 _cumulativePnl)
+        external
+        pure
+        returns (bytes memory)
+    {
+        Pnl memory pnl;
+        pnl.precision = _precision;
+        pnl.market = _market;
+        pnl.timestamp = _timestamp;
+        pnl.cumulativePnl = _cumulativePnl;
+        return abi.encodePacked(pnl.precision, pnl.market, pnl.timestamp, pnl.cumulativePnl);
+    }
+
     function getPrices(string memory _ticker, uint48 _timestamp) external view returns (Price memory signedPrices) {
         signedPrices = prices[_ticker][_timestamp];
         if (signedPrices.timestamp == 0) revert PriceFeed_PriceNotSigned();
         if (signedPrices.timestamp + MIN_EXPIRATION_TIME < block.timestamp) revert PriceFeed_PriceExpired();
     }
 
-    function getCumulativePnl(address _market, uint48 _timestamp) external view returns (int256 pnl) {
-        pnl = cumulativePnl[_market][_timestamp].cumulativePnl;
-        if (cumulativePnl[_market][_timestamp].market == address(0)) revert PriceFeed_PnlNotSigned();
+    function getCumulativePnl(address _market, uint48 _timestamp) external view returns (Pnl memory pnl) {
+        pnl = cumulativePnl[_market][_timestamp];
+        if (pnl.market == address(0)) revert PriceFeed_PnlNotSigned();
+    }
+
+    function getTokenData(string memory _ticker) external view returns (TokenData memory) {
+        return tokenData[_ticker];
     }
 
     function priceUpdateRequested(bytes32 _requestId) external view returns (bool) {
@@ -464,6 +536,10 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
 
     function getRequester(bytes32 _requestId) external view returns (address) {
         return requestData.get(_requestId).requester;
+    }
+
+    function getRequestData(bytes32 _requestId) external view returns (RequestData memory) {
+        return requestData.get(_requestId);
     }
 
     function getRequests() external view returns (bytes32[] memory) {

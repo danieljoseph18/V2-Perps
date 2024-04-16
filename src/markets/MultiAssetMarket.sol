@@ -147,11 +147,12 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
      * ========================= Setter Functions  =========================
      */
 
+    // @audit - Caller can input any arbitrary timestamp to manipulate price?
     function addToken(
         Config calldata _config,
         string memory _ticker,
         bytes calldata _newAllocations,
-        bytes32 _priceRequestId
+        uint48 _requestTimestamp
     ) external onlyConfigurator(address(this)) nonReentrant {
         MarketLogic.validateConfig(_config);
         MarketLogic.addToken(
@@ -160,16 +161,16 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
             _config,
             _ticker,
             _newAllocations,
-            _priceRequestId
+            _requestTimestamp
         );
     }
 
-    function removeToken(string memory _ticker, bytes calldata _newAllocations, bytes32 _priceRequestId)
+    function removeToken(string memory _ticker, bytes calldata _newAllocations, uint48 _requestTimestamp)
         external
         onlyConfigurator(address(this))
         nonReentrant
     {
-        MarketLogic.removeToken(ITradeStorage(tradeStorage).priceFeed(), _ticker, _newAllocations, _priceRequestId);
+        MarketLogic.removeToken(ITradeStorage(tradeStorage).priceFeed(), _ticker, _newAllocations, _requestTimestamp);
     }
 
     function transferPoolOwnership(address _newOwner) external {
@@ -235,9 +236,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         orderExists(_params.key)
         nonReentrant
     {
-        MarketLogic.executeDeposit(
-            ITradeStorage(tradeStorage).priceFeed(), requests, _params, _params.deposit.isLongToken ? WETH : USDC
-        );
+        MarketLogic.executeDeposit(requests, _params, _params.deposit.isLongToken ? WETH : USDC);
     }
 
     function executeWithdrawal(ExecuteWithdrawal calldata _params)
@@ -247,17 +246,9 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         nonReentrant
     {
         if (_params.withdrawal.isLongToken) {
-            MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), requests, _params, WETH, longTokenBalance - longTokensReserved
-            );
+            MarketLogic.executeWithdrawal(requests, _params, WETH, longTokenBalance - longTokensReserved);
         } else {
-            MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(),
-                requests,
-                _params,
-                USDC,
-                shortTokenBalance - shortTokensReserved
-            );
+            MarketLogic.executeWithdrawal(requests, _params, USDC, shortTokenBalance - shortTokensReserved);
         }
     }
 
@@ -301,12 +292,12 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
      * ========================= External State Functions  =========================
      */
     /// @dev - Caller must've requested a price before calling this function
-    function reallocate(bytes calldata _allocations, bytes32 _priceRequestId)
+    function reallocate(bytes calldata _allocations, uint48 _requestTimestamp)
         external
         onlyConfigurator(address(this))
         nonReentrant
     {
-        _reallocate(_allocations, _priceRequestId);
+        _reallocate(_allocations, _requestTimestamp);
     }
 
     function updateMarketState(
@@ -541,7 +532,8 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
      */
 
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    function _reallocate(bytes calldata _allocations, bytes32 _priceRequestId) private {
-        MarketLogic.reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _priceRequestId);
+    // @audit - again, caller can input any arbitrary request timestamp?
+    function _reallocate(bytes calldata _allocations, uint48 _requestTimestamp) private {
+        MarketLogic.reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _requestTimestamp);
     }
 }

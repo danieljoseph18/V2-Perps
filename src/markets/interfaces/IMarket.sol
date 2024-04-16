@@ -25,7 +25,7 @@ interface IMarket {
         uint256 amountIn;
         uint256 executionFee;
         address owner;
-        uint48 expirationTimestamp;
+        uint48 requestTimestamp;
         bool isLongToken;
         bool reverseWrap;
         bool isDeposit;
@@ -38,8 +38,8 @@ interface IMarket {
         IMarket market;
         IMarketToken marketToken;
         Input deposit;
-        IPriceFeed.Price longPrices;
-        IPriceFeed.Price shortPrices;
+        Oracle.Prices longPrices;
+        Oracle.Prices shortPrices;
         bytes32 key;
         uint256 longBorrowFeesUsd;
         uint256 shortBorrowFeesUsd;
@@ -50,8 +50,8 @@ interface IMarket {
         IMarket market;
         IMarketToken marketToken;
         Input withdrawal;
-        IPriceFeed.Price longPrices;
-        IPriceFeed.Price shortPrices;
+        Oracle.Prices longPrices;
+        Oracle.Prices shortPrices;
         bytes32 key;
         uint256 longBorrowFeesUsd;
         uint256 shortBorrowFeesUsd;

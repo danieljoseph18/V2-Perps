@@ -39,6 +39,12 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     EnumerableMap.DeployRequestMap private requests;
     mapping(address market => bool isMarket) public isMarket;
     mapping(uint256 index => address market) public markets;
+    /**
+     * Required to create a Router from interfaces.
+     * By simulating the trade through each market associated with the ticker,
+     * we can determine the optimal route to trade through.
+     */
+    mapping(string ticker => address[] markets) public marketsByTicker;
 
     bool private isInitialized;
     bool private multiAssetsEnabled;
@@ -102,6 +108,9 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     }
 
     // @audit - need to cap ticker length to 15 bytes
+    // @audit - do we need to cap assets to 1 in existence? think about this from a UI perspective
+    // @audit - combine the request and the execute into 1 function --> then we can revert if invalid
+    // @audit - add reference pricing to ensure the validity of price feeds. --> not all assets need a reference price
     function requestNewMarket(DeployRequest calldata _request) external payable nonReentrant {
         /* Validate the Inputs */
         // 1. Msg.value should be > marketCreationFee
@@ -196,6 +205,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         rewardTracker.initialize(address(marketToken), address(feeDistributor), address(liquidityLocker));
         // Add to Storage
         isMarket[address(market)] = true;
+        marketsByTicker[request.indexTokenTicker].push(address(market));
         markets[cumulativeMarketIndex] = address(market);
         ++cumulativeMarketIndex;
 

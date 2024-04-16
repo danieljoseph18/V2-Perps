@@ -43,9 +43,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint64 public feeForExecution; // Percentage of the Trading Fee, 18 D.P
     uint256 public minCollateralUsd;
     uint64 public minCancellationTime;
-    // Minimum time a keeper must execute their reserved transaction before it is
-    // made available to the broader network.
-    uint64 public minTimeForExecution;
 
     constructor(IMarket _market, IReferralStorage _referralStorage, IPriceFeed _priceFeed, address _roleStorage)
         RoleValidation(_roleStorage)
@@ -64,15 +61,13 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         uint64 _adlFee, // Percentage of the output amount that goes to the ADL executor, 18 D.P
         uint64 _feeForExecution, // Percentage of the Trading Fee that goes to the keeper, 18 D.P
         uint256 _minCollateralUsd, // 2e30 = 2 USD
-        uint64 _minCancellationTime, // e.g 1 minutes
-        uint64 _minTimeForExecution // e.g 1 minutes
+        uint64 _minCancellationTime // e.g 1 minutes
     ) external onlyMarketFactory {
         if (isInitialized) revert TradeStorage_AlreadyInitialized();
         liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
         minCollateralUsd = _minCollateralUsd;
         minCancellationTime = _minCancellationTime;
-        minTimeForExecution = _minTimeForExecution;
         adlFee = _adlFee;
         feeForExecution = _feeForExecution;
         isInitialized = true;
@@ -85,14 +80,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
             revert TradeStorage_InvalidExecutionTime();
         }
         minCancellationTime = _minCancellationTime;
-    }
-
-    // Time until a position request can be executed by the broader keeper network
-    function setMinTimeForExecution(uint64 _minTimeForExecution) external onlyConfigurator(address(market)) {
-        if (_minTimeForExecution > MAX_TIME_TO_EXPIRATION || _minTimeForExecution < MIN_TIME_TO_EXPIRATION) {
-            revert TradeStorage_InvalidExecutionTime();
-        }
-        minTimeForExecution = _minTimeForExecution;
     }
 
     function setFees(uint64 _liquidationFee, uint64 _positionFee, uint64 _adlFee, uint64 _feeForExecution)
@@ -141,20 +128,24 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
     }
 
-    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator)
+    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator, uint48 _requestTimestamp)
         external
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.liquidatePosition(market, referralStorage, priceFeed, _positionKey, _requestId, _liquidator);
+        TradeLogic.liquidatePosition(
+            market, referralStorage, priceFeed, _positionKey, _requestId, _requestTimestamp, _liquidator
+        );
     }
 
-    function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver)
+    function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver, uint48 _requestTimestamp)
         external
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestId, _feeReceiver);
+        TradeLogic.executeAdl(
+            market, referralStorage, priceFeed, _positionKey, _requestId, _requestTimestamp, _feeReceiver
+        );
     }
 
     /**

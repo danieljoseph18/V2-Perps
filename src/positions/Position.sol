@@ -3,6 +3,7 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
+import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
@@ -73,7 +74,7 @@ library Position {
         uint256 collateral; // USD
         uint256 size; // USD
         uint256 weightedAvgEntryPrice;
-        uint64 lastUpdate;
+        uint48 lastUpdate;
         FundingParams fundingParams;
         BorrowingParams borrowingParams;
         /**
@@ -126,7 +127,7 @@ library Position {
         Input input;
         Conditionals conditionals;
         address user;
-        uint64 requestTimestamp;
+        uint48 requestTimestamp;
         RequestType requestType;
         bytes32 requestId; // Id of the price update request
     }
@@ -401,7 +402,7 @@ library Position {
             input: _trade,
             conditionals: _conditionals,
             user: _user,
-            requestTimestamp: uint64(block.timestamp),
+            requestTimestamp: uint48(block.timestamp),
             requestType: _requestType,
             requestId: _requestId
         });
@@ -424,7 +425,7 @@ library Position {
             collateral: _collateralUsd,
             size: _request.input.sizeDelta,
             weightedAvgEntryPrice: _impactedPrice,
-            lastUpdate: uint64(block.timestamp),
+            lastUpdate: uint48(block.timestamp),
             isLong: _request.input.isLong,
             fundingParams: FundingParams(MarketUtils.getFundingAccrued(market, _request.input.ticker), 0),
             borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
@@ -463,7 +464,7 @@ library Position {
                 }),
                 conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
-                requestTimestamp: uint64(block.timestamp),
+                requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.STOP_LOSS,
                 requestId: bytes32(0)
             });
@@ -489,7 +490,7 @@ library Position {
                 }),
                 conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
-                requestTimestamp: uint64(block.timestamp),
+                requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.TAKE_PROFIT,
                 requestId: bytes32(0)
             });
@@ -500,8 +501,7 @@ library Position {
         Data memory _position,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
-        address _liquidator,
-        bytes32 _requestId
+        address _liquidator
     ) internal view returns (Settlement memory order) {
         order = Settlement({
             request: Request({
@@ -521,9 +521,9 @@ library Position {
                 }),
                 conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
-                requestTimestamp: uint64(block.timestamp),
+                requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.POSITION_DECREASE,
-                requestId: _requestId
+                requestId: bytes32(0)
             }),
             orderKey: bytes32(0),
             feeReceiver: _liquidator,
@@ -531,13 +531,11 @@ library Position {
         });
     }
 
-    function createAdlOrder(
-        Data memory _position,
-        uint256 _sizeDelta,
-        uint256 _collateralDelta,
-        address _feeReceiver,
-        bytes32 _requestId
-    ) internal view returns (Settlement memory order) {
+    function createAdlOrder(Data memory _position, uint256 _sizeDelta, uint256 _collateralDelta, address _feeReceiver)
+        internal
+        view
+        returns (Settlement memory order)
+    {
         order = Settlement({
             request: Request({
                 input: Input({
@@ -556,9 +554,9 @@ library Position {
                 }),
                 conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
-                requestTimestamp: uint64(block.timestamp),
+                requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.POSITION_DECREASE,
-                requestId: _requestId
+                requestId: bytes32(0)
             }),
             orderKey: bytes32(0),
             feeReceiver: _feeReceiver,

@@ -3,23 +3,42 @@ pragma solidity 0.8.23;
 
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
 import {IChainlinkFeed} from "./interfaces/IChainlinkFeed.sol";
+import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV2V3Interface.sol";
 import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
 import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol";
+import {IPyth} from "@pyth/contracts/IPyth.sol";
+import {PythStructs} from "@pyth/contracts/PythStructs.sol";
 import {ERC20, IERC20, IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {MathUtils} from "../libraries/MathUtils.sol";
 import {mulDiv} from "@prb/math/Common.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 
 library Oracle {
+    using SignedMath for int256;
+    using SignedMath for int64;
+    using MathUtils for uint256;
+    using SafeCast for uint256;
+
     error Oracle_SequencerDown();
     error Oracle_PriceNotSet();
     error Oracle_InvalidAmmDecimals();
     error Oracle_InvalidPoolType();
+    error Oracle_InvalidReferenceQuery();
+    error Oracle_InvalidPriceRetrieval();
 
     struct UniswapPool {
         address token0;
         address token1;
         address poolAddress;
         PoolType poolType;
+    }
+
+    struct Prices {
+        uint256 min;
+        uint256 med;
+        uint256 max;
     }
 
     enum PoolType {
@@ -30,8 +49,13 @@ library Oracle {
     string private constant LONG_TICKER = "ETH";
     string private constant SHORT_TICKER = "USDC";
     uint8 private constant PRICE_DECIMALS = 30;
+    uint8 private constant CHAINLINK_DECIMALS = 8;
     uint16 private constant MAX_VARIANCE = 10_000;
+    uint64 private constant MAX_PRICE_DEVIATION = 0.1e18;
 
+    /**
+     * ====================================== Validation ======================================
+     */
     function isSequencerUp(IPriceFeed priceFeed) external view {
         address sequencerUptimeFeed = priceFeed.sequencerUptimeFeed();
         if (sequencerUptimeFeed != address(0)) {
@@ -56,6 +80,9 @@ library Oracle {
         }
     }
 
+    /**
+     * ====================================== Price Retrieval ======================================
+     */
     function getPrice(IPriceFeed priceFeed, string calldata _ticker, uint48 _blockTimestamp)
         external
         view
@@ -102,51 +129,152 @@ library Oracle {
     function getMarketTokenPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
         public
         view
-        returns (IPriceFeed.Price memory _longPrices, IPriceFeed.Price memory _shortPrices)
+        returns (Prices memory longPrices, Prices memory shortPrices)
     {
-        _longPrices = priceFeed.getPrices(LONG_TICKER, _blockTimestamp);
-        _shortPrices = priceFeed.getPrices(SHORT_TICKER, _blockTimestamp);
+        longPrices = getMarketTokenPrices(priceFeed, _blockTimestamp, true);
+        shortPrices = getMarketTokenPrices(priceFeed, _blockTimestamp, false);
     }
 
-    function getBaseUnit(IPriceFeed priceFeed, string calldata _ticker) external view returns (uint256 baseUnit) {
-        baseUnit = priceFeed.baseUnits(_ticker);
+    function getMarketTokenPrices(IPriceFeed priceFeed, uint48 _blockTimestamp, bool _isLong)
+        public
+        view
+        returns (Prices memory prices)
+    {
+        IPriceFeed.Price memory signedPrice = priceFeed.getPrices(_isLong ? LONG_TICKER : SHORT_TICKER, _blockTimestamp);
+        prices.med = signedPrice.med * (10 ** (PRICE_DECIMALS - signedPrice.precision));
+        prices.min = prices.med - mulDiv(prices.med, signedPrice.variance, MAX_VARIANCE);
+        prices.max = prices.med + mulDiv(prices.med, signedPrice.variance, MAX_VARIANCE);
     }
 
     /**
-     * ====================================== In case I want to implement Ref Price ======================================
+     * ====================================== Pnl ======================================
+     */
+    function getCumulativePnl(IPriceFeed priceFeed, address _market, uint48 _blockTimestamp)
+        external
+        view
+        returns (int256 cumulativePnl)
+    {
+        IPriceFeed.Pnl memory pnl = priceFeed.getCumulativePnl(_market, _blockTimestamp);
+        uint256 multiplier = 10 ** (PRICE_DECIMALS - pnl.precision);
+        cumulativePnl = pnl.cumulativePnl * multiplier.toInt256();
+    }
+
+    /**
+     * ====================================== Auxillary ======================================
+     */
+    function getBaseUnit(IPriceFeed priceFeed, string calldata _ticker) external view returns (uint256 baseUnit) {
+        baseUnit = 10 ** priceFeed.getTokenData(_ticker).tokenDecimals;
+    }
+
+    function validatePriceRange(IPriceFeed priceFeed, string calldata _ticker, uint256 _signedPrice) external view {
+        uint256 referencePrice = getReferencePrice(priceFeed, _ticker);
+        if (_signedPrice.delta(referencePrice) > referencePrice.percentage(MAX_PRICE_DEVIATION)) {
+            revert Oracle_InvalidPriceRetrieval();
+        }
+    }
+
+    function validateMarketTokenPriceRanges(IPriceFeed priceFeed, uint256 _longPrice, uint256 _shortPrice)
+        external
+        view
+    {
+        uint256 longReferencePrice = getReferencePrice(priceFeed, LONG_TICKER);
+        uint256 shortReferencePrice = getReferencePrice(priceFeed, SHORT_TICKER);
+        if (_longPrice.delta(longReferencePrice) > longReferencePrice.percentage(MAX_PRICE_DEVIATION)) {
+            revert Oracle_InvalidPriceRetrieval();
+        }
+        if (_shortPrice.delta(shortReferencePrice) > shortReferencePrice.percentage(MAX_PRICE_DEVIATION)) {
+            revert Oracle_InvalidPriceRetrieval();
+        }
+    }
+
+    /**
+     * ====================================== Reference Prices ======================================
      */
 
-    /// @dev _baseUnit is the base unit of the token0
-    // ONLY EVER USED FOR REFERENCE PRICE -> PRICE IS MANIPULATABLE
-    function getAmmPrice(UniswapPool memory _pool) public view returns (uint256 price) {
-        if (_pool.poolType == PoolType.V3) {
-            IUniswapV3Pool pool = IUniswapV3Pool(_pool.poolAddress);
-            (uint160 sqrtPriceX96,,,,,,) = pool.slot0();
-            (bool success, uint256 token0Decimals) = _tryGetAssetDecimals(IERC20(_pool.token0));
-            if (!success) revert Oracle_InvalidAmmDecimals();
-            uint256 baseUnit = 10 ** token0Decimals;
-            UD60x18 numerator = ud(uint256(sqrtPriceX96)).powu(2).mul(ud(baseUnit));
-            UD60x18 denominator = ud(2).powu(192);
-            price = unwrap(numerator.div(denominator));
-            return price;
-        } else if (_pool.poolType == PoolType.V2) {
-            IUniswapV2Pair pair = IUniswapV2Pair(_pool.poolAddress);
-            (uint112 reserve0, uint112 reserve1,) = pair.getReserves();
-            address pairToken0 = pair.token0();
-            (bool success0, uint256 token0Decimals) = _tryGetAssetDecimals(IERC20(_pool.token0));
-            (bool success1, uint256 token1Decimals) = _tryGetAssetDecimals(IERC20(_pool.token1));
-            if (!success0 || !success1) revert Oracle_InvalidAmmDecimals();
-            if (_pool.token0 == pairToken0) {
-                uint256 baseUnit = 10 ** token0Decimals;
-                price = mulDiv(uint256(reserve1), baseUnit, uint256(reserve0));
-            } else {
-                uint256 baseUnit = 10 ** token1Decimals;
-                price = mulDiv(uint256(reserve0), baseUnit, uint256(reserve1));
-            }
-            return price;
+    /* ONLY EVER USED FOR REFERENCE PRICES: PRICES RETURNED MAY BE HIGH-LATENCY, OR MANIPULATABLE.  */
+
+    /**
+     * In order of most common to least common reference feeds to save on gas:
+     * - Chainlink
+     * - Pyth
+     * - Uniswap V3
+     * - Uniswap V2
+     */
+    function getReferencePrice(IPriceFeed priceFeed, string memory _ticker) public view returns (uint256 price) {
+        IPriceFeed.TokenData memory tokenData = priceFeed.getTokenData(_ticker);
+        if (tokenData.feedType == IPriceFeed.FeedType.CHAINLINK) {
+            price = _getChainlinkPrice(tokenData);
+        } else if (tokenData.feedType == IPriceFeed.FeedType.PYTH) {
+            price = _getPythPrice(priceFeed, tokenData, _ticker);
+        } else if (tokenData.feedType == IPriceFeed.FeedType.UNI_V3) {
+            price = _getUniswapV3Price(tokenData);
+        } else if (
+            tokenData.feedType == IPriceFeed.FeedType.UNI_V2_T0 || tokenData.feedType == IPriceFeed.FeedType.UNI_V2_T1
+        ) {
+            price = _getUniswapV2Price(tokenData);
         } else {
-            revert Oracle_InvalidPoolType();
+            revert Oracle_InvalidReferenceQuery();
         }
+    }
+
+    // @audit - implement a function to check the uniswap v3 pool is valid from the factory contract
+    // need to implement this to check the pool creator isn't providing a spoofed pool
+    // same for chainlink feeds and potentially pyth feeds
+
+    // @audit - needs 30 dp
+    function _getUniswapV3Price(IPriceFeed.TokenData memory _tokenData) private view returns (uint256 price) {
+        if (_tokenData.feedType != IPriceFeed.FeedType.UNI_V3) revert Oracle_InvalidReferenceQuery();
+        IUniswapV3Pool pool = IUniswapV3Pool(_tokenData.secondaryFeed);
+        (uint160 sqrtPriceX96,,,,,,) = pool.slot0();
+        address token0 = pool.token0();
+        (bool success, uint256 token0Decimals) = _tryGetAssetDecimals(IERC20(token0));
+        if (!success) revert Oracle_InvalidAmmDecimals();
+        uint256 baseUnit = 10 ** token0Decimals;
+        UD60x18 numerator = ud(uint256(sqrtPriceX96)).powu(2).mul(ud(baseUnit));
+        UD60x18 denominator = ud(2).powu(192);
+        price = unwrap(numerator.div(denominator));
+    }
+
+    // @audit - needs 30 dp
+    function _getUniswapV2Price(IPriceFeed.TokenData memory _tokenData) private view returns (uint256 price) {
+        IUniswapV2Pair pair = IUniswapV2Pair(_tokenData.secondaryFeed);
+        (uint112 reserve0, uint112 reserve1,) = pair.getReserves();
+        (bool success0, uint256 token0Decimals) = _tryGetAssetDecimals(IERC20(pair.token0()));
+        (bool success1, uint256 token1Decimals) = _tryGetAssetDecimals(IERC20(pair.token1()));
+        if (!success0 || !success1) revert Oracle_InvalidAmmDecimals();
+        if (_tokenData.feedType == IPriceFeed.FeedType.UNI_V2_T0) {
+            price = mulDiv(uint256(reserve1), 10 ** token0Decimals, uint256(reserve0));
+        } else if (_tokenData.feedType == IPriceFeed.FeedType.UNI_V2_T1) {
+            price = mulDiv(uint256(reserve0), 10 ** token1Decimals, uint256(reserve1));
+        } else {
+            revert Oracle_InvalidReferenceQuery();
+        }
+    }
+
+    function _getChainlinkPrice(IPriceFeed.TokenData memory _tokenData) private view returns (uint256 price) {
+        if (_tokenData.feedType != IPriceFeed.FeedType.CHAINLINK) revert Oracle_InvalidReferenceQuery();
+        // Get the price feed address from the ticker
+        AggregatorV2V3Interface chainlinkFeed = AggregatorV2V3Interface(_tokenData.secondaryFeed);
+        // Query the feed for the price
+        int256 signedPrice = chainlinkFeed.latestAnswer();
+        // Convert the price from int256 to uint256 and expand decimals to 30 d.p
+        price = signedPrice.abs() * (10 ** (PRICE_DECIMALS - CHAINLINK_DECIMALS));
+    }
+
+    // Need the Pyth address and the bytes32 id for the ticker
+    // @audit - can exponent or price be negative?
+    function _getPythPrice(IPriceFeed priceFeed, IPriceFeed.TokenData memory _tokenData, string memory _ticker)
+        private
+        view
+        returns (uint256 price)
+    {
+        if (_tokenData.feedType != IPriceFeed.FeedType.PYTH) revert Oracle_InvalidReferenceQuery();
+        // Query the Pyth feed for the price
+        IPyth pythFeed = IPyth(_tokenData.secondaryFeed);
+        PythStructs.Price memory pythData = pythFeed.getEmaPriceUnsafe(priceFeed.pythIds(_ticker));
+        // Expand the price to 30 d.p
+        uint256 exponent = PRICE_DECIMALS - uint32(pythData.expo);
+        price = pythData.price.abs() * (10 ** exponent);
     }
 
     function _tryGetAssetDecimals(IERC20 _asset) private view returns (bool, uint256) {

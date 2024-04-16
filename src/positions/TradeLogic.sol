@@ -171,9 +171,6 @@ library TradeLogic {
             revert TradeLogic_InvalidRequestType();
         }
 
-        // Clear the Signed Prices
-        priceFeed.clearSignedPrices(market, request.requestId);
-
         // Cache the State of the Market After the Position
         invariants.updatedStorage = market.getStorage(request.input.ticker);
         invariants.updatedState = market.getState(request.input.isLong);
@@ -200,12 +197,15 @@ library TradeLogic {
         IPriceFeed priceFeed,
         bytes32 _positionKey,
         bytes32 _requestId,
+        uint48 _requestTimestamp,
         address _feeReceiver
     ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
+        // Check that the price update was requested by the ADLer, if not, require some time to pass before enabling them to execute
+        Execution.validatePriceRequest(priceFeed, _feeReceiver, _requestId, _requestTimestamp);
         // Initiate the Adl order
         (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) =
-            Execution.initiateAdlOrder(market, tradeStorage, priceFeed, _positionKey, _requestId, _feeReceiver);
+            Execution.initiateAdlOrder(market, tradeStorage, priceFeed, _positionKey, _requestTimestamp, _feeReceiver);
 
         // Update the Market State
         _updateMarketState(
@@ -228,9 +228,6 @@ library TradeLogic {
             tradeStorage.liquidationFee()
         );
 
-        // Clear signed prices
-        priceFeed.clearSignedPrices(market, _requestId);
-
         // Validate the Adl
         Execution.validateAdl(
             market, prices, startingPnlFactor, params.request.input.ticker, params.request.input.isLong
@@ -245,6 +242,7 @@ library TradeLogic {
         IPriceFeed priceFeed,
         bytes32 _positionKey,
         bytes32 _requestId,
+        uint48 _requestTimestamp,
         address _liquidator
     ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
@@ -252,17 +250,18 @@ library TradeLogic {
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         // Check the Position Exists
         if (position.user == address(0)) revert TradeLogic_PositionDoesNotExist();
+        // Check that the price update was requested by the liquidator, if not, require some time to pass before enabling them to execute
+        Execution.validatePriceRequest(priceFeed, _liquidator, _requestId, _requestTimestamp);
         // Get the Prices
         Execution.Prices memory prices =
-            Execution.getTokenPrices(priceFeed, position.ticker, _requestId, position.isLong, false);
+            Execution.getTokenPrices(priceFeed, position.ticker, _requestTimestamp, position.isLong, false);
         // No price impact on Liquidations
         prices.impactedPrice = prices.indexPrice;
         // Update the Market State
         _updateMarketState(market, prices, position.ticker, position.size, position.isLong, false);
         // Construct Liquidation Order
-        Position.Settlement memory params = Position.createLiquidationOrder(
-            position, prices.collateralPrice, prices.collateralBaseUnit, _liquidator, _requestId
-        );
+        Position.Settlement memory params =
+            Position.createLiquidationOrder(position, prices.collateralPrice, prices.collateralBaseUnit, _liquidator);
 
         // Execute the Liquidation
         _decreasePosition(
@@ -274,9 +273,6 @@ library TradeLogic {
             tradeStorage.minCollateralUsd(),
             tradeStorage.liquidationFee()
         );
-        // Clear Signed Prices
-        // Need request id
-        priceFeed.clearSignedPrices(market, _requestId);
         // Fire Event
         emit LiquidatePosition(_positionKey, _liquidator, position.isLong);
     }

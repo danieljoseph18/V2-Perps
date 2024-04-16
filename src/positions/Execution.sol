@@ -43,6 +43,8 @@ library Execution {
     error Execution_InvalidAdlDelta();
     error Execution_PositionNotProfitable();
     error Execution_InvalidPosition();
+    error Execution_InvalidExecutor();
+    error Execution_InvalidRequestTimestamp();
 
     event AdlTargetRatioReached(address indexed market, int256 pnlFactor, bool isLong);
 
@@ -76,6 +78,7 @@ library Execution {
         uint256 collateralBaseUnit;
     }
 
+    uint8 private constant REQUEST_EXPIRY_DURATION = 2 minutes;
     uint64 private constant LONG_BASE_UNIT = 1e18;
     uint64 private constant SHORT_BASE_UNIT = 1e6;
     uint64 private constant PRECISION = 1e18;
@@ -83,6 +86,7 @@ library Execution {
     uint64 private constant TARGET_PNL_FACTOR = 0.35e18;
     uint64 private constant MAX_SLIPPAGE = 0.66e18;
     uint64 private constant MIN_PROFIT_PERCENTAGE = 0.05e18;
+    uint64 private constant MAX_PRICE_DEVIATION = 0.1e18;
 
     /**
      * ========================= Construction Functions =========================
@@ -105,10 +109,16 @@ library Execution {
         // Fetch and validate request from key
         request = tradeStorage.getOrder(_orderKey);
         // Validate the request before continuing execution
-        request.requestId = _validateRequestId(tradeStorage, priceFeed, request, _requestId, _feeReceiver);
+        if (request.input.isLimit) {
+            validatePriceRequest(priceFeed, _feeReceiver, _requestId, request.requestTimestamp);
+        }
         // Fetch and validate price
         prices = getTokenPrices(
-            priceFeed, request.input.ticker, request.requestId, request.input.isLong, request.input.isIncrease
+            priceFeed,
+            request.input.ticker,
+            uint48(request.requestTimestamp),
+            request.input.isLong,
+            request.input.isIncrease
         );
         // Check the Limit Price if it's a limit order
         if (request.input.isLimit) {
@@ -139,14 +149,14 @@ library Execution {
         ITradeStorage tradeStorage,
         IPriceFeed priceFeed,
         bytes32 _positionKey,
-        bytes32 _priceRequestId,
+        uint48 _requestTimestamp,
         address _feeReceiver
     ) internal view returns (Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) {
         // Check the position in question is active
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         if (position.size == 0) revert Execution_PositionNotActive();
         // Get current MarketUtils and token data
-        prices = getTokenPrices(priceFeed, position.ticker, _priceRequestId, position.isLong, false);
+        prices = getTokenPrices(priceFeed, position.ticker, _requestTimestamp, position.isLong, false);
 
         // Get starting PNL Factor
         startingPnlFactor = _getPnlFactor(market, prices, position.ticker, position.isLong);
@@ -187,7 +197,7 @@ library Execution {
         uint256 collateralDelta =
             position.collateral.percentage(adlPercentage).fromUsd(prices.collateralPrice, prices.collateralBaseUnit);
         // Construct an ADL Order
-        params = Position.createAdlOrder(position, sizeDelta, collateralDelta, _feeReceiver, _priceRequestId);
+        params = Position.createAdlOrder(position, sizeDelta, collateralDelta, _feeReceiver);
     }
 
     /**
@@ -543,6 +553,22 @@ library Execution {
         if (newPnlFactor >= _startingPnlFactor) revert Execution_PNLFactorNotReduced();
     }
 
+    function validatePriceRequest(IPriceFeed priceFeed, address _caller, bytes32 _requestId, uint48 _requestTimestamp)
+        public
+        view
+    {
+        // Check if the requester == caller
+        IPriceFeed.RequestData memory data = priceFeed.getRequestData(_requestId);
+        // Check that the request timestamp equals the input timestamp
+        if (data.blockTimestamp != _requestTimestamp) revert Execution_InvalidRequestTimestamp();
+        if (data.requester != _caller) {
+            // If not, check that sufficient time has passed for the caller to execute the request
+            if (block.timestamp < data.blockTimestamp + REQUEST_EXPIRY_DURATION) {
+                revert Execution_InvalidExecutor();
+            }
+        }
+    }
+
     /**
      * ========================= Oracle Functions =========================
      */
@@ -555,7 +581,7 @@ library Execution {
     function getTokenPrices(
         IPriceFeed priceFeed,
         string memory _indexTicker,
-        bytes32 _requestId,
+        uint48 _requestTimestamp,
         bool _isLong,
         bool _isIncrease
     ) public view returns (Prices memory prices) {
@@ -565,15 +591,19 @@ library Execution {
         // Fetch index price based on order type and direction
         prices.indexPrice = _isLong
             ? _isIncrease
-                ? Oracle.getMaxPrice(priceFeed, _requestId, _indexTicker)
-                : Oracle.getMinPrice(priceFeed, _requestId, _indexTicker)
+                ? Oracle.getMaxPrice(priceFeed, _indexTicker, _requestTimestamp)
+                : Oracle.getMinPrice(priceFeed, _indexTicker, _requestTimestamp)
             : _isIncrease
-                ? Oracle.getMinPrice(priceFeed, _requestId, _indexTicker)
-                : Oracle.getMaxPrice(priceFeed, _requestId, _indexTicker);
+                ? Oracle.getMinPrice(priceFeed, _indexTicker, _requestTimestamp)
+                : Oracle.getMaxPrice(priceFeed, _indexTicker, _requestTimestamp);
 
         // Market Token Prices and Base Units
         (prices.longMarketTokenPrice, prices.shortMarketTokenPrice) =
-            Oracle.getMarketTokenPrices(priceFeed, _requestId, maximizePrice);
+            Oracle.getMarketTokenPrices(priceFeed, maximizePrice, _requestTimestamp);
+
+        // Validate Price Ranges
+        Oracle.validatePriceRange(priceFeed, _indexTicker, prices.indexPrice);
+        Oracle.validateMarketTokenPriceRanges(priceFeed, prices.longMarketTokenPrice, prices.shortMarketTokenPrice);
 
         prices.collateralPrice = _isLong ? prices.longMarketTokenPrice : prices.shortMarketTokenPrice;
         prices.collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
@@ -592,7 +622,7 @@ library Execution {
         uint256 _impactedPrice,
         bool _isIncrease
     ) private view returns (Position.Data memory) {
-        _position.lastUpdate = uint64(block.timestamp);
+        _position.lastUpdate = uint48(block.timestamp);
         if (_isIncrease) {
             // Increase the Position's collateral
             _position.collateral += _collateralDeltaUsd;
@@ -873,31 +903,6 @@ library Execution {
         Position.validateDecreasePosition(
             _position, _feeState, _prices, _initialCollateral, _initialSize, _sizeDelta, _decreasePnl
         );
-    }
-
-    function _validateRequestId(
-        ITradeStorage tradeStorage,
-        IPriceFeed priceFeed,
-        Position.Request memory _request,
-        bytes32 _requestId,
-        address _feeReceiver
-    ) private view returns (bytes32 requestId) {
-        if (_request.input.isLimit) {
-            // Set the Request Id to the Provided Request Id
-            requestId = _requestId;
-            // If a limit order, the keeper should've requested a price update themselves
-            // Required to prevent front-runners from stealing keeper fees for TXs they didn't initiate
-            // MinTimeForExecution acts as a time buffer in which the keeper must execute the TX before it opens to the broader network
-            if (
-                priceFeed.getRequester(_requestId) != _feeReceiver
-                    && block.timestamp < _request.requestTimestamp + tradeStorage.minTimeForExecution()
-            ) {
-                revert Execution_InvalidPriceRequest();
-            }
-        } else if (_requestId == bytes32(0)) {
-            // Fetch and return the request id attached to the position request
-            requestId = _request.requestId;
-        }
     }
 
     /**

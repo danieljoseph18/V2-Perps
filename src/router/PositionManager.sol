@@ -25,6 +25,8 @@ import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
 // Contract picks up and executes all requests, as well as holds intermediary funds.
+// @audit - as prices are timestamp specific, we need to make it so if a price fails
+// for any reason, a price is re-requested to execute the position with.
 contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
@@ -92,14 +94,20 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         IMarket.ExecuteDeposit memory params;
         params.market = market;
         params.deposit = market.getRequest(_key);
+        // @audit - don't really like fetching these here, would rather have in the market.
         params.key = _key;
         // Get the signed prices
-        (params.longPrices, params.shortPrices) = Oracle.getMarketTokenPrices(priceFeed, params.deposit.priceRequestId);
+        (params.longPrices.max, params.shortPrices.max) =
+            Oracle.getMarketTokenPrices(priceFeed, true, params.deposit.requestTimestamp);
+        (params.longPrices.med, params.shortPrices.med) =
+            Oracle.getMarketTokenPrices(priceFeed, params.deposit.requestTimestamp);
+        (params.longPrices.min, params.shortPrices.min) =
+            Oracle.getMarketTokenPrices(priceFeed, false, params.deposit.requestTimestamp);
         // Calculate cumulative borrow fees
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
         // Calculate Cumulative PNL
-        params.cumulativePnl = priceFeed.getCumulativePnl(params.deposit.pnlRequestId);
+        params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.deposit.requestTimestamp);
         params.marketToken = market.MARKET_TOKEN();
 
         // Approve the Market to spend the Collateral
@@ -130,11 +138,15 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.market = market;
         params.withdrawal = market.getRequest(_key);
         params.key = _key;
-        params.cumulativePnl = priceFeed.getCumulativePnl(params.withdrawal.pnlRequestId);
+        params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.withdrawal.requestTimestamp);
         params.shouldUnwrap = params.withdrawal.reverseWrap;
-        // Calculate the amount out
-        (params.longPrices, params.shortPrices) =
-            Oracle.getMarketTokenPrices(priceFeed, params.withdrawal.priceRequestId);
+        // Get the signed prices
+        (params.longPrices.max, params.shortPrices.max) =
+            Oracle.getMarketTokenPrices(priceFeed, true, params.withdrawal.requestTimestamp);
+        (params.longPrices.med, params.shortPrices.med) =
+            Oracle.getMarketTokenPrices(priceFeed, params.withdrawal.requestTimestamp);
+        (params.longPrices.min, params.shortPrices.min) =
+            Oracle.getMarketTokenPrices(priceFeed, false, params.withdrawal.requestTimestamp);
         // Calculate cumulative borrow fees
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);

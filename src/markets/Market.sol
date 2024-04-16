@@ -370,9 +370,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         orderExists(_params.key)
         nonReentrant
     {
-        MarketLogic.executeDeposit(
-            ITradeStorage(tradeStorage).priceFeed(), requests, _params, _params.deposit.isLongToken ? WETH : USDC
-        );
+        MarketLogic.executeDeposit(requests, _params, _params.deposit.isLongToken ? WETH : USDC);
     }
 
     function executeWithdrawal(ExecuteWithdrawal calldata _params)
@@ -382,17 +380,9 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         nonReentrant
     {
         if (_params.withdrawal.isLongToken) {
-            MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(), requests, _params, WETH, longTokenBalance - longTokensReserved
-            );
+            MarketLogic.executeWithdrawal(requests, _params, WETH, longTokenBalance - longTokensReserved);
         } else {
-            MarketLogic.executeWithdrawal(
-                ITradeStorage(tradeStorage).priceFeed(),
-                requests,
-                _params,
-                USDC,
-                shortTokenBalance - shortTokensReserved
-            );
+            MarketLogic.executeWithdrawal(requests, _params, USDC, shortTokenBalance - shortTokensReserved);
         }
     }
 

@@ -15,6 +15,7 @@ import {MathUtils} from "../libraries/MathUtils.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
+import {Oracle} from "../oracle/Oracle.sol";
 
 library MarketLogic {
     using SafeERC20 for IERC20;
@@ -222,7 +223,7 @@ library MarketLogic {
             amountIn: _amountIn,
             executionFee: _executionFee,
             owner: _owner,
-            expirationTimestamp: uint48(block.timestamp) + TIME_TO_EXPIRATION,
+            requestTimestamp: uint48(block.timestamp),
             isLongToken: _transferToken == _weth,
             reverseWrap: _reverseWrap,
             isDeposit: _isDeposit,
@@ -249,7 +250,7 @@ library MarketLogic {
         IMarket.Input memory request = market.getRequest(_key);
         if (request.owner != _caller) revert MarketLogic_RequestNotOwner();
         // Ensure the request has passed the expiration time
-        if (request.expirationTimestamp > block.timestamp) revert MarketLogic_RequestNotExpired();
+        if (request.requestTimestamp + TIME_TO_EXPIRATION > block.timestamp) revert MarketLogic_RequestNotExpired();
         // Delete the request
         if (!requests.remove(_key)) revert MarketLogic_FailedToRemoveRequest();
         // Set Token Out and Should Unwrap
@@ -273,7 +274,7 @@ library MarketLogic {
         IMarket.Config calldata _config,
         string memory _ticker,
         bytes calldata _newAllocations,
-        bytes32 _priceRequestId
+        uint48 _requestTimestamp
     ) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
@@ -282,7 +283,7 @@ library MarketLogic {
         // Add asset to storage
         market.addAsset(_ticker);
         // Reallocate
-        reallocate(priceFeed, _newAllocations, _priceRequestId);
+        reallocate(priceFeed, _newAllocations, _requestTimestamp);
         // Initialize Storage
         marketStorage.config = _config;
         marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
@@ -294,7 +295,7 @@ library MarketLogic {
         IPriceFeed priceFeed,
         string memory _ticker,
         bytes calldata _newAllocations,
-        bytes32 _priceRequestId
+        uint48 _requestTimestamp
     ) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
@@ -304,21 +305,19 @@ library MarketLogic {
         // Remove the Asset
         market.removeAsset(_ticker);
         // Reallocate
-        reallocate(priceFeed, _newAllocations, _priceRequestId);
+        reallocate(priceFeed, _newAllocations, _requestTimestamp);
         // Fire Event
         emit TokenRemoved(_ticker);
     }
 
     /// @dev - Caller must've requested a price before calling this function
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    function reallocate(IPriceFeed priceFeed, bytes calldata _allocations, bytes32 _priceRequestId) internal {
+    // @audit - does it matter who requested the prices??
+    function reallocate(IPriceFeed priceFeed, bytes calldata _allocations, uint48 _requestTimestamp) internal {
         IMarket market = IMarket(address(this));
-
         // Fetch token prices
-        if (priceFeed.getRequester(_priceRequestId) != msg.sender) revert MarketLogic_InvalidPriceRequest();
-
-        uint256 longTokenPrice = priceFeed.getPrices(_priceRequestId, LONG_TICKER).med;
-        uint256 shortTokenPrice = priceFeed.getPrices(_priceRequestId, SHORT_TICKER).med;
+        uint256 longTokenPrice = Oracle.getPrice(priceFeed, LONG_TICKER, _requestTimestamp);
+        uint256 shortTokenPrice = Oracle.getPrice(priceFeed, SHORT_TICKER, _requestTimestamp);
 
         // Copy tickers to memory
         string[] memory assetTickers = market.getTickers();
@@ -332,7 +331,9 @@ library MarketLogic {
             // Update Storage
             market.setAllocationShare(assetTickers[i], allocationValue);
             // Check the allocation value -> new max open interest must be > current open interest
-            _validateOpenInterest(market, priceFeed, assetTickers[i], _priceRequestId, longTokenPrice, shortTokenPrice);
+            _validateOpenInterest(
+                market, priceFeed, assetTickers[i], _requestTimestamp, longTokenPrice, shortTokenPrice
+            );
             // Increment total
             total += allocationValue;
             unchecked {
@@ -341,13 +342,9 @@ library MarketLogic {
         }
 
         if (total != TOTAL_ALLOCATION) revert MarketLogic_InvalidCumulativeAllocation();
-
-        // Clear the prices
-        priceFeed.clearSignedPrices(market, _priceRequestId);
     }
 
     function executeDeposit(
-        IPriceFeed priceFeed,
         EnumerableMap.MarketRequestMap storage requests,
         IMarket.ExecuteDeposit calldata _params,
         address _tokenIn
@@ -364,17 +361,12 @@ library MarketLogic {
         _params.market.accumulateFees(fee, _params.deposit.isLongToken);
         _params.market.updatePoolBalance(afterFeeAmount, _params.deposit.isLongToken, true);
 
-        // Clear Signed Prices and Pnl
-        priceFeed.clearSignedPrices(_params.market, _params.deposit.priceRequestId);
-        priceFeed.clearCumulativePnl(_params.market, _params.deposit.pnlRequestId);
-
         emit DepositExecuted(_params.key, _params.deposit.owner, _tokenIn, _params.deposit.amountIn, mintAmount);
         // mint tokens to user
         IMarketToken(_params.marketToken).mint(_params.deposit.owner, mintAmount);
     }
 
     function executeWithdrawal(
-        IPriceFeed priceFeed,
         EnumerableMap.MarketRequestMap storage requests,
         IMarket.ExecuteWithdrawal calldata _params,
         address _tokenOut,
@@ -398,10 +390,6 @@ library MarketLogic {
         if (transferAmountOut > _availableTokens) revert MarketLogic_InsufficientAvailableTokens();
         // decrease the pool
         _params.market.updatePoolBalance(_params.amountOut, _params.withdrawal.isLongToken, false);
-
-        // Clear Signed Prices and Pnl
-        priceFeed.clearSignedPrices(_params.market, _params.withdrawal.priceRequestId);
-        priceFeed.clearCumulativePnl(_params.market, _params.withdrawal.pnlRequestId);
 
         emit WithdrawalExecuted(
             _params.key, _params.withdrawal.owner, _tokenOut, _params.withdrawal.amountIn, transferAmountOut
@@ -506,13 +494,13 @@ library MarketLogic {
         IMarket market,
         IPriceFeed priceFeed,
         string memory _ticker,
-        bytes32 _priceRequestId,
+        uint48 _requestTimestamp,
         uint256 _longSignedPrice,
         uint256 _shortSignedPrice
     ) private view {
         // Get the index price and the index base unit
-        uint256 indexPrice = priceFeed.getPrices(_priceRequestId, _ticker).med;
-        uint256 indexBaseUnit = priceFeed.baseUnits(_ticker);
+        uint256 indexPrice = Oracle.getPrice(priceFeed, _ticker, _requestTimestamp);
+        uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _ticker);
         // Get the Long Max Oi
         uint256 longMaxOi =
             MarketUtils.getAvailableOiUsd(market, _ticker, indexPrice, _longSignedPrice, indexBaseUnit, true);

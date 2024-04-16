@@ -40,15 +40,6 @@ library MarketUtils {
     error MarketUtils_InsufficientFreeLiquidity();
     error MarketUtils_AdlCantOccur();
 
-    struct FeeParams {
-        IMarket market;
-        uint256 tokenAmount;
-        bool isLongToken;
-        IPriceFeed.Price longPrices;
-        IPriceFeed.Price shortPrices;
-        bool isDeposit;
-    }
-
     struct FeeState {
         uint256 baseFee;
         uint256 amountUsd;
@@ -64,9 +55,10 @@ library MarketUtils {
         uint256 indexFee;
     }
 
+    // @audit - do we define a central location to get all deposit prices?
     function calculateDepositFee(
-        IPriceFeed.Price memory _longPrices,
-        IPriceFeed.Price memory _shortPrices,
+        Oracle.Prices memory _longPrices,
+        Oracle.Prices memory _shortPrices,
         uint256 _longTokenBalance,
         uint256 _shortTokenBalance,
         uint256 _tokenAmount,
@@ -285,8 +277,8 @@ library MarketUtils {
     function calculateMintAmount(
         IMarket market,
         IMarketToken marketToken,
-        IPriceFeed.Price memory _longPrices,
-        IPriceFeed.Price memory _shortPrices,
+        Oracle.Prices memory _longPrices,
+        Oracle.Prices memory _shortPrices,
         uint256 _amountIn,
         uint256 _longBorrowFeesUsd,
         uint256 _shortBorrowFeesUsd,
@@ -322,8 +314,8 @@ library MarketUtils {
     function calculateWithdrawalAmount(
         IMarket market,
         IMarketToken marketToken,
-        IPriceFeed.Price memory _longPrices,
-        IPriceFeed.Price memory _shortPrices,
+        Oracle.Prices memory _longPrices,
+        Oracle.Prices memory _shortPrices,
         uint256 _marketTokenAmountIn,
         uint256 _longBorrowFeesUsd,
         uint256 _shortBorrowFeesUsd,
@@ -448,7 +440,7 @@ library MarketUtils {
     function calculateCumulativeMarketPnl(
         IMarket market,
         IPriceFeed priceFeed,
-        bytes32 _priceRequestId,
+        uint48 _requestTimestamp,
         bool _isLong,
         bool _maximise
     ) external view returns (int256 cumulativePnl) {
@@ -465,8 +457,8 @@ library MarketUtils {
         for (uint8 i = 0; i < tickers.length;) {
             string memory ticker = tickers[i];
             uint256 indexPrice = _maximise
-                ? Oracle.getMaxPrice(priceFeed, _priceRequestId, ticker)
-                : Oracle.getMinPrice(priceFeed, _priceRequestId, ticker);
+                ? Oracle.getMaxPrice(priceFeed, ticker, _requestTimestamp)
+                : Oracle.getMinPrice(priceFeed, ticker, _requestTimestamp);
             uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, ticker);
             int256 pnl = getMarketPnl(market, ticker, indexPrice, indexBaseUnit, _isLong);
             cumulativePnl += pnl;

@@ -197,7 +197,7 @@ contract TestBorrowing is Test {
             _collateral,
             positionSize,
             3000e30,
-            uint64(block.timestamp),
+            uint48(block.timestamp),
             Position.FundingParams(MarketUtils.getFundingAccrued(market, ethTicker), 0),
             Position.BorrowingParams(0, 0, 0),
             bytes32(0),
@@ -239,7 +239,7 @@ contract TestBorrowing is Test {
             _collateral,
             positionSize,
             3000e30,
-            uint64(block.timestamp),
+            uint48(block.timestamp),
             Position.FundingParams(MarketUtils.getFundingAccrued(market, ethTicker), 0),
             Position.BorrowingParams(0, 1e18, 0), // Set entry cumulative to 1e18
             bytes32(0),

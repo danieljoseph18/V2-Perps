@@ -16,6 +16,21 @@ interface IPriceFeed {
         RequestType requestType;
     }
 
+    struct TokenData {
+        address secondaryFeed;
+        uint8 tokenDecimals;
+        FeedType feedType;
+        bool hasSecondaryFeed;
+    }
+
+    enum FeedType {
+        CHAINLINK,
+        UNI_V3,
+        UNI_V2_T0, // Uniswap V2 token0
+        UNI_V2_T1, // Uniswap V2 token1
+        PYTH
+    }
+
     struct Price {
         /**
          * The ticker of the asset. Used to identify the asset.
@@ -72,7 +87,7 @@ interface IPriceFeed {
     event Response(bytes32 indexed requestId, RequestData requestData, bytes response, bytes err);
     event AssetPricesCleared();
     event PnlCleared(address indexed market);
-    event AssetSupported(string indexed ticker, uint256 baseUnit);
+    event AssetSupported(string indexed ticker, uint8 tokenDecimals);
     event SupportRemoved(string indexed ticker);
     event LinkReceived(uint256 indexed amount);
 
@@ -80,7 +95,7 @@ interface IPriceFeed {
     function PRICE_DECIMALS() external pure returns (uint256);
     function sequencerUptimeFeed() external view returns (address);
     function getPrices(string memory _ticker, uint48 _timestamp) external view returns (Price memory signedPrices);
-    function getCumulativePnl(address _market, uint48 _timestamp) external view returns (int256 pnl);
+    function getCumulativePnl(address _market, uint48 _timestamp) external view returns (Pnl memory pnl);
 
     function updateSubscriptionId(uint64 _subId) external;
     function updateBillingParameters(
@@ -90,7 +105,7 @@ interface IPriceFeed {
         uint256 _fallbackWeiToLinkRatio,
         address _nativeLinkPriceFeed
     ) external;
-    function supportAsset(string memory _ticker, uint256 _baseUnit) external;
+    function supportAsset(string memory _ticker, TokenData memory _tokenData, bytes32 _pythId) external;
     function unsupportAsset(string memory _ticker) external;
     function updateSequencerUptimeFeed(address _sequencerUptimeFeed) external;
     function requestPriceUpdate(string[] calldata args, address _requester)
@@ -102,7 +117,9 @@ interface IPriceFeed {
         payable
         returns (bytes32 requestId);
     function estimateRequestCost() external view returns (uint256);
-    function baseUnits(string memory _ticker) external view returns (uint256);
+    function getTokenData(string memory _ticker) external view returns (TokenData memory);
     function priceUpdateRequested(bytes32 _requestId) external view returns (bool);
+    function getRequestData(bytes32 _requestId) external view returns (RequestData memory);
     function getRequester(bytes32 _requestId) external view returns (address);
+    function pythIds(string memory _ticker) external view returns (bytes32);
 }
