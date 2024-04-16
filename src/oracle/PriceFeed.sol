@@ -26,6 +26,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     // Length of 1 Bytes32 Word
     uint8 private constant WORD = 32;
     uint8 private constant MIN_EXPIRATION_TIME = 2 minutes;
+    uint40 private constant MSB1 = 0x8000000000;
     uint64 private constant LINK_BASE_UNIT = 1e18;
     // Uniswap V3 Router address on Network
     address public immutable UNISWAP_V3_ROUTER;
@@ -300,10 +301,26 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
             // Fulfill the price update request
             uint256 len = response.length;
             if (len % WORD != 0) revert PriceFeed_InvalidResponseLength();
-            for (uint256 i = 0; i < len;) {
+            // @audit - response can contain a number of prices to update
+            // need to loop through in 32 byte words and deconstruct as shown.
+            // max length is 100 assets * 32 byte words = 3200 --> uint16 sufficient
+            for (uint16 i = 0; i < len;) {
                 Price memory price;
-                (price.ticker, price.precision, price.variance, price.timestamp, price.med) =
-                    abi.decode(response, (bytes15, uint8, uint16, uint48, uint64));
+                // Decode the encodedPrice into a bytes32
+                // @audit - wrong, needs to be 32 bytes of the current word
+                bytes32 responseBytes = bytes32(response);
+
+                // Extract the values from the bytes32 and store them in the Price struct
+                // truncate first 15 bytes of the response
+                price.ticker = bytes15(responseBytes);
+                // shift response 15 bytes left, then truncate the first byte
+                price.precision = uint8(bytes1((responseBytes << 120)));
+                // shift the response another byte left, then truncate the first 2 bytes
+                price.variance = uint16(bytes2(responseBytes << 128));
+                // shift the response another 2 bytes left, then truncate the first 6 bytes
+                price.timestamp = uint48(bytes6(responseBytes << 144));
+                // shift the response another 6 bytes left, then truncate the first 8 bytes
+                price.med = uint64(bytes8(responseBytes << 192));
 
                 // Store the price in storage
                 prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
@@ -318,8 +335,31 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
             if (len != WORD) revert PriceFeed_InvalidResponseLength();
 
             Pnl memory pnl;
-            (pnl.precision, pnl.market, pnl.timestamp, pnl.cumulativePnl) =
-                abi.decode(response, (uint8, address, uint48, int40));
+
+            bytes32 responseBytes = bytes32(response);
+            // shift the response 1 byte left, then truncate the first byte
+            pnl.precision = uint8(bytes1(responseBytes));
+            // shift the response another byte left, then truncate the first 20 bytes
+            pnl.market = address(bytes20(responseBytes << 8));
+            // shift the response another 20 bytes left, then truncate the first 6 bytes
+            pnl.timestamp = uint48(bytes6(responseBytes << 168));
+            // shift the response another 6 bytes left, then truncate the first 5 bytes
+            // Extract the cumulativePnl as uint40 as we can't directly extract
+            // an int40 from bytes.
+            uint40 pnlValue = uint40(bytes5(responseBytes << 216));
+
+            // Check if the most significant bit is 1 or 0
+            // 0x800... in binary is 1000000... The msb is 1, and all of the rest are 0
+            // Using the & operator, we check if the msb matches
+            // If they match, the number is negative, else positive.
+            if (pnlValue & MSB1 != 0) {
+                // If msb is 1, this indicates the number is negative.
+                // In this case, we flip all of the bits and add 1 to convert from +ve to -ve
+                pnl.cumulativePnl = -int40(~pnlValue + 1);
+            } else {
+                // If msb is 0, the value is positive, so we convert and return as is.
+                pnl.cumulativePnl = int40(pnlValue);
+            }
 
             // Store the cumulative PNL in the mapping
             cumulativePnl[pnl.market][pnl.timestamp] = pnl;
