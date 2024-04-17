@@ -563,7 +563,7 @@ library Execution {
         if (data.blockTimestamp != _requestTimestamp) revert Execution_InvalidRequestTimestamp();
         if (data.requester != _caller) {
             // If not, check that sufficient time has passed for the caller to execute the request
-            if (block.timestamp < data.blockTimestamp + REQUEST_EXPIRY_DURATION) {
+            if (block.timestamp < data.blockTimestamp + priceFeed.timeToExpiration()) {
                 revert Execution_InvalidExecutor();
             }
         }

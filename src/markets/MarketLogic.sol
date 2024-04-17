@@ -317,8 +317,7 @@ library MarketLogic {
         IMarket market = IMarket(address(this));
 
         // Validate the Price Request
-        uint48 requestTimestamp = priceFeed.getRequestData(_priceRequestId).blockTimestamp;
-        if (block.timestamp > requestTimestamp + priceFeed.timeToExpiration()) revert MarketLogic_RequestExpired();
+        uint48 requestTimestamp = Oracle.getRequestTimestamp(priceFeed, _priceRequestId);
 
         // Fetch token prices
         uint256 longTokenPrice = Oracle.getPrice(priceFeed, LONG_TICKER, requestTimestamp);

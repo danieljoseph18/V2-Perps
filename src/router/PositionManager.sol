@@ -190,6 +190,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
     /// @dev For market orders, can just pass in bytes32(0) as the request id, as it's only required for limits
     /// @dev If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestId as input
+    // @audit - what happens if a price request is invalidated but the position still exists?
     function executePosition(IMarket market, bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
         external
         payable

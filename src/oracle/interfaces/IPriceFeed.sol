@@ -14,6 +14,7 @@ interface IPriceFeed {
         address requester;
         uint48 blockTimestamp;
         RequestType requestType;
+        string[] args;
     }
 
     struct TokenData {
@@ -99,9 +100,9 @@ interface IPriceFeed {
     function sequencerUptimeFeed() external view returns (address);
     function getPrices(string memory _ticker, uint48 _timestamp) external view returns (Price memory signedPrices);
     function getCumulativePnl(address _market, uint48 _timestamp) external view returns (Pnl memory pnl);
-
-    function updateSubscriptionId(uint64 _subId) external;
     function updateBillingParameters(
+        uint64 _subId,
+        bytes32 _donId,
         uint256 _gasOverhead,
         uint32 _callbackGasLimit,
         uint256 _premiumFee,

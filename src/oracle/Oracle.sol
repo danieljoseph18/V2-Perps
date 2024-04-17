@@ -22,6 +22,7 @@ import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 library Oracle {
     using SignedMath for int256;
     using SignedMath for int64;
+    using SignedMath for int32;
     using MathUtils for uint256;
     using SafeCast for uint256;
 
@@ -32,6 +33,7 @@ library Oracle {
     error Oracle_InvalidReferenceQuery();
     error Oracle_InvalidPriceRetrieval();
     error Oracle_InvalidSecondaryStrategy();
+    error Oracle_RequestExpired();
 
     struct Prices {
         uint256 min;
@@ -79,6 +81,17 @@ library Oracle {
                 revert Oracle_SequencerDown();
             }
         }
+    }
+
+    /// @dev - Wrapper around `getRequestTimestamp` with an additional validation step
+    function getRequestTimestamp(IPriceFeed priceFeed, bytes32 _requestId)
+        external
+        view
+        returns (uint48 requestTimestamp)
+    {
+        // Validate the Price Request
+        requestTimestamp = priceFeed.getRequestTimestamp(_requestId);
+        if (block.timestamp > requestTimestamp + priceFeed.timeToExpiration()) revert Oracle_RequestExpired();
     }
 
     function isValidChainlinkFeed(FeedRegistryInterface feedRegistry, address _feedAddress) external view {
@@ -397,7 +410,6 @@ library Oracle {
     }
 
     // Need the Pyth address and the bytes32 id for the ticker
-    // @audit - can exponent or price be negative?
     function _getPythPrice(IPriceFeed priceFeed, IPriceFeed.TokenData memory _tokenData, string memory _ticker)
         private
         view
@@ -408,7 +420,7 @@ library Oracle {
         IPyth pythFeed = IPyth(_tokenData.secondaryFeed);
         PythStructs.Price memory pythData = pythFeed.getEmaPriceUnsafe(priceFeed.pythIds(_ticker));
         // Expand the price to 30 d.p
-        uint256 exponent = PRICE_DECIMALS - uint32(pythData.expo);
+        uint256 exponent = PRICE_DECIMALS - pythData.expo.abs();
         price = pythData.price.abs() * (10 ** exponent);
     }
 

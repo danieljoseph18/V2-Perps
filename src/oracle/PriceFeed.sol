@@ -36,16 +36,11 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     address public immutable WETH;
     // LINK address on Network
     address public immutable LINK;
-    // donID - Sepolia = 0x66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000
-    // Check to get the donID for your supported network https://docs.chain.link/chainlink-functions/supported-networks
-    // @audit - make don and router configurable
-    bytes32 private immutable DON_ID;
-    // Router address - Hardcoded for Sepolia = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0
-    // Check to get the router address for your supported network https://docs.chain.link/chainlink-functions/supported-networks
-    address private immutable ROUTER;
 
     IMarketFactory public marketFactory;
 
+    // Don IDs: https://docs.chain.link/chainlink-functions/supported-networks
+    bytes32 private donId;
     address public sequencerUptimeFeed;
     uint64 subscriptionId;
     uint64 settlementFee;
@@ -67,7 +62,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     uint256 public premiumFee;
     address public nativeLinkPriceFeed;
     uint32 public callbackGasLimit;
-    // @audit - where else do we need to use this? not just market logic...
     uint48 public timeToExpiration;
 
     // State variable to store the returned character information
@@ -79,13 +73,16 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     // data should be tied only to the request as its specific to the request
     mapping(string ticker => TokenData) private tokenData;
     mapping(string ticker => bytes32 pythId) public pythIds;
-    /**
-     * audit - to prevent multiple requests for the same action, we can perhaps store a generic
-     * request signature. If a request already exists for the same action, we can prevent the
-     * request from processing and save the end user some gas.
-     */
+
     // Dictionary to enable clearing of the RequestKey
-    mapping(bytes32 id => bytes32 key) private idToKey;
+    // Bi-directional to handle the case of invalidated requests
+    mapping(bytes32 requestId => bytes32 requestKey) private idToKey;
+    mapping(bytes32 requestKey => bytes32 requestId) private keyToId;
+    /**
+     * Used to count the number of failed price / pnl retrievals. If > MAX, the request is
+     * invalidated and removed from storage.
+     */
+    mapping(bytes32 requestId => uint256 retries) numberOfRetries;
     EnumerableMap.PriceRequestMap private requestData;
     EnumerableSet.Bytes32Set private assetIds;
     EnumerableSet.Bytes32Set private requestKeys;
@@ -110,8 +107,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         UNISWAP_V3_ROUTER = _uniV3Router;
         UNISWAP_V3_FACTORY = _uniV3Factory;
         subscriptionId = _subId;
-        DON_ID = _donId;
-        ROUTER = _router;
+        donId = _donId;
     }
 
     function initialize(
@@ -134,17 +130,17 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         isInitialized = true;
     }
 
-    function updateSubscriptionId(uint64 _subId) external onlyAdmin {
-        subscriptionId = _subId;
-    }
-
     function updateBillingParameters(
+        uint64 _subId,
+        bytes32 _donId,
         uint256 _gasOverhead,
         uint32 _callbackGasLimit,
         uint256 _premiumFee,
         uint64 _settlementFee,
         address _nativeLinkPriceFeed
     ) external onlyAdmin {
+        subscriptionId = _subId;
+        donId = _donId;
         gasOverhead = _gasOverhead;
         callbackGasLimit = _callbackGasLimit;
         premiumFee = _premiumFee;
@@ -204,6 +200,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
      * @param args The arguments to pass to the HTTP request -> should be the tickers for which pricing is requested
      * @return requestId The ID of the request
      */
+    // @audit - need to add timestamp to the args
     function requestPriceUpdate(string[] calldata args, address _requester)
         external
         payable
@@ -212,32 +209,32 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         returns (bytes32 requestId)
     {
         Oracle.isSequencerUp(this);
-        // Compute the key and check if the same request exists
+
+        // Compute the key and check if the same request exists:
+        // if it does, return to prevent the consumer from running the same computation multiple times.
         bytes32 priceRequestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
         if (requestKeys.contains(priceRequestKey)) return bytes32(0);
-        // Initialize the request
-        FunctionsRequest.Request memory req;
-        req.initializeRequestForInlineJavaScript(priceUpdateSource); // Initialize the request with JS code
-        req.setArgs(args); // Set the arguments for the request
 
-        // Send the request and store the request ID
-        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, DON_ID);
+        requestId = _requestFulfillment(args, true);
 
         RequestData memory data = RequestData({
             requester: _requester,
             blockTimestamp: _blockTimestamp(),
-            requestType: RequestType.PRICE_UPDATE
+            requestType: RequestType.PRICE_UPDATE,
+            args: args
         });
 
         // Add the Request to Storage
         requestKeys.add(priceRequestKey);
         idToKey[requestId] = priceRequestKey;
+        keyToId[priceRequestKey] = requestId;
         requestData.set(requestId, data);
 
         return requestId;
     }
 
     /// @dev - for this, we need to copy / call the function MarketUtils.calculateCumulativeMarketPnl but offchain
+    // @audit - need to add timestamp to the args
     function requestCumulativeMarketPnl(IMarket market, address _requester)
         external
         payable
@@ -248,7 +245,9 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         // Need to check the market is valid
         // If the market is not valid, revert
         if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
-        // Compute the key and check if the same request exists
+
+        // Compute the key and check if the same request exists:
+        // if it does, return to prevent the consumer running multiple times for a given block.
         bytes32 cumulativePnlRequestKey = _generateKey(abi.encode(market, _requester, _blockTimestamp()));
         if (requestKeys.contains(cumulativePnlRequestKey)) return bytes32(0);
 
@@ -257,22 +256,19 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         // convert assets to a string
         string[] memory tickers = market.getTickers();
 
-        FunctionsRequest.Request memory req;
-        req.initializeRequestForInlineJavaScript(cumulativePnlSource); // Initialize the request with JS code
-        if (tickers.length > 0) req.setArgs(tickers); // Set the arguments for the request
-
-        // Send the request and store the request ID
-        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, DON_ID);
+        requestId = _requestFulfillment(tickers, false);
 
         RequestData memory data = RequestData({
             requester: _requester,
             blockTimestamp: _blockTimestamp(),
-            requestType: RequestType.CUMULATIVE_PNL
+            requestType: RequestType.CUMULATIVE_PNL,
+            args: tickers
         });
 
         // Add the Request to Storage
         requestKeys.add(cumulativePnlRequestKey);
         idToKey[requestId] = cumulativePnlRequestKey;
+        keyToId[cumulativePnlRequestKey] = requestId;
         requestData.set(requestId, data);
 
         return requestId;
@@ -284,18 +280,36 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
      * @param response The HTTP response data
      * @param err Any errors from the Functions request
      */
+    /// @dev - Need to make sure an err is only passed to the contract if it's critical,
+    /// to prevent valid prices being invalidated.
     // Decode the response, according to the structure of the request
     // Try to avoid reverting, and instead return without storing the price response if invalid.
-    // @audit - what if the request for the block failed --> how can users price their assets?
-    // @audit - what if the data is already in storage? How do we prevent the consumer from running?
     function fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
         // Return if invalid requestId
         if (!requestData.contains(requestId)) return;
         // Return if an error is thrown
-        // @audit - What if an error is thrown but the response is still valid?
-        if (err.length > 0) return;
+        // Need to store the number of times it's been re-requested --> if > 5 for example, delete and invalidate the request
+        if (err.length > 0) {
+            // get the failed request
+            RequestData memory failedRequestData = requestData.get(requestId);
+            // create a new request
+            bytes32 newRequestId =
+                _requestFulfillment(failedRequestData.args, failedRequestData.requestType == RequestType.PRICE_UPDATE);
+            // key will remain the same, so cache the key
+            bytes32 requestKey = idToKey[requestId];
+            // replace the old request with the new one
+            // Delete the old request
+            requestData.remove(requestId);
+            delete idToKey[requestId];
+            idToKey[newRequestId] = requestKey;
+            keyToId[requestKey] = newRequestId;
+            requestData.set(newRequestId, failedRequestData);
+            return;
+            // Replace the
+            // q -> how do we replace the request from a trading position standpoint?
+            // a -> on the position we can store the request key instead
+        }
         // Remove the RequestId from storage and return if fail
-        // @audit - could this clearing cause issues as it's a struct?
         if (!requestData.remove(requestId)) return;
         requestKeys.remove(idToKey[requestId]);
         delete idToKey[requestId];
@@ -356,6 +370,15 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     /**
      * ================================== Private Functions ==================================
      */
+    function _requestFulfillment(string[] memory _args, bool _isPrice) private returns (bytes32 requestId) {
+        FunctionsRequest.Request memory req;
+        req.initializeRequestForInlineJavaScript(_isPrice ? priceUpdateSource : cumulativePnlSource); // Initialize the request with JS code
+        if (_args.length > 0) req.setArgs(_args); // Set the arguments for the request
+
+        // Send the request and store the request ID
+        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, donId);
+    }
+
     function _decodeAndStorePrices(bytes memory _encodedPrices) private {
         if (_encodedPrices.length > MAX_DATA_LENGTH) revert PriceFeed_PriceUpdateLength();
         if (_encodedPrices.length % WORD != 0) revert PriceFeed_PriceUpdateLength();

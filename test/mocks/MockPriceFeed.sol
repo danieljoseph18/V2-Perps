@@ -33,15 +33,11 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     address public immutable WETH;
     // LINK address on Network
     address public immutable LINK;
-    // donID - Sepolia = 0x66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000
-    // Check to get the donID for your supported network https://docs.chain.link/chainlink-functions/supported-networks
-    bytes32 private immutable DON_ID;
-    // Router address - Hardcoded for Sepolia = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0
-    // Check to get the router address for your supported network https://docs.chain.link/chainlink-functions/supported-networks
-    address private immutable ROUTER;
 
     IMarketFactory public marketFactory;
 
+    // Don IDs: https://docs.chain.link/chainlink-functions/supported-networks
+    bytes32 private donId;
     address public sequencerUptimeFeed;
     uint64 subscriptionId;
     uint64 settlementFee;
@@ -104,8 +100,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         UNISWAP_V3_ROUTER = _uniV3Router;
         UNISWAP_V3_FACTORY = _uniV3Factory;
         subscriptionId = _subId;
-        DON_ID = _donId;
-        ROUTER = _router;
+        donId = _donId;
     }
 
     function initialize(
@@ -128,17 +123,17 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         isInitialized = true;
     }
 
-    function updateSubscriptionId(uint64 _subId) external {
-        subscriptionId = _subId;
-    }
-
     function updateBillingParameters(
+        uint64 _subId,
+        bytes32 _donId,
         uint256 _gasOverhead,
         uint32 _callbackGasLimit,
         uint256 _premiumFee,
         uint64 _settlementFee,
         address _nativeLinkPriceFeed
     ) external {
+        subscriptionId = _subId;
+        donId = _donId;
         gasOverhead = _gasOverhead;
         callbackGasLimit = _callbackGasLimit;
         premiumFee = _premiumFee;
