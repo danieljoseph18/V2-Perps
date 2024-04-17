@@ -52,9 +52,12 @@ library Oracle {
     uint8 private constant CHAINLINK_DECIMALS = 8;
     uint16 private constant MAX_VARIANCE = 10_000;
     uint64 private constant MAX_PRICE_DEVIATION = 0.1e18;
+    uint64 private constant OVERESTIMATION_FACTOR = 0.1e18;
+    uint64 private constant LINK_BASE_UNIT = 1e18;
+    uint64 private constant PREMIUM_FEE = 0.2e18; // 20%
 
     /**
-     * ====================================== Validation ======================================
+     * ====================================== Helper Functions ======================================
      */
     function isSequencerUp(IPriceFeed priceFeed) external view {
         address sequencerUptimeFeed = priceFeed.sequencerUptimeFeed();
@@ -77,6 +80,48 @@ library Oracle {
             if (!isUp) {
                 revert Oracle_SequencerDown();
             }
+        }
+    }
+
+    function estimateRequestCost(IPriceFeed priceFeed) external view returns (uint256 cost) {
+        // Get the current gas price
+        uint256 gasPrice = tx.gasprice;
+
+        // Calculate the overestimated gas price (overestimated by 10%)
+        uint256 overestimatedGasPrice = gasPrice + gasPrice.percentage(OVERESTIMATION_FACTOR);
+
+        // Calculate the total estimated gas cost for the functions call
+        uint256 totalEstimatedGasCost = overestimatedGasPrice * (priceFeed.gasOverhead() + priceFeed.callbackGasLimit());
+        uint256 premiumFee = totalEstimatedGasCost.percentage(PREMIUM_FEE);
+
+        // Calculate the total cost -> gas cost + premium fee
+        cost = totalEstimatedGasCost + premiumFee;
+    }
+
+    function calculateSettlementFee(uint256 _ethAmount, uint256 _settlementFeePercentage)
+        external
+        pure
+        returns (uint256)
+    {
+        return _ethAmount.percentage(_settlementFeePercentage);
+    }
+
+    /**
+     * enum FeedType {
+     *     CHAINLINK,
+     *     UNI_V3,
+     *     UNI_V2_T0, // Uniswap V2 token0
+     *     UNI_V2_T1, // Uniswap V2 token1
+     *     PYTH
+     * }
+     */
+    function validateFeedType(IPriceFeed.FeedType _feedType) external pure {
+        if (
+            _feedType != IPriceFeed.FeedType.CHAINLINK && _feedType != IPriceFeed.FeedType.UNI_V3
+                && _feedType != IPriceFeed.FeedType.UNI_V2_T0 && _feedType != IPriceFeed.FeedType.UNI_V2_T1
+                && _feedType != IPriceFeed.FeedType.PYTH
+        ) {
+            revert Oracle_InvalidPoolType();
         }
     }
 
@@ -112,30 +157,16 @@ library Oracle {
         minPrice = medPrice - mulDiv(medPrice, price.variance, MAX_VARIANCE);
     }
 
-    function getMarketTokenPrices(IPriceFeed priceFeed, bool _maximise, uint48 _blockTimestamp)
-        external
-        view
-        returns (uint256 longPrice, uint256 shortPrice)
-    {
-        if (_maximise) {
-            longPrice = getMaxPrice(priceFeed, LONG_TICKER, _blockTimestamp);
-            shortPrice = getMaxPrice(priceFeed, SHORT_TICKER, _blockTimestamp);
-        } else {
-            longPrice = getMinPrice(priceFeed, LONG_TICKER, _blockTimestamp);
-            shortPrice = getMinPrice(priceFeed, SHORT_TICKER, _blockTimestamp);
-        }
-    }
-
-    function getMarketTokenPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
+    function getVaultPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
         public
         view
         returns (Prices memory longPrices, Prices memory shortPrices)
     {
-        longPrices = getMarketTokenPrices(priceFeed, _blockTimestamp, true);
-        shortPrices = getMarketTokenPrices(priceFeed, _blockTimestamp, false);
+        longPrices = getVaultPricesForSide(priceFeed, _blockTimestamp, true);
+        shortPrices = getVaultPricesForSide(priceFeed, _blockTimestamp, false);
     }
 
-    function getMarketTokenPrices(IPriceFeed priceFeed, uint48 _blockTimestamp, bool _isLong)
+    function getVaultPricesForSide(IPriceFeed priceFeed, uint48 _blockTimestamp, bool _isLong)
         public
         view
         returns (Prices memory prices)
@@ -144,6 +175,24 @@ library Oracle {
         prices.med = signedPrice.med * (10 ** (PRICE_DECIMALS - signedPrice.precision));
         prices.min = prices.med - mulDiv(prices.med, signedPrice.variance, MAX_VARIANCE);
         prices.max = prices.med + mulDiv(prices.med, signedPrice.variance, MAX_VARIANCE);
+    }
+
+    function getMaxVaultPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
+        external
+        view
+        returns (uint256 longPrice, uint256 shortPrice)
+    {
+        longPrice = getMaxPrice(priceFeed, LONG_TICKER, _blockTimestamp);
+        shortPrice = getMaxPrice(priceFeed, SHORT_TICKER, _blockTimestamp);
+    }
+
+    function getMinVaultPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
+        external
+        view
+        returns (uint256 longPrice, uint256 shortPrice)
+    {
+        longPrice = getMinPrice(priceFeed, LONG_TICKER, _blockTimestamp);
+        shortPrice = getMinPrice(priceFeed, SHORT_TICKER, _blockTimestamp);
     }
 
     /**
@@ -215,6 +264,7 @@ library Oracle {
         } else {
             revert Oracle_InvalidReferenceQuery();
         }
+        if (price == 0) revert Oracle_InvalidReferenceQuery();
     }
 
     // @audit - implement a function to check the uniswap v3 pool is valid from the factory contract

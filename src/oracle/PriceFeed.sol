@@ -17,7 +17,9 @@ import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Oracle} from "./Oracle.sol";
 
 /// @dev - Needs LINK / subscription to fulfill requests -> need to put this cost onto users
-// @audit - need to introduce a reference price source to ensure the validity of the price output.
+// @audit - could we create a merkle tree whitelist for all valid reference price sources?
+// for uniswap, can we check validity from the factory contract directly?
+// @audit - can we fetch the ticker from each reference price feed to ensure it matches with the index ticker provided?
 contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -49,6 +51,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
 
     address public sequencerUptimeFeed;
     uint64 subscriptionId;
+    uint64 settlementFee;
     bool private isInitialized;
 
     // JavaScript source code
@@ -65,7 +68,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     //Callback gas limit
     uint256 public gasOverhead;
     uint256 public premiumFee;
-    uint256 public fallbackWeiToLinkRatio;
     address public nativeLinkPriceFeed;
     uint32 public callbackGasLimit;
     uint256 public timeToExpiration;
@@ -118,7 +120,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         uint256 _gasOverhead,
         uint32 _callbackGasLimit,
         uint256 _premiumFee,
-        uint256 _fallbackWeiToLinkRatio,
+        uint64 _settlementFee,
         address _nativeLinkPriceFeed,
         address _sequencerUptimeFeed,
         uint256 _timeToExpiration
@@ -127,7 +129,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         gasOverhead = _gasOverhead;
         callbackGasLimit = _callbackGasLimit;
         premiumFee = _premiumFee;
-        fallbackWeiToLinkRatio = _fallbackWeiToLinkRatio;
+        settlementFee = _settlementFee;
         nativeLinkPriceFeed = _nativeLinkPriceFeed;
         sequencerUptimeFeed = _sequencerUptimeFeed;
         timeToExpiration = _timeToExpiration;
@@ -142,13 +144,13 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         uint256 _gasOverhead,
         uint32 _callbackGasLimit,
         uint256 _premiumFee,
-        uint256 _fallbackWeiToLinkRatio,
+        uint64 _settlementFee,
         address _nativeLinkPriceFeed
     ) external onlyAdmin {
         gasOverhead = _gasOverhead;
         callbackGasLimit = _callbackGasLimit;
         premiumFee = _premiumFee;
-        fallbackWeiToLinkRatio = _fallbackWeiToLinkRatio;
+        settlementFee = _settlementFee;
         nativeLinkPriceFeed = _nativeLinkPriceFeed;
     }
 
@@ -216,9 +218,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         // Compute the key and check if the same request exists
         bytes32 priceRequestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
         if (requestKeys.contains(priceRequestKey)) return bytes32(0);
-        // Convert ETH into Link
-        // @audit - convert to arbitrage version
-        _convertEthToLink(msg.value);
         // Initialize the request
         FunctionsRequest.Request memory req;
         req.initializeRequestForInlineJavaScript(priceUpdateSource); // Initialize the request with JS code
@@ -255,9 +254,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         // Compute the key and check if the same request exists
         bytes32 cumulativePnlRequestKey = _generateKey(abi.encode(market, _requester, _blockTimestamp()));
         if (requestKeys.contains(cumulativePnlRequestKey)) return bytes32(0);
-
-        // @audit - convert to arbitrage version
-        _convertEthToLink(msg.value);
 
         // get all of the assets from the market
         // pass the assets to the request as args
@@ -320,29 +316,44 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         emit Response(requestId, data, response, err);
     }
 
-    // @audit - wrong --> doesn't account for the decimals of a chainlink price
-    function estimateRequestCost() external view returns (uint256) {
-        // Get the current gas price
-        uint256 gasPrice = tx.gasprice;
+    function settleEthForLink() external onlyAdmin nonReentrant {
+        // Get the amount of Ether held within the contract
+        uint256 ethBalance = address(this).balance;
+        if (ethBalance == 0) revert PriceFeed_ZeroBalance();
+        // Calculate the fee to be paid to the arbitrageur based on the bonus fee paid by the requesters
+        uint256 settlementReward = Oracle.calculateSettlementFee(ethBalance, settlementFee);
+        uint256 conversionAmount = ethBalance - settlementReward;
+        // Convert the Ether to LINK using the Uniswap V3 Router
+        // Get the Uniswap V3 router instance
+        ISwapRouter uniswapRouter = ISwapRouter(UNISWAP_V3_ROUTER);
 
-        // Calculate the overestimated gas price
-        uint256 overestimatedGasPrice = (gasPrice * 110) / 100;
+        // Approve the router to spend ETH
+        IWETH(WETH).deposit{value: conversionAmount}();
+        IWETH(WETH).approve(address(uniswapRouter), conversionAmount);
 
-        // Calculate the total estimated gas cost in native units
-        uint256 totalEstimatedGasCost = overestimatedGasPrice * (gasOverhead + callbackGasLimit);
+        // Set the path for the swap (WETH -> LINK)
+        address[] memory path = new address[](2);
+        path[0] = WETH;
+        path[1] = LINK;
 
-        // Convert the total estimated gas cost to LINK using the price feed or fallback ratio
-        uint256 estimatedCostInLink;
-        try AggregatorV2V3Interface(nativeLinkPriceFeed).latestAnswer() returns (int256 answer) {
-            estimatedCostInLink = totalEstimatedGasCost * uint256(answer) / LINK_BASE_UNIT;
-        } catch {
-            estimatedCostInLink = totalEstimatedGasCost / fallbackWeiToLinkRatio;
-        }
+        // Set the fee tier for the pool (e.g., 0.3% fee tier)
+        uint24 feeTier = 3000;
 
-        // Add the premium fee to get the total estimated cost in LINK
-        uint256 totalEstimatedCost = estimatedCostInLink + premiumFee;
-
-        return totalEstimatedCost;
+        // Swap WETH for LINK
+        uint256 amountOut = uniswapRouter.exactInput(
+            ISwapRouter.ExactInputParams({
+                path: abi.encodePacked(path[0], feeTier, path[1]),
+                recipient: address(this),
+                deadline: block.timestamp + 2 minutes,
+                amountIn: conversionAmount,
+                amountOutMinimum: 0
+            })
+        );
+        if (amountOut == 0) revert PriceFeed_SwapFailed();
+        // Send the settlement fee to the caller
+        payable(msg.sender).transfer(settlementReward);
+        // Emit an event to log the amount of LINK received
+        emit LinkBalanceSettled(settlementReward);
     }
 
     /**
@@ -419,50 +430,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
 
         // Store the cumulative PNL in the mapping
         cumulativePnl[pnl.market][pnl.timestamp] = pnl;
-    }
-
-    /**
-     * When Ether is received, it needs to be swapped for LINK to pay for the fee of the request.
-     * The execution fee should be sufficient to cover the cost of the request in LINK.
-     */
-    // @audit
-    /**
-     * Can make this an open function that anyone can call to convert ETH to LINK,
-     * then get paid a small settlement fee for doing so. Basically incentivize
-     * users to settle all Ether on the contract accumulated for LINK.
-     *
-     * Need to punish people from manipulating the AMM to extract value from the contract.
-     */
-    function _convertEthToLink(uint256 _ethAmount) private {
-        // Get the Uniswap V3 router instance
-        ISwapRouter uniswapRouter = ISwapRouter(UNISWAP_V3_ROUTER);
-
-        // Calculate the amount of Ether received
-        uint256 ethAmount = _ethAmount;
-
-        // Approve the router to spend ETH
-        IWETH(WETH).deposit{value: ethAmount}();
-        IWETH(WETH).approve(address(uniswapRouter), ethAmount);
-
-        // Set the path for the swap (WETH -> LINK)
-        address[] memory path = new address[](2);
-        path[0] = WETH;
-        path[1] = LINK;
-
-        // Set the fee tier for the pool (e.g., 0.3% fee tier)
-        uint24 feeTier = 3000;
-
-        // Swap WETH for LINK
-        uint256 amountOut = uniswapRouter.exactInput(
-            ISwapRouter.ExactInputParams({
-                path: abi.encodePacked(path[0], feeTier, path[1]),
-                recipient: address(this),
-                deadline: block.timestamp + 1800,
-                amountIn: ethAmount,
-                amountOutMinimum: 0
-            })
-        );
-        if (amountOut == 0) revert PriceFeed_SwapFailed();
     }
 
     function _blockTimestamp() internal view returns (uint48) {

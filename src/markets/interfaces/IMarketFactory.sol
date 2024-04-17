@@ -30,14 +30,19 @@ interface IMarketFactory {
     error MarketFactory_RequestDoesNotExist();
     error MarketFactory_AccessDenied();
     error MarketFactory_FailedToRemoveRequest();
+    error MarketFactory_InvalidDecimals();
+    error MarketFactory_InvalidTicker();
+    error MarketFactory_InvalidPythFeed();
+    error MarketFactory_SelfExecution();
 
-    struct DeployRequest {
+    struct DeployParams {
         bool isMultiAsset;
         address owner;
         string indexTokenTicker;
         string marketTokenName;
         string marketTokenSymbol;
-        uint256 baseUnit;
+        IPriceFeed.TokenData tokenData;
+        bytes32 pythId;
     }
 
     function initialize(
@@ -51,9 +56,9 @@ interface IMarketFactory {
     ) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
-    function requestNewMarket(DeployRequest calldata _request) external payable;
+    function requestNewMarket(DeployParams calldata _request) external payable;
     function executeNewMarket(bytes32 _requestKey) external returns (address);
-    function getRequest(bytes32 _requestKey) external view returns (DeployRequest memory);
+    function getRequest(bytes32 _requestKey) external view returns (DeployParams memory);
     function marketCreationFee() external view returns (uint256);
     function markets(uint256 index) external view returns (address);
     function isMarket(address _market) external view returns (bool);

@@ -598,8 +598,13 @@ library Execution {
                 : Oracle.getMaxPrice(priceFeed, _indexTicker, _requestTimestamp);
 
         // Market Token Prices and Base Units
-        (prices.longMarketTokenPrice, prices.shortMarketTokenPrice) =
-            Oracle.getMarketTokenPrices(priceFeed, maximizePrice, _requestTimestamp);
+        if (maximizePrice) {
+            (prices.longMarketTokenPrice, prices.shortMarketTokenPrice) =
+                Oracle.getMaxVaultPrices(priceFeed, _requestTimestamp);
+        } else {
+            (prices.longMarketTokenPrice, prices.shortMarketTokenPrice) =
+                Oracle.getMinVaultPrices(priceFeed, _requestTimestamp);
+        }
 
         // Validate Price Ranges
         Oracle.validatePriceRange(priceFeed, _indexTicker, prices.indexPrice);

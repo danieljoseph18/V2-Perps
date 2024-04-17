@@ -44,6 +44,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
 
     address public sequencerUptimeFeed;
     uint64 subscriptionId;
+    uint64 settlementFee;
     bool private isInitialized;
 
     // JavaScript source code
@@ -60,7 +61,6 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     //Callback gas limit
     uint256 public gasOverhead;
     uint256 public premiumFee;
-    uint256 public fallbackWeiToLinkRatio;
     address public nativeLinkPriceFeed;
     uint32 public callbackGasLimit;
     uint256 public timeToExpiration;
@@ -112,7 +112,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         uint256 _gasOverhead,
         uint32 _callbackGasLimit,
         uint256 _premiumFee,
-        uint256 _fallbackWeiToLinkRatio,
+        uint64 _settlementFee,
         address _nativeLinkPriceFeed,
         address _sequencerUptimeFeed,
         uint256 _timeToExpiration
@@ -121,7 +121,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         gasOverhead = _gasOverhead;
         callbackGasLimit = _callbackGasLimit;
         premiumFee = _premiumFee;
-        fallbackWeiToLinkRatio = _fallbackWeiToLinkRatio;
+        settlementFee = _settlementFee;
         nativeLinkPriceFeed = _nativeLinkPriceFeed;
         sequencerUptimeFeed = _sequencerUptimeFeed;
         timeToExpiration = _timeToExpiration;
@@ -136,13 +136,13 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         uint256 _gasOverhead,
         uint32 _callbackGasLimit,
         uint256 _premiumFee,
-        uint256 _fallbackWeiToLinkRatio,
+        uint64 _settlementFee,
         address _nativeLinkPriceFeed
     ) external {
         gasOverhead = _gasOverhead;
         callbackGasLimit = _callbackGasLimit;
         premiumFee = _premiumFee;
-        fallbackWeiToLinkRatio = _fallbackWeiToLinkRatio;
+        settlementFee = _settlementFee;
         nativeLinkPriceFeed = _nativeLinkPriceFeed;
     }
 
@@ -322,30 +322,6 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
 
         // Emit an event to log the response
         emit Response(requestId, data, response, err);
-    }
-
-    function estimateRequestCost() external view returns (uint256) {
-        // Get the current gas price
-        uint256 gasPrice = tx.gasprice;
-
-        // Calculate the overestimated gas price
-        uint256 overestimatedGasPrice = (gasPrice * 110) / 100;
-
-        // Calculate the total estimated gas cost in native units
-        uint256 totalEstimatedGasCost = overestimatedGasPrice * (gasOverhead + callbackGasLimit);
-
-        // Convert the total estimated gas cost to LINK using the price feed or fallback ratio
-        uint256 totalEstimatedGasCostInLink;
-        try AggregatorV2V3Interface(nativeLinkPriceFeed).latestAnswer() returns (int256 answer) {
-            totalEstimatedGasCostInLink = totalEstimatedGasCost * uint256(answer) / LINK_BASE_UNIT;
-        } catch {
-            totalEstimatedGasCostInLink = totalEstimatedGasCost / fallbackWeiToLinkRatio;
-        }
-
-        // Add the premium fee to get the total estimated cost in LINK
-        uint256 totalEstimatedCost = totalEstimatedGasCostInLink + premiumFee;
-
-        return totalEstimatedCost;
     }
 
     function _blockTimestamp() internal view returns (uint48) {

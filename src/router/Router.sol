@@ -266,7 +266,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         // If ticker field was empty, revert
         if (bytes(ticker).length == 0) revert Router_InvalidAsset();
         // Get the Price update fee
-        uint256 priceUpdateFee = priceFeed.estimateRequestCost();
+        uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
         // Validate the Execution Fee
         if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();
         // Request a Price Update
@@ -281,7 +281,7 @@ contract Router is ReentrancyGuard, RoleValidation {
      */
     function requestPricingForMarket(IMarket market) external payable returns (bytes32 priceRequestId) {
         string[] memory tickers = market.getTickers();
-        uint256 priceUpdateFee = priceFeed.estimateRequestCost();
+        uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
         if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();
         priceRequestId = priceFeed.requestPriceUpdate{value: msg.value}(tickers, msg.sender);
     }

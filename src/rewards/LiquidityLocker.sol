@@ -79,7 +79,7 @@ contract LiquidityLocker is ILiquidityLocker, RoleValidation, ReentrancyGuard {
         if (uint256(tier) > 3) revert LiquidityLocker_InvalidTier();
         if (amount == 0) revert LiquidityLocker_InvalidAmount();
         if (rewardTracker.balanceOf(msg.sender) < amount) revert LiquidityLocker_InsufficientFunds();
-        uint64 duration = _getDuration(tier);
+        uint40 duration = _getDuration(tier);
 
         stakeTransferrer.transferFrom(msg.sender, address(this), address(rewardTracker), amount);
 
@@ -89,7 +89,7 @@ contract LiquidityLocker is ILiquidityLocker, RoleValidation, ReentrancyGuard {
         nextPositionId = nextPositionId + 1;
 
         Position memory newPosition =
-            Position(amount, tier, uint64(block.timestamp), uint64(block.timestamp) + duration, msg.sender);
+            Position(amount, tier, uint40(block.timestamp), uint40(block.timestamp) + duration, msg.sender);
         lockData[msg.sender].positions[id] = newPosition;
         lockData[msg.sender].positionIds.push(id);
         lockData[msg.sender].lockedAmount = lockData[msg.sender].lockedAmount + amount;
@@ -310,7 +310,7 @@ contract LiquidityLocker is ILiquidityLocker, RoleValidation, ReentrancyGuard {
 
     /// @notice Returns the duration of a locked position by tier.
     /// @param tier The tier of the position.
-    function _getDuration(uint8 tier) private pure returns (uint64) {
+    function _getDuration(uint8 tier) private pure returns (uint40) {
         if (tier == 0) {
             return TIER1_DURATION; // 1hr cooldown
         } else if (tier == 1) {

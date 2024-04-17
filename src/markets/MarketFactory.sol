@@ -20,8 +20,15 @@ import {TransferStakedTokens} from "../rewards/TransferStakedTokens.sol";
 import {Roles} from "../access/Roles.sol";
 
 /// @dev Needs MarketFactory Role
+/**
+ * Known issues:
+ * - Users can create pools with spoofed reference price feeds (either ref price feed not associated with asset, or a fake)
+ */
+// @audit - could we introduce a flagging system to stall requests that are suspicious?
+// they then move into limbo, and if the flag is validated, the flagger gets paid a % of the request fee?
+// would need to blacklist a user after multiple invalid flags
 contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
-    using EnumerableMap for EnumerableMap.DeployRequestMap;
+    using EnumerableMap for EnumerableMap.DeployParamsMap;
 
     IPriceFeed priceFeed;
     IReferralStorage referralStorage;
@@ -36,7 +43,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     address private immutable WETH;
     address private immutable USDC;
 
-    EnumerableMap.DeployRequestMap private requests;
+    EnumerableMap.DeployParamsMap private requests;
     mapping(address market => bool isMarket) public isMarket;
     mapping(uint256 index => address market) public markets;
     /**
@@ -47,10 +54,10 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     mapping(string ticker => address[] markets) public marketsByTicker;
 
     bool private isInitialized;
-    bool private multiAssetsEnabled;
     IMarket.Config public defaultConfig;
     address public feeReceiver;
     uint256 public marketCreationFee;
+    uint256 public marketExecutionFee;
     uint256 cumulativeMarketIndex;
     uint256 requestNonce;
 
@@ -66,7 +73,8 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         address _positionManager,
         address _feeDistributor,
         address _feeReceiver,
-        uint256 _marketCreationFee
+        uint256 _marketCreationFee,
+        uint256 _marketExecutionFee
     ) external onlyAdmin {
         if (isInitialized) revert MarketFactory_AlreadyInitialized();
         priceFeed = IPriceFeed(_priceFeed);
@@ -77,7 +85,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         defaultConfig = _defaultConfig;
         feeReceiver = _feeReceiver;
         marketCreationFee = _marketCreationFee;
-        multiAssetsEnabled = false;
+        marketExecutionFee = _marketExecutionFee;
         isInitialized = true;
         emit MarketFactoryInitialized(_priceFeed);
     }
@@ -91,8 +99,9 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
-    function updateMarketCreationFee(uint256 _marketCreationFee) external onlyAdmin {
+    function updateMarketFees(uint256 _marketCreationFee, uint256 _marketExecutionFee) external onlyAdmin {
         marketCreationFee = _marketCreationFee;
+        marketExecutionFee = _marketExecutionFee;
     }
 
     function updateFeeDistributor(address _feeDistributor) external onlyAdmin {
@@ -103,28 +112,36 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         positionManager = IPositionManager(_positionManager);
     }
 
-    function setIsMultiAssetMarketEnabled(bool _multiAssetsEnabled) external onlyAdmin {
-        multiAssetsEnabled = _multiAssetsEnabled;
+    /// @dev - Function called by the admin to withdraw the fees collected from market creation
+    function withdrawCreationTaxes() external onlyAdmin {
+        // Calculate the withdrawable amount (amount not held in escrow for open positions)
+        uint256 withdrawableAmount = address(this).balance;
+        // Withdrawable amount is the balance minus the fees escrowed to incentivize executors
+        withdrawableAmount -= (marketExecutionFee * requests.length());
+        // Transfer the withdrawable amount to the fee receiver
+        payable(msg.sender).transfer(withdrawableAmount);
     }
 
-    // @audit - need to cap ticker length to 15 bytes
-    // @audit - do we need to cap assets to 1 in existence? think about this from a UI perspective
-    // @audit - combine the request and the execute into 1 function --> then we can revert if invalid
-    // @audit - add reference pricing to ensure the validity of price feeds. --> not all assets need a reference price
-    function requestNewMarket(DeployRequest calldata _request) external payable nonReentrant {
+    /**
+     * ========================= User Interaction Functions =========================
+     */
+    function createNewMarket(DeployParams calldata _params) external payable nonReentrant {
         /* Validate the Inputs */
-        // 1. Msg.value should be > marketCreationFee
         if (msg.value != marketCreationFee) revert MarketFactory_InvalidFee();
-        // 2. Owner should be msg.sender
-        if (_request.owner != msg.sender) revert MarketFactory_InvalidOwner();
-        // 3. Base Unit should be non-zero
-        if (_request.baseUnit == 0) revert MarketFactory_InvalidBaseUnit();
-        if (_request.isMultiAsset) {
-            // Caller must have the admin role if multi assets are disabled
-            if (!multiAssetsEnabled && !roleStorage.hasRole(Roles.DEFAULT_ADMIN_ROLE, msg.sender)) {
-                revert MarketFactory_AccessDenied();
+        if (_params.owner != msg.sender) revert MarketFactory_InvalidOwner();
+        if (_params.tokenData.tokenDecimals == 0) revert MarketFactory_InvalidDecimals();
+        if (bytes(_params.indexTokenTicker).length > 15) revert MarketFactory_InvalidTicker();
+        if (_params.tokenData.hasSecondaryFeed) {
+            Oracle.validateFeedType(_params.tokenData.feedType);
+            if (_params.tokenData.feedType == IPriceFeed.FeedType.PYTH && _params.pythId == bytes32(0)) {
+                revert MarketFactory_InvalidPythFeed();
             }
         }
+
+        /* Create a Price Request --> used to ensure the price feed returns a valid response */
+        string[] memory tickers = new string[](1);
+        tickers[0] = _params.indexTokenTicker;
+        priceFeed.requestPriceUpdate(tickers, _params.owner);
 
         /* Generate a differentiated Request Key based on the inputs */
         bytes32 requestKey = _getMarketRequestKey(msg.sender, _request.indexTokenTicker);
@@ -137,92 +154,39 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         emit MarketRequested(requestKey, _request.indexTokenTicker);
     }
 
-    /// @dev - Before calling this function, the request's input should be cross-referenced with EVs.
-    /// @dev - using chainlink functions or similar, we can eventually open this up to the public by implementing off-chain validation
-    /// @dev - never reverts. If the request is invalid, it's deleted and the function returns address(0);
-    function executeNewMarket(bytes32 _requestKey) external nonReentrant onlyMarketKeeper returns (address) {
-        // Get the Request
-        DeployRequest memory request = requests.get(_requestKey);
-
-        /* Validate and Update the Request */
-
-        // 2. Make sure Market token name and symbol are < 32 bytes for gas efficiency
-        if (bytes(request.marketTokenName).length > 32 || bytes(request.marketTokenSymbol).length > 32) {
-            _deleteMarketRequest(_requestKey);
-            return address(0);
+    /// @dev - This function is to be called by executors / keepers to execute a request.
+    /// If the request fails to execute, it will be cleared from storage. If the request
+    /// sucessfully executes, the user will
+    function executeMarketRequest(bytes32 _requestKey) external nonReentrant {
+        try this.fulfillMarketRequest(_requestKey, msg.sender) {}
+        catch {
+            // Delete the request if it fails
+            deleteInvalidRequest(_requestKey);
         }
-
-        // Set Up Price Oracle
-        priceFeed.supportAsset(request.indexTokenTicker, request.baseUnit);
-        // Create new Market Token
-        MarketToken marketToken =
-            new MarketToken(request.marketTokenName, request.marketTokenSymbol, address(roleStorage));
-        // Create new Market contract
-        IMarket market;
-        if (request.isMultiAsset) {
-            market = new MultiAssetMarket(
-                defaultConfig,
-                request.owner,
-                feeReceiver,
-                address(feeDistributor),
-                WETH,
-                USDC,
-                address(marketToken),
-                request.indexTokenTicker,
-                address(roleStorage)
-            );
-        } else {
-            market = new Market(
-                defaultConfig,
-                request.owner,
-                feeReceiver,
-                address(feeDistributor),
-                WETH,
-                USDC,
-                address(marketToken),
-                request.indexTokenTicker,
-                address(roleStorage)
-            );
-        }
-        // Create new TradeStorage contract
-        TradeStorage tradeStorage = new TradeStorage(market, referralStorage, priceFeed, address(roleStorage));
-        // Create new Reward Tracker contract
-        RewardTracker rewardTracker = new RewardTracker(
-            market,
-            // Prepend Staked Prefix
-            string(abi.encodePacked("Staked ", request.marketTokenName)),
-            string(abi.encodePacked("s", request.marketTokenSymbol)),
-            address(roleStorage)
-        );
-        // Deploy LiquidityLocker
-        LiquidityLocker liquidityLocker =
-            new LiquidityLocker(address(rewardTracker), address(transferStakedTokens), WETH, USDC, address(roleStorage));
-        // Initialize Market with TradeStorage and 0.3% Borrow Scale
-        market.initialize(address(tradeStorage), address(rewardTracker), 0.003e18);
-        // Initialize TradeStorage with Default values
-        tradeStorage.initialize(0.05e18, 0.001e18, 0.005e18, 0.1e18, 2e30, 10 seconds, 1 minutes);
-        // Initialize RewardTracker with Default values
-        rewardTracker.initialize(address(marketToken), address(feeDistributor), address(liquidityLocker));
-        // Add to Storage
-        isMarket[address(market)] = true;
-        marketsByTicker[request.indexTokenTicker].push(address(market));
-        markets[cumulativeMarketIndex] = address(market);
-        ++cumulativeMarketIndex;
-
-        // Set Up Roles -> Enable Caller to control Market
-        roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), msg.sender));
-        roleStorage.setMinter(address(marketToken), address(market));
-
-        // Send Market Creation Fee to Executor
-        payable(msg.sender).transfer(marketCreationFee);
-
-        // Fire Event
-        emit MarketCreated(address(market), request.indexTokenTicker);
-
-        return address(market);
     }
 
-    function deleteInvalidRequest(bytes32 _requestKey) external onlyMarketKeeper {
+    function fulfillMarketRequest(bytes32 _requestKey, address _executor) external nonReentrant onlyCallback {
+        // Get the Request
+        DeployParams memory request = requests.get(_requestKey);
+        // Users can't execute their own requests
+        if (_executor == request.owner) revert MarketFactory_SelfExecution();
+
+        /* Validate the Requests Pricing Strategies */
+
+        // Reverts if a price wasn't signed.
+        uint256 priceReponse = Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp);
+        // Validate the price range from reference price --> will revert if failed to fetch ref price
+        if (request.tokenData.hasSecondaryFeed) {
+            Oracle.validatePriceRange(priceFeed, request.indexTokenTicker, priceReponse);
+        }
+        /* Create and initiate the market contracts */
+        _initializeMarketContracts(request);
+
+        // Send the Execution Fee to the fulfiller
+        payable(_executor).transfer(marketExecutionFee);
+    }
+
+    function deleteInvalidRequest(bytes32 _requestKey) external onlyCallback {
         // Check the Request exists
         if (!requests.contains(_requestKey)) revert MarketFactory_RequestDoesNotExist();
         // Delete the Request
@@ -236,7 +200,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         return keccak256(abi.encode(_indexTokenTicker));
     }
 
-    function getRequest(bytes32 _requestKey) external view returns (DeployRequest memory) {
+    function getRequest(bytes32 _requestKey) external view returns (DeployParams memory) {
         return requests.get(_requestKey);
     }
 
@@ -255,6 +219,73 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Private Functions =========================
      */
+    function _initializeMarketContracts(DeployParams calldata _params) private {
+        // Set Up Price Oracle
+        priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythId);
+        // Create new Market Token
+        MarketToken marketToken =
+            new MarketToken(_params.marketTokenName, _params.marketTokenSymbol, address(roleStorage));
+        // Create new Market contract
+        IMarket market;
+        if (_params.isMultiAsset) {
+            market = new MultiAssetMarket(
+                defaultConfig,
+                _params.owner,
+                feeReceiver,
+                address(feeDistributor),
+                WETH,
+                USDC,
+                address(marketToken),
+                _params.indexTokenTicker,
+                address(roleStorage)
+            );
+        } else {
+            market = new Market(
+                defaultConfig,
+                _params.owner,
+                feeReceiver,
+                address(feeDistributor),
+                WETH,
+                USDC,
+                address(marketToken),
+                _params.indexTokenTicker,
+                address(roleStorage)
+            );
+        }
+        // Create new TradeStorage contract
+        TradeStorage tradeStorage = new TradeStorage(market, referralStorage, priceFeed, address(roleStorage));
+        // Create new Reward Tracker contract
+        RewardTracker rewardTracker = new RewardTracker(
+            market,
+            // Prepend Staked Prefix
+            string(abi.encodePacked("Staked ", _params.marketTokenName)),
+            string(abi.encodePacked("s", _params.marketTokenSymbol)),
+            address(roleStorage)
+        );
+        // Deploy LiquidityLocker
+        LiquidityLocker liquidityLocker =
+            new LiquidityLocker(address(rewardTracker), address(transferStakedTokens), WETH, USDC, address(roleStorage));
+        // Initialize Market with TradeStorage and 0.3% Borrow Scale
+        market.initialize(address(tradeStorage), address(rewardTracker), 0.003e18);
+        // Initialize TradeStorage with Default values
+        // @audit - we can clean this up --> don't like the magic numbers
+        tradeStorage.initialize(0.05e18, 0.001e18, 0.005e18, 0.1e18, 2e30, 10 seconds, 1 minutes);
+        // Initialize RewardTracker with Default values
+        rewardTracker.initialize(address(marketToken), address(feeDistributor), address(liquidityLocker));
+        // Add to Storage
+        isMarket[address(market)] = true;
+        marketsByTicker[_params.indexTokenTicker].push(address(market));
+        markets[cumulativeMarketIndex] = address(market);
+        ++cumulativeMarketIndex;
+
+        // Set Up Roles -> Enable Requester to control Market
+        roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), _params.owner));
+        roleStorage.setMinter(address(marketToken), address(market));
+
+        // Fire Event
+        emit MarketCreated(address(market), request.indexTokenTicker);
+    }
+
     /// @dev - Each key has to be 100% unique, as deletion from the map can leave corrupted data
     /// Uses requestNonce as a nonce, and block.timestamp to ensure uniqueness
     function _getMarketRequestKey(address _user, string calldata _indexTokenTicker)
@@ -265,6 +296,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         return keccak256(abi.encodePacked(_user, _indexTokenTicker, block.timestamp, requestNonce));
     }
 
+    // No refunds. Fee is kept by the contract to ensure requesters play by the rules.
     function _deleteMarketRequest(bytes32 _requestKey) private {
         if (!requests.remove(_requestKey)) revert MarketFactory_FailedToRemoveRequest();
     }

@@ -22,8 +22,8 @@ interface ILiquidityLocker {
     struct Position {
         uint256 depositAmount;
         uint8 tier;
-        uint64 lockedAt;
-        uint64 unlockDate;
+        uint40 lockedAt;
+        uint40 unlockDate;
         address owner;
     }
 

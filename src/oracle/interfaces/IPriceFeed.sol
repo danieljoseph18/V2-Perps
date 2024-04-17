@@ -82,6 +82,7 @@ interface IPriceFeed {
     error PriceFeed_FailedToClearRequest();
     error PriceFeed_SwapFailed();
     error PriceFeed_InvalidResponseLength();
+    error PriceFeed_ZeroBalance();
 
     // Event to log responses
     event Response(bytes32 indexed requestId, RequestData requestData, bytes response, bytes err);
@@ -90,6 +91,7 @@ interface IPriceFeed {
     event AssetSupported(string indexed ticker, uint8 tokenDecimals);
     event SupportRemoved(string indexed ticker);
     event LinkReceived(uint256 indexed amount);
+    event LinkBalanceSettled(uint256 indexed amount);
 
     function marketFactory() external view returns (IMarketFactory);
     function PRICE_DECIMALS() external pure returns (uint256);
@@ -102,7 +104,7 @@ interface IPriceFeed {
         uint256 _gasOverhead,
         uint32 _callbackGasLimit,
         uint256 _premiumFee,
-        uint256 _fallbackWeiToLinkRatio,
+        uint64 _settlementFee,
         address _nativeLinkPriceFeed
     ) external;
     function supportAsset(string memory _ticker, TokenData memory _tokenData, bytes32 _pythId) external;
@@ -116,10 +118,12 @@ interface IPriceFeed {
         external
         payable
         returns (bytes32 requestId);
-    function estimateRequestCost() external view returns (uint256);
     function getTokenData(string memory _ticker) external view returns (TokenData memory);
     function priceUpdateRequested(bytes32 _requestId) external view returns (bool);
     function getRequestData(bytes32 _requestId) external view returns (RequestData memory);
     function getRequester(bytes32 _requestId) external view returns (address);
     function pythIds(string memory _ticker) external view returns (bytes32);
+    function nativeLinkPriceFeed() external view returns (address);
+    function callbackGasLimit() external view returns (uint32);
+    function gasOverhead() external view returns (uint256);
 }

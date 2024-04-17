@@ -97,12 +97,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // @audit - don't really like fetching these here, would rather have in the market.
         params.key = _key;
         // Get the signed prices
-        (params.longPrices.max, params.shortPrices.max) =
-            Oracle.getMarketTokenPrices(priceFeed, true, params.deposit.requestTimestamp);
-        (params.longPrices.med, params.shortPrices.med) =
-            Oracle.getMarketTokenPrices(priceFeed, params.deposit.requestTimestamp);
-        (params.longPrices.min, params.shortPrices.min) =
-            Oracle.getMarketTokenPrices(priceFeed, false, params.deposit.requestTimestamp);
+        (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.deposit.requestTimestamp);
         // Calculate cumulative borrow fees
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
@@ -141,12 +136,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.withdrawal.requestTimestamp);
         params.shouldUnwrap = params.withdrawal.reverseWrap;
         // Get the signed prices
-        (params.longPrices.max, params.shortPrices.max) =
-            Oracle.getMarketTokenPrices(priceFeed, true, params.withdrawal.requestTimestamp);
-        (params.longPrices.med, params.shortPrices.med) =
-            Oracle.getMarketTokenPrices(priceFeed, params.withdrawal.requestTimestamp);
-        (params.longPrices.min, params.shortPrices.min) =
-            Oracle.getMarketTokenPrices(priceFeed, false, params.withdrawal.requestTimestamp);
+        (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.withdrawal.requestTimestamp);
         // Calculate cumulative borrow fees
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
