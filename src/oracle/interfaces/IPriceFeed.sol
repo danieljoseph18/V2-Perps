@@ -25,9 +25,10 @@ interface IPriceFeed {
 
     enum FeedType {
         CHAINLINK,
-        UNI_V3,
-        UNI_V2_T0, // Uniswap V2 token0
-        UNI_V2_T1, // Uniswap V2 token1
+        UNI_V30, // Uniswap V3 token0
+        UNI_V31, // Uniswap V3 token1
+        UNI_V20, // Uniswap V2 token0
+        UNI_V21, // Uniswap V2 token1
         PYTH
     }
 
@@ -127,4 +128,5 @@ interface IPriceFeed {
     function callbackGasLimit() external view returns (uint32);
     function gasOverhead() external view returns (uint256);
     function getRequestTimestamp(bytes32 _requestId) external view returns (uint48);
+    function timeToExpiration() external view returns (uint48);
 }

@@ -51,6 +51,7 @@ library MarketLogic {
     error MarketLogic_FailedToRemoveRequest();
     error MarketLogic_FailedToAddRequest();
     error MarketLogic_AllocationLength();
+    error MarketLogic_RequestExpired();
 
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
     event DepositExecuted(
@@ -274,7 +275,7 @@ library MarketLogic {
         IMarket.Config calldata _config,
         string memory _ticker,
         bytes calldata _newAllocations,
-        uint48 _requestTimestamp
+        bytes32 _priceRequestId
     ) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
@@ -283,7 +284,7 @@ library MarketLogic {
         // Add asset to storage
         market.addAsset(_ticker);
         // Reallocate
-        reallocate(priceFeed, _newAllocations, _requestTimestamp);
+        reallocate(priceFeed, _newAllocations, _priceRequestId);
         // Initialize Storage
         marketStorage.config = _config;
         marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
@@ -295,7 +296,7 @@ library MarketLogic {
         IPriceFeed priceFeed,
         string memory _ticker,
         bytes calldata _newAllocations,
-        uint48 _requestTimestamp
+        bytes32 _priceRequestId
     ) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
@@ -305,19 +306,23 @@ library MarketLogic {
         // Remove the Asset
         market.removeAsset(_ticker);
         // Reallocate
-        reallocate(priceFeed, _newAllocations, _requestTimestamp);
+        reallocate(priceFeed, _newAllocations, _priceRequestId);
         // Fire Event
         emit TokenRemoved(_ticker);
     }
 
     /// @dev - Caller must've requested a price before calling this function
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    // @audit - does it matter who requested the prices??
-    function reallocate(IPriceFeed priceFeed, bytes calldata _allocations, uint48 _requestTimestamp) internal {
+    function reallocate(IPriceFeed priceFeed, bytes calldata _allocations, bytes32 _priceRequestId) internal {
         IMarket market = IMarket(address(this));
+
+        // Validate the Price Request
+        uint48 requestTimestamp = priceFeed.getRequestData(_priceRequestId).blockTimestamp;
+        if (block.timestamp > requestTimestamp + priceFeed.timeToExpiration()) revert MarketLogic_RequestExpired();
+
         // Fetch token prices
-        uint256 longTokenPrice = Oracle.getPrice(priceFeed, LONG_TICKER, _requestTimestamp);
-        uint256 shortTokenPrice = Oracle.getPrice(priceFeed, SHORT_TICKER, _requestTimestamp);
+        uint256 longTokenPrice = Oracle.getPrice(priceFeed, LONG_TICKER, requestTimestamp);
+        uint256 shortTokenPrice = Oracle.getPrice(priceFeed, SHORT_TICKER, requestTimestamp);
 
         // Copy tickers to memory
         string[] memory assetTickers = market.getTickers();
@@ -331,9 +336,7 @@ library MarketLogic {
             // Update Storage
             market.setAllocationShare(assetTickers[i], allocationValue);
             // Check the allocation value -> new max open interest must be > current open interest
-            _validateOpenInterest(
-                market, priceFeed, assetTickers[i], _requestTimestamp, longTokenPrice, shortTokenPrice
-            );
+            _validateOpenInterest(market, priceFeed, assetTickers[i], requestTimestamp, longTokenPrice, shortTokenPrice);
             // Increment total
             total += allocationValue;
             unchecked {

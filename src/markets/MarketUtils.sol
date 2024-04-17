@@ -55,7 +55,6 @@ library MarketUtils {
         uint256 indexFee;
     }
 
-    // @audit - do we define a central location to get all deposit prices?
     function calculateDepositFee(
         Oracle.Prices memory _longPrices,
         Oracle.Prices memory _shortPrices,

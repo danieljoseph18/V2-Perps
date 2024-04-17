@@ -35,6 +35,7 @@ interface IMarketFactory {
     error MarketFactory_InvalidPythFeed();
     error MarketFactory_SelfExecution();
     error MarketFactory_InvalidTimestamp();
+    error MarketFactory_InvalidUniswapV2Pool();
 
     struct DeployParams {
         bool isMultiAsset;
@@ -43,8 +44,14 @@ interface IMarketFactory {
         string marketTokenName;
         string marketTokenSymbol;
         IPriceFeed.TokenData tokenData;
-        bytes32 pythId;
+        PythData pythData;
+        bytes32[] stablecoinMerkleProof;
         uint48 requestTimestamp;
+    }
+
+    struct PythData {
+        bytes32 id;
+        bytes32[] merkleProof;
     }
 
     function initialize(

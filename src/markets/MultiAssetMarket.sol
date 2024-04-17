@@ -41,14 +41,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
      * Units: % Per Day
      */
     uint64 public constant FUNDING_VELOCITY_CLAMP = 0.00001e18; // 0.001% per day
-    /**
-     * Maximum PNL:POOL ratio before ADL is triggered.
-     */
-    uint64 public constant MAX_PNL_FACTOR = 0.45e18; // 45%
-    uint64 public constant MAX_ADL_PERCENTAGE = 0.5e18; // Can only ADL up to 50% of a position
-    // Value = Max Bonus Fee
-    // Users will be charged a % of this fee based on the skew of the market
-    uint256 public constant FEE_SCALE = 0.01e18; // 1%
 
     address private immutable WETH;
     address private immutable USDC;
@@ -56,7 +48,9 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     EnumerableSet.Bytes32Set private assetIds;
     bool private isInitialized;
 
+    // Owner / Configurator of the Pool
     address private poolOwner;
+    // Address for the protocol to receive 10% of fees to
     address private feeReceiver;
 
     uint256 private longAccumulatedFees;
@@ -147,12 +141,11 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
      * ========================= Setter Functions  =========================
      */
 
-    // @audit - Caller can input any arbitrary timestamp to manipulate price?
     function addToken(
         Config calldata _config,
         string memory _ticker,
         bytes calldata _newAllocations,
-        uint48 _requestTimestamp
+        bytes32 _priceRequestId
     ) external onlyConfigurator(address(this)) nonReentrant {
         MarketLogic.validateConfig(_config);
         MarketLogic.addToken(
@@ -161,16 +154,16 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
             _config,
             _ticker,
             _newAllocations,
-            _requestTimestamp
+            _priceRequestId
         );
     }
 
-    function removeToken(string memory _ticker, bytes calldata _newAllocations, uint48 _requestTimestamp)
+    function removeToken(string memory _ticker, bytes calldata _newAllocations, bytes32 _priceRequestId)
         external
         onlyConfigurator(address(this))
         nonReentrant
     {
-        MarketLogic.removeToken(ITradeStorage(tradeStorage).priceFeed(), _ticker, _newAllocations, _requestTimestamp);
+        MarketLogic.removeToken(ITradeStorage(tradeStorage).priceFeed(), _ticker, _newAllocations, _priceRequestId);
     }
 
     function transferPoolOwnership(address _newOwner) external {
@@ -255,8 +248,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Callback Functions  =========================
      */
-    // @audit - have a min allocation of 100 (1%) --> what other checks and balances do we need to make
-    // this truly permissionless?
     function setAllocationShare(string calldata _ticker, uint256 _allocationShare) external onlyCallback {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         marketStorage[assetId].allocationShare = _allocationShare;
@@ -292,12 +283,12 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
      * ========================= External State Functions  =========================
      */
     /// @dev - Caller must've requested a price before calling this function
-    function reallocate(bytes calldata _allocations, uint48 _requestTimestamp)
+    function reallocate(bytes calldata _allocations, bytes32 _priceRequestId)
         external
         onlyConfigurator(address(this))
         nonReentrant
     {
-        _reallocate(_allocations, _requestTimestamp);
+        MarketLogic.reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _priceRequestId);
     }
 
     function updateMarketState(
@@ -525,15 +516,5 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
                 poolBalance: shortTokenBalance
             });
         }
-    }
-
-    /**
-     *  ========================= Private Functions  =========================
-     */
-
-    /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    // @audit - again, caller can input any arbitrary request timestamp?
-    function _reallocate(bytes calldata _allocations, uint48 _requestTimestamp) private {
-        MarketLogic.reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _requestTimestamp);
     }
 }

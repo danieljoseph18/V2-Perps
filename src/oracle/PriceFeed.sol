@@ -16,10 +16,6 @@ import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/shared/inte
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Oracle} from "./Oracle.sol";
 
-/// @dev - Needs LINK / subscription to fulfill requests -> need to put this cost onto users
-// @audit - could we create a merkle tree whitelist for all valid reference price sources?
-// for uniswap, can we check validity from the factory contract directly?
-// @audit - can we fetch the ticker from each reference price feed to ensure it matches with the index ticker provided?
 contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSet for EnumerableSet.Bytes32Set;
@@ -42,6 +38,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     address public immutable LINK;
     // donID - Sepolia = 0x66756e2d657468657265756d2d7365706f6c69612d3100000000000000000000
     // Check to get the donID for your supported network https://docs.chain.link/chainlink-functions/supported-networks
+    // @audit - make don and router configurable
     bytes32 private immutable DON_ID;
     // Router address - Hardcoded for Sepolia = 0xb83E47C2bC239B3bf370bc41e1459A34b41238D0
     // Check to get the router address for your supported network https://docs.chain.link/chainlink-functions/supported-networks
@@ -70,7 +67,8 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     uint256 public premiumFee;
     address public nativeLinkPriceFeed;
     uint32 public callbackGasLimit;
-    uint256 public timeToExpiration;
+    // @audit - where else do we need to use this? not just market logic...
+    uint48 public timeToExpiration;
 
     // State variable to store the returned character information
     mapping(string ticker => mapping(uint48 blockTimestamp => Price priceResponse)) private prices;
@@ -123,7 +121,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         uint64 _settlementFee,
         address _nativeLinkPriceFeed,
         address _sequencerUptimeFeed,
-        uint256 _timeToExpiration
+        uint48 _timeToExpiration
     ) external onlyAdmin {
         if (isInitialized) revert PriceFeed_AlreadyInitialized();
         gasOverhead = _gasOverhead;
@@ -183,7 +181,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         if (!assetIds.contains(assetId)) return; // Return if not supported
         bool success = assetIds.remove(assetId);
         if (!success) revert PriceFeed_AssetRemovalFailed();
-        // @audit - corruptible? might need to remove 1 by 1
         delete tokenData[_ticker];
         emit SupportRemoved(_ticker);
     }
@@ -192,7 +189,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         sequencerUptimeFeed = _sequencerUptimeFeed;
     }
 
-    function setTimeToExpiration(uint256 _timeToExpiration) external onlyAdmin {
+    function setTimeToExpiration(uint48 _timeToExpiration) external onlyAdmin {
         timeToExpiration = _timeToExpiration;
     }
 

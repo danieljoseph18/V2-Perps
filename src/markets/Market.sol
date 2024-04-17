@@ -43,14 +43,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      * Units: % Per Day
      */
     uint64 public constant FUNDING_VELOCITY_CLAMP = 0.00001e18; // 0.001% per day
-    /**
-     * Maximum PNL:POOL ratio before ADL is triggered.
-     */
-    uint64 public constant MAX_PNL_FACTOR = 0.45e18; // 45%
-    uint64 public constant MAX_ADL_PERCENTAGE = 0.5e18; // Can only ADL up to 50% of a position
-    // Value = Max Bonus Fee
-    // Users will be charged a % of this fee based on the skew of the market
-    uint256 public constant FEE_SCALE = 0.01e18; // 1%
 
     // The rest of the 80% of the fees go to the FeeDistributor to distribute to LPs
     uint256 private constant FEES_TO_OWNER = 0.1e18; // 10% to Owner
@@ -62,7 +54,9 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     EnumerableSet.Bytes32Set private assetIds;
     bool private isInitialized;
 
+    // Owner / Configurator of the Pool
     address private poolOwner;
+    // Address for the protocol to receive 10% of fees to
     address private feeReceiver;
 
     uint256 private longAccumulatedFees;
@@ -84,7 +78,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     // Store the Collateral Amount for each User
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
-    // @audit - need to ensure this can't return corrupted data from old requests
     EnumerableMap.MarketRequestMap private requests;
 
     // Each Asset's storage is tracked through this mapping

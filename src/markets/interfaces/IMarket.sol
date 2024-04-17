@@ -287,8 +287,6 @@ interface IMarket {
     function isAssetInMarket(string memory _ticker) external view returns (bool);
     function getTickers() external view returns (string[] memory);
     function FUNDING_VELOCITY_CLAMP() external view returns (uint64);
-    function MAX_PNL_FACTOR() external view returns (uint64);
-    function MAX_ADL_PERCENTAGE() external view returns (uint64);
     function requestExists(bytes32 _key) external view returns (bool);
     function setAllocationShare(string calldata _ticker, uint256 _allocationShare) external;
     function addAsset(string calldata _ticker) external;

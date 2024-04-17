@@ -63,7 +63,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     uint256 public premiumFee;
     address public nativeLinkPriceFeed;
     uint32 public callbackGasLimit;
-    uint256 public timeToExpiration;
+    uint48 public timeToExpiration;
 
     // State variable to store the returned character information
     mapping(string ticker => mapping(uint48 blockTimestamp => Price priceResponse)) private prices;
@@ -115,7 +115,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         uint64 _settlementFee,
         address _nativeLinkPriceFeed,
         address _sequencerUptimeFeed,
-        uint256 _timeToExpiration
+        uint48 _timeToExpiration
     ) external {
         if (isInitialized) revert PriceFeed_AlreadyInitialized();
         gasOverhead = _gasOverhead;
@@ -176,7 +176,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         sequencerUptimeFeed = _sequencerUptimeFeed;
     }
 
-    function setTimeToExpiration(uint256 _timeToExpiration) external {
+    function setTimeToExpiration(uint48 _timeToExpiration) external {
         timeToExpiration = _timeToExpiration;
     }
 

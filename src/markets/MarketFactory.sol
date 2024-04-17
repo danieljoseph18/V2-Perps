@@ -5,6 +5,10 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {Market, IMarket} from "./Market.sol";
+import {FeedRegistryInterface} from "@chainlink/contracts/src/v0.8/interfaces/FeedRegistryInterface.sol";
+import {IUniswapV3Factory} from "../oracle/interfaces/IUniswapV3Factory.sol";
+import {IUniswapV2Factory} from "../oracle/interfaces/IUniswapV2Factory.sol";
+import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {MultiAssetMarket} from "./MultiAssetMarket.sol";
 import {MarketToken} from "./MarketToken.sol";
 import {TradeStorage} from "../positions/TradeStorage.sol";
@@ -22,11 +26,11 @@ import {Roles} from "../access/Roles.sol";
 /// @dev Needs MarketFactory Role
 /**
  * Known issues:
- * - Users can create pools with spoofed reference price feeds (either ref price feed not associated with asset, or a fake)
+ * - Users can create pools with a reference price not associated to the asset provided.
+ * User interfaces MUST display which pools are high-risk, and which are low risk, or at least have a verification system.
+ * single asset markets with validated price sources (including reference price) are the lowest risk. Multi asset markets,
+ * supporting illiquid assets, with price sources without references for verification are the highest risk.
  */
-// @audit - could we introduce a flagging system to stall requests that are suspicious?
-// they then move into limbo, and if the flag is validated, the flagger gets paid a % of the request fee?
-// would need to blacklist a user after multiple invalid flags
 contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     using EnumerableMap for EnumerableMap.DeployParamsMap;
 
@@ -35,6 +39,10 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     IFeeDistributor feeDistributor;
     IPositionManager positionManager;
     TransferStakedTokens transferStakedTokens;
+
+    FeedRegistryInterface private feedRegistry;
+    IUniswapV2Factory private uniV2Factory;
+    IUniswapV3Factory private uniV3Factory;
 
     uint256 private constant MAX_FEE_TO_OWNER = 0.3e18; // 30%
     uint256 private constant MAX_HEARTBEAT_DURATION = 1 days;
@@ -58,6 +66,19 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     address public feeReceiver;
     uint256 public marketCreationFee;
     uint256 public marketExecutionFee;
+    /**
+     * Stores the feed ids of all of the valid pyth price feeds.
+     * This enables us to ensure that the pyth price feed a user inputs as
+     * a reference price feed is a valid feed.
+     */
+    bytes32 public pythMerkleRoot;
+    /**
+     * Stores the addresses of all valid stablecoins for a given chain.
+     * This is required for fetching prices from AMM secondary strategies,
+     * as one of the tokens in the pair must be a stablecoin to get a USD
+     * equivalent value for the computed price.
+     */
+    bytes32 public stablecoinMerkleRoot;
     uint256 cumulativeMarketIndex;
     uint256 requestNonce;
 
@@ -90,6 +111,15 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         emit MarketFactoryInitialized(_priceFeed);
     }
 
+    function setFeedValidators(address _chainlinkFeedRegistry, address _uniV2Factory, address _uniV3Factory)
+        external
+        onlyAdmin
+    {
+        feedRegistry = FeedRegistryInterface(_chainlinkFeedRegistry);
+        uniV2Factory = IUniswapV2Factory(_uniV2Factory);
+        uniV3Factory = IUniswapV3Factory(_uniV3Factory);
+    }
+
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external onlyAdmin {
         defaultConfig = _defaultConfig;
         emit DefaultConfigSet();
@@ -102,6 +132,11 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     function updateMarketFees(uint256 _marketCreationFee, uint256 _marketExecutionFee) external onlyAdmin {
         marketCreationFee = _marketCreationFee;
         marketExecutionFee = _marketExecutionFee;
+    }
+
+    function updateMerkleRoots(bytes32 _pythMerkleRoot, bytes32 _stablecoinMerkleRoot) external onlyAdmin {
+        pythMerkleRoot = _pythMerkleRoot;
+        stablecoinMerkleRoot = _stablecoinMerkleRoot;
     }
 
     function updateFeeDistributor(address _feeDistributor) external onlyAdmin {
@@ -125,19 +160,15 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /**
      * ========================= User Interaction Functions =========================
      */
+    /// @dev Params unrelated to the request can be left blank --> merkle roots, pyth id etc.
     function createNewMarket(DeployParams calldata _params) external payable nonReentrant {
         /* Validate the Inputs */
         if (msg.value != marketCreationFee) revert MarketFactory_InvalidFee();
         if (_params.owner != msg.sender) revert MarketFactory_InvalidOwner();
         if (_params.tokenData.tokenDecimals == 0) revert MarketFactory_InvalidDecimals();
         if (bytes(_params.indexTokenTicker).length > 15) revert MarketFactory_InvalidTicker();
-        if (_params.tokenData.hasSecondaryFeed) {
-            Oracle.validateFeedType(_params.tokenData.feedType);
-            if (_params.tokenData.feedType == IPriceFeed.FeedType.PYTH && _params.pythId == bytes32(0)) {
-                revert MarketFactory_InvalidPythFeed();
-            }
-        }
         if (_params.requestTimestamp != uint48(block.timestamp)) revert MarketFactory_InvalidTimestamp();
+        if (_params.tokenData.hasSecondaryFeed) _validateSecondaryStrategy(_params);
 
         /* Create a Price Request --> used to ensure the price feed returns a valid response */
         string[] memory tickers = new string[](1);
@@ -157,8 +188,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
 
     /// @dev - This function is to be called by executors / keepers to execute a request.
     /// If the request fails to execute, it will be cleared from storage. If the request
-    /// sucessfully executes, the user will
-    // @audit - caller could forcibly execute a request and make it fail to revert it
+    /// sucessfully executes, the keeper will be paid an execution fee as an incentive.
     function executeMarketRequest(bytes32 _requestKey) external nonReentrant {
         // Get the Request
         DeployParams memory request = requests.get(_requestKey);
@@ -168,7 +198,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         /* Validate the Requests Pricing Strategies */
 
         // Reverts if a price wasn't signed.
-        // @audit - wrap in try catch --> if fail, call _deleteInvalidRequest(_requestKey)
         try Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp) returns (
             uint256 priceReponse
         ) {
@@ -220,7 +249,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
      */
     function _initializeMarketContracts(DeployParams memory _params) private {
         // Set Up Price Oracle
-        priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythId);
+        priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythData.id);
         // Create new Market Token
         MarketToken marketToken =
             new MarketToken(_params.marketTokenName, _params.marketTokenSymbol, address(roleStorage));
@@ -267,7 +296,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
         market.initialize(address(tradeStorage), address(rewardTracker), 0.003e18);
         // Initialize TradeStorage with Default values
-        // @audit - we can clean this up --> don't like the magic numbers
+        // @gas - we can clean this up --> don't like the magic numbers
         tradeStorage.initialize(0.05e18, 0.001e18, 0.01e18, 0.1e18, 2e30, 1 minutes);
         // Initialize RewardTracker with Default values
         rewardTracker.initialize(address(marketToken), address(feeDistributor), address(liquidityLocker));
@@ -283,6 +312,38 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
 
         // Fire Event
         emit MarketCreated(address(market), _params.indexTokenTicker);
+    }
+
+    function _validateSecondaryStrategy(DeployParams calldata _params) private view {
+        Oracle.validateFeedType(_params.tokenData.feedType);
+        // If the feed is a Chainlink feed, validate the feed
+        if (_params.tokenData.feedType == IPriceFeed.FeedType.CHAINLINK) {
+            Oracle.isValidChainlinkFeed(feedRegistry, _params.tokenData.secondaryFeed);
+        } else if (_params.tokenData.feedType == IPriceFeed.FeedType.PYTH) {
+            Oracle.isValidPythFeed(_params.pythData.merkleProof, pythMerkleRoot, _params.pythData.id);
+        } else if (
+            _params.tokenData.feedType == IPriceFeed.FeedType.UNI_V30
+                || _params.tokenData.feedType == IPriceFeed.FeedType.UNI_V31
+        ) {
+            Oracle.isValidUniswapV3Pool(
+                uniV3Factory,
+                _params.tokenData.secondaryFeed,
+                _params.tokenData.feedType,
+                _params.stablecoinMerkleProof,
+                stablecoinMerkleRoot
+            );
+        } else if (
+            _params.tokenData.feedType == IPriceFeed.FeedType.UNI_V20
+                || _params.tokenData.feedType == IPriceFeed.FeedType.UNI_V21
+        ) {
+            Oracle.isValidUniswapV2Pool(
+                uniV2Factory,
+                _params.tokenData.secondaryFeed,
+                _params.tokenData.feedType,
+                _params.stablecoinMerkleProof,
+                stablecoinMerkleRoot
+            );
+        }
     }
 
     /// @dev - Each key has to be 100% unique, as deletion from the map can leave corrupted data
