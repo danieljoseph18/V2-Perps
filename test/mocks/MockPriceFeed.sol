@@ -332,21 +332,31 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         return keccak256(_args);
     }
 
-    function encodePrice(string memory _ticker, uint8 _precision, uint16 _variance, uint48 _timestamp, uint64 _med)
-        external
-        pure
-        returns (bytes memory)
-    {
-        Price memory price;
-        // Ticker is maximum 15 bytes of length
-        price.ticker = bytes15(bytes(_ticker));
-        price.precision = _precision;
-        price.variance = _variance;
-        price.timestamp = _timestamp;
-        price.med = _med;
-        return abi.encodePacked(price.ticker, price.precision, price.variance, price.timestamp, price.med);
+    // Used to pack price data into a single bytes32 word for fulfillment
+    function encodePrices(
+        string[] calldata _tickers,
+        uint8[] calldata _precisions,
+        uint16[] calldata _variances,
+        uint48[] calldata _timestamps,
+        uint64[] calldata _meds
+    ) external pure returns (bytes memory) {
+        uint16 len = uint16(_tickers.length);
+        bytes32[] memory encodedPrices = new bytes32[](len);
+        // Loop through the prices and encode them into a single bytes32 word
+        for (uint16 i = 0; i < len;) {
+            bytes32 encodedPrice = bytes32(
+                abi.encodePacked(bytes15(bytes(_tickers[i])), _precisions[i], _variances[i], _timestamps[i], _meds[i])
+            );
+            encodedPrices[i] = encodedPrice;
+            unchecked {
+                ++i;
+            }
+        }
+        // Concatenate the encoded prices into a single bytes string
+        return abi.encodePacked(encodedPrices);
     }
 
+    // Used to pack cumulative PNL into a single bytes32 word for fulfillment
     function encodePnl(uint8 _precision, address _market, uint48 _timestamp, int40 _cumulativePnl)
         external
         pure
@@ -385,6 +395,10 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
 
     function getRequestData(bytes32 _requestId) external view returns (RequestData memory) {
         return requestData.get(_requestId);
+    }
+
+    function getRequestTimestamp(bytes32 _requestId) external view returns (uint48) {
+        return requestData.get(_requestId).blockTimestamp;
     }
 
     function getRequests() external view returns (bytes32[] memory) {

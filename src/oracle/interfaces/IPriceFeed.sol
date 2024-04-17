@@ -126,4 +126,5 @@ interface IPriceFeed {
     function nativeLinkPriceFeed() external view returns (address);
     function callbackGasLimit() external view returns (uint32);
     function gasOverhead() external view returns (uint256);
+    function getRequestTimestamp(bytes32 _requestId) external view returns (uint48);
 }

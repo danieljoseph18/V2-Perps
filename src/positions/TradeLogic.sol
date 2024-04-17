@@ -197,15 +197,15 @@ library TradeLogic {
         IPriceFeed priceFeed,
         bytes32 _positionKey,
         bytes32 _requestId,
-        uint48 _requestTimestamp,
         address _feeReceiver
     ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Check that the price update was requested by the ADLer, if not, require some time to pass before enabling them to execute
-        Execution.validatePriceRequest(priceFeed, _feeReceiver, _requestId, _requestTimestamp);
+        uint48 requestTimestamp = priceFeed.getRequestTimestamp(_requestId);
+        Execution.validatePriceRequest(priceFeed, _feeReceiver, _requestId, requestTimestamp);
         // Initiate the Adl order
         (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) =
-            Execution.initiateAdlOrder(market, tradeStorage, priceFeed, _positionKey, _requestTimestamp, _feeReceiver);
+            Execution.initiateAdlOrder(market, tradeStorage, priceFeed, _positionKey, requestTimestamp, _feeReceiver);
 
         // Update the Market State
         _updateMarketState(
@@ -242,7 +242,6 @@ library TradeLogic {
         IPriceFeed priceFeed,
         bytes32 _positionKey,
         bytes32 _requestId,
-        uint48 _requestTimestamp,
         address _liquidator
     ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
@@ -251,10 +250,11 @@ library TradeLogic {
         // Check the Position Exists
         if (position.user == address(0)) revert TradeLogic_PositionDoesNotExist();
         // Check that the price update was requested by the liquidator, if not, require some time to pass before enabling them to execute
-        Execution.validatePriceRequest(priceFeed, _liquidator, _requestId, _requestTimestamp);
+        uint48 requestTimestamp = priceFeed.getRequestTimestamp(_requestId);
+        Execution.validatePriceRequest(priceFeed, _liquidator, _requestId, requestTimestamp);
         // Get the Prices
         Execution.Prices memory prices =
-            Execution.getTokenPrices(priceFeed, position.ticker, _requestTimestamp, position.isLong, false);
+            Execution.getTokenPrices(priceFeed, position.ticker, requestTimestamp, position.isLong, false);
         // No price impact on Liquidations
         prices.impactedPrice = prices.indexPrice;
         // Update the Market State

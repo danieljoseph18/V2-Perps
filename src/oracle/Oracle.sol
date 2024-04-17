@@ -272,6 +272,7 @@ library Oracle {
     // same for chainlink feeds and potentially pyth feeds
 
     // @audit - needs 30 dp
+    // @audit - should we be using TWAP?
     function _getUniswapV3Price(IPriceFeed.TokenData memory _tokenData) private view returns (uint256 price) {
         if (_tokenData.feedType != IPriceFeed.FeedType.UNI_V3) revert Oracle_InvalidReferenceQuery();
         IUniswapV3Pool pool = IUniswapV3Pool(_tokenData.secondaryFeed);
@@ -286,6 +287,7 @@ library Oracle {
     }
 
     // @audit - needs 30 dp
+    // @audit - should we be using TWAP?
     function _getUniswapV2Price(IPriceFeed.TokenData memory _tokenData) private view returns (uint256 price) {
         IUniswapV2Pair pair = IUniswapV2Pair(_tokenData.secondaryFeed);
         (uint112 reserve0, uint112 reserve1,) = pair.getReserves();

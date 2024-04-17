@@ -48,10 +48,13 @@ contract TestPositions is Test {
     string[] tickers;
 
     address USER = makeAddr("USER");
+    address USER1 = makeAddr("USER1");
+    address USER2 = makeAddr("USER2");
 
-    IPriceFeed.Price ethPrices;
-    IPriceFeed.Price usdcPrices;
-    IPriceFeed.Price[] prices;
+    uint8[] precisions;
+    uint16[] variances;
+    uint48[] timestamps;
+    uint64[] meds;
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -79,34 +82,48 @@ contract TestPositions is Test {
     modifier setUpMarkets() {
         vm.deal(OWNER, 2_000_000 ether);
         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
-        vm.deal(USER, 1_000_000 ether);
+        vm.deal(USER, 2_000_000 ether);
         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
+        vm.deal(USER1, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER1, 1_000_000_000e6);
+        vm.deal(USER2, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER2, 1_000_000_000e6);
+        vm.prank(USER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER1);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER2);
+        WETH(weth).deposit{value: 1_000_000 ether}();
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
-        IMarketFactory.DeployRequest memory request = IMarketFactory.DeployRequest({
+        IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
             isMultiAsset: false,
             owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
-            baseUnit: 1e18
+            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
+            pythId: bytes32(0),
+            requestTimestamp: uint48(block.timestamp)
         });
-        marketFactory.requestNewMarket{value: 0.01 ether}(request);
-        market = Market(payable(marketFactory.executeNewMarket(marketFactory.getRequestKeys()[0])));
+        marketFactory.createNewMarket{value: 0.01 ether}(request);
+        // Set Prices
+        precisions.push(0);
+        precisions.push(0);
+        variances.push(100);
+        variances.push(100);
+        timestamps.push(uint48(block.timestamp));
+        timestamps.push(uint48(block.timestamp));
+        meds.push(3000);
+        meds.push(1);
+        bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
+        priceFeed.updatePrices(encodedPrices);
+        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
+        market = Market(payable(marketFactory.markets(0)));
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.rewardTracker()));
         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
-        // Set Prices
-        ethPrices =
-            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 3000e30, max: 3000e30});
-        usdcPrices = IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 1e30, med: 1e30, max: 1e30});
-        prices.push(ethPrices);
-        prices.push(usdcPrices);
-        bytes32 priceRequestId = keccak256(abi.encode("PRICE REQUEST"));
-        bytes32 pnlRequestId = keccak256(abi.encode("PNL REQUEST"));
-        priceFeed.updatePrices(priceRequestId, tickers, prices);
-        priceFeed.updatePnl(market, 0, pnlRequestId);
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);

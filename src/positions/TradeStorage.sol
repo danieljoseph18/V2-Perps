@@ -128,24 +128,20 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         );
     }
 
-    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator, uint48 _requestTimestamp)
+    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator)
         external
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.liquidatePosition(
-            market, referralStorage, priceFeed, _positionKey, _requestId, _requestTimestamp, _liquidator
-        );
+        TradeLogic.liquidatePosition(market, referralStorage, priceFeed, _positionKey, _requestId, _liquidator);
     }
 
-    function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver, uint48 _requestTimestamp)
+    function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver)
         external
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.executeAdl(
-            market, referralStorage, priceFeed, _positionKey, _requestId, _requestTimestamp, _feeReceiver
-        );
+        TradeLogic.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestId, _feeReceiver);
     }
 
     /**

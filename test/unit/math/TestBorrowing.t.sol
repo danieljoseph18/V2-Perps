@@ -60,9 +60,10 @@ contract TestBorrowing is Test {
     address USER1 = makeAddr("USER1");
     address USER2 = makeAddr("USER2");
 
-    IPriceFeed.Price ethPrices;
-    IPriceFeed.Price usdcPrices;
-    IPriceFeed.Price[] prices;
+    uint8[] precisions;
+    uint16[] variances;
+    uint48[] timestamps;
+    uint64[] meds;
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -104,30 +105,34 @@ contract TestBorrowing is Test {
         WETH(weth).deposit{value: 1_000_000 ether}();
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
-        IMarketFactory.DeployRequest memory request = IMarketFactory.DeployRequest({
+        IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
             isMultiAsset: false,
             owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
-            baseUnit: 1e18
+            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
+            pythId: bytes32(0),
+            requestTimestamp: uint48(block.timestamp)
         });
-        marketFactory.requestNewMarket{value: 0.01 ether}(request);
-        market = Market(payable(marketFactory.executeNewMarket(marketFactory.getRequestKeys()[0])));
+        marketFactory.createNewMarket{value: 0.01 ether}(request);
+        // Set Prices
+        precisions.push(0);
+        precisions.push(0);
+        variances.push(100);
+        variances.push(100);
+        timestamps.push(uint48(block.timestamp));
+        timestamps.push(uint48(block.timestamp));
+        meds.push(3000);
+        meds.push(1);
+        bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
+        priceFeed.updatePrices(encodedPrices);
+        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
+        market = Market(payable(marketFactory.markets(0)));
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.rewardTracker()));
         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
-        // Set Prices
-        ethPrices =
-            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 3000e30, max: 3000e30});
-        usdcPrices = IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 1e30, med: 1e30, max: 1e30});
-        prices.push(ethPrices);
-        prices.push(usdcPrices);
-        bytes32 priceRequestId = keccak256(abi.encode("PRICE REQUEST"));
-        bytes32 pnlRequestId = keccak256(abi.encode("PNL REQUEST"));
-        priceFeed.updatePrices(priceRequestId, tickers, prices);
-        priceFeed.updatePnl(market, 0, pnlRequestId);
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
@@ -273,33 +278,42 @@ contract TestBorrowing is Test {
         assertEq(feesOwed, expectedFees);
     }
 
+    struct BorrowCache {
+        uint256 collateralPrice;
+        uint256 collateralBaseUnit;
+        uint256 maxOi;
+        IMarket.OpenInterestValues openInterest;
+        uint256 actualRate;
+        uint256 expectedRate;
+    }
+
     function testBorrowingRateCalculation(uint256 _openInterest, bool _isLong) public setUpMarkets {
-        uint256 collateralPrice = _isLong ? 3000e30 : 1e30;
-        uint256 collateralBaseUnit = _isLong ? 1e18 : 1e6;
-        uint256 maxOi = MarketUtils.getMaxOpenInterest(market, ethTicker, collateralPrice, collateralBaseUnit, _isLong);
-        _openInterest = bound(_openInterest, 0, maxOi);
+        BorrowCache memory cache;
+        cache.collateralPrice = _isLong ? 3000e30 : 1e30;
+        cache.collateralBaseUnit = _isLong ? 1e18 : 1e6;
+        cache.maxOi =
+            MarketUtils.getMaxOpenInterest(market, ethTicker, cache.collateralPrice, cache.collateralBaseUnit, _isLong);
+        _openInterest = bound(_openInterest, 0, cache.maxOi);
 
         // Mock the open interest and available open interest on the market
-        IMarket.OpenInterestValues memory openInterest = market.getOpenInterestValues(ethTicker);
+        cache.openInterest = market.getOpenInterestValues(ethTicker);
         if (_isLong) {
-            openInterest.longOpenInterest = _openInterest;
+            cache.openInterest.longOpenInterest = _openInterest;
         } else {
-            openInterest.shortOpenInterest = _openInterest;
+            cache.openInterest.shortOpenInterest = _openInterest;
         }
         vm.mockCall(
             address(market),
             abi.encodeWithSelector(market.getOpenInterestValues.selector, ethTicker),
-            abi.encode(openInterest) // Mock return value
+            abi.encode(cache.openInterest) // Mock return value
         );
-        // calculate the expected rate
-        console2.log("Borrow Scale: ", market.borrowScale());
-        console2.log("Open Interest: ", _openInterest);
-        console2.log("Max Open Interest: ", maxOi);
-        uint256 expectedRate = market.borrowScale().percentage(_openInterest, maxOi);
         // compare with the actual rate
-        uint256 actualRate = Borrowing.calculateRate(market, ethTicker, collateralPrice, collateralBaseUnit, _isLong);
+        cache.actualRate =
+            Borrowing.calculateRate(market, ethTicker, cache.collateralPrice, cache.collateralBaseUnit, _isLong);
+        // calculate the expected rate
+        cache.expectedRate = market.borrowScale().percentage(_openInterest, cache.maxOi);
         // Check off by 1 for round down
-        assertApproxEqAbs(actualRate, expectedRate, 1, "Unmatched Values");
+        assertApproxEqAbs(cache.actualRate, cache.expectedRate, 1, "Unmatched Values");
     }
 
     function testGetNextAverageCumulativeCalculationLong(

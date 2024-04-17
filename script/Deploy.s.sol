@@ -150,7 +150,8 @@ contract Deploy is Script {
             address(contracts.positionManager),
             address(contracts.feeDistributor),
             msg.sender,
-            0.01 ether
+            0.01 ether,
+            0.005 ether
         );
 
         contracts.positionManager.updateGasEstimates(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);

@@ -509,6 +509,10 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         return requestData.get(_requestId);
     }
 
+    function getRequestTimestamp(bytes32 _requestId) external view returns (uint48) {
+        return requestData.get(_requestId).blockTimestamp;
+    }
+
     function getRequests() external view returns (bytes32[] memory) {
         return requestData.keys();
     }

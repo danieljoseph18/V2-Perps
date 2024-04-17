@@ -32,7 +32,7 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
  *
  * The following new map types are introducted:
  *
- * - `bytes32 -> DeployRequest` (`DeployRequestMap`)
+ * - `bytes32 -> DeployParams` (`DeployParamsMap`)
  * - `bytes32 -> IMarket.Input` (`MarketRequestMap`)
  * - `bytes32 -> IPriceFeed.RequestData` (`PriceRequestMap`)
  *
@@ -57,9 +57,9 @@ library EnumerableMap {
     /**
      * ======================================== Market Creation Requests ========================================
      */
-    struct DeployRequestMap {
+    struct DeployParamsMap {
         EnumerableSet.Bytes32Set _keys;
-        mapping(bytes32 => IMarketFactory.DeployRequest) _values;
+        mapping(bytes32 => IMarketFactory.DeployParams) _values;
     }
 
     /**
@@ -69,7 +69,7 @@ library EnumerableMap {
      * Returns true if the key was added to the map, that is if it was not
      * already present.
      */
-    function set(DeployRequestMap storage map, bytes32 key, IMarketFactory.DeployRequest calldata value)
+    function set(DeployParamsMap storage map, bytes32 key, IMarketFactory.DeployParams calldata value)
         internal
         returns (bool)
     {
@@ -82,7 +82,7 @@ library EnumerableMap {
      *
      * Returns true if the key was removed from the map, that is if it was present.
      */
-    function remove(DeployRequestMap storage map, bytes32 key) internal returns (bool) {
+    function remove(DeployParamsMap storage map, bytes32 key) internal returns (bool) {
         delete map._values[key];
         return map._keys.remove(key);
     }
@@ -90,14 +90,14 @@ library EnumerableMap {
     /**
      * @dev Returns true if the key is in the map. O(1).
      */
-    function contains(DeployRequestMap storage map, bytes32 key) internal view returns (bool) {
+    function contains(DeployParamsMap storage map, bytes32 key) internal view returns (bool) {
         return map._keys.contains(key);
     }
 
     /**
      * @dev Returns the number of key-value pairs in the map. O(1).
      */
-    function length(DeployRequestMap storage map) internal view returns (uint256) {
+    function length(DeployParamsMap storage map) internal view returns (uint256) {
         return map._keys.length();
     }
 
@@ -111,10 +111,10 @@ library EnumerableMap {
      *
      * - `index` must be strictly less than {length}.
      */
-    function at(DeployRequestMap storage map, uint256 index)
+    function at(DeployParamsMap storage map, uint256 index)
         internal
         view
-        returns (bytes32, IMarketFactory.DeployRequest memory)
+        returns (bytes32, IMarketFactory.DeployParams memory)
     {
         bytes32 key = map._keys.at(index);
         return (key, map._values[key]);
@@ -124,12 +124,12 @@ library EnumerableMap {
      * @dev Tries to returns the value associated with `key`. O(1).
      * Does not revert if `key` is not in the map.
      */
-    function tryGet(DeployRequestMap storage map, bytes32 key)
+    function tryGet(DeployParamsMap storage map, bytes32 key)
         internal
         view
-        returns (bool, IMarketFactory.DeployRequest memory)
+        returns (bool, IMarketFactory.DeployParams memory)
     {
-        IMarketFactory.DeployRequest memory value = map._values[key];
+        IMarketFactory.DeployParams memory value = map._values[key];
         if (value.owner == address(0)) {
             return (contains(map, key), value);
         } else {
@@ -144,12 +144,8 @@ library EnumerableMap {
      *
      * - `key` must be in the map.
      */
-    function get(DeployRequestMap storage map, bytes32 key)
-        internal
-        view
-        returns (IMarketFactory.DeployRequest memory)
-    {
-        IMarketFactory.DeployRequest memory value = map._values[key];
+    function get(DeployParamsMap storage map, bytes32 key) internal view returns (IMarketFactory.DeployParams memory) {
+        IMarketFactory.DeployParams memory value = map._values[key];
         if (value.owner == address(0) && !contains(map, key)) {
             revert EnumerableMapNonexistentKey(key);
         }
@@ -164,7 +160,7 @@ library EnumerableMap {
      * this function has an unbounded cost, and using it as part of a state-changing function may render the function
      * uncallable if the map grows to a point where copying to memory consumes too much gas to fit in a block.
      */
-    function keys(DeployRequestMap storage map) internal view returns (bytes32[] memory) {
+    function keys(DeployParamsMap storage map) internal view returns (bytes32[] memory) {
         return map._keys.values();
     }
 

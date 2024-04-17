@@ -54,9 +54,10 @@ contract TestAltOrders is Test {
     address USER1 = makeAddr("USER1");
     address USER2 = makeAddr("USER2");
 
-    IPriceFeed.Price ethPrices;
-    IPriceFeed.Price usdcPrices;
-    IPriceFeed.Price[] prices;
+    uint8[] precisions;
+    uint16[] variances;
+    uint48[] timestamps;
+    uint64[] meds;
 
     function setUp() public {
         Deploy deploy = new Deploy();
@@ -98,30 +99,34 @@ contract TestAltOrders is Test {
         WETH(weth).deposit{value: 1_000_000 ether}();
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
-        IMarketFactory.DeployRequest memory request = IMarketFactory.DeployRequest({
+        IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
             isMultiAsset: false,
             owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
-            baseUnit: 1e18
+            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
+            pythId: bytes32(0),
+            requestTimestamp: uint48(block.timestamp)
         });
-        marketFactory.requestNewMarket{value: 0.01 ether}(request);
-        market = Market(payable(marketFactory.executeNewMarket(marketFactory.getRequestKeys()[0])));
+        marketFactory.createNewMarket{value: 0.01 ether}(request);
+        // Set Prices
+        precisions.push(0);
+        precisions.push(0);
+        variances.push(100);
+        variances.push(100);
+        timestamps.push(uint48(block.timestamp));
+        timestamps.push(uint48(block.timestamp));
+        meds.push(3000);
+        meds.push(1);
+        bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
+        priceFeed.updatePrices(encodedPrices);
+        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
+        market = Market(payable(marketFactory.markets(0)));
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.rewardTracker()));
         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
-        // Set Prices
-        ethPrices =
-            IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 3000e30, med: 3000e30, max: 3000e30});
-        usdcPrices = IPriceFeed.Price({expirationTimestamp: block.timestamp + 1 days, min: 1e30, med: 1e30, max: 1e30});
-        prices.push(ethPrices);
-        prices.push(usdcPrices);
-        bytes32 priceRequestId = keccak256(abi.encode("PRICE REQUEST"));
-        bytes32 pnlRequestId = keccak256(abi.encode("PNL REQUEST"));
-        priceFeed.updatePrices(priceRequestId, tickers, prices);
-        priceFeed.updatePnl(market, 0, pnlRequestId);
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
@@ -150,7 +155,8 @@ contract TestAltOrders is Test {
         Position.Input memory input;
         uint256 collateralDelta;
         _leverage = bound(_leverage, 2, 15);
-        _limitPrice = bound(_limitPrice, 500e30, 10_000e30);
+        // $500 - $10,000
+        _limitPrice = bound(_limitPrice, 500, 10_000);
         if (_isLong) {
             _sizeDelta = bound(_sizeDelta, 210e30, 1_000_000e30);
             collateralDelta = mulDiv(_sizeDelta / _leverage, 1e18, 3000e30);
@@ -216,7 +222,7 @@ contract TestAltOrders is Test {
         input.isIncrease = false;
         input.limitPrice = _limitPrice;
         input.collateralDelta = 0;
-        input.triggerAbove = _limitPrice > ethPrices.med ? true : false;
+        input.triggerAbove = _limitPrice > 3000e30 ? true : false;
 
         vm.prank(OWNER);
         router.createPositionRequest{value: 0.01 ether}(market, input, Position.Conditionals(false, false, 0, 0, 0, 0));
@@ -238,17 +244,14 @@ contract TestAltOrders is Test {
         }
 
         // Move the price to where it can be executed and execute
-        bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
-        ethPrices.med = _limitPrice;
-        ethPrices.max = _limitPrice;
-        ethPrices.min = _limitPrice;
-        prices[0] = ethPrices;
         vm.warp(block.timestamp + 1 days);
         vm.roll(block.number + 1);
-        priceFeed.updatePrices(requestId, tickers, prices);
+
+        _setPrices(uint64(_limitPrice), 1);
 
         // Execute Stop Loss
         key = tradeStorage.getOrderAtIndex(0, true);
+        bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
         vm.prank(OWNER);
         positionManager.executePosition(market, key, requestId, OWNER);
     }
@@ -337,21 +340,17 @@ contract TestAltOrders is Test {
         if (_isLong) {
             uint256 liquidationPrice = Position.getLiquidationPrice(position);
             // bound price below liquidation price
-            _newPrice = bound(_newPrice, 100e30, liquidationPrice);
+            _newPrice = bound(_newPrice, 100, liquidationPrice / 1e30);
         } else {
             uint256 liquidationPrice = Position.getLiquidationPrice(position);
             // bound price above liquidation price
-            _newPrice = bound(_newPrice, liquidationPrice, 100_000e30);
+            _newPrice = bound(_newPrice, liquidationPrice / 1e30, 100_000);
         }
 
         // sign the new price
-        ethPrices.med = _newPrice;
-        ethPrices.max = _newPrice;
-        ethPrices.min = _newPrice;
-        prices[0] = ethPrices;
-        bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
-        priceFeed.updatePrices(requestId, tickers, prices);
+        _setPrices(uint64(_newPrice), 1);
         // liquidate the position
+        bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
         vm.prank(OWNER);
         positionManager.liquidatePosition(market, positionKey, requestId);
     }
@@ -493,30 +492,31 @@ contract TestAltOrders is Test {
         );
 
         // sign the new price
-        ethPrices.med = _newPrice;
-        ethPrices.max = _newPrice;
-        ethPrices.min = _newPrice;
-        prices[0] = ethPrices;
+        _setPrices(uint64(_newPrice), 1);
 
         bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
-        priceFeed.updatePrices(requestId, tickers, prices);
-
         if (_isLong) {
-            vm.assume(
-                MarketUtils.getPnlFactor(market, ethTicker, ethPrices.med, 1e18, ethPrices.med, 1e18, true) > 0.45e18
-            );
+            vm.assume(MarketUtils.getPnlFactor(market, ethTicker, 3000e30, 1e18, 3000e30, 1e18, true) > 0.45e18);
             // ADL any one of the positions
             bytes32 positionKey = keccak256(abi.encode(ethTicker, OWNER, true));
             vm.prank(OWNER);
             positionManager.executeAdl(market, requestId, positionKey);
         } else {
-            vm.assume(
-                MarketUtils.getPnlFactor(market, ethTicker, ethPrices.med, 1e18, usdcPrices.med, 1e6, false) > 0.45e18
-            );
+            vm.assume(MarketUtils.getPnlFactor(market, ethTicker, 3000e30, 1e18, 1e30, 1e6, false) > 0.45e18);
             // ADL any one of the positions
             bytes32 positionKey = keccak256(abi.encode(ethTicker, OWNER, false));
             vm.prank(OWNER);
             positionManager.executeAdl(market, requestId, positionKey);
         }
+    }
+
+    function _setPrices(uint64 _ethPrice, uint64 _usdcPrice) private {
+        // Set Prices
+        timestamps[0] = uint48(block.timestamp);
+        timestamps[1] = uint48(block.timestamp);
+        meds[0] = _ethPrice;
+        meds[1] = _usdcPrice;
+        bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
+        priceFeed.updatePrices(encodedPrices);
     }
 }

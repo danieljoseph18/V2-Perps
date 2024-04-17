@@ -34,9 +34,9 @@ interface ITradeStorage {
     function executePositionRequest(bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
         external
         returns (Execution.FeeState memory feeState, Position.Request memory request);
-    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator, uint48 _requestTimestamp)
+    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator)
         external;
-    function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver, uint48 _requestTimestamp)
+    function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver)
         external;
     function setFees(uint64 _liquidationFee, uint64 _positionFee, uint64 _adlFee, uint64 _feeForExecution) external;
     function getOpenPositionKeys(bool _isLong) external view returns (bytes32[] memory);

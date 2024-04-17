@@ -34,6 +34,7 @@ interface IMarketFactory {
     error MarketFactory_InvalidTicker();
     error MarketFactory_InvalidPythFeed();
     error MarketFactory_SelfExecution();
+    error MarketFactory_InvalidTimestamp();
 
     struct DeployParams {
         bool isMultiAsset;
@@ -43,6 +44,7 @@ interface IMarketFactory {
         string marketTokenSymbol;
         IPriceFeed.TokenData tokenData;
         bytes32 pythId;
+        uint48 requestTimestamp;
     }
 
     function initialize(
@@ -52,12 +54,13 @@ interface IMarketFactory {
         address _positionManager,
         address _feeDistributor,
         address _feeReceiver,
-        uint256 _marketCreationFee
+        uint256 _marketCreationFee,
+        uint256 _marketExecutionFee
     ) external;
     function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
-    function requestNewMarket(DeployParams calldata _request) external payable;
-    function executeNewMarket(bytes32 _requestKey) external returns (address);
+    function createNewMarket(DeployParams calldata _params) external payable;
+    function executeMarketRequest(bytes32 _requestKey) external;
     function getRequest(bytes32 _requestKey) external view returns (DeployParams memory);
     function marketCreationFee() external view returns (uint256);
     function markets(uint256 index) external view returns (address);

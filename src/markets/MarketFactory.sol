@@ -137,6 +137,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
                 revert MarketFactory_InvalidPythFeed();
             }
         }
+        if (_params.requestTimestamp != uint48(block.timestamp)) revert MarketFactory_InvalidTimestamp();
 
         /* Create a Price Request --> used to ensure the price feed returns a valid response */
         string[] memory tickers = new string[](1);
@@ -144,53 +145,51 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         priceFeed.requestPriceUpdate(tickers, _params.owner);
 
         /* Generate a differentiated Request Key based on the inputs */
-        bytes32 requestKey = _getMarketRequestKey(msg.sender, _request.indexTokenTicker);
+        bytes32 requestKey = _getMarketRequestKey(msg.sender, _params.indexTokenTicker);
         ++requestNonce;
 
         // Add the request to storage
-        if (!requests.set(requestKey, _request)) revert MarketFactory_FailedToAddMarket();
+        if (!requests.set(requestKey, _params)) revert MarketFactory_FailedToAddMarket();
 
         // Fire Event
-        emit MarketRequested(requestKey, _request.indexTokenTicker);
+        emit MarketRequested(requestKey, _params.indexTokenTicker);
     }
 
     /// @dev - This function is to be called by executors / keepers to execute a request.
     /// If the request fails to execute, it will be cleared from storage. If the request
     /// sucessfully executes, the user will
+    // @audit - caller could forcibly execute a request and make it fail to revert it
     function executeMarketRequest(bytes32 _requestKey) external nonReentrant {
-        try this.fulfillMarketRequest(_requestKey, msg.sender) {}
-        catch {
-            // Delete the request if it fails
-            deleteInvalidRequest(_requestKey);
-        }
-    }
-
-    function fulfillMarketRequest(bytes32 _requestKey, address _executor) external nonReentrant onlyCallback {
         // Get the Request
         DeployParams memory request = requests.get(_requestKey);
         // Users can't execute their own requests
-        if (_executor == request.owner) revert MarketFactory_SelfExecution();
+        if (msg.sender == request.owner) revert MarketFactory_SelfExecution();
 
         /* Validate the Requests Pricing Strategies */
 
         // Reverts if a price wasn't signed.
-        uint256 priceReponse = Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp);
-        // Validate the price range from reference price --> will revert if failed to fetch ref price
-        if (request.tokenData.hasSecondaryFeed) {
-            Oracle.validatePriceRange(priceFeed, request.indexTokenTicker, priceReponse);
+        // @audit - wrap in try catch --> if fail, call _deleteInvalidRequest(_requestKey)
+        try Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp) returns (
+            uint256 priceReponse
+        ) {
+            // Validate the price range from reference price --> will revert if failed to fetch ref price
+            if (request.tokenData.hasSecondaryFeed) {
+                try Oracle.validatePriceRange(priceFeed, request.indexTokenTicker, priceReponse) {
+                    // If the price is valid, continue
+                } catch {
+                    _deleteInvalidRequest(_requestKey);
+                    return;
+                }
+            }
+        } catch {
+            _deleteInvalidRequest(_requestKey);
+            return;
         }
         /* Create and initiate the market contracts */
         _initializeMarketContracts(request);
 
         // Send the Execution Fee to the fulfiller
-        payable(_executor).transfer(marketExecutionFee);
-    }
-
-    function deleteInvalidRequest(bytes32 _requestKey) external onlyCallback {
-        // Check the Request exists
-        if (!requests.contains(_requestKey)) revert MarketFactory_RequestDoesNotExist();
-        // Delete the Request
-        _deleteMarketRequest(_requestKey);
+        payable(msg.sender).transfer(marketExecutionFee);
     }
 
     /**
@@ -219,7 +218,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Private Functions =========================
      */
-    function _initializeMarketContracts(DeployParams calldata _params) private {
+    function _initializeMarketContracts(DeployParams memory _params) private {
         // Set Up Price Oracle
         priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythId);
         // Create new Market Token
@@ -269,7 +268,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         market.initialize(address(tradeStorage), address(rewardTracker), 0.003e18);
         // Initialize TradeStorage with Default values
         // @audit - we can clean this up --> don't like the magic numbers
-        tradeStorage.initialize(0.05e18, 0.001e18, 0.005e18, 0.1e18, 2e30, 10 seconds, 1 minutes);
+        tradeStorage.initialize(0.05e18, 0.001e18, 0.01e18, 0.1e18, 2e30, 1 minutes);
         // Initialize RewardTracker with Default values
         rewardTracker.initialize(address(marketToken), address(feeDistributor), address(liquidityLocker));
         // Add to Storage
@@ -283,7 +282,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         roleStorage.setMinter(address(marketToken), address(market));
 
         // Fire Event
-        emit MarketCreated(address(market), request.indexTokenTicker);
+        emit MarketCreated(address(market), _params.indexTokenTicker);
     }
 
     /// @dev - Each key has to be 100% unique, as deletion from the map can leave corrupted data
@@ -297,7 +296,10 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     }
 
     // No refunds. Fee is kept by the contract to ensure requesters play by the rules.
-    function _deleteMarketRequest(bytes32 _requestKey) private {
+    function _deleteInvalidRequest(bytes32 _requestKey) private {
+        // Check the Request exists
+        if (!requests.contains(_requestKey)) revert MarketFactory_RequestDoesNotExist();
+        // Delete the Request
         if (!requests.remove(_requestKey)) revert MarketFactory_FailedToRemoveRequest();
     }
 }
