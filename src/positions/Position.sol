@@ -129,7 +129,7 @@ library Position {
         address user;
         uint48 requestTimestamp;
         RequestType requestType;
-        bytes32 requestId; // Id of the price update request
+        bytes32 requestKey; // Key of the price update request
     }
 
     // Bundled Request for Execution
@@ -396,7 +396,7 @@ library Position {
         Conditionals calldata _conditionals,
         address _user,
         RequestType _requestType,
-        bytes32 _requestId
+        bytes32 _requestKey
     ) internal view returns (Request memory request) {
         request = Request({
             input: _trade,
@@ -404,7 +404,7 @@ library Position {
             user: _user,
             requestTimestamp: uint48(block.timestamp),
             requestType: _requestType,
-            requestId: _requestId
+            requestKey: _requestKey
         });
     }
 
@@ -466,7 +466,7 @@ library Position {
                 user: _position.user,
                 requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.STOP_LOSS,
-                requestId: bytes32(0)
+                requestKey: bytes32(0)
             });
         }
         // Construct the Take profit based on the values
@@ -492,7 +492,7 @@ library Position {
                 user: _position.user,
                 requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.TAKE_PROFIT,
-                requestId: bytes32(0)
+                requestKey: bytes32(0)
             });
         }
     }
@@ -523,7 +523,7 @@ library Position {
                 user: _position.user,
                 requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.POSITION_DECREASE,
-                requestId: bytes32(0)
+                requestKey: bytes32(0)
             }),
             orderKey: bytes32(0),
             feeReceiver: _liquidator,
@@ -556,7 +556,7 @@ library Position {
                 user: _position.user,
                 requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.POSITION_DECREASE,
-                requestId: bytes32(0)
+                requestKey: bytes32(0)
             }),
             orderKey: bytes32(0),
             feeReceiver: _feeReceiver,

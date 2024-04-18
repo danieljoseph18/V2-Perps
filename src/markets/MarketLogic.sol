@@ -214,8 +214,8 @@ library MarketLogic {
         address _transferToken, // Token In for Deposits, Out for Withdrawals
         uint256 _amountIn,
         uint256 _executionFee,
-        bytes32 _priceRequestId,
-        bytes32 _pnlRequestId,
+        bytes32 _priceRequestKey,
+        bytes32 _pnlRequestKey,
         address _weth,
         bool _reverseWrap,
         bool _isDeposit
@@ -229,8 +229,8 @@ library MarketLogic {
             reverseWrap: _reverseWrap,
             isDeposit: _isDeposit,
             key: _generateKey(_owner, _transferToken, _amountIn, _isDeposit),
-            priceRequestId: _priceRequestId,
-            pnlRequestId: _pnlRequestId
+            priceRequestKey: _priceRequestKey,
+            pnlRequestKey: _pnlRequestKey
         });
         if (!requests.set(request.key, request)) revert MarketLogic_FailedToAddRequest();
         emit RequestCreated(request.key, _owner, _transferToken, _amountIn, _isDeposit);
@@ -275,7 +275,7 @@ library MarketLogic {
         IMarket.Config calldata _config,
         string memory _ticker,
         bytes calldata _newAllocations,
-        bytes32 _priceRequestId
+        bytes32 _priceRequestKey
     ) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
@@ -284,7 +284,7 @@ library MarketLogic {
         // Add asset to storage
         market.addAsset(_ticker);
         // Reallocate
-        reallocate(priceFeed, _newAllocations, _priceRequestId);
+        reallocate(priceFeed, _newAllocations, _priceRequestKey);
         // Initialize Storage
         marketStorage.config = _config;
         marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
@@ -296,7 +296,7 @@ library MarketLogic {
         IPriceFeed priceFeed,
         string memory _ticker,
         bytes calldata _newAllocations,
-        bytes32 _priceRequestId
+        bytes32 _priceRequestKey
     ) internal {
         IMarket market = IMarket(address(this));
         if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
@@ -306,18 +306,18 @@ library MarketLogic {
         // Remove the Asset
         market.removeAsset(_ticker);
         // Reallocate
-        reallocate(priceFeed, _newAllocations, _priceRequestId);
+        reallocate(priceFeed, _newAllocations, _priceRequestKey);
         // Fire Event
         emit TokenRemoved(_ticker);
     }
 
     /// @dev - Caller must've requested a price before calling this function
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    function reallocate(IPriceFeed priceFeed, bytes calldata _allocations, bytes32 _priceRequestId) internal {
+    function reallocate(IPriceFeed priceFeed, bytes calldata _allocations, bytes32 _priceRequestKey) internal {
         IMarket market = IMarket(address(this));
 
         // Validate the Price Request
-        uint48 requestTimestamp = Oracle.getRequestTimestamp(priceFeed, _priceRequestId);
+        uint48 requestTimestamp = Oracle.getRequestTimestamp(priceFeed, _priceRequestKey);
 
         // Fetch token prices
         uint256 longTokenPrice = Oracle.getPrice(priceFeed, LONG_TICKER, requestTimestamp);

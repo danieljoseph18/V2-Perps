@@ -103,7 +103,8 @@ contract TestPositions is Test {
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
             tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-            pythId: bytes32(0),
+            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
+            stablecoinMerkleProof: new bytes32[](0),
             requestTimestamp: uint48(block.timestamp)
         });
         marketFactory.createNewMarket{value: 0.01 ether}(request);

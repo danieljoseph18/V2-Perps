@@ -145,7 +145,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         Config calldata _config,
         string memory _ticker,
         bytes calldata _newAllocations,
-        bytes32 _priceRequestId
+        bytes32 _priceRequestKey
     ) external onlyConfigurator(address(this)) nonReentrant {
         MarketLogic.validateConfig(_config);
         MarketLogic.addToken(
@@ -154,16 +154,16 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
             _config,
             _ticker,
             _newAllocations,
-            _priceRequestId
+            _priceRequestKey
         );
     }
 
-    function removeToken(string memory _ticker, bytes calldata _newAllocations, bytes32 _priceRequestId)
+    function removeToken(string memory _ticker, bytes calldata _newAllocations, bytes32 _priceRequestKey)
         external
         onlyConfigurator(address(this))
         nonReentrant
     {
-        MarketLogic.removeToken(ITradeStorage(tradeStorage).priceFeed(), _ticker, _newAllocations, _priceRequestId);
+        MarketLogic.removeToken(ITradeStorage(tradeStorage).priceFeed(), _ticker, _newAllocations, _priceRequestKey);
     }
 
     function transferPoolOwnership(address _newOwner) external {
@@ -196,8 +196,8 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         address _transferToken, // Token In for Deposits, Out for Withdrawals
         uint256 _amountIn,
         uint256 _executionFee,
-        bytes32 _priceRequestId,
-        bytes32 _pnlRequestId,
+        bytes32 _priceRequestKey,
+        bytes32 _pnlRequestKey,
         bool _reverseWrap,
         bool _isDeposit
     ) external payable onlyRouter {
@@ -207,8 +207,8 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
             _transferToken,
             _amountIn,
             _executionFee,
-            _priceRequestId,
-            _pnlRequestId,
+            _priceRequestKey,
+            _pnlRequestKey,
             WETH,
             _reverseWrap,
             _isDeposit
@@ -283,12 +283,12 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
      * ========================= External State Functions  =========================
      */
     /// @dev - Caller must've requested a price before calling this function
-    function reallocate(bytes calldata _allocations, bytes32 _priceRequestId)
+    function reallocate(bytes calldata _allocations, bytes32 _priceRequestKey)
         external
         onlyConfigurator(address(this))
         nonReentrant
     {
-        MarketLogic.reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _priceRequestId);
+        MarketLogic.reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _priceRequestKey);
     }
 
     function updateMarketState(
@@ -381,14 +381,14 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function updateImpactPool(string calldata _ticker, int256 _priceImpactUsd)
+    function updateImpactPool(string calldata _ticker, int256 _priceImpactUKey)
         external
         onlyTradeStorage(address(this))
     {
         bytes32 assetId = keccak256(abi.encode(_ticker));
-        _priceImpactUsd > 0
-            ? marketStorage[assetId].impactPool += _priceImpactUsd.abs()
-            : marketStorage[assetId].impactPool -= _priceImpactUsd.abs();
+        _priceImpactUKey > 0
+            ? marketStorage[assetId].impactPool += _priceImpactUKey.abs()
+            : marketStorage[assetId].impactPool -= _priceImpactUKey.abs();
     }
 
     /**

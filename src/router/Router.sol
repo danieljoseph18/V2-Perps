@@ -39,8 +39,8 @@ contract Router is ReentrancyGuard, RoleValidation {
     event PositionRequestCreated(
         IMarket market, string ticker, bool isLong, bool isIncrease, uint256 sizeDelta, uint256 collateralDelta
     );
-    event PriceUpdateRequested(bytes32 requestId, string[] tickers, address requester);
-    event PnlRequested(bytes32 requestId, IMarket market, address requester);
+    event PriceUpdateRequested(bytes32 requestKey, string[] tickers, address requester);
+    event PnlRequested(bytes32 requestKey, IMarket market, address requester);
 
     error Router_InvalidOwner();
     error Router_InvalidAmountIn();
@@ -115,11 +115,11 @@ contract Router is ReentrancyGuard, RoleValidation {
         }
 
         uint256 priceFee = totalPriceUpdateFee / 2;
-        bytes32 priceRequestId = _requestPriceUpdate(priceFee, "");
-        bytes32 pnlRequestId = _requestPnlUpdate(market, priceFee);
+        bytes32 priceRequestKey = _requestPriceUpdate(priceFee, "");
+        bytes32 pnlRequestKey = _requestPnlUpdate(market, priceFee);
 
         market.createRequest(
-            _owner, _tokenIn, _amountIn, _executionFee, priceRequestId, pnlRequestId, _shouldWrap, true
+            _owner, _tokenIn, _amountIn, _executionFee, priceRequestKey, pnlRequestKey, _shouldWrap, true
         );
         _sendExecutionFee(_executionFee);
 
@@ -149,14 +149,14 @@ contract Router is ReentrancyGuard, RoleValidation {
         }
 
         uint256 priceFee = totalPriceUpdateFee / 2;
-        bytes32 priceRequestId = _requestPriceUpdate(priceFee, "");
-        bytes32 pnlRequestId = _requestPnlUpdate(market, priceFee);
+        bytes32 priceRequestKey = _requestPriceUpdate(priceFee, "");
+        bytes32 pnlRequestKey = _requestPnlUpdate(market, priceFee);
 
         IMarketToken marketToken = market.MARKET_TOKEN();
         marketToken.safeTransferFrom(msg.sender, address(positionManager), _marketTokenAmountIn);
 
         market.createRequest(
-            _owner, _tokenOut, _marketTokenAmountIn, _executionFee, priceRequestId, pnlRequestId, _shouldUnwrap, false
+            _owner, _tokenOut, _marketTokenAmountIn, _executionFee, priceRequestKey, pnlRequestKey, _shouldUnwrap, false
         );
         _sendExecutionFee(_executionFee);
 
@@ -215,7 +215,7 @@ contract Router is ReentrancyGuard, RoleValidation {
 
         // Request Price Update for the Asset if Market Order
         // Limit Orders, Stop Loss, and Take Profit Order's prices will be updated at execution time
-        bytes32 priceRequestId = _trade.isLimit ? bytes32(0) : _requestPriceUpdate(priceUpdateFee, _trade.ticker);
+        bytes32 priceRequestKey = _trade.isLimit ? bytes32(0) : _requestPriceUpdate(priceUpdateFee, _trade.ticker);
 
         // Construct the state for Order Creation
         bytes32 positionKey = Position.validateInputParameters(_trade, _conditionals, address(market));
@@ -229,7 +229,7 @@ contract Router is ReentrancyGuard, RoleValidation {
 
         // Construct the Request from the user input
         Position.Request memory request =
-            Position.createRequest(_trade, _conditionals, msg.sender, requestType, priceRequestId);
+            Position.createRequest(_trade, _conditionals, msg.sender, requestType, priceRequestKey);
 
         // Store the Order Request
         tradeStorage.createOrderRequest(request);
@@ -256,7 +256,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     function requestExecutionPricing(IMarket market, bytes32 _key, bool _isPositionKey)
         external
         payable
-        returns (bytes32 priceRequestId)
+        returns (bytes32 priceRequestKey)
     {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         string memory ticker;
@@ -270,7 +270,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Validate the Execution Fee
         if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();
         // Request a Price Update
-        priceRequestId = _requestPriceUpdate(msg.value, ticker);
+        priceRequestKey = _requestPriceUpdate(msg.value, ticker);
     }
 
     /**
@@ -279,17 +279,17 @@ contract Router is ReentrancyGuard, RoleValidation {
      * 2. market.removeToken
      * 3. market.reallocate
      */
-    function requestPricingForMarket(IMarket market) external payable returns (bytes32 priceRequestId) {
+    function requestPricingForMarket(IMarket market) external payable returns (bytes32 priceRequestKey) {
         string[] memory tickers = market.getTickers();
         uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
         if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();
-        priceRequestId = priceFeed.requestPriceUpdate{value: msg.value}(tickers, msg.sender);
+        priceRequestKey = priceFeed.requestPriceUpdate{value: msg.value}(tickers, msg.sender);
     }
 
     /**
      * ========================================= Internal Functions =========================================
      */
-    function _requestPriceUpdate(uint256 _fee, string memory _ticker) private returns (bytes32 requestId) {
+    function _requestPriceUpdate(uint256 _fee, string memory _ticker) private returns (bytes32 requestKey) {
         // Convert the string to an array of length 1
         string[] memory tickers;
         if (bytes(_ticker).length == 0) {
@@ -305,14 +305,14 @@ contract Router is ReentrancyGuard, RoleValidation {
             tickers[2] = SHORT_TICKER;
         }
         // Request a Price Update for the Asset
-        requestId = priceFeed.requestPriceUpdate{value: _fee}(tickers, msg.sender);
+        requestKey = priceFeed.requestPriceUpdate{value: _fee}(tickers, msg.sender);
         // Fire Event
-        emit PriceUpdateRequested(requestId, tickers, msg.sender);
+        emit PriceUpdateRequested(requestKey, tickers, msg.sender);
     }
 
-    function _requestPnlUpdate(IMarket market, uint256 _fee) private returns (bytes32 requestId) {
-        requestId = priceFeed.requestCumulativeMarketPnl{value: _fee}(market, msg.sender);
-        emit PnlRequested(requestId, market, msg.sender);
+    function _requestPnlUpdate(IMarket market, uint256 _fee) private returns (bytes32 requestKey) {
+        requestKey = priceFeed.requestCumulativeMarketPnl{value: _fee}(market, msg.sender);
+        emit PnlRequested(requestKey, market, msg.sender);
     }
 
     function _handleTokenTransfers(Position.Input memory _trade) private {

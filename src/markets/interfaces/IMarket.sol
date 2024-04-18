@@ -30,8 +30,8 @@ interface IMarket {
         bool reverseWrap;
         bool isDeposit;
         bytes32 key;
-        bytes32 priceRequestId; // Id of the price update request
-        bytes32 pnlRequestId; // Id of the cumulative pnl request
+        bytes32 priceRequestKey; // Key of the price update request
+        bytes32 pnlRequestKey; // Id of the cumulative pnl request
     }
 
     struct ExecuteDeposit {
@@ -242,8 +242,8 @@ interface IMarket {
         address _transferToken, // Token In for Deposits, Out for Withdrawals
         uint256 _amountIn,
         uint256 _executionFee,
-        bytes32 _priceRequestId,
-        bytes32 _pnlRequestId,
+        bytes32 _priceRequestKey,
+        bytes32 _pnlRequestKey,
         bool _reverseWrap,
         bool _isDeposit
     ) external payable;

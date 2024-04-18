@@ -330,8 +330,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         address _transferToken, // Token In for Deposits, Out for Withdrawals
         uint256 _amountIn,
         uint256 _executionFee,
-        bytes32 _priceRequestId,
-        bytes32 _pnlRequestId,
+        bytes32 _priceRequestKey,
+        bytes32 _pnlRequestKey,
         bool _reverseWrap,
         bool _isDeposit
     ) external payable onlyRouter {
@@ -341,8 +341,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             _transferToken,
             _amountIn,
             _executionFee,
-            _priceRequestId,
-            _pnlRequestId,
+            _priceRequestKey,
+            _pnlRequestKey,
             WETH,
             _reverseWrap,
             _isDeposit

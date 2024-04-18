@@ -44,6 +44,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     address public sequencerUptimeFeed;
     uint64 subscriptionId;
     uint64 settlementFee;
+    uint8 maxRetries;
     bool private isInitialized;
 
     // JavaScript source code
@@ -82,7 +83,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
      * Used to count the number of failed price / pnl retrievals. If > MAX, the request is
      * invalidated and removed from storage.
      */
-    mapping(bytes32 requestId => uint256 retries) numberOfRetries;
+    mapping(bytes32 requestKey => uint256 retries) numberOfRetries;
     EnumerableMap.PriceRequestMap private requestData;
     EnumerableSet.Bytes32Set private assetIds;
     EnumerableSet.Bytes32Set private requestKeys;
@@ -198,7 +199,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     /**
      * @notice Sends an HTTP request for character information
      * @param args The arguments to pass to the HTTP request -> should be the tickers for which pricing is requested
-     * @return requestId The ID of the request
+     * @return requestKey The signature of the request
      */
     // @audit - need to add timestamp to the args
     function requestPriceUpdate(string[] calldata args, address _requester)
@@ -206,16 +207,16 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         payable
         onlyRouter
         nonReentrant
-        returns (bytes32 requestId)
+        returns (bytes32 requestKey)
     {
         Oracle.isSequencerUp(this);
 
         // Compute the key and check if the same request exists:
         // if it does, return to prevent the consumer from running the same computation multiple times.
-        bytes32 priceRequestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
-        if (requestKeys.contains(priceRequestKey)) return bytes32(0);
+        requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
+        if (requestKeys.contains(requestKey)) return bytes32(0);
 
-        requestId = _requestFulfillment(args, true);
+        bytes32 requestId = _requestFulfillment(args, true);
 
         RequestData memory data = RequestData({
             requester: _requester,
@@ -225,12 +226,10 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         });
 
         // Add the Request to Storage
-        requestKeys.add(priceRequestKey);
-        idToKey[requestId] = priceRequestKey;
-        keyToId[priceRequestKey] = requestId;
+        requestKeys.add(requestKey);
+        idToKey[requestId] = requestKey;
+        keyToId[requestKey] = requestId;
         requestData.set(requestId, data);
-
-        return requestId;
     }
 
     /// @dev - for this, we need to copy / call the function MarketUtils.calculateCumulativeMarketPnl but offchain
@@ -240,7 +239,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         payable
         onlyRouter
         nonReentrant
-        returns (bytes32 requestId)
+        returns (bytes32 requestKey)
     {
         // Need to check the market is valid
         // If the market is not valid, revert
@@ -248,15 +247,15 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
 
         // Compute the key and check if the same request exists:
         // if it does, return to prevent the consumer running multiple times for a given block.
-        bytes32 cumulativePnlRequestKey = _generateKey(abi.encode(market, _requester, _blockTimestamp()));
-        if (requestKeys.contains(cumulativePnlRequestKey)) return bytes32(0);
+        requestKey = _generateKey(abi.encode(market, _requester, _blockTimestamp()));
+        if (requestKeys.contains(requestKey)) return bytes32(0);
 
         // get all of the assets from the market
         // pass the assets to the request as args
         // convert assets to a string
         string[] memory tickers = market.getTickers();
 
-        requestId = _requestFulfillment(tickers, false);
+        bytes32 requestId = _requestFulfillment(tickers, false);
 
         RequestData memory data = RequestData({
             requester: _requester,
@@ -266,12 +265,10 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         });
 
         // Add the Request to Storage
-        requestKeys.add(cumulativePnlRequestKey);
-        idToKey[requestId] = cumulativePnlRequestKey;
-        keyToId[cumulativePnlRequestKey] = requestId;
+        requestKeys.add(requestKey);
+        idToKey[requestId] = requestKey;
+        keyToId[requestKey] = requestId;
         requestData.set(requestId, data);
-
-        return requestId;
     }
 
     /**
@@ -288,26 +285,10 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         // Return if invalid requestId
         if (!requestData.contains(requestId)) return;
         // Return if an error is thrown
-        // Need to store the number of times it's been re-requested --> if > 5 for example, delete and invalidate the request
+        // @audit - what if the subscription runs out of fund --> need buffer
         if (err.length > 0) {
-            // get the failed request
-            RequestData memory failedRequestData = requestData.get(requestId);
-            // create a new request
-            bytes32 newRequestId =
-                _requestFulfillment(failedRequestData.args, failedRequestData.requestType == RequestType.PRICE_UPDATE);
-            // key will remain the same, so cache the key
-            bytes32 requestKey = idToKey[requestId];
-            // replace the old request with the new one
-            // Delete the old request
-            requestData.remove(requestId);
-            delete idToKey[requestId];
-            idToKey[newRequestId] = requestKey;
-            keyToId[requestKey] = newRequestId;
-            requestData.set(newRequestId, failedRequestData);
+            _recreateRequest(requestId);
             return;
-            // Replace the
-            // q -> how do we replace the request from a trading position standpoint?
-            // a -> on the position we can store the request key instead
         }
         // Remove the RequestId from storage and return if fail
         if (!requestData.remove(requestId)) return;
@@ -370,6 +351,38 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     /**
      * ================================== Private Functions ==================================
      */
+
+    /// @dev Needed to re-request any failed requests to ensure they're fulfilled
+    /// if a request fails > max retries, the request is cancelled and removed from storage.
+    function _recreateRequest(bytes32 _oldRequestId) private {
+        // get the failed request
+        RequestData memory failedRequestData = requestData.get(_oldRequestId);
+        // key will remain the same, so cache the key
+        bytes32 requestKey = idToKey[_oldRequestId];
+        // increment the number of retries
+        if (numberOfRetries[requestKey] > maxRetries) {
+            // delete the request to stop the loop
+            requestData.remove(_oldRequestId);
+            delete idToKey[_oldRequestId];
+            requestKeys.remove(requestKey);
+            delete keyToId[requestKey];
+            return;
+        } else {
+            ++numberOfRetries[requestKey];
+        }
+        // create a new request
+        bytes32 newRequestId =
+            _requestFulfillment(failedRequestData.args, failedRequestData.requestType == RequestType.PRICE_UPDATE);
+        // replace the old request with the new one
+        // Delete the old request
+        requestData.remove(_oldRequestId);
+        delete idToKey[_oldRequestId];
+        idToKey[newRequestId] = requestKey;
+        keyToId[requestKey] = newRequestId;
+        requestData.set(newRequestId, failedRequestData);
+        return;
+    }
+
     function _requestFulfillment(string[] memory _args, bool _isPrice) private returns (bytes32 requestId) {
         FunctionsRequest.Request memory req;
         req.initializeRequestForInlineJavaScript(_isPrice ? priceUpdateSource : cumulativePnlSource); // Initialize the request with JS code
@@ -525,12 +538,19 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         return requestData.get(_requestId).requester;
     }
 
-    function getRequestData(bytes32 _requestId) external view returns (RequestData memory) {
-        return requestData.get(_requestId);
+    function getRequestData(bytes32 _requestKey) external view returns (RequestData memory) {
+        bytes32 requestId = keyToId[_requestKey];
+        return requestData.get(requestId);
     }
 
-    function getRequestTimestamp(bytes32 _requestId) external view returns (uint48) {
-        return requestData.get(_requestId).blockTimestamp;
+    function isRequestValid(bytes32 _requestKey) external view returns (bool) {
+        bytes32 requestId = keyToId[_requestKey];
+        return requestData.contains(requestId);
+    }
+
+    function getRequestTimestamp(bytes32 _requestKey) external view returns (uint48) {
+        bytes32 requestId = keyToId[_requestKey];
+        return requestData.get(requestId).blockTimestamp;
     }
 
     function getRequests() external view returns (bytes32[] memory) {

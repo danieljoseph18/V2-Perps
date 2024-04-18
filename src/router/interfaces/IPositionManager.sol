@@ -15,6 +15,7 @@ interface IPositionManager {
     event MarketRequestCancelled(bytes32 indexed _requestKey, address indexed _owner, address _token, uint256 _amount);
 
     error PositionManager_AccessDenied();
+    error PositionManager_CancellationFailed();
     error PositionManager_InvalidMarket();
     error PositionManager_InvalidKey();
     error PositionManager_ExecuteDepositFailed();

@@ -189,9 +189,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     }
 
     /// @dev For market orders, can just pass in bytes32(0) as the request id, as it's only required for limits
-    /// @dev If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestId as input
+    /// @dev If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestKey as input
     // @audit - what happens if a price request is invalidated but the position still exists?
-    function executePosition(IMarket market, bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
+    function executePosition(IMarket market, bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
         external
         payable
         nonReentrant
@@ -203,7 +203,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the Request
         (Execution.FeeState memory feeState, Position.Request memory request) =
-            tradeStorage.executePositionRequest(_orderKey, _requestId, _feeReceiver);
+            tradeStorage.executePositionRequest(_orderKey, _requestKey, _feeReceiver);
 
         // Emit Trade Executed Event
         emit ExecutePosition(_orderKey, feeState.positionFee, feeState.affiliateRebate);
@@ -221,10 +221,10 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     // Only person who requested the pricing for an order should be able to initiate the liquidation,
     // up until a certain time buffer. After that time buffer, any user should be able to.
     /// @dev - Caller needs to call Router.requestExecutionPricing before
-    function liquidatePosition(IMarket market, bytes32 _positionKey, bytes32 _requestId) external payable {
+    function liquidatePosition(IMarket market, bytes32 _positionKey, bytes32 _requestKey) external payable {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // liquidate the position
-        try tradeStorage.liquidatePosition(_positionKey, _requestId, msg.sender) {}
+        try tradeStorage.liquidatePosition(_positionKey, _requestKey, msg.sender) {}
         catch {
             revert PositionManager_LiquidationFailed();
         }
@@ -237,7 +237,10 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Check it exists
         if (request.user == address(0)) revert PositionManager_RequestDoesNotExist();
         // Check the caller is the position owner
-        if (msg.sender != request.user) revert PositionManager_NotPositionOwner();
+        if (msg.sender != request.user) {
+            // if caller is not the request owner --> the request must have an invalidated price to cancel it
+            if (!priceFeed.isRequestValid(request.requestKey)) revert PositionManager_CancellationFailed();
+        }
         // Check sufficient time has passed
         if (block.timestamp < request.requestTimestamp + tradeStorage.minCancellationTime()) {
             revert PositionManager_InsufficientDelay();
@@ -245,19 +248,25 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         // Cancel the Request
         tradeStorage.cancelOrderRequest(_key, _isLimit);
         // Refund the Collateral
-        IERC20(request.input.collateralToken).safeTransfer(msg.sender, request.input.collateralDelta);
+        IERC20(request.input.collateralToken).safeTransfer(request.user, request.input.collateralDelta);
         // Refund the Execution Fee
-        uint256 refundAmount = Gas.getRefundForCancellation(request.input.executionFee);
-        payable(msg.sender).sendValue(refundAmount);
+        (uint256 refundAmount, uint256 amountForExecutor) = Gas.getRefundForCancellation(request.input.executionFee);
+        if (msg.sender == request.user) {
+            // If user executes their own cancellation, send in a single transaction
+            payable(msg.sender).sendValue(refundAmount + amountForExecutor);
+        } else {
+            payable(request.user).sendValue(refundAmount);
+            payable(msg.sender).sendValue(amountForExecutor);
+        }
     }
 
     // Only person who requested the pricing for an order should be able to initiate the adl,
     // up until a certain time buffer. After that time buffer, any user should be able to.
-    /// @dev - Caller needs to call Router.requestExecutionPricing before and provide a valid requestId
-    function executeAdl(IMarket market, bytes32 _requestId, bytes32 _positionKey) external payable {
+    /// @dev - Caller needs to call Router.requestExecutionPricing before and provide a valid requestKey
+    function executeAdl(IMarket market, bytes32 _requestKey, bytes32 _positionKey) external payable {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         // Execute the ADL
-        tradeStorage.executeAdl(_positionKey, _requestId, msg.sender);
+        tradeStorage.executeAdl(_positionKey, _requestKey, msg.sender);
     }
 
     function transferTokensForIncrease(

@@ -97,13 +97,13 @@ library TradeLogic {
         IPositionManager positionManager,
         IReferralStorage referralStorage,
         bytes32 _orderKey,
-        bytes32 _requestId,
+        bytes32 _requestKey,
         address _feeReceiver
     ) internal returns (Execution.FeeState memory feeState, Position.Request memory request) {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Initiate the execution
         Execution.Prices memory prices;
-        (prices, request) = Execution.initiate(tradeStorage, market, priceFeed, _orderKey, _requestId, _feeReceiver);
+        (prices, request) = Execution.initiate(tradeStorage, market, priceFeed, _orderKey, _requestKey, _feeReceiver);
         // Cache the State of the Market Before the Position
         Invariants memory invariants = _getInvariants(market, request.input.ticker, request.user, request.input.isLong);
         // Delete the Order from Storage
@@ -196,13 +196,13 @@ library TradeLogic {
         IReferralStorage referralStorage,
         IPriceFeed priceFeed,
         bytes32 _positionKey,
-        bytes32 _requestId,
+        bytes32 _requestKey,
         address _feeReceiver
     ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Check that the price update was requested by the ADLer, if not, require some time to pass before enabling them to execute
-        uint48 requestTimestamp = priceFeed.getRequestTimestamp(_requestId);
-        Execution.validatePriceRequest(priceFeed, _feeReceiver, _requestId, requestTimestamp);
+        uint48 requestTimestamp = priceFeed.getRequestTimestamp(_requestKey);
+        Execution.validatePriceRequest(priceFeed, _feeReceiver, _requestKey, requestTimestamp);
         // Initiate the Adl order
         (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) =
             Execution.initiateAdlOrder(market, tradeStorage, priceFeed, _positionKey, requestTimestamp, _feeReceiver);
@@ -241,7 +241,7 @@ library TradeLogic {
         IReferralStorage referralStorage,
         IPriceFeed priceFeed,
         bytes32 _positionKey,
-        bytes32 _requestId,
+        bytes32 _requestKey,
         address _liquidator
     ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
@@ -250,8 +250,8 @@ library TradeLogic {
         // Check the Position Exists
         if (position.user == address(0)) revert TradeLogic_PositionDoesNotExist();
         // Check that the price update was requested by the liquidator, if not, require some time to pass before enabling them to execute
-        uint48 requestTimestamp = priceFeed.getRequestTimestamp(_requestId);
-        Execution.validatePriceRequest(priceFeed, _liquidator, _requestId, requestTimestamp);
+        uint48 requestTimestamp = priceFeed.getRequestTimestamp(_requestKey);
+        Execution.validatePriceRequest(priceFeed, _liquidator, _requestKey, requestTimestamp);
         // Get the Prices
         Execution.Prices memory prices =
             Execution.getTokenPrices(priceFeed, position.ticker, requestTimestamp, position.isLong, false);

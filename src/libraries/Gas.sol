@@ -11,6 +11,7 @@ library Gas {
     using MathUtils for uint256;
 
     uint256 private constant CANCELLATION_PENALTY = 0.2e18; // 20%
+    uint64 private constant CANCELLATION_REWARD = 0.5e18;
     uint256 private constant SCALING_FACTOR = 1e18;
     uint256 private constant BUFFER_PERCENTAGE = 1.1e18; // 110%
 
@@ -58,8 +59,14 @@ library Gas {
         estimatedCost = (actionCost + priceUpdateCost).percentage(BUFFER_PERCENTAGE);
     }
 
-    function getRefundForCancellation(uint256 _executionFee) external pure returns (uint256) {
-        return _executionFee.percentage(CANCELLATION_PENALTY);
+    function getRefundForCancellation(uint256 _executionFee)
+        external
+        pure
+        returns (uint256 refundAmount, uint256 amountForExecutor)
+    {
+        refundAmount = _executionFee.percentage(CANCELLATION_PENALTY);
+        // 50% of the cancellation penalty
+        amountForExecutor = (_executionFee - refundAmount).percentage(CANCELLATION_REWARD);
     }
 
     function _getActionCost(IPositionManager positionManager, Action _action) private view returns (uint256) {

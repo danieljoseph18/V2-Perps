@@ -76,7 +76,10 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
      * request from processing and save the end user some gas.
      */
     // Dictionary to enable clearing of the RequestKey
-    mapping(bytes32 id => bytes32 key) private idToKey;
+    // Bi-directional to handle the case of invalidated requests
+    mapping(bytes32 requestId => bytes32 requestKey) private idToKey;
+    mapping(bytes32 requestKey => bytes32 requestId) private keyToId;
+
     EnumerableMap.PriceRequestMap private requestData;
     EnumerableSet.Bytes32Set private assetIds;
     EnumerableSet.Bytes32Set private requestKeys;
@@ -198,7 +201,8 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         RequestData memory data = RequestData({
             requester: _requester,
             blockTimestamp: _blockTimestamp(),
-            requestType: RequestType.PRICE_UPDATE
+            requestType: RequestType.PRICE_UPDATE,
+            args: args
         });
 
         requestData.set(requestId, data);
@@ -214,7 +218,8 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         RequestData memory data = RequestData({
             requester: _requester,
             blockTimestamp: _blockTimestamp(),
-            requestType: RequestType.CUMULATIVE_PNL
+            requestType: RequestType.CUMULATIVE_PNL,
+            args: new string[](0)
         });
 
         requestData.set(requestId, data);
@@ -392,8 +397,14 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         return requestData.get(_requestId);
     }
 
-    function getRequestTimestamp(bytes32 _requestId) external view returns (uint48) {
-        return requestData.get(_requestId).blockTimestamp;
+    function isRequestValid(bytes32 _requestKey) external view returns (bool) {
+        bytes32 requestId = keyToId[_requestKey];
+        return requestData.contains(requestId);
+    }
+
+    function getRequestTimestamp(bytes32 _requestKey) external view returns (uint48) {
+        bytes32 requestId = keyToId[_requestKey];
+        return requestData.get(requestId).blockTimestamp;
     }
 
     function getRequests() external view returns (bytes32[] memory) {

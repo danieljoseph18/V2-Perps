@@ -117,31 +117,31 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     /// @dev needs to accept request id for limit order cases
     /// the request id at request time won't be the same as the request id at execution time
-    function executePositionRequest(bytes32 _orderKey, bytes32 _requestId, address _feeReceiver)
+    function executePositionRequest(bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
         external
         onlyPositionManager
         nonReentrant
         returns (Execution.FeeState memory feeState, Position.Request memory request)
     {
         return TradeLogic.executePositionRequest(
-            market, priceFeed, IPositionManager(msg.sender), referralStorage, _orderKey, _requestId, _feeReceiver
+            market, priceFeed, IPositionManager(msg.sender), referralStorage, _orderKey, _requestKey, _feeReceiver
         );
     }
 
-    function liquidatePosition(bytes32 _positionKey, bytes32 _requestId, address _liquidator)
+    function liquidatePosition(bytes32 _positionKey, bytes32 _requestKey, address _liquidator)
         external
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.liquidatePosition(market, referralStorage, priceFeed, _positionKey, _requestId, _liquidator);
+        TradeLogic.liquidatePosition(market, referralStorage, priceFeed, _positionKey, _requestKey, _liquidator);
     }
 
-    function executeAdl(bytes32 _positionKey, bytes32 _requestId, address _feeReceiver)
+    function executeAdl(bytes32 _positionKey, bytes32 _requestKey, address _feeReceiver)
         external
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestId, _feeReceiver);
+        TradeLogic.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestKey, _feeReceiver);
     }
 
     /**

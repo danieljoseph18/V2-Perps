@@ -84,13 +84,13 @@ library Oracle {
     }
 
     /// @dev - Wrapper around `getRequestTimestamp` with an additional validation step
-    function getRequestTimestamp(IPriceFeed priceFeed, bytes32 _requestId)
+    function getRequestTimestamp(IPriceFeed priceFeed, bytes32 _requestKey)
         external
         view
         returns (uint48 requestTimestamp)
     {
         // Validate the Price Request
-        requestTimestamp = priceFeed.getRequestTimestamp(_requestId);
+        requestTimestamp = priceFeed.getRequestTimestamp(_requestKey);
         if (block.timestamp > requestTimestamp + priceFeed.timeToExpiration()) revert Oracle_RequestExpired();
     }
 

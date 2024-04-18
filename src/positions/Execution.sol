@@ -39,7 +39,6 @@ library Execution {
     error Execution_PNLFactorNotReduced();
     error Execution_PositionExists();
     error Execution_InvalidPriceRequest();
-    error Execution_InvalidRequestId();
     error Execution_InvalidAdlDelta();
     error Execution_PositionNotProfitable();
     error Execution_InvalidPosition();
@@ -103,14 +102,14 @@ library Execution {
         IMarket market,
         IPriceFeed priceFeed,
         bytes32 _orderKey,
-        bytes32 _requestId,
+        bytes32 _requestKey,
         address _feeReceiver
     ) internal view returns (Prices memory prices, Position.Request memory request) {
         // Fetch and validate request from key
         request = tradeStorage.getOrder(_orderKey);
         // Validate the request before continuing execution
         if (request.input.isLimit) {
-            validatePriceRequest(priceFeed, _feeReceiver, _requestId, request.requestTimestamp);
+            validatePriceRequest(priceFeed, _feeReceiver, _requestKey, request.requestTimestamp);
         }
         // Fetch and validate price
         prices = getTokenPrices(
@@ -553,12 +552,12 @@ library Execution {
         if (newPnlFactor >= _startingPnlFactor) revert Execution_PNLFactorNotReduced();
     }
 
-    function validatePriceRequest(IPriceFeed priceFeed, address _caller, bytes32 _requestId, uint48 _requestTimestamp)
+    function validatePriceRequest(IPriceFeed priceFeed, address _caller, bytes32 _requestKey, uint48 _requestTimestamp)
         public
         view
     {
         // Check if the requester == caller
-        IPriceFeed.RequestData memory data = priceFeed.getRequestData(_requestId);
+        IPriceFeed.RequestData memory data = priceFeed.getRequestData(_requestKey);
         // Check that the request timestamp equals the input timestamp
         if (data.blockTimestamp != _requestTimestamp) revert Execution_InvalidRequestTimestamp();
         if (data.requester != _caller) {
