@@ -25,12 +25,12 @@ library Borrowing {
     ) external view returns (IMarket.BorrowingValues memory) {
         if (_isLong) {
             borrowing.longCumulativeBorrowFees +=
-                calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.longBorrowingRate = calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, true);
+                _calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
+            borrowing.longBorrowingRate = _calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, true);
         } else {
             borrowing.shortCumulativeBorrowFees +=
-                calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.shortBorrowingRate = calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, false);
+                _calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
+            borrowing.shortBorrowingRate = _calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, false);
         }
 
         borrowing.lastBorrowUpdate = uint48(block.timestamp);
@@ -38,69 +38,16 @@ library Borrowing {
         return borrowing;
     }
 
-    /**
-     * Borrow scale represents the maximium possible borrowing fee per day.
-     * We then apply a factor to the scale to get the actual borrowing fee.
-     * The calculation for the factor is simply (open interest usd / max open interest usd).
-     * If OI is low, fee will be low, if OI is close to max, fee will be close to max.
-     */
-    function calculateRate(
-        IMarket market,
-        string calldata _ticker,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit,
-        bool _isLong
-    ) public view returns (uint256 borrowRatePerDay) {
-        // Factor = (open interest usd / max open interest usd)
-        uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
-        console2.log("Oi in Rate: ", openInterest);
-
-        uint256 maxOi = MarketUtils.getMaxOpenInterest(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
-
-        console2.log("Max Oi in Rate: ", maxOi);
-
-        uint256 factor = openInterest.div(maxOi);
-
-        console2.log("Factor in Rate: ", factor);
-
-        borrowRatePerDay = market.borrowScale();
-
-        // Opposite case cann occur if collateral decreases in value significantly.
-        if (openInterest < maxOi) {
-            borrowRatePerDay = borrowRatePerDay.percentage(factor);
-        }
-        console2.log("Borrow Rate Per Day: ", borrowRatePerDay);
-    }
-
-    function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) public view returns (uint256 fee) {
-        uint256 timeElapsed = block.timestamp - _lastUpdate;
-        if (timeElapsed == 0) return 0;
-        // Fees = (borrowRatePerDay * timeElapsed)
-        fee = _rate.percentage(timeElapsed, SECONDS_PER_DAY);
-    }
-
-    function getTotalFeesOwedByMarkets(IMarket market, bool _isLong) external view returns (uint256 totalFeeUsd) {
+    function getTotalFeesOwedByMarket(IMarket market, bool _isLong) external view returns (uint256 totalFeeUsd) {
         string[] memory tickers = market.getTickers();
         uint256 len = tickers.length;
         totalFeeUsd;
         for (uint256 i = 0; i < len;) {
-            totalFeeUsd += getTotalFeesOwedByMarket(market, tickers[i], _isLong);
+            totalFeeUsd += _getTotalFeesOwedForAsset(market, tickers[i], _isLong);
             unchecked {
                 ++i;
             }
         }
-    }
-
-    function getTotalFeesOwedByMarket(IMarket market, string memory _ticker, bool _isLong)
-        public
-        view
-        returns (uint256 totalFeesOwedUsd)
-    {
-        uint256 accumulatedFees = MarketUtils.getCumulativeBorrowFee(market, _ticker, _isLong)
-            - MarketUtils.getAverageCumulativeBorrowFee(market, _ticker, _isLong);
-        uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
-        // Total Fees Owed = cumulativeFeePercentage * openInterestUsd
-        totalFeesOwedUsd = accumulatedFees.mul(openInterest);
     }
 
     /**
@@ -161,5 +108,56 @@ library Borrowing {
         uint256 timeElapsed = block.timestamp - MarketUtils.getLastBorrowingUpdate(market, _ticker);
         if (timeElapsed == 0) return 0;
         pendingFees = borrowRate * timeElapsed;
+    }
+
+    /**
+     * ============================== Private Functions ==============================
+     */
+
+    /**
+     * Borrow scale represents the maximium possible borrowing fee per day.
+     * We then apply a factor to the scale to get the actual borrowing fee.
+     * The calculation for the factor is simply (open interest usd / max open interest usd).
+     * If OI is low, fee will be low, if OI is close to max, fee will be close to max.
+     */
+    function _calculateRate(
+        IMarket market,
+        string calldata _ticker,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) private view returns (uint256 borrowRatePerDay) {
+        // Factor = (open interest usd / max open interest usd)
+        uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
+
+        uint256 maxOi = MarketUtils.getMaxOpenInterest(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+
+        uint256 factor = openInterest.div(maxOi);
+
+        borrowRatePerDay = market.borrowScale();
+
+        // Opposite case cann occur if collateral decreases in value significantly.
+        if (openInterest < maxOi) {
+            borrowRatePerDay = borrowRatePerDay.percentage(factor);
+        }
+    }
+
+    function _getTotalFeesOwedForAsset(IMarket market, string memory _ticker, bool _isLong)
+        private
+        view
+        returns (uint256 totalFeesOwedUsd)
+    {
+        uint256 accumulatedFees = MarketUtils.getCumulativeBorrowFee(market, _ticker, _isLong)
+            - MarketUtils.getAverageCumulativeBorrowFee(market, _ticker, _isLong);
+        uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
+        // Total Fees Owed = cumulativeFeePercentage * openInterestUsd
+        totalFeesOwedUsd = accumulatedFees.mul(openInterest);
+    }
+
+    function _calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) private view returns (uint256 fee) {
+        uint256 timeElapsed = block.timestamp - _lastUpdate;
+        if (timeElapsed == 0) return 0;
+        // Fees = (borrowRatePerDay * timeElapsed)
+        fee = _rate.percentage(timeElapsed, SECONDS_PER_DAY);
     }
 }

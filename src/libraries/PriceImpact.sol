@@ -18,7 +18,6 @@ library PriceImpact {
     using SafeCast for int256;
     using MathUtils for uint256;
 
-    error PriceImpact_InvalidTotalImpact(int256 totalImpact);
     error PriceImpact_SizeDeltaIsZero();
     error PriceImpact_InsufficientLiquidity();
     error PriceImpact_InvalidState();

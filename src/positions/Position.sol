@@ -3,7 +3,6 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
-import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
@@ -24,12 +23,10 @@ library Position {
 
     error Position_InvalidDecrease();
     error Position_SizeDelta();
-    error Position_DeltaExceedsCollateral();
     error Position_CollateralExceedsSize();
     error Position_BelowMinLeverage();
     error Position_OverMaxLeverage();
     error Position_InvalidSlippage();
-    error Position_InvalidCollateralDelta();
     error Position_MarketDoesNotExist();
     error Position_InvalidLimitPrice();
     error Position_InvalidAssetId();
@@ -50,16 +47,13 @@ library Position {
     error Position_CumulativeBorrowDelta();
     error Position_OpenInterestDelta();
     error Position_InvalidFeeUpdate();
-    error Position_InvalidCollateralUpdate();
     error Position_InvalidPoolUpdate();
     error Position_InvalidVaultUpdate();
 
     uint8 private constant MIN_LEVERAGE = 100; // 1x
     uint8 private constant LEVERAGE_PRECISION = 100;
-    uint16 private constant MIN_COLLATERAL = 1000;
     uint64 private constant PRECISION = 1e18;
     uint64 private constant TARGET_PNL_RATIO = 0.35e18;
-    int256 private constant PRICE_PRECISION = 1e30;
     // Max and Min Price Slippage
     uint128 private constant MIN_SLIPPAGE = 0.0001e30; // 0.01%
     uint128 private constant MAX_SLIPPAGE = 0.9999e30; // 99.99%
@@ -179,7 +173,7 @@ library Position {
         IMarket.MarketStorage memory _prevStorage,
         IMarket.MarketStorage memory _storage,
         Position.Request memory _request
-    ) internal view {
+    ) external view {
         _validateFundingValues(_prevStorage.funding, _storage.funding);
         _validateBorrowingValues(
             market, _prevStorage.borrowing, _storage.borrowing, _request.input.sizeDelta, _request.input.isLong
@@ -194,6 +188,142 @@ library Position {
         _validatePnlValues(_prevStorage.pnl, _storage.pnl, _request.input.isLong);
     }
 
+    /**
+     * For an increase:
+     * - Fees should be accumulated in the fee pool
+     * - Users collateral amount should increase by collateral after fees
+     * - Settled funding should be settled through the pool balance
+     *
+     * For a decrease:
+     * - Fees should be accumulated in the fee pool
+     * - Users collateral amount should decrease by collateral after fees
+     * - Settled funding should be settled through the pool balance
+     * - PNL should be settled through the pool balance
+     */
+    function validatePoolDelta(
+        Execution.FeeState memory _feeState,
+        IMarket.State memory _marketBefore,
+        IMarket.State memory _marketAfter,
+        uint256 _collateralDelta,
+        uint256 _userCollateralBefore,
+        bool _isIncrease,
+        bool _isFullDecrease
+    ) external pure {
+        if (_isIncrease) {
+            // Fees should be accumulated in the fee pool
+            if (
+                _marketAfter.accumulatedFees
+                    != _marketBefore.accumulatedFees + _feeState.positionFee + _feeState.borrowFee
+            ) {
+                revert Position_InvalidFeeUpdate();
+            }
+            // Funding / PNL should be settled through the pool balance
+            // Calculate the Execpted Balance of the Market
+            uint256 expectedMarketBalance = _marketBefore.poolBalance;
+            // If user paid funding, pool should increase
+            if (_feeState.fundingFee < 0) expectedMarketBalance += _feeState.fundingFee.abs();
+            // If user got paid funding, pool should decrease
+            else if (_feeState.fundingFee > 0) expectedMarketBalance -= _feeState.fundingFee.abs();
+            // If user lost pnl, pool should increase
+            if (_feeState.realizedPnl < 0) expectedMarketBalance -= _feeState.realizedPnl.abs();
+            // If user gained pnl, pool should decrease
+            else if (_feeState.realizedPnl > 0) expectedMarketBalance += _feeState.realizedPnl.abs();
+
+            if (_marketAfter.poolBalance != expectedMarketBalance) {
+                revert Position_InvalidPoolUpdate();
+            }
+
+            // Vault Balance should increase by collateral delta - fee for executor - affiliate rebate
+            // @audit - wrong --> need to add is long ? then determine whether to use weth or usdc
+            // ideally in state snapshot we just snapshot 1 side
+            if (
+                _marketAfter.wethBalance
+                    != _marketBefore.wethBalance + _collateralDelta - _feeState.feeForExecutor - _feeState.affiliateRebate
+            ) {
+                revert Position_InvalidVaultUpdate();
+            }
+        } else {
+            // Fees should be accumulated in the fee pool
+            if (
+                _marketAfter.accumulatedFees
+                    != _marketBefore.accumulatedFees + _feeState.positionFee + _feeState.borrowFee
+            ) {
+                revert Position_InvalidFeeUpdate();
+            }
+
+            // Funding / PNL should be settled through the pool balance
+            // Calculate the Execpted Balance of the Market
+            /**
+             * Need to account for: collateral out, realized pnl, funding, fees, fee for executor, affiliate rebate
+             * Vault should decrease by:
+             * - Collateral Out
+             * - Fee for Executor
+             * - Affiliate Rebate
+             * - +- Pnl
+             * - +- Funding
+             *
+             * If liquidation, vault should only change by - liq fee
+             */
+            uint256 expectedMarketBalance = _marketBefore.poolBalance;
+
+            if (_feeState.isLiquidation) {
+                // If liquidation, all collateral after fees should be accumulated in the pool
+
+                expectedMarketBalance += _feeState.afterFeeAmount;
+                if (_feeState.amountOwedToUser > 0) {
+                    expectedMarketBalance -= _feeState.amountOwedToUser;
+                }
+                // If liquidation, only output should be the liquidation fee
+                // @audit - wrong --> need to add is long ? then determine whether to use weth or usdc
+                // ideally in state snapshot we just snapshot 1 side
+                if (
+                    _marketAfter.wethBalance
+                        != _marketBefore.wethBalance - (_feeState.feeForExecutor + _feeState.amountOwedToUser)
+                ) {
+                    revert Position_InvalidVaultUpdate();
+                }
+            } else {
+                uint256 expectedVaultDelta =
+                    (_feeState.afterFeeAmount + _feeState.feeForExecutor + _feeState.affiliateRebate);
+                // If user paid funding, pool should increase
+                if (_feeState.fundingFee < 0) {
+                    expectedMarketBalance += _feeState.fundingFee.abs();
+                } else if (_feeState.fundingFee > 0) {
+                    // If user got paid funding, pool should decrease
+                    uint256 absFundingFee = _feeState.fundingFee.abs();
+                    expectedMarketBalance -= absFundingFee;
+                    expectedVaultDelta += absFundingFee;
+                }
+                // If user lost pnl, pool should increase
+                if (_feeState.realizedPnl < 0) {
+                    expectedMarketBalance += _feeState.realizedPnl.abs();
+                } else if (_feeState.realizedPnl > 0) {
+                    // If user gained pnl, pool should decrease
+                    uint256 absPnl = _feeState.realizedPnl.abs();
+                    expectedMarketBalance -= absPnl;
+                    expectedVaultDelta += absPnl;
+                }
+                // @audit - wrong --> need to add is long ? then determine whether to use weth or usdc
+                // ideally in state snapshot we just snapshot 1 side
+                if (_marketAfter.wethBalance != _marketBefore.wethBalance - expectedVaultDelta) {
+                    revert Position_InvalidVaultUpdate();
+                }
+            }
+
+            if (_collateralDelta > _userCollateralBefore) {
+                // If deficit in collateral was covered by the pool (due to decrease in collateral value)
+                expectedMarketBalance -= (_collateralDelta - _userCollateralBefore);
+            } else if (_isFullDecrease && _userCollateralBefore - _collateralDelta > 0) {
+                // If excess collateral left on a full decrease, it's absorbed into the pool
+                expectedMarketBalance += (_userCollateralBefore - _collateralDelta);
+            }
+
+            if (_marketAfter.poolBalance != expectedMarketBalance) {
+                revert Position_InvalidPoolUpdate();
+            }
+        }
+    }
+
     function validateCollateralIncrease(
         Data memory _position,
         Execution.FeeState memory _feeState,
@@ -201,7 +331,7 @@ library Position {
         uint256 _collateralDelta,
         uint256 _collateralDeltaUsd,
         uint256 _initialCollateral
-    ) internal pure {
+    ) external pure {
         // ensure the position collateral has changed by the correct amount
         uint256 expectedCollateralDelta = _collateralDelta - _feeState.positionFee - _feeState.borrowFee
             - _feeState.affiliateRebate - _feeState.feeForExecutor;
@@ -223,7 +353,7 @@ library Position {
         Execution.FeeState memory _feeState,
         Execution.Prices memory _prices,
         uint256 _initialCollateral
-    ) internal pure {
+    ) external pure {
         // ensure the position collateral has changed by the correct amount
         uint256 expectedCollateralDelta = _feeState.afterFeeAmount + _feeState.positionFee + _feeState.borrowFee
             + _feeState.affiliateRebate + _feeState.feeForExecutor;
@@ -244,7 +374,7 @@ library Position {
         uint256 _positionFee,
         uint256 _affiliateRebate,
         uint256 _feeForExecutor
-    ) internal pure {
+    ) external pure {
         if (_collateralIn != _afterFeeAmount + _positionFee + _affiliateRebate + _feeForExecutor) {
             revert Position_NewPosition();
         }
@@ -259,7 +389,7 @@ library Position {
         uint256 _initialCollateral,
         uint256 _initialSize,
         uint256 _sizeDelta
-    ) internal pure {
+    ) external pure {
         uint256 expectedCollateralDelta = _collateralDelta - _feeState.positionFee - _feeState.affiliateRebate
             - _feeState.borrowFee - _feeState.feeForExecutor;
         // Account for funding paid out from / to the user
@@ -287,7 +417,7 @@ library Position {
         uint256 _initialSize,
         uint256 _sizeDelta,
         int256 _pnl
-    ) internal pure {
+    ) external pure {
         // Amount out should = collateralDelta +- pnl += fundingFee - borrow fee - trading fee - affiliateRebate - feeForExecutor
         /**
          * collat before should = collat after + collateralDelta + fees + pnl
@@ -315,7 +445,7 @@ library Position {
 
     // 1x = 100
     function checkLeverage(IMarket market, string memory _ticker, uint256 _sizeUsd, uint256 _collateralUsd)
-        internal
+        external
         view
     {
         uint256 maxLeverage = MarketUtils.getMaxLeverage(market, _ticker);
@@ -330,7 +460,7 @@ library Position {
      * and execution easier.
      */
     function getRequestType(Input memory _trade, Data memory _position)
-        internal
+        external
         pure
         returns (RequestType requestType)
     {
@@ -397,7 +527,7 @@ library Position {
         address _user,
         RequestType _requestType,
         bytes32 _requestKey
-    ) internal view returns (Request memory request) {
+    ) external view returns (Request memory request) {
         request = Request({
             input: _trade,
             conditionals: _conditionals,
@@ -413,7 +543,7 @@ library Position {
         Request memory _request,
         uint256 _impactedPrice,
         uint256 _collateralUsd
-    ) internal view returns (Data memory position) {
+    ) external view returns (Data memory position) {
         // Get Entry Funding & Borrowing Values
         (uint256 longBorrowFee, uint256 shortBorrowFee) =
             MarketUtils.getCumulativeBorrowFees(market, _request.input.ticker);
@@ -440,7 +570,7 @@ library Position {
         Conditionals memory _conditionals,
         Execution.Prices memory _prices,
         uint256 _totalExecutionFee
-    ) internal view returns (Request memory stopLossOrder, Request memory takeProfitOrder) {
+    ) external view returns (Request memory stopLossOrder, Request memory takeProfitOrder) {
         // Construct the stop loss based on the values
         uint256 slExecutionFee = _totalExecutionFee.percentage(2, 3); // 2/3 of the total execution fee
         if (_conditionals.stopLossSet) {
@@ -502,7 +632,7 @@ library Position {
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         address _liquidator
-    ) internal view returns (Settlement memory order) {
+    ) external view returns (Settlement memory order) {
         order = Settlement({
             request: Request({
                 input: Input({
@@ -532,7 +662,7 @@ library Position {
     }
 
     function createAdlOrder(Data memory _position, uint256 _sizeDelta, uint256 _collateralDelta, address _feeReceiver)
-        internal
+        external
         view
         returns (Settlement memory order)
     {
@@ -902,136 +1032,6 @@ library Position {
         } else {
             if (_pnl.longAverageEntryPriceUsd != _prevPnl.longAverageEntryPriceUsd) {
                 revert Position_InvalidIncreasePosition();
-            }
-        }
-    }
-
-    /**
-     * For an increase:
-     * - Fees should be accumulated in the fee pool
-     * - Users collateral amount should increase by collateral after fees
-     * - Settled funding should be settled through the pool balance
-     *
-     * For a decrease:
-     * - Fees should be accumulated in the fee pool
-     * - Users collateral amount should decrease by collateral after fees
-     * - Settled funding should be settled through the pool balance
-     * - PNL should be settled through the pool balance
-     */
-    function validatePoolDelta(
-        Execution.FeeState memory _feeState,
-        IMarket.State memory _marketBefore,
-        IMarket.State memory _marketAfter,
-        uint256 _collateralDelta,
-        uint256 _userCollateralBefore,
-        uint256 _vaultBalanceBefore,
-        uint256 _vaultBalanceAfter,
-        bool _isIncrease,
-        bool _isFullDecrease
-    ) internal pure {
-        if (_isIncrease) {
-            // Fees should be accumulated in the fee pool
-            if (
-                _marketAfter.accumulatedFees
-                    != _marketBefore.accumulatedFees + _feeState.positionFee + _feeState.borrowFee
-            ) {
-                revert Position_InvalidFeeUpdate();
-            }
-            // Funding / PNL should be settled through the pool balance
-            // Calculate the Execpted Balance of the Market
-            uint256 expectedMarketBalance = _marketBefore.poolBalance;
-            // If user paid funding, pool should increase
-            if (_feeState.fundingFee < 0) expectedMarketBalance += _feeState.fundingFee.abs();
-            // If user got paid funding, pool should decrease
-            else if (_feeState.fundingFee > 0) expectedMarketBalance -= _feeState.fundingFee.abs();
-            // If user lost pnl, pool should increase
-            if (_feeState.realizedPnl < 0) expectedMarketBalance -= _feeState.realizedPnl.abs();
-            // If user gained pnl, pool should decrease
-            else if (_feeState.realizedPnl > 0) expectedMarketBalance += _feeState.realizedPnl.abs();
-
-            if (_marketAfter.poolBalance != expectedMarketBalance) {
-                revert Position_InvalidPoolUpdate();
-            }
-
-            // Vault Balance should increase by collateral delta - fee for executor - affiliate rebate
-            if (
-                _vaultBalanceAfter
-                    != _vaultBalanceBefore + _collateralDelta - _feeState.feeForExecutor - _feeState.affiliateRebate
-            ) {
-                revert Position_InvalidVaultUpdate();
-            }
-        } else {
-            // Fees should be accumulated in the fee pool
-            if (
-                _marketAfter.accumulatedFees
-                    != _marketBefore.accumulatedFees + _feeState.positionFee + _feeState.borrowFee
-            ) {
-                revert Position_InvalidFeeUpdate();
-            }
-
-            // Funding / PNL should be settled through the pool balance
-            // Calculate the Execpted Balance of the Market
-            /**
-             * Need to account for: collateral out, realized pnl, funding, fees, fee for executor, affiliate rebate
-             * Vault should decrease by:
-             * - Collateral Out
-             * - Fee for Executor
-             * - Affiliate Rebate
-             * - +- Pnl
-             * - +- Funding
-             *
-             * If liquidation, vault should only change by - liq fee
-             */
-            uint256 expectedMarketBalance = _marketBefore.poolBalance;
-
-            if (_feeState.isLiquidation) {
-                // If liquidation, all collateral after fees should be accumulated in the pool
-
-                expectedMarketBalance += _feeState.afterFeeAmount;
-                if (_feeState.amountOwedToUser > 0) {
-                    expectedMarketBalance -= _feeState.amountOwedToUser;
-                }
-                // If liquidation, only output should be the liquidation fee
-                if (_vaultBalanceAfter != _vaultBalanceBefore - (_feeState.feeForExecutor + _feeState.amountOwedToUser))
-                {
-                    revert Position_InvalidVaultUpdate();
-                }
-            } else {
-                uint256 expectedVaultDelta =
-                    (_feeState.afterFeeAmount + _feeState.feeForExecutor + _feeState.affiliateRebate);
-                // If user paid funding, pool should increase
-                if (_feeState.fundingFee < 0) {
-                    expectedMarketBalance += _feeState.fundingFee.abs();
-                } else if (_feeState.fundingFee > 0) {
-                    // If user got paid funding, pool should decrease
-                    uint256 absFundingFee = _feeState.fundingFee.abs();
-                    expectedMarketBalance -= absFundingFee;
-                    expectedVaultDelta += absFundingFee;
-                }
-                // If user lost pnl, pool should increase
-                if (_feeState.realizedPnl < 0) {
-                    expectedMarketBalance += _feeState.realizedPnl.abs();
-                } else if (_feeState.realizedPnl > 0) {
-                    // If user gained pnl, pool should decrease
-                    uint256 absPnl = _feeState.realizedPnl.abs();
-                    expectedMarketBalance -= absPnl;
-                    expectedVaultDelta += absPnl;
-                }
-                if (_vaultBalanceAfter != _vaultBalanceBefore - expectedVaultDelta) {
-                    revert Position_InvalidVaultUpdate();
-                }
-            }
-
-            if (_collateralDelta > _userCollateralBefore) {
-                // If deficit in collateral was covered by the pool (due to decrease in collateral value)
-                expectedMarketBalance -= (_collateralDelta - _userCollateralBefore);
-            } else if (_isFullDecrease && _userCollateralBefore - _collateralDelta > 0) {
-                // If excess collateral left on a full decrease, it's absorbed into the pool
-                expectedMarketBalance += (_userCollateralBefore - _collateralDelta);
-            }
-
-            if (_marketAfter.poolBalance != expectedMarketBalance) {
-                revert Position_InvalidPoolUpdate();
             }
         }
     }

@@ -7,7 +7,6 @@ import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {mulDiv} from "@prb/math/Common.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
@@ -77,11 +76,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     // Each Asset's storage is tracked through this mapping
     mapping(bytes32 assetId => MarketStorage assetStorage) private marketStorage;
 
-    /**
-     * ideally, we want to remove dynamic allocations all together. instead, just have a fixed max
-     * open interest, and cumulatively, all assets in the market can represent a maximum of that.
-     * Try to avoid looping at all costs --> may have to store cumulative openinterest
-     */
     modifier orderExists(bytes32 _key) {
         if (!requests.contains(_key)) revert Market_InvalidKey();
         _;
@@ -135,7 +129,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         rewardTracker = IRewardTracker(_rewardTracker);
         borrowScale = _borrowScale;
         isInitialized = true;
-        emit Market_Initialzied();
+        emit Market_Initialized();
     }
     /**
      * ========================= Setter Functions  =========================
@@ -315,6 +309,33 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         );
     }
 
+    /**
+     * ========================= Token Functions  =========================
+     */
+    function batchWithdrawFees() external onlyConfigurator(address(this)) nonReentrant {
+        uint256 longFees = longAccumulatedFees;
+        uint256 shortFees = shortAccumulatedFees;
+        longAccumulatedFees = 0;
+        shortAccumulatedFees = 0;
+        MarketLogic.batchWithdrawFees(WETH, USDC, address(feeDistributor), feeReceiver, poolOwner, longFees, shortFees);
+    }
+
+    function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
+        external
+        onlyTradeStorage(address(this))
+        nonReentrant
+    {
+        if (_isLongToken) {
+            MarketLogic.transferOutTokens(
+                _to, WETH, _amount, longTokenBalance - longTokensReserved, true, _shouldUnwrap
+            );
+        } else {
+            MarketLogic.transferOutTokens(
+                _to, USDC, _amount, shortTokenBalance - shortTokensReserved, false, _shouldUnwrap
+            );
+        }
+    }
+
     function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorageOrMarket(address(this)) {
         _isLong ? longAccumulatedFees += _amount : shortAccumulatedFees += _amount;
         emit FeesAccumulated(_amount, _isLong);
@@ -392,33 +413,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     }
 
     /**
-     * ========================= Token Functions  =========================
-     */
-    function batchWithdrawFees() external onlyConfigurator(address(this)) nonReentrant {
-        uint256 longFees = longAccumulatedFees;
-        uint256 shortFees = shortAccumulatedFees;
-        longAccumulatedFees = 0;
-        shortAccumulatedFees = 0;
-        MarketLogic.batchWithdrawFees(WETH, USDC, address(feeDistributor), feeReceiver, poolOwner, longFees, shortFees);
-    }
-
-    function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
-        external
-        onlyTradeStorage(address(this))
-        nonReentrant
-    {
-        if (_isLongToken) {
-            MarketLogic.transferOutTokens(
-                _to, WETH, _amount, longTokenBalance - longTokensReserved, true, _shouldUnwrap
-            );
-        } else {
-            MarketLogic.transferOutTokens(
-                _to, USDC, _amount, shortTokenBalance - shortTokensReserved, false, _shouldUnwrap
-            );
-        }
-    }
-
-    /**
      * ========================= Getter Functions  =========================
      */
     function getAssetIds() external view returns (bytes32[] memory) {
@@ -492,10 +486,6 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
 
     function requestExists(bytes32 _key) external view returns (bool) {
         return requests.contains(_key);
-    }
-
-    function getVaultBalance(bool _isLong) external view returns (uint256) {
-        return _isLong ? IERC20(WETH).balanceOf(address(this)) : IERC20(USDC).balanceOf(address(this));
     }
 
     function getState(bool _isLong) external view returns (State memory) {

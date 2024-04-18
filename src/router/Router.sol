@@ -165,6 +165,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit WithdrawalRequestCreated(market, _owner, _tokenOut, _marketTokenAmountIn);
     }
 
+    // @audit - need min size so fee can never be 0
     function createPositionRequest(
         IMarket market,
         Position.Input memory _trade,

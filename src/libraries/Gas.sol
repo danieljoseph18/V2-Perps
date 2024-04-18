@@ -3,7 +3,6 @@ pragma solidity 0.8.23;
 
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {MathUtils} from "./MathUtils.sol";
 
@@ -12,7 +11,6 @@ library Gas {
 
     uint256 private constant CANCELLATION_PENALTY = 0.2e18; // 20%
     uint64 private constant CANCELLATION_REWARD = 0.5e18;
-    uint256 private constant SCALING_FACTOR = 1e18;
     uint256 private constant BUFFER_PERCENTAGE = 1.1e18; // 110%
 
     enum Action {
@@ -41,22 +39,10 @@ library Gas {
         }
         uint256 estimatedFee;
         (estimatedFee, priceUpdateFee) =
-            estimateExecutionFee(priceFeed, positionManager, _action, _hasPnlRequest, _isLimit);
+            _estimateExecutionFee(priceFeed, positionManager, _action, _hasPnlRequest, _isLimit);
         if (_executionFee < estimatedFee + priceUpdateFee) {
             revert Gas_InsufficientExecutionFee(_executionFee, estimatedFee);
         }
-    }
-
-    function estimateExecutionFee(
-        IPriceFeed priceFeed,
-        IPositionManager positionManager,
-        Action _action,
-        bool _hasPnlRequest,
-        bool _isLimit
-    ) public view returns (uint256 estimatedCost, uint256 priceUpdateCost) {
-        uint256 actionCost = _getActionCost(positionManager, _action);
-        priceUpdateCost = _getPriceUpdateCost(priceFeed, _hasPnlRequest, _isLimit);
-        estimatedCost = (actionCost + priceUpdateCost).percentage(BUFFER_PERCENTAGE);
     }
 
     function getRefundForCancellation(uint256 _executionFee)
@@ -67,6 +53,21 @@ library Gas {
         refundAmount = _executionFee.percentage(CANCELLATION_PENALTY);
         // 50% of the cancellation penalty
         amountForExecutor = (_executionFee - refundAmount).percentage(CANCELLATION_REWARD);
+    }
+
+    /**
+     * ============================== Private Functions ==============================
+     */
+    function _estimateExecutionFee(
+        IPriceFeed priceFeed,
+        IPositionManager positionManager,
+        Action _action,
+        bool _hasPnlRequest,
+        bool _isLimit
+    ) private view returns (uint256 estimatedCost, uint256 priceUpdateCost) {
+        uint256 actionCost = _getActionCost(positionManager, _action);
+        priceUpdateCost = _getPriceUpdateCost(priceFeed, _hasPnlRequest, _isLimit);
+        estimatedCost = (actionCost + priceUpdateCost).percentage(BUFFER_PERCENTAGE);
     }
 
     function _getActionCost(IPositionManager positionManager, Action _action) private view returns (uint256) {

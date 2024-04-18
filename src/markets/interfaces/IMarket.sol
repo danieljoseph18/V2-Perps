@@ -199,18 +199,12 @@ interface IMarket {
     error Market_InvalidKey();
     error Market_InvalidPoolOwner();
     error Market_InvalidFeeDistributor();
-    error Market_InsufficientAvailableTokens();
-    error Market_FailedToAddRequest();
-    error Market_FailedToRemoveRequest();
-    error Market_InsufficientCollateral();
     error Market_TokenAlreadyExists();
     error Market_FailedToAddAssetId();
     error Market_FailedToRemoveAssetId();
     error Market_AlreadyInitialized();
-    error Market_FailedToTransferETH();
     error Market_InvalidETHTransfer();
     error Market_InvalidBorrowScale();
-    error Market_InvalidCaller();
     error Market_SingleAssetMarket();
 
     /**
@@ -218,7 +212,7 @@ interface IMarket {
      */
     event TokenAdded(bytes32 indexed assetId);
     event MarketConfigUpdated(bytes32 indexed assetId);
-    event Market_Initialzied();
+    event Market_Initialized();
     event FeesAccumulated(uint256 amount, bool _isLong);
 
     // Admin functions
@@ -299,6 +293,5 @@ interface IMarket {
     function getPnlValues(string calldata _ticker) external view returns (PnlValues memory);
     function getImpactPool(string calldata _ticker) external view returns (uint256);
     function getAllocationShare(string calldata _ticker) external view returns (uint256);
-    function getVaultBalance(bool _isLong) external view returns (uint256);
     function collateralAmounts(address _user, bool _isLong) external view returns (uint256);
 }

@@ -165,7 +165,6 @@ contract Deploy is Script {
         contracts.roleStorage.grantRole(Roles.POSITION_MANAGER, address(contracts.positionManager));
         contracts.roleStorage.grantRole(Roles.ROUTER, address(contracts.router));
         contracts.roleStorage.grantRole(Roles.DEFAULT_ADMIN_ROLE, contracts.owner);
-        contracts.roleStorage.grantRole(Roles.MARKET_KEEPER, contracts.owner);
 
         vm.stopBroadcast();
 

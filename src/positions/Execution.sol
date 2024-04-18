@@ -16,8 +16,6 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {mulDiv} from "@prb/math/Common.sol";
-import {console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -26,26 +24,18 @@ library Execution {
     using MathUtils for uint256;
     using MathUtils for int256;
 
-    error Execution_FeeExceedsDelta();
     error Execution_MinCollateralThreshold();
     error Execution_LiquidatablePosition();
     error Execution_FeesExceedCollateralDelta();
-    error Execution_InvalidPriceRetrieval();
-    error Execution_InvalidRequestKey();
-    error Execution_InvalidFeeReceiver();
     error Execution_LimitPriceNotMet(uint256 limitPrice, uint256 markPrice);
     error Execution_PnlToPoolRatioNotExceeded(int256 pnlFactor, uint256 maxPnlFactor);
     error Execution_PositionNotActive();
     error Execution_PNLFactorNotReduced();
     error Execution_PositionExists();
-    error Execution_InvalidPriceRequest();
-    error Execution_InvalidAdlDelta();
     error Execution_PositionNotProfitable();
     error Execution_InvalidPosition();
     error Execution_InvalidExecutor();
     error Execution_InvalidRequestTimestamp();
-
-    event AdlTargetRatioReached(address indexed market, int256 pnlFactor, bool isLong);
 
     /**
      * ========================= Data Structures =========================
@@ -77,15 +67,19 @@ library Execution {
         uint256 collateralBaseUnit;
     }
 
-    uint8 private constant REQUEST_EXPIRY_DURATION = 2 minutes;
     uint64 private constant LONG_BASE_UNIT = 1e18;
     uint64 private constant SHORT_BASE_UNIT = 1e6;
     uint64 private constant PRECISION = 1e18;
     uint64 private constant MAX_PNL_FACTOR = 0.45e18;
     uint64 private constant TARGET_PNL_FACTOR = 0.35e18;
-    uint64 private constant MAX_SLIPPAGE = 0.66e18;
     uint64 private constant MIN_PROFIT_PERCENTAGE = 0.05e18;
-    uint64 private constant MAX_PRICE_DEVIATION = 0.1e18;
+
+    modifier validCaller(IMarket market, ITradeStorage tradeStorage) {
+        if (msg.sender != address(tradeStorage) || address(tradeStorage) != market.tradeStorage()) {
+            revert Execution_InvalidExecutor();
+        }
+        _;
+    }
 
     /**
      * ========================= Construction Functions =========================
@@ -104,7 +98,7 @@ library Execution {
         bytes32 _orderKey,
         bytes32 _requestKey,
         address _feeReceiver
-    ) internal view returns (Prices memory prices, Position.Request memory request) {
+    ) external view returns (Prices memory prices, Position.Request memory request) {
         // Fetch and validate request from key
         request = tradeStorage.getOrder(_orderKey);
         // Validate the request before continuing execution
@@ -150,7 +144,7 @@ library Execution {
         bytes32 _positionKey,
         uint48 _requestTimestamp,
         address _feeReceiver
-    ) internal view returns (Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) {
+    ) external view returns (Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) {
         // Check the position in question is active
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         if (position.size == 0) revert Execution_PositionNotActive();
@@ -260,7 +254,12 @@ library Execution {
         Position.Settlement memory _params,
         Prices memory _prices,
         bytes32 _positionKey
-    ) internal view returns (Position.Data memory position, FeeState memory feeState) {
+    )
+        external
+        view
+        validCaller(market, tradeStorage)
+        returns (Position.Data memory position, FeeState memory feeState)
+    {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
@@ -309,7 +308,12 @@ library Execution {
         Prices memory _prices,
         uint256 _minCollateralUsd,
         bytes32 _positionKey
-    ) internal view returns (Position.Data memory position, FeeState memory feeState) {
+    )
+        external
+        view
+        validCaller(market, tradeStorage)
+        returns (Position.Data memory position, FeeState memory feeState)
+    {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
@@ -367,7 +371,12 @@ library Execution {
         Prices memory _prices,
         uint256 _minCollateralUsd,
         bytes32 _positionKey
-    ) internal view returns (Position.Data memory position, FeeState memory feeState) {
+    )
+        external
+        view
+        validCaller(market, tradeStorage)
+        returns (Position.Data memory position, FeeState memory feeState)
+    {
         if (tradeStorage.getPosition(_positionKey).user != address(0)) revert Execution_PositionExists();
 
         // Calculate Fee + Fee for executor
@@ -420,7 +429,12 @@ library Execution {
         Position.Settlement memory _params,
         Prices memory _prices,
         bytes32 _positionKey
-    ) internal view returns (FeeState memory feeState, Position.Data memory position) {
+    )
+        external
+        view
+        validCaller(market, tradeStorage)
+        returns (FeeState memory feeState, Position.Data memory position)
+    {
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
         uint256 initialCollateral = position.collateral;
@@ -474,7 +488,12 @@ library Execution {
         uint256 _minCollateralUsd,
         uint256 _liquidationFee,
         bytes32 _positionKey
-    ) internal view returns (Position.Data memory position, FeeState memory feeState) {
+    )
+        external
+        view
+        validCaller(market, tradeStorage)
+        returns (Position.Data memory position, FeeState memory feeState)
+    {
         // Fetch and Validate the Position
         position = tradeStorage.getPosition(_positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
@@ -545,7 +564,7 @@ library Execution {
         int256 _startingPnlFactor,
         string memory _ticker,
         bool _isLong
-    ) internal view {
+    ) external view {
         // Get the new PNL to pool ratio
         int256 newPnlFactor = _getPnlFactor(market, _prices, _ticker, _isLong);
         // PNL to pool has reduced
@@ -607,7 +626,7 @@ library Execution {
 
         // Validate Price Ranges
         Oracle.validatePriceRange(priceFeed, _indexTicker, prices.indexPrice);
-        Oracle.validateMarketTokenPriceRanges(priceFeed, prices.longMarketTokenPrice, prices.shortMarketTokenPrice);
+        Oracle.validateVaultTokenRanges(priceFeed, prices.longMarketTokenPrice, prices.shortMarketTokenPrice);
 
         prices.collateralPrice = _isLong ? prices.longMarketTokenPrice : prices.shortMarketTokenPrice;
         prices.collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;

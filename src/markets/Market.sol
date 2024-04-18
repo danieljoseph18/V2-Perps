@@ -41,10 +41,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      */
     uint64 public constant FUNDING_VELOCITY_CLAMP = 0.00001e18; // 0.001% per day
 
-    // The rest of the 80% of the fees go to the FeeDistributor to distribute to LPs
-    uint256 private constant FEES_TO_OWNER = 0.1e18; // 10% to Owner
-    uint256 private constant FEES_TO_PROTOCOL = 0.1e18; // 10% to Protocol
-
     address private immutable WETH;
     address private immutable USDC;
 
@@ -133,7 +129,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         rewardTracker = IRewardTracker(_rewardTracker);
         borrowScale = _borrowScale;
         isInitialized = true;
-        emit Market_Initialzied();
+        emit Market_Initialized();
     }
     /**
      * ========================= Setter Functions  =========================
@@ -159,6 +155,63 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         marketStorage[assetId].config = _config;
         emit MarketConfigUpdated(assetId);
+    }
+
+    /**
+     * ========================= Deposit / Withdrawal Functions  =========================
+     */
+    function createRequest(
+        address _owner,
+        address _transferToken, // Token In for Deposits, Out for Withdrawals
+        uint256 _amountIn,
+        uint256 _executionFee,
+        bytes32 _priceRequestKey,
+        bytes32 _pnlRequestKey,
+        bool _reverseWrap,
+        bool _isDeposit
+    ) external payable onlyRouter {
+        MarketLogic.createRequest(
+            requests,
+            _owner,
+            _transferToken,
+            _amountIn,
+            _executionFee,
+            _priceRequestKey,
+            _pnlRequestKey,
+            WETH,
+            _reverseWrap,
+            _isDeposit
+        );
+    }
+
+    function cancelRequest(bytes32 _key, address _caller)
+        external
+        onlyPositionManager
+        returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
+    {
+        return MarketLogic.cancelRequest(requests, _key, _caller, WETH, USDC, address(MARKET_TOKEN));
+    }
+
+    function executeDeposit(ExecuteDeposit calldata _params)
+        external
+        onlyPositionManager
+        orderExists(_params.key)
+        nonReentrant
+    {
+        MarketLogic.executeDeposit(requests, _params, _params.deposit.isLongToken ? WETH : USDC);
+    }
+
+    function executeWithdrawal(ExecuteWithdrawal calldata _params)
+        external
+        onlyPositionManager
+        orderExists(_params.key)
+        nonReentrant
+    {
+        if (_params.withdrawal.isLongToken) {
+            MarketLogic.executeWithdrawal(requests, _params, WETH, longTokenBalance - longTokensReserved);
+        } else {
+            MarketLogic.executeWithdrawal(requests, _params, USDC, shortTokenBalance - shortTokensReserved);
+        }
     }
 
     /**
@@ -322,60 +375,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             : marketStorage[assetId].impactPool -= _priceImpactUsd.abs();
     }
 
-    function createRequest(
-        address _owner,
-        address _transferToken, // Token In for Deposits, Out for Withdrawals
-        uint256 _amountIn,
-        uint256 _executionFee,
-        bytes32 _priceRequestKey,
-        bytes32 _pnlRequestKey,
-        bool _reverseWrap,
-        bool _isDeposit
-    ) external payable onlyRouter {
-        MarketLogic.createRequest(
-            requests,
-            _owner,
-            _transferToken,
-            _amountIn,
-            _executionFee,
-            _priceRequestKey,
-            _pnlRequestKey,
-            WETH,
-            _reverseWrap,
-            _isDeposit
-        );
-    }
-
-    function cancelRequest(bytes32 _key, address _caller)
-        external
-        onlyPositionManager
-        returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
-    {
-        return MarketLogic.cancelRequest(requests, _key, _caller, WETH, USDC, address(MARKET_TOKEN));
-    }
-
-    function executeDeposit(ExecuteDeposit calldata _params)
-        external
-        onlyPositionManager
-        orderExists(_params.key)
-        nonReentrant
-    {
-        MarketLogic.executeDeposit(requests, _params, _params.deposit.isLongToken ? WETH : USDC);
-    }
-
-    function executeWithdrawal(ExecuteWithdrawal calldata _params)
-        external
-        onlyPositionManager
-        orderExists(_params.key)
-        nonReentrant
-    {
-        if (_params.withdrawal.isLongToken) {
-            MarketLogic.executeWithdrawal(requests, _params, WETH, longTokenBalance - longTokensReserved);
-        } else {
-            MarketLogic.executeWithdrawal(requests, _params, USDC, shortTokenBalance - shortTokensReserved);
-        }
-    }
-
     /**
      * ========================= Getter Functions  =========================
      */
@@ -450,10 +449,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function requestExists(bytes32 _key) external view returns (bool) {
         return requests.contains(_key);
-    }
-
-    function getVaultBalance(bool _isLong) external view returns (uint256) {
-        return _isLong ? IERC20(WETH).balanceOf(address(this)) : IERC20(USDC).balanceOf(address(this));
     }
 
     function getState(bool _isLong) external view returns (State memory) {

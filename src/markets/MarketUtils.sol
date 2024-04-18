@@ -22,12 +22,12 @@ library MarketUtils {
     uint64 private constant PRECISION = 1e18;
     uint64 private constant BASE_FEE = 0.001e18; // 0.1%
     uint64 public constant FEE_SCALE = 0.01e18; // 1%
-    uint64 private constant LONG_BASE_UNIT = 1e18;
-
-    uint8 public constant MAX_ALLOCATION = 100;
-    uint32 private constant SHORT_BASE_UNIT = 1e6;
     uint64 private constant SHORT_CONVERSION_FACTOR = 1e18;
+
     uint64 private constant MAX_PNL_FACTOR = 0.45e18;
+    uint64 private constant LONG_BASE_UNIT = 1e18;
+    uint32 private constant SHORT_BASE_UNIT = 1e6;
+    uint8 public constant MAX_ALLOCATION = 100;
 
     uint256 constant LONG_CONVERSION_FACTOR = 1e30;
 
@@ -56,6 +56,9 @@ library MarketUtils {
         uint256 indexFee;
     }
 
+    /**
+     * ======================= Constructor Functions =======================
+     */
     function constructDepositParams(IPriceFeed priceFeed, IMarket market, bytes32 _depositKey)
         external
         view
@@ -68,8 +71,8 @@ library MarketUtils {
         // Get the signed prices
         (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.deposit.requestTimestamp);
         // Calculate cumulative borrow fees
-        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
-        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
+        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, true);
+        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, false);
         // Calculate Cumulative PNL
         params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.deposit.requestTimestamp);
         params.marketToken = market.MARKET_TOKEN();
@@ -89,11 +92,14 @@ library MarketUtils {
         // Get the signed prices
         (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.withdrawal.requestTimestamp);
         // Calculate cumulative borrow fees
-        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
-        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
+        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, true);
+        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, false);
         params.marketToken = market.MARKET_TOKEN();
     }
 
+    /**
+     * ======================= Core Functions =======================
+     */
     function calculateDepositFee(
         Oracle.Prices memory _longPrices,
         Oracle.Prices memory _shortPrices,
@@ -184,11 +190,10 @@ library MarketUtils {
     }
 
     function calculateDepositAmounts(IMarket.ExecuteDeposit calldata _params)
-        internal
+        external
         view
         returns (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount)
     {
-        // Calculate Fee (Internal Function to avoid STD)
         fee = calculateDepositFee(
             _params.longPrices,
             _params.shortPrices,
@@ -217,7 +222,7 @@ library MarketUtils {
     }
 
     function calculateWithdrawalAmounts(IMarket.ExecuteWithdrawal memory _params)
-        internal
+        external
         view
         returns (uint256 tokenAmountOut)
     {
@@ -255,7 +260,7 @@ library MarketUtils {
         IMarket.State memory _updatedState,
         uint256 _amountIn,
         bool _isLongToken
-    ) internal pure {
+    ) external pure {
         if (_isLongToken) {
             // Market's WETH Balance should increase by AmountIn
             if (_updatedState.wethBalance != _initialState.wethBalance + _amountIn) {
@@ -284,7 +289,7 @@ library MarketUtils {
         uint256 _marketTokenAmountIn,
         uint256 _amountOut,
         bool _isLongToken
-    ) internal pure {
+    ) external pure {
         uint256 minFee = _amountOut.percentage(BASE_FEE);
         uint256 maxFee = _amountOut.percentage(BASE_FEE + FEE_SCALE);
         if (_initialState.totalSupply != _updatedState.totalSupply + _marketTokenAmountIn) {
@@ -322,7 +327,7 @@ library MarketUtils {
         uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl,
         bool _isLongToken
-    ) internal view returns (uint256 marketTokenAmount) {
+    ) public view returns (uint256 marketTokenAmount) {
         // Maximize the AUM
         uint256 marketTokenPrice = getMarketTokenPrice(
             market,
@@ -359,7 +364,7 @@ library MarketUtils {
         uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl,
         bool _isLongToken
-    ) internal view returns (uint256 tokenAmount) {
+    ) public view returns (uint256 tokenAmount) {
         // Minimize the AUM
         uint256 marketTokenPrice = getMarketTokenPrice(
             market,
@@ -383,6 +388,9 @@ library MarketUtils {
         }
     }
 
+    /**
+     * ======================= Utility Functions =======================
+     */
     function getMarketTokenPrice(
         IMarket market,
         IMarketToken marketToken,
@@ -413,7 +421,7 @@ library MarketUtils {
         uint256 _shortTokenPrice,
         uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl
-    ) internal view returns (uint256 aum) {
+    ) public view returns (uint256 aum) {
         // Get Values in USD -> Subtract reserved amounts from AUM
         aum += (market.longTokenBalance() - market.longTokensReserved()).toUsd(_longTokenPrice, LONG_BASE_UNIT);
         aum += (market.shortTokenBalance() - market.shortTokensReserved()).toUsd(_shortTokenPrice, SHORT_BASE_UNIT);
@@ -461,7 +469,7 @@ library MarketUtils {
         bool _isLong
     ) public view returns (int256 netPnl) {
         uint256 openInterest = getOpenInterest(market, _ticker, _isLong);
-        uint256 averageEntryPrice = getAverageEntryPrice(market, _ticker, _isLong);
+        uint256 averageEntryPrice = _getAverageEntryPrice(market, _ticker, _isLong);
         if (openInterest == 0 || averageEntryPrice == 0) return 0;
         int256 priceDelta = _indexPrice.diff(averageEntryPrice);
         uint256 entryIndexAmount = openInterest.fromUsd(averageEntryPrice, _indexBaseUnit);
@@ -611,7 +619,7 @@ library MarketUtils {
         uint256 remainingAllocationUsd =
             getPoolBalanceUsd(market, _ticker, _collateralTokenPrice, collateralBaseUnit, _isLong);
 
-        availableOi = remainingAllocationUsd - remainingAllocationUsd.percentage(getReserveFactor(market, _ticker));
+        availableOi = remainingAllocationUsd - remainingAllocationUsd.percentage(_getReserveFactor(market, _ticker));
 
         // get the pnl
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
@@ -638,7 +646,7 @@ library MarketUtils {
         // calculate liquidity allocated to the market for that side
         uint256 poolAmount = totalAvailableLiquidity.percentage(getAllocation(market, _ticker), MAX_ALLOCATION);
         // subtract the reserve factor from the pool amount and convert to USD
-        maxOpenInterest = (poolAmount - poolAmount.percentage(getReserveFactor(market, _ticker))).toUsd(
+        maxOpenInterest = (poolAmount - poolAmount.percentage(_getReserveFactor(market, _ticker))).toUsd(
             _collateralPrice, _collateralBaseUnit
         );
     }
@@ -683,7 +691,7 @@ library MarketUtils {
         bool _isLong
     ) external view returns (uint256 adlPrice) {
         // Get the current average entry price and open interest
-        uint256 averageEntryPrice = getAverageEntryPrice(market, _ticker, _isLong);
+        uint256 averageEntryPrice = _getAverageEntryPrice(market, _ticker, _isLong);
         uint256 openInterest = getOpenInterest(market, _ticker, _isLong);
 
         // Get the pool balance in USD
@@ -805,10 +813,6 @@ library MarketUtils {
             : market.getBorrowingValues(_ticker).shortBorrowingRate;
     }
 
-    function getConfig(IMarket market, string calldata _ticker) external view returns (IMarket.Config memory) {
-        return market.getConfig(_ticker);
-    }
-
     function getMaintenanceMargin(IMarket market, string calldata _ticker) external view returns (uint256) {
         return market.getConfig(_ticker).maintenanceMargin;
     }
@@ -829,10 +833,6 @@ library MarketUtils {
         return market.getConfig(_ticker).funding;
     }
 
-    function getReserveFactor(IMarket market, string calldata _ticker) public view returns (uint256) {
-        return market.getConfig(_ticker).reserveFactor;
-    }
-
     function getMaxLeverage(IMarket market, string calldata _ticker) external view returns (uint32) {
         return market.getConfig(_ticker).maxLeverage;
     }
@@ -845,12 +845,6 @@ library MarketUtils {
         return _isLong
             ? market.getOpenInterestValues(_ticker).longOpenInterest
             : market.getOpenInterestValues(_ticker).shortOpenInterest;
-    }
-
-    function getAverageEntryPrice(IMarket market, string memory _ticker, bool _isLong) public view returns (uint256) {
-        return _isLong
-            ? market.getPnlValues(_ticker).longAverageEntryPriceUsd
-            : market.getPnlValues(_ticker).shortAverageEntryPriceUsd;
     }
 
     function getAverageCumulativeBorrowFee(IMarket market, string calldata _ticker, bool _isLong)
@@ -883,5 +877,22 @@ library MarketUtils {
                 ++i;
             }
         }
+    }
+
+    /**
+     * ======================= Private Functions =======================
+     */
+    function _getAverageEntryPrice(IMarket market, string memory _ticker, bool _isLong)
+        private
+        view
+        returns (uint256)
+    {
+        return _isLong
+            ? market.getPnlValues(_ticker).longAverageEntryPriceUsd
+            : market.getPnlValues(_ticker).shortAverageEntryPriceUsd;
+    }
+
+    function _getReserveFactor(IMarket market, string calldata _ticker) private view returns (uint256) {
+        return market.getConfig(_ticker).reserveFactor;
     }
 }

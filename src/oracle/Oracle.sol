@@ -30,7 +30,6 @@ library Oracle {
     using Strings for uint256;
 
     error Oracle_SequencerDown();
-    error Oracle_PriceNotSet();
     error Oracle_InvalidAmmDecimals();
     error Oracle_InvalidPoolType();
     error Oracle_InvalidReferenceQuery();
@@ -56,7 +55,6 @@ library Oracle {
     uint16 private constant MAX_VARIANCE = 10_000;
     uint64 private constant MAX_PRICE_DEVIATION = 0.1e18;
     uint64 private constant OVERESTIMATION_FACTOR = 0.1e18;
-    uint64 private constant LINK_BASE_UNIT = 1e18;
     uint64 private constant PREMIUM_FEE = 0.2e18; // 20%
 
     /**
@@ -84,17 +82,6 @@ library Oracle {
                 revert Oracle_SequencerDown();
             }
         }
-    }
-
-    /// @dev - Wrapper around `getRequestTimestamp` with an additional validation step
-    function getRequestTimestamp(IPriceFeed priceFeed, bytes32 _requestKey)
-        external
-        view
-        returns (uint48 requestTimestamp)
-    {
-        // Validate the Price Request
-        requestTimestamp = priceFeed.getRequestTimestamp(_requestKey);
-        if (block.timestamp > requestTimestamp + priceFeed.timeToExpiration()) revert Oracle_RequestExpired();
     }
 
     function isValidChainlinkFeed(FeedRegistryInterface feedRegistry, address _feedAddress) external view {
@@ -344,6 +331,17 @@ library Oracle {
         baseUnit = 10 ** priceFeed.getTokenData(_ticker).tokenDecimals;
     }
 
+    /// @dev - Wrapper around `getRequestTimestamp` with an additional validation step
+    function getRequestTimestamp(IPriceFeed priceFeed, bytes32 _requestKey)
+        external
+        view
+        returns (uint48 requestTimestamp)
+    {
+        // Validate the Price Request
+        requestTimestamp = priceFeed.getRequestTimestamp(_requestKey);
+        if (block.timestamp > requestTimestamp + priceFeed.timeToExpiration()) revert Oracle_RequestExpired();
+    }
+
     function validatePriceRange(IPriceFeed priceFeed, string calldata _ticker, uint256 _signedPrice) external view {
         uint256 referencePrice = getReferencePrice(priceFeed, _ticker);
         if (_signedPrice.delta(referencePrice) > referencePrice.percentage(MAX_PRICE_DEVIATION)) {
@@ -351,10 +349,7 @@ library Oracle {
         }
     }
 
-    function validateMarketTokenPriceRanges(IPriceFeed priceFeed, uint256 _longPrice, uint256 _shortPrice)
-        external
-        view
-    {
+    function validateVaultTokenRanges(IPriceFeed priceFeed, uint256 _longPrice, uint256 _shortPrice) external view {
         uint256 longReferencePrice = getReferencePrice(priceFeed, LONG_TICKER);
         uint256 shortReferencePrice = getReferencePrice(priceFeed, SHORT_TICKER);
         if (_longPrice.delta(longReferencePrice) > longReferencePrice.percentage(MAX_PRICE_DEVIATION)) {

@@ -6,14 +6,12 @@ import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 
@@ -36,22 +34,17 @@ library MarketLogic {
     error MarketLogic_RequestNotExpired();
     error MarketLogic_InvalidTicker();
     error MarketLogic_PriceIsZero();
-    error MarketLogic_InvalidPriceRequest();
     error MarketLogic_InvalidCumulativeAllocation();
     error MarketLogic_InvalidAllocation();
     error MarketLogic_InvalidCaller();
     error MarketLogic_MaxAssetsReached();
     error MarketLogic_TokenAlreadyExists();
-    error MarketLogic_FailedToAddAssetId();
     error MarketLogic_TokenDoesNotExist();
     error MarketLogic_MinimumAssetsReached();
-    error MarketLogic_FailedToRemoveAssetId();
     error MarketLogic_FailedToTransferETH();
-    error MarketLogic_InvalidOpenInterestDelta();
     error MarketLogic_FailedToRemoveRequest();
     error MarketLogic_FailedToAddRequest();
     error MarketLogic_AllocationLength();
-    error MarketLogic_RequestExpired();
 
     event FeesWithdrawn(uint256 _longFees, uint256 _shortFees);
     event DepositExecuted(
@@ -66,7 +59,6 @@ library MarketLogic {
     event TokenAdded(string ticker);
     event TokenRemoved(string ticker);
 
-    uint256 private constant BITMASK_8 = type(uint256).max >> (256 - 8);
     uint8 private constant TOTAL_ALLOCATION = 100;
     // Max 100 assets per market (could fit 12 more in last uint256, but 100 used for simplicity)
     // Fits 16 allocations per uint256
@@ -82,10 +74,7 @@ library MarketLogic {
     int256 private constant MIN_SKEW_SCALE = 1000e30; // $1000
     int256 private constant MAX_SKEW_SCALE = 10_000_000_000e30; // $10 Bn
     int64 private constant SIGNED_SCALAR = 1e18;
-    uint64 private constant SCALING_FACTOR = 1e18;
     uint48 private constant TIME_TO_EXPIRATION = 1 minutes;
-    uint256 private constant LONG_BASE_UNIT = 1e18;
-    uint256 private constant SHORT_BASE_UNIT = 1e6;
     string private constant LONG_TICKER = "WETH";
     string private constant SHORT_TICKER = "USDC";
 
@@ -93,6 +82,9 @@ library MarketLogic {
     uint256 private constant FEES_TO_OWNER = 0.1e18; // 10% to Owner
     uint256 private constant FEES_TO_PROTOCOL = 0.1e18; // 10% to Protocol
 
+    /**
+     * ============================= Validations =============================
+     */
     modifier validAction(uint256 _amountIn, uint256 _amountOut, bool _isLongToken, bool _isDeposit) {
         // Cache the State Before
         IMarket.State memory initialState = IMarket(address(this)).getState(_isLongToken);
@@ -155,6 +147,9 @@ library MarketLogic {
         }
     }
 
+    /**
+     * ============================= Admin Functions =============================
+     */
     function batchWithdrawFees(
         address _weth,
         address _usdc,
@@ -186,28 +181,9 @@ library MarketLogic {
         emit FeesWithdrawn(longFees, shortFees);
     }
 
-    function transferOutTokens(
-        address _to,
-        address _tokenOut,
-        uint256 _amount,
-        uint256 _availableTokens,
-        bool _isLongToken,
-        bool _shouldUnwrap
-    ) internal {
-        if (_amount > _availableTokens) revert MarketLogic_InsufficientAvailableTokens();
-        if (_isLongToken) {
-            if (_shouldUnwrap) {
-                IWETH(_tokenOut).withdraw(_amount);
-                (bool success,) = _to.call{value: _amount}("");
-                if (!success) revert MarketLogic_FailedToTransferETH();
-            } else {
-                IERC20(_tokenOut).safeTransfer(_to, _amount);
-            }
-        } else {
-            IERC20(_tokenOut).safeTransfer(_to, _amount);
-        }
-    }
-
+    /**
+     * ============================= Request Functions =============================
+     */
     function createRequest(
         EnumerableMap.MarketRequestMap storage requests,
         address _owner,
@@ -269,88 +245,14 @@ library MarketLogic {
         emit RequestCanceled(_key, _caller);
     }
 
-    function addToken(
-        IPriceFeed priceFeed,
-        IMarket.MarketStorage storage marketStorage,
-        IMarket.Config calldata _config,
-        string memory _ticker,
-        bytes calldata _newAllocations,
-        bytes32 _priceRequestKey
-    ) internal {
-        IMarket market = IMarket(address(this));
-        if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
-        if (market.getAssetsInMarket() >= MAX_ASSETS) revert MarketLogic_MaxAssetsReached();
-        if (market.isAssetInMarket(_ticker)) revert MarketLogic_TokenAlreadyExists();
-        // Add asset to storage
-        market.addAsset(_ticker);
-        // Reallocate
-        reallocate(priceFeed, _newAllocations, _priceRequestKey);
-        // Initialize Storage
-        marketStorage.config = _config;
-        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
-        marketStorage.borrowing.lastBorrowUpdate = uint48(block.timestamp);
-        emit TokenAdded(_ticker);
-    }
-
-    function removeToken(
-        IPriceFeed priceFeed,
-        string memory _ticker,
-        bytes calldata _newAllocations,
-        bytes32 _priceRequestKey
-    ) internal {
-        IMarket market = IMarket(address(this));
-        if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
-        if (!market.isAssetInMarket(_ticker)) revert MarketLogic_TokenDoesNotExist();
-        uint256 len = market.getAssetsInMarket();
-        if (len == 1) revert MarketLogic_MinimumAssetsReached();
-        // Remove the Asset
-        market.removeAsset(_ticker);
-        // Reallocate
-        reallocate(priceFeed, _newAllocations, _priceRequestKey);
-        // Fire Event
-        emit TokenRemoved(_ticker);
-    }
-
-    /// @dev - Caller must've requested a price before calling this function
-    /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
-    function reallocate(IPriceFeed priceFeed, bytes calldata _allocations, bytes32 _priceRequestKey) internal {
-        IMarket market = IMarket(address(this));
-
-        // Validate the Price Request
-        uint48 requestTimestamp = Oracle.getRequestTimestamp(priceFeed, _priceRequestKey);
-
-        // Fetch token prices
-        uint256 longTokenPrice = Oracle.getPrice(priceFeed, LONG_TICKER, requestTimestamp);
-        uint256 shortTokenPrice = Oracle.getPrice(priceFeed, SHORT_TICKER, requestTimestamp);
-
-        // Copy tickers to memory
-        string[] memory assetTickers = market.getTickers();
-        if (_allocations.length != assetTickers.length) revert MarketLogic_AllocationLength();
-
-        uint8 total = 0;
-
-        // Iterate over each byte in allocations calldata
-        for (uint256 i = 0; i < _allocations.length;) {
-            uint8 allocationValue = uint8(_allocations[i]);
-            // Update Storage
-            market.setAllocationShare(assetTickers[i], allocationValue);
-            // Check the allocation value -> new max open interest must be > current open interest
-            _validateOpenInterest(market, priceFeed, assetTickers[i], requestTimestamp, longTokenPrice, shortTokenPrice);
-            // Increment total
-            total += allocationValue;
-            unchecked {
-                ++i;
-            }
-        }
-
-        if (total != TOTAL_ALLOCATION) revert MarketLogic_InvalidCumulativeAllocation();
-    }
-
+    /**
+     * ============================= Market Execution =============================
+     */
     function executeDeposit(
         EnumerableMap.MarketRequestMap storage requests,
         IMarket.ExecuteDeposit calldata _params,
         address _tokenIn
-    ) internal validAction(_params.deposit.amountIn, 0, _params.deposit.isLongToken, true) {
+    ) external validAction(_params.deposit.amountIn, 0, _params.deposit.isLongToken, true) {
         if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
         // Transfer deposit tokens from msg.sender
         IERC20(_tokenIn).safeTransferFrom(msg.sender, address(this), _params.deposit.amountIn);
@@ -373,7 +275,7 @@ library MarketLogic {
         IMarket.ExecuteWithdrawal calldata _params,
         address _tokenOut,
         uint256 _availableTokens // tokenBalance - tokensReserved
-    ) internal validAction(_params.withdrawal.amountIn, _params.amountOut, _params.withdrawal.isLongToken, false) {
+    ) external validAction(_params.withdrawal.amountIn, _params.amountOut, _params.withdrawal.isLongToken, false) {
         if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
         // Transfer Market Tokens in from msg.sender
         IMarketToken(_params.marketToken).safeTransferFrom(msg.sender, address(this), _params.withdrawal.amountIn);
@@ -407,6 +309,86 @@ library MarketLogic {
         );
     }
 
+    /**
+     * ============================= Market State Update =============================
+     */
+    function addToken(
+        IPriceFeed priceFeed,
+        IMarket.MarketStorage storage marketStorage,
+        IMarket.Config calldata _config,
+        string memory _ticker,
+        bytes calldata _newAllocations,
+        bytes32 _priceRequestKey
+    ) external {
+        IMarket market = IMarket(address(this));
+        if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
+        if (market.getAssetsInMarket() >= MAX_ASSETS) revert MarketLogic_MaxAssetsReached();
+        if (market.isAssetInMarket(_ticker)) revert MarketLogic_TokenAlreadyExists();
+        // Add asset to storage
+        market.addAsset(_ticker);
+        // Reallocate
+        reallocate(priceFeed, _newAllocations, _priceRequestKey);
+        // Initialize Storage
+        marketStorage.config = _config;
+        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
+        marketStorage.borrowing.lastBorrowUpdate = uint48(block.timestamp);
+        emit TokenAdded(_ticker);
+    }
+
+    function removeToken(
+        IPriceFeed priceFeed,
+        string memory _ticker,
+        bytes calldata _newAllocations,
+        bytes32 _priceRequestKey
+    ) external {
+        IMarket market = IMarket(address(this));
+        if (msg.sender != address(this)) revert MarketLogic_InvalidCaller();
+        if (!market.isAssetInMarket(_ticker)) revert MarketLogic_TokenDoesNotExist();
+        uint256 len = market.getAssetsInMarket();
+        if (len == 1) revert MarketLogic_MinimumAssetsReached();
+        // Remove the Asset
+        market.removeAsset(_ticker);
+        // Reallocate
+        reallocate(priceFeed, _newAllocations, _priceRequestKey);
+        // Fire Event
+        emit TokenRemoved(_ticker);
+    }
+
+    /// @dev - Caller must've requested a price before calling this function
+    /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
+    function reallocate(IPriceFeed priceFeed, bytes calldata _allocations, bytes32 _priceRequestKey) public {
+        IMarket market = IMarket(address(this));
+
+        // Validate the Price Request
+        uint48 requestTimestamp = Oracle.getRequestTimestamp(priceFeed, _priceRequestKey);
+
+        // Fetch token prices
+        uint256 longTokenPrice = Oracle.getPrice(priceFeed, LONG_TICKER, requestTimestamp);
+        uint256 shortTokenPrice = Oracle.getPrice(priceFeed, SHORT_TICKER, requestTimestamp);
+
+        // Copy tickers to memory
+        string[] memory assetTickers = market.getTickers();
+        if (_allocations.length != assetTickers.length) revert MarketLogic_AllocationLength();
+
+        uint8 total = 0;
+
+        // Iterate over each byte in allocations calldata
+        for (uint256 i = 0; i < _allocations.length;) {
+            uint8 allocationValue = uint8(_allocations[i]);
+            // Update Storage
+            market.setAllocationShare(assetTickers[i], allocationValue);
+            // Check the allocation value -> new max open interest must be > current open interest
+            _validateOpenInterest(market, priceFeed, assetTickers[i], requestTimestamp, longTokenPrice, shortTokenPrice);
+            // Increment total
+            total += allocationValue;
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (total != TOTAL_ALLOCATION) revert MarketLogic_InvalidCumulativeAllocation();
+    }
+
     function updateMarketState(
         IMarket.MarketStorage storage marketStorage,
         string calldata _ticker,
@@ -417,7 +399,7 @@ library MarketLogic {
         uint256 _collateralBaseUnit,
         bool _isLong,
         bool _isIncrease
-    ) internal {
+    ) external {
         IMarket market = IMarket(address(this));
         // If invalid ticker, revert
         if (!market.isAssetInMarket(_ticker)) revert MarketLogic_InvalidTicker();
@@ -456,6 +438,35 @@ library MarketLogic {
         // Fire Event
         emit MarketStateUpdated(_ticker, _isLong);
     }
+
+    /**
+     * ============================= Token Transfers =============================
+     */
+    function transferOutTokens(
+        address _to,
+        address _tokenOut,
+        uint256 _amount,
+        uint256 _availableTokens,
+        bool _isLongToken,
+        bool _shouldUnwrap
+    ) public {
+        if (_amount > _availableTokens) revert MarketLogic_InsufficientAvailableTokens();
+        if (_isLongToken) {
+            if (_shouldUnwrap) {
+                IWETH(_tokenOut).withdraw(_amount);
+                (bool success,) = _to.call{value: _amount}("");
+                if (!success) revert MarketLogic_FailedToTransferETH();
+            } else {
+                IERC20(_tokenOut).safeTransfer(_to, _amount);
+            }
+        } else {
+            IERC20(_tokenOut).safeTransfer(_to, _amount);
+        }
+    }
+
+    /**
+     * ========================= Private Functions =========================
+     */
 
     /**
      * Updates the weighted average values for the market. Both rely on the market condition pre-open interest update.

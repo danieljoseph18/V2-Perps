@@ -44,10 +44,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     IUniswapV2Factory private uniV2Factory;
     IUniswapV3Factory private uniV3Factory;
 
-    uint256 private constant MAX_FEE_TO_OWNER = 0.3e18; // 30%
-    uint256 private constant MAX_HEARTBEAT_DURATION = 1 days;
-    uint256 private constant MAX_PERCENTAGE = 1e18;
-    uint256 private constant MIN_PERCENTAGE = 0.01e18; // 1%
     address private immutable WETH;
     address private immutable USDC;
 
@@ -224,10 +220,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Getter Functions =========================
      */
-    function generateAssetId(string memory _indexTokenTicker) public pure returns (bytes32) {
-        return keccak256(abi.encode(_indexTokenTicker));
-    }
-
     function getRequest(bytes32 _requestKey) external view returns (DeployParams memory) {
         return requests.get(_requestKey);
     }

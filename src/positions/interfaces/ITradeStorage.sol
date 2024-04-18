@@ -18,8 +18,6 @@ interface ITradeStorage {
     error TradeStorage_OrderRemovalFailed();
     error TradeStorage_PositionRemovalFailed();
     error TradeStorage_InvalidExecutionTime();
-    error TradeStorage_InvalidPosition();
-    error TradeStorage_InvalidOrder();
 
     function initialize(
         uint64 _liquidationFee, // 0.05e18 = 5%

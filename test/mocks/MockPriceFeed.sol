@@ -480,8 +480,6 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
         _decodeAndStorePrices(_response);
     }
 
-    event PnlUpdated(bytes32 indexed requestId, int256 pnl);
-
     // Used to Manually Set Pnl for Testing
     function updatePnl(bytes memory _response) external {
         _decodeAndStorePnl(_response);

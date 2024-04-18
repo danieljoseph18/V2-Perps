@@ -67,16 +67,11 @@ interface IPriceFeed {
     }
 
     // Custom error type
-    error PriceFeed_UnexpectedRequestID(bytes32 requestId);
     error PriceFeed_PriceUpdateLength();
-    error PriceFeed_FulfillmentFailed(string err);
-    error PriceFeed_InvalidGasParams();
     error PriceFeed_AssetSupportFailed();
     error PriceFeed_AssetRemovalFailed();
     error PriceFeed_InvalidMarket();
     error PriceFeed_InvalidRequestType();
-    error PriceFeed_FailedToClearPrice();
-    error PriceFeed_FailedToClearPnl();
     error PriceFeed_PriceNotSigned();
     error PriceFeed_PnlNotSigned();
     error PriceFeed_AlreadyInitialized();
@@ -88,15 +83,10 @@ interface IPriceFeed {
 
     // Event to log responses
     event Response(bytes32 indexed requestId, RequestData requestData, bytes response, bytes err);
-    event AssetPricesCleared();
-    event PnlCleared(address indexed market);
     event AssetSupported(string indexed ticker, uint8 tokenDecimals);
     event SupportRemoved(string indexed ticker);
-    event LinkReceived(uint256 indexed amount);
     event LinkBalanceSettled(uint256 indexed amount);
 
-    function marketFactory() external view returns (IMarketFactory);
-    function PRICE_DECIMALS() external pure returns (uint256);
     function sequencerUptimeFeed() external view returns (address);
     function getPrices(string memory _ticker, uint48 _timestamp) external view returns (Price memory signedPrices);
     function getCumulativePnl(address _market, uint48 _timestamp) external view returns (Pnl memory pnl);
@@ -111,7 +101,6 @@ interface IPriceFeed {
     ) external;
     function supportAsset(string memory _ticker, TokenData memory _tokenData, bytes32 _pythId) external;
     function unsupportAsset(string memory _ticker) external;
-    function updateSequencerUptimeFeed(address _sequencerUptimeFeed) external;
     function requestPriceUpdate(string[] calldata args, address _requester)
         external
         payable

@@ -28,7 +28,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint8 private constant MAX_TIME_TO_EXPIRATION = 3 minutes;
     uint8 private constant MIN_TIME_TO_EXPIRATION = 20 seconds;
 
-    // User Enumerable Sets instead of a custom map to allow for easier querying.
     mapping(bytes32 _key => Position.Request _order) private orders;
     EnumerableSet.Bytes32Set private marketOrderKeys;
     EnumerableSet.Bytes32Set private limitOrderKeys;
@@ -104,7 +103,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     /// @dev Adds Order to EnumerableSet
     function createOrderRequest(Position.Request calldata _request) external onlyRouter {
-        TradeLogic.createOrderRequest(_request);
+        TradeLogic.createOrderRequest(_request, _request.input.isLimit ? limitOrderKeys : marketOrderKeys);
     }
 
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyPositionManager {
@@ -162,15 +161,6 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     function createOrder(Position.Request memory _request) external onlyCallback returns (bytes32 orderKey) {
-        // Generate the Key
-        orderKey = Position.generateOrderKey(_request);
-        // Create a Storage Pointer to the Order Set
-        EnumerableSet.Bytes32Set storage orderSet = _request.input.isLimit ? limitOrderKeys : marketOrderKeys;
-        // Check if the Order already exists
-        if (orderSet.contains(orderKey)) revert TradeStorage_OrderAlreadyExists();
-        // Add the Order to the Set
-        bool success = orderSet.add(orderKey);
-        if (!success) revert TradeStorage_OrderAdditionFailed();
         orders[orderKey] = _request;
     }
 
