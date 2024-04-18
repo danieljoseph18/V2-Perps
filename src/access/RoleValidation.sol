@@ -10,54 +10,52 @@ contract RoleValidation {
     error RoleValidation_AccessDenied();
 
     modifier onlyAdmin() {
-        if (!roleStorage.hasRole(Roles.DEFAULT_ADMIN_ROLE, msg.sender)) revert RoleValidation_AccessDenied();
+        _validateRole(Roles.DEFAULT_ADMIN_ROLE);
         _;
     }
 
     modifier onlyMarketFactory() {
-        if (!roleStorage.hasRole(Roles.MARKET_FACTORY, msg.sender)) revert RoleValidation_AccessDenied();
+        _validateRole(Roles.MARKET_FACTORY);
         _;
     }
 
     modifier onlyPositionManager() {
-        if (!roleStorage.hasRole(Roles.POSITION_MANAGER, msg.sender)) revert RoleValidation_AccessDenied();
+        _validateRole(Roles.POSITION_MANAGER);
         _;
     }
 
     modifier onlyConfigurator(address _market) {
-        if (!roleStorage.hasConfiguratorRole(_market, msg.sender)) revert RoleValidation_AccessDenied();
+        _validateConfigurator(_market);
         _;
     }
 
     modifier onlyTradeStorage(address _market) {
-        if (!roleStorage.hasTradeStorageRole(_market, msg.sender)) revert RoleValidation_AccessDenied();
+        _validateTradeStorage(_market);
         _;
     }
 
     modifier onlyTradeStorageOrMarket(address _market) {
-        if (!roleStorage.hasTradeStorageRole(_market, msg.sender) && msg.sender != _market) {
-            revert RoleValidation_AccessDenied();
-        }
+        _validateMarketOrTradeStorage(_market);
         _;
     }
 
     modifier onlyMarket(address _market) {
-        if (msg.sender != _market) revert RoleValidation_AccessDenied();
+        _validateMarket(_market);
         _;
     }
 
     modifier onlyMinter(address _marketToken) {
-        if (roleStorage.getMinter(_marketToken) != msg.sender) revert RoleValidation_AccessDenied();
+        _validateMinter(_marketToken);
         _;
     }
 
     modifier onlyRouter() {
-        if (!roleStorage.hasRole(Roles.ROUTER, msg.sender)) revert RoleValidation_AccessDenied();
+        _validateRole(Roles.ROUTER);
         _;
     }
 
     modifier onlyCallback() {
-        if (msg.sender != address(this)) revert RoleValidation_AccessDenied();
+        _validateCallback();
         _;
     }
 
@@ -65,7 +63,33 @@ contract RoleValidation {
         roleStorage = RoleStorage(_roleStorage);
     }
 
-    function getTradeStorage(address _market) internal view returns (address) {
-        return roleStorage.getTradeStorage(_market);
+    function _validateRole(bytes32 _role) private view {
+        if (!roleStorage.hasRole(_role, msg.sender)) revert RoleValidation_AccessDenied();
+    }
+
+    function _validateMarket(address _market) private view {
+        if (msg.sender != _market) revert RoleValidation_AccessDenied();
+    }
+
+    function _validateMinter(address _marketToken) private view {
+        if (roleStorage.getMinter(_marketToken) != msg.sender) revert RoleValidation_AccessDenied();
+    }
+
+    function _validateTradeStorage(address _market) private view {
+        if (!roleStorage.hasTradeStorageRole(_market, msg.sender)) revert RoleValidation_AccessDenied();
+    }
+
+    function _validateMarketOrTradeStorage(address _market) private view {
+        if (!roleStorage.hasTradeStorageRole(_market, msg.sender) && msg.sender != _market) {
+            revert RoleValidation_AccessDenied();
+        }
+    }
+
+    function _validateConfigurator(address _market) private view {
+        if (!roleStorage.hasConfiguratorRole(_market, msg.sender)) revert RoleValidation_AccessDenied();
+    }
+
+    function _validateCallback() private view {
+        if (msg.sender != address(this)) revert RoleValidation_AccessDenied();
     }
 }

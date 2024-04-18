@@ -75,9 +75,7 @@ library Execution {
     uint64 private constant MIN_PROFIT_PERCENTAGE = 0.05e18;
 
     modifier validCaller(IMarket market, ITradeStorage tradeStorage) {
-        if (msg.sender != address(tradeStorage) || address(tradeStorage) != market.tradeStorage()) {
-            revert Execution_InvalidExecutor();
-        }
+        _validateCaller(market, tradeStorage);
         _;
     }
 
@@ -989,5 +987,11 @@ library Execution {
     {
         maintenanceCollateral =
             _position.collateral.percentage(MarketUtils.getMaintenanceMargin(market, _position.ticker));
+    }
+
+    function _validateCaller(IMarket market, ITradeStorage tradeStorage) private view {
+        if (msg.sender != address(tradeStorage) || address(tradeStorage) != market.tradeStorage()) {
+            revert Execution_InvalidExecutor();
+        }
     }
 }

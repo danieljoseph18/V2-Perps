@@ -81,7 +81,7 @@ library TradeLogic {
 
     /// @notice Creates a new Order Request
     function createOrderRequest(Position.Request calldata _request, EnumerableSet.Bytes32Set storage orderSet)
-        external
+        internal
     {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         // Generate the Key
@@ -107,7 +107,7 @@ library TradeLogic {
         bytes32 _orderKey,
         bytes32 _requestKey,
         address _feeReceiver
-    ) external returns (Execution.FeeState memory feeState, Position.Request memory request) {
+    ) internal returns (Execution.FeeState memory feeState, Position.Request memory request) {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         if (address(this) != market.tradeStorage()) revert TradeLogic_InvalidCaller();
         // Initiate the execution
@@ -204,7 +204,7 @@ library TradeLogic {
         bytes32 _positionKey,
         bytes32 _requestKey,
         address _feeReceiver
-    ) external {
+    ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         if (address(this) != market.tradeStorage()) revert TradeLogic_InvalidCaller();
         // Check that the price update was requested by the ADLer, if not, require some time to pass before enabling them to execute
@@ -250,7 +250,7 @@ library TradeLogic {
         bytes32 _positionKey,
         bytes32 _requestKey,
         address _liquidator
-    ) external {
+    ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
         if (address(this) != market.tradeStorage()) revert TradeLogic_InvalidCaller();
         // Fetch the Position

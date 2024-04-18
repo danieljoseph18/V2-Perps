@@ -77,7 +77,7 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
     mapping(bytes32 assetId => MarketStorage assetStorage) private marketStorage;
 
     modifier orderExists(bytes32 _key) {
-        if (!requests.contains(_key)) revert Market_InvalidKey();
+        _orderExists(_key);
         _;
     }
 
@@ -410,6 +410,13 @@ contract MultiAssetMarket is IMarket, RoleValidation, ReentrancyGuard {
         _priceImpactUKey > 0
             ? marketStorage[assetId].impactPool += _priceImpactUKey.abs()
             : marketStorage[assetId].impactPool -= _priceImpactUKey.abs();
+    }
+
+    /**
+     * ========================= Private Functions  =========================
+     */
+    function _orderExists(bytes32 _key) private view {
+        if (!requests.contains(_key)) revert Market_InvalidKey();
     }
 
     /**
