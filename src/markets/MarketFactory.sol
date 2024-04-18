@@ -163,7 +163,8 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /// @dev Params unrelated to the request can be left blank --> merkle roots, pyth id etc.
     function createNewMarket(DeployParams calldata _params) external payable nonReentrant {
         /* Validate the Inputs */
-        if (msg.value != marketCreationFee) revert MarketFactory_InvalidFee();
+        uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
+        if (msg.value != marketCreationFee + priceUpdateFee) revert MarketFactory_InvalidFee();
         if (_params.owner != msg.sender) revert MarketFactory_InvalidOwner();
         if (_params.tokenData.tokenDecimals == 0) revert MarketFactory_InvalidDecimals();
         if (bytes(_params.indexTokenTicker).length > 15) revert MarketFactory_InvalidTicker();
@@ -171,9 +172,8 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         if (_params.tokenData.hasSecondaryFeed) _validateSecondaryStrategy(_params);
 
         /* Create a Price Request --> used to ensure the price feed returns a valid response */
-        string[] memory tickers = new string[](1);
-        tickers[0] = _params.indexTokenTicker;
-        priceFeed.requestPriceUpdate(tickers, _params.owner);
+        string[] memory args = Oracle.constructPriceArguments(_params.indexTokenTicker);
+        priceFeed.requestPriceUpdate{value: priceUpdateFee}(args, _params.owner);
 
         /* Generate a differentiated Request Key based on the inputs */
         bytes32 requestKey = _getMarketRequestKey(msg.sender, _params.indexTokenTicker);

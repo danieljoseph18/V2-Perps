@@ -2,6 +2,7 @@
 pragma solidity 0.8.23;
 
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IChainlinkFeed} from "./interfaces/IChainlinkFeed.sol";
 import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV2V3Interface.sol";
 import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
@@ -17,6 +18,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {mulDiv} from "@prb/math/Common.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 
 library Oracle {
@@ -25,6 +27,7 @@ library Oracle {
     using SignedMath for int32;
     using MathUtils for uint256;
     using SafeCast for uint256;
+    using Strings for uint256;
 
     error Oracle_SequencerDown();
     error Oracle_PriceNotSet();
@@ -194,6 +197,61 @@ library Oracle {
         returns (uint256)
     {
         return _ethAmount.percentage(_settlementFeePercentage);
+    }
+
+    /// @dev - Prepend the timestamp to the arguments before sending to the DON
+    function constructPriceArguments(string calldata _ticker) external view returns (string[] memory args) {
+        if (bytes(_ticker).length == 0) {
+            // Only prices for Long and Short Tokens
+            args = new string[](3);
+            args[0] = block.timestamp.toString();
+            args[1] = LONG_TICKER;
+            args[2] = SHORT_TICKER;
+        } else {
+            // Prices for index token, long token, and short token
+            args = new string[](4);
+            args[0] = block.timestamp.toString();
+            args[1] = _ticker;
+            args[2] = LONG_TICKER;
+            args[3] = SHORT_TICKER;
+        }
+    }
+
+    function constructMultiPriceArgs(IMarket market) external view returns (string[] memory args) {
+        // Get the stringified timestamp
+        string memory timestamp = block.timestamp.toString();
+        // Return an array with the stringified timestamp appended before the tickers
+        string[] memory tickers = market.getTickers();
+        uint256 len = tickers.length;
+        args = new string[](len + 3);
+        args[0] = timestamp;
+        args[1] = LONG_TICKER;
+        args[2] = SHORT_TICKER;
+        for (uint8 i = 0; i < len;) {
+            args[i + 3] = tickers[i];
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @dev - Prepend the timestamp to the arguments before sending to the DON
+    /// Use of loop not desirable, but the maximum possible loops is ~ 102
+    function constructPnlArguments(IMarket market) external view returns (string[] memory args) {
+        // Get the tickers
+        string[] memory tickers = market.getTickers();
+        // Get the stringified timestamp
+        string memory timestamp = block.timestamp.toString();
+        // Return an array with the stringified timestamp appended before the tickers
+        uint256 len = tickers.length;
+        args = new string[](tickers.length + 1);
+        args[0] = timestamp;
+        for (uint8 i = 0; i < len;) {
+            args[i + 1] = tickers[i];
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /**

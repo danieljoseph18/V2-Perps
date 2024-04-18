@@ -16,6 +16,7 @@ import {Gas} from "../libraries/Gas.sol";
 import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
@@ -24,6 +25,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     using SafeERC20 for IWETH;
     using SafeERC20 for IMarketToken;
     using Address for address payable;
+    using Strings for uint256;
 
     IMarketFactory private marketFactory;
     IPriceFeed private priceFeed;
@@ -274,40 +276,31 @@ contract Router is ReentrancyGuard, RoleValidation {
     }
 
     /**
-     * @dev - Used for requesting pricing before calling:
+     * @dev Requests an update for all of the prices of the assets within a market.
+     *
+     * Used for requesting pricing before calling:
      * 1. market.addToken
      * 2. market.removeToken
      * 3. market.reallocate
      */
     function requestPricingForMarket(IMarket market) external payable returns (bytes32 priceRequestKey) {
-        string[] memory tickers = market.getTickers();
         uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
         if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();
-        priceRequestKey = priceFeed.requestPriceUpdate{value: msg.value}(tickers, msg.sender);
+        string[] memory args = Oracle.constructMultiPriceArgs(market);
+        priceRequestKey = priceFeed.requestPriceUpdate{value: msg.value}(args, msg.sender);
     }
 
     /**
      * ========================================= Internal Functions =========================================
      */
+    /// @dev - First argument of functions requests is always the block timestamp
     function _requestPriceUpdate(uint256 _fee, string memory _ticker) private returns (bytes32 requestKey) {
         // Convert the string to an array of length 1
-        string[] memory tickers;
-        if (bytes(_ticker).length == 0) {
-            // Only prices for Long and Short Tokens
-            tickers = new string[](2);
-            tickers[0] = LONG_TICKER;
-            tickers[1] = SHORT_TICKER;
-        } else {
-            // Prices for index token, long token, and short token
-            tickers = new string[](3);
-            tickers[0] = _ticker;
-            tickers[1] = LONG_TICKER;
-            tickers[2] = SHORT_TICKER;
-        }
+        string[] memory args = Oracle.constructPriceArguments(_ticker);
         // Request a Price Update for the Asset
-        requestKey = priceFeed.requestPriceUpdate{value: _fee}(tickers, msg.sender);
+        requestKey = priceFeed.requestPriceUpdate{value: _fee}(args, msg.sender);
         // Fire Event
-        emit PriceUpdateRequested(requestKey, tickers, msg.sender);
+        emit PriceUpdateRequested(requestKey, args, msg.sender);
     }
 
     function _requestPnlUpdate(IMarket market, uint256 _fee) private returns (bytes32 requestKey) {

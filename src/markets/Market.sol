@@ -20,9 +20,6 @@ import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {MarketLogic} from "./MarketLogic.sol";
 
-// @audit - what other currently hard-coded values can we give to the user to configure?
-// liquidation fee? trading fee? etc.
-// want to give as much customization to the user as possible
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using EnumerableMap for EnumerableMap.MarketRequestMap;

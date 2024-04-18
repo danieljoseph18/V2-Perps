@@ -25,8 +25,6 @@ import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
 // Contract picks up and executes all requests, as well as holds intermediary funds.
-// @audit - as prices are timestamp specific, we need to make it so if a price fails
-// for any reason, a price is re-requested to execute the position with.
 contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeERC20 for IWETH;
@@ -91,19 +89,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
-        IMarket.ExecuteDeposit memory params;
-        params.market = market;
-        params.deposit = market.getRequest(_key);
-        // @audit - don't really like fetching these here, would rather have in the market.
-        params.key = _key;
-        // Get the signed prices
-        (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.deposit.requestTimestamp);
-        // Calculate cumulative borrow fees
-        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
-        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
-        // Calculate Cumulative PNL
-        params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.deposit.requestTimestamp);
-        params.marketToken = market.MARKET_TOKEN();
+        IMarket.ExecuteDeposit memory params = MarketUtils.constructDepositParams(priceFeed, market, _key);
 
         // Approve the Market to spend the Collateral
         if (params.deposit.isLongToken) WETH.approve(address(market), params.deposit.amountIn);
@@ -129,18 +115,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
-        IMarket.ExecuteWithdrawal memory params;
-        params.market = market;
-        params.withdrawal = market.getRequest(_key);
-        params.key = _key;
-        params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.withdrawal.requestTimestamp);
-        params.shouldUnwrap = params.withdrawal.reverseWrap;
-        // Get the signed prices
-        (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.withdrawal.requestTimestamp);
-        // Calculate cumulative borrow fees
-        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
-        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
-        params.marketToken = market.MARKET_TOKEN();
+        IMarket.ExecuteWithdrawal memory params = MarketUtils.constructWithdrawalParams(priceFeed, market, _key);
         // Calculate amountOut
         params.amountOut = MarketUtils.calculateWithdrawalAmount(
             market,
@@ -190,7 +165,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
     /// @dev For market orders, can just pass in bytes32(0) as the request id, as it's only required for limits
     /// @dev If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestKey as input
-    // @audit - what happens if a price request is invalidated but the position still exists?
     function executePosition(IMarket market, bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
         external
         payable

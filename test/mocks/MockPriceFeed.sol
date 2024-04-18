@@ -25,6 +25,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     uint8 private constant MIN_EXPIRATION_TIME = 2 minutes;
     uint40 private constant MSB1 = 0x8000000000;
     uint64 private constant LINK_BASE_UNIT = 1e18;
+    uint16 private constant MAX_DATA_LENGTH = 3296;
     // Uniswap V3 Router address on Network
     address public immutable UNISWAP_V3_ROUTER;
     // Uniswap V3 Factory address on Network
@@ -41,6 +42,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     address public sequencerUptimeFeed;
     uint64 subscriptionId;
     uint64 settlementFee;
+    uint8 maxRetries;
     bool private isInitialized;
 
     // JavaScript source code
@@ -65,21 +67,21 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     mapping(string ticker => mapping(uint48 blockTimestamp => Price priceResponse)) private prices;
     mapping(address market => mapping(uint48 blockTimestamp => Pnl cumulativePnl)) public cumulativePnl;
     // store who requested the data and what type of data was requested
-    //  keeper who requested can fill the order for non market orders
+    // only the keeper who requested can fill the order for non market orders
     // all pricing should be cleared once the request is filled
-    // data should be tied  the request as its specific to the request
+    // data should be tied only to the request as its specific to the request
     mapping(string ticker => TokenData) private tokenData;
     mapping(string ticker => bytes32 pythId) public pythIds;
-    /**
-     * audit - to prevent multiple requests for the same action, we can perhaps store a generic
-     * request signature. If a request already exists for the same action, we can prevent the
-     * request from processing and save the end user some gas.
-     */
+
     // Dictionary to enable clearing of the RequestKey
     // Bi-directional to handle the case of invalidated requests
     mapping(bytes32 requestId => bytes32 requestKey) private idToKey;
     mapping(bytes32 requestKey => bytes32 requestId) private keyToId;
-
+    /**
+     * Used to count the number of failed price / pnl retrievals. If > MAX, the request is
+     * invalidated and removed from storage.
+     */
+    mapping(bytes32 requestKey => uint256 retries) numberOfRetries;
     EnumerableMap.PriceRequestMap private requestData;
     EnumerableSet.Bytes32Set private assetIds;
     EnumerableSet.Bytes32Set private requestKeys;
@@ -187,16 +189,17 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     /**
      * @notice Sends an HTTP request for character information
      * @param args The arguments to pass to the HTTP request -> should be the tickers for which pricing is requested
-     * @return requestId The ID of the request
+     * @return requestKey The ID of the request
      */
     function requestPriceUpdate(string[] calldata args, address _requester)
         external
         payable
-        returns (bytes32 requestId)
+        returns (bytes32 requestKey)
     {
         args;
-        // Create a  request id
-        requestId = keccak256(abi.encode("PRICE REQUEST"));
+        // Create a  request key
+        requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
+        bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
 
         RequestData memory data = RequestData({
             requester: _requester,
@@ -205,15 +208,18 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
             args: args
         });
 
+        // Add the Request to Storage
+        requestKeys.add(requestKey);
+        idToKey[requestId] = requestKey;
+        keyToId[requestKey] = requestId;
         requestData.set(requestId, data);
-
-        return requestId;
     }
 
     /// @dev - for this, we need to copy / call the function MarketUtils.calculateCumulativeMarketPnl but offchain
-    function requestCumulativeMarketPnl(IMarket, address _requester) external payable returns (bytes32 requestId) {
+    function requestCumulativeMarketPnl(IMarket, address _requester) external payable returns (bytes32 requestKey) {
         // Create a  request id
-        requestId = keccak256(abi.encode("PNL REQUEST"));
+        requestKey = _generateKey(abi.encode(_requester, _blockTimestamp()));
+        bytes32 requestId = keccak256(abi.encode("PNL REQUEST"));
 
         RequestData memory data = RequestData({
             requester: _requester,
@@ -222,6 +228,10 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
             args: new string[](0)
         });
 
+        // Add the Request to Storage
+        requestKeys.add(requestKey);
+        idToKey[requestId] = requestKey;
+        keyToId[requestKey] = requestId;
         requestData.set(requestId, data);
 
         return requestId;
@@ -233,95 +243,149 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
      * @param response The HTTP response data
      * @param err Any errors from the Functions request
      */
+    /// @dev - Need to make sure an err is only passed to the contract if it's critical,
+    /// to prevent valid prices being invalidated.
     // Decode the response, according to the structure of the request
     // Try to avoid reverting, and instead return without storing the price response if invalid.
-    // @audit - what if the request for the block failed --> how can users price their assets?
-    // @audit - what if the data is already in storage? How do we prevent the consumer from running?
     function fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
         // Return if invalid requestId
         if (!requestData.contains(requestId)) return;
         // Return if an error is thrown
-        // @audit - What if an error is thrown but the response is still valid?
-        if (err.length > 0) return;
+        if (err.length > 0) {
+            _recreateRequest(requestId);
+            return;
+        }
         // Remove the RequestId from storage and return if fail
-        // @audit - could this clearing cause issues as it's a struct?
         if (!requestData.remove(requestId)) return;
         requestKeys.remove(idToKey[requestId]);
         delete idToKey[requestId];
         // Get the request type of the request
         RequestData memory data = requestData.get(requestId);
         if (data.requestType == RequestType.PRICE_UPDATE) {
-            // Fulfill the price update request
-            uint256 len = response.length;
-            if (len % WORD != 0) revert PriceFeed_InvalidResponseLength();
-            // @audit - response can contain a number of prices to update
-            // need to loop through in 32 byte words and deconstruct as shown.
-            // max length is 100 assets * 32 byte words = 3200 --> uint16 sufficient
-            for (uint16 i = 0; i < len;) {
-                Price memory price;
-                // Decode the encodedPrice into a bytes32
-                // @audit - wrong, needs to be 32 bytes of the current word
-                bytes32 responseBytes = bytes32(response);
-
-                // Extract the values from the bytes32 and store them in the Price struct
-                // truncate first 15 bytes of the response
-                price.ticker = bytes15(responseBytes);
-                // shift response 15 bytes left, then truncate the first byte
-                price.precision = uint8(bytes1((responseBytes << 120)));
-                // shift the response another byte left, then truncate the first 2 bytes
-                price.variance = uint16(bytes2(responseBytes << 128));
-                // shift the response another 2 bytes left, then truncate the first 6 bytes
-                price.timestamp = uint48(bytes6(responseBytes << 144));
-                // shift the response another 6 bytes left, then truncate the first 8 bytes
-                price.med = uint64(bytes8(responseBytes << 192));
-
-                // Store the price in storage
-                prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
-
-                unchecked {
-                    i += WORD;
-                }
-            }
+            _decodeAndStorePrices(response);
         } else if (data.requestType == RequestType.CUMULATIVE_PNL) {
-            // Fulfill the cumulative PNL request
-            uint256 len = response.length;
-            if (len != WORD) revert PriceFeed_InvalidResponseLength();
-
-            Pnl memory pnl;
-
-            bytes32 responseBytes = bytes32(response);
-            // shift the response 1 byte left, then truncate the first byte
-            pnl.precision = uint8(bytes1(responseBytes));
-            // shift the response another byte left, then truncate the first 20 bytes
-            pnl.market = address(bytes20(responseBytes << 8));
-            // shift the response another 20 bytes left, then truncate the first 6 bytes
-            pnl.timestamp = uint48(bytes6(responseBytes << 168));
-            // shift the response another 6 bytes left, then truncate the first 5 bytes
-            // Extract the cumulativePnl as uint40 as we can't directly extract
-            // an int40 from bytes.
-            uint40 pnlValue = uint40(bytes5(responseBytes << 216));
-
-            // Check if the most significant bit is 1 or 0
-            // 0x800... in binary is 1000000... The msb is 1, and all of the rest are 0
-            // Using the & operator, we check if the msb matches
-            // If they match, the number is negative, else positive.
-            if (pnlValue & MSB1 != 0) {
-                // If msb is 1, this indicates the number is negative.
-                // In this case, we flip all of the bits and add 1 to convert from +ve to -ve
-                pnl.cumulativePnl = -int40(~pnlValue + 1);
-            } else {
-                // If msb is 0, the value is positive, so we convert and return as is.
-                pnl.cumulativePnl = int40(pnlValue);
-            }
-
-            // Store the cumulative PNL in the mapping
-            cumulativePnl[pnl.market][pnl.timestamp] = pnl;
+            _decodeAndStorePnl(response);
         } else {
             revert PriceFeed_InvalidRequestType();
         }
 
         // Emit an event to log the response
         emit Response(requestId, data, response, err);
+    }
+
+    /**
+     * ================================== Private Functions ==================================
+     */
+
+    /// @dev Needed to re-request any failed requests to ensure they're fulfilled
+    /// if a request fails > max retries, the request is cancelled and removed from storage.
+    function _recreateRequest(bytes32 _oldRequestId) private {
+        // get the failed request
+        RequestData memory failedRequestData = requestData.get(_oldRequestId);
+        // key will remain the same, so cache the key
+        bytes32 requestKey = idToKey[_oldRequestId];
+        // increment the number of retries
+        if (numberOfRetries[requestKey] > maxRetries) {
+            // delete the request to stop the loop
+            requestData.remove(_oldRequestId);
+            delete idToKey[_oldRequestId];
+            requestKeys.remove(requestKey);
+            delete keyToId[requestKey];
+        } else {
+            ++numberOfRetries[requestKey];
+            // create a new request
+            bytes32 newRequestId =
+                _requestFulfillment(failedRequestData.args, failedRequestData.requestType == RequestType.PRICE_UPDATE);
+            // replace the old request with the new one
+            // Delete the old request
+            requestData.remove(_oldRequestId);
+            delete idToKey[_oldRequestId];
+            idToKey[newRequestId] = requestKey;
+            keyToId[requestKey] = newRequestId;
+            requestData.set(newRequestId, failedRequestData);
+        }
+    }
+
+    function _requestFulfillment(string[] memory _args, bool _isPrice) private returns (bytes32 requestId) {
+        FunctionsRequest.Request memory req;
+        req.initializeRequestForInlineJavaScript(_isPrice ? priceUpdateSource : cumulativePnlSource); // Initialize the request with JS code
+        if (_args.length > 0) req.setArgs(_args); // Set the arguments for the request
+
+        // Send the request and store the request ID
+        requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, donId);
+    }
+
+    function _decodeAndStorePrices(bytes memory _encodedPrices) private {
+        if (_encodedPrices.length > MAX_DATA_LENGTH) revert PriceFeed_PriceUpdateLength();
+        if (_encodedPrices.length % WORD != 0) revert PriceFeed_PriceUpdateLength();
+
+        uint256 numPrices = _encodedPrices.length / 32;
+
+        for (uint16 i = 0; i < numPrices;) {
+            bytes32 encodedPrice;
+
+            // Use yul to extract the encoded price from the bytes
+            // offset = (32 * i) + 32 (first 32 bytes are the length of the byte string)
+            // encodedPrice = mload(encodedPrices[offset:offset+32])
+            assembly {
+                encodedPrice := mload(add(_encodedPrices, add(32, mul(i, 32))))
+            }
+
+            Price memory price = Price(
+                // First 15 bytes are the ticker
+                bytes15(encodedPrice),
+                // Next byte is the precision
+                uint8(encodedPrice[15]),
+                // Shift recorded values to the left and store the first 2 bytes (variance)
+                uint16(bytes2(encodedPrice << 128)),
+                // Shift recorded values to the left and store the first 6 bytes (timestamp)
+                uint48(bytes6(encodedPrice << 144)),
+                // Shift recorded values to the left and store the first 8 bytes (median price)
+                uint64(bytes8(encodedPrice << 192))
+            );
+            // Store the constructed price struct in the mapping
+            prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
+
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _decodeAndStorePnl(bytes memory _encodedPnl) private {
+        // Fulfill the cumulative PNL request
+        uint256 len = _encodedPnl.length;
+        if (len != WORD) revert PriceFeed_InvalidResponseLength();
+
+        Pnl memory pnl;
+
+        bytes32 responseBytes = bytes32(_encodedPnl);
+        // shift the response 1 byte left, then truncate the first byte
+        pnl.precision = uint8(bytes1(responseBytes));
+        // shift the response another byte left, then truncate the first 20 bytes
+        pnl.market = address(bytes20(responseBytes << 8));
+        // shift the response another 20 bytes left, then truncate the first 6 bytes
+        pnl.timestamp = uint48(bytes6(responseBytes << 168));
+        // shift the response another 6 bytes left, then truncate the first 5 bytes
+        // Extract the cumulativePnl as uint40 as we can't directly extract
+        // an int40 from bytes.
+        uint40 pnlValue = uint40(bytes5(responseBytes << 216));
+
+        // Check if the most significant bit is 1 or 0
+        // 0x800... in binary is 1000000... The msb is 1, and all of the rest are 0
+        // Using the & operator, we check if the msb matches
+        // If they match, the number is negative, else positive.
+        if (pnlValue & MSB1 != 0) {
+            // If msb is 1, this indicates the number is negative.
+            // In this case, we flip all of the bits and add 1 to convert from +ve to -ve
+            pnl.cumulativePnl = -int40(~pnlValue + 1);
+        } else {
+            // If msb is 0, the value is positive, so we convert and return as is.
+            pnl.cumulativePnl = int40(pnlValue);
+        }
+
+        // Store the cumulative PNL in the mapping
+        cumulativePnl[pnl.market][pnl.timestamp] = pnl;
     }
 
     function _blockTimestamp() internal view returns (uint48) {
@@ -413,75 +477,13 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
 
     // Used to Manually Set Prices for Testing
     function updatePrices(bytes memory _response) external {
-        // Fulfill the price update request
-        uint256 len = _response.length;
-        if (len % WORD != 0) revert PriceFeed_InvalidResponseLength();
-        // @audit - response can contain a number of prices to update
-        // need to loop through in 32 byte words and deconstruct as shown.
-        // max length is 100 assets * 32 byte words = 3200 --> uint16 sufficient
-        for (uint16 i = 0; i < len;) {
-            Price memory price;
-            // Decode the encodedPrice into a bytes32
-            // @audit - wrong, needs to be 32 bytes of the current word
-            bytes32 responseBytes = bytes32(_response);
-
-            // Extract the values from the bytes32 and store them in the Price struct
-            // truncate first 15 bytes of the response
-            price.ticker = bytes15(responseBytes);
-            // shift response 15 bytes left, then truncate the first byte
-            price.precision = uint8(bytes1((responseBytes << 120)));
-            // shift the response another byte left, then truncate the first 2 bytes
-            price.variance = uint16(bytes2(responseBytes << 128));
-            // shift the response another 2 bytes left, then truncate the first 6 bytes
-            price.timestamp = uint48(bytes6(responseBytes << 144));
-            // shift the response another 6 bytes left, then truncate the first 8 bytes
-            price.med = uint64(bytes8(responseBytes << 192));
-
-            // Store the price in storage
-            prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
-
-            unchecked {
-                i += WORD;
-            }
-        }
+        _decodeAndStorePrices(_response);
     }
 
     event PnlUpdated(bytes32 indexed requestId, int256 pnl);
 
     // Used to Manually Set Pnl for Testing
     function updatePnl(bytes memory _response) external {
-        // Fulfill the cumulative PNL request
-        uint256 len = _response.length;
-        if (len != WORD) revert PriceFeed_InvalidResponseLength();
-
-        Pnl memory pnl;
-
-        bytes32 responseBytes = bytes32(_response);
-        // shift the response 1 byte left, then truncate the first byte
-        pnl.precision = uint8(bytes1(responseBytes));
-        // shift the response another byte left, then truncate the first 20 bytes
-        pnl.market = address(bytes20(responseBytes << 8));
-        // shift the response another 20 bytes left, then truncate the first 6 bytes
-        pnl.timestamp = uint48(bytes6(responseBytes << 168));
-        // shift the response another 6 bytes left, then truncate the first 5 bytes
-        // Extract the cumulativePnl as uint40 as we can't directly extract
-        // an int40 from bytes.
-        uint40 pnlValue = uint40(bytes5(responseBytes << 216));
-
-        // Check if the most significant bit is 1 or 0
-        // 0x800... in binary is 1000000... The msb is 1, and all of the rest are 0
-        // Using the & operator, we check if the msb matches
-        // If they match, the number is negative, else positive.
-        if (pnlValue & MSB1 != 0) {
-            // If msb is 1, this indicates the number is negative.
-            // In this case, we flip all of the bits and add 1 to convert from +ve to -ve
-            pnl.cumulativePnl = -int40(~pnlValue + 1);
-        } else {
-            // If msb is 0, the value is positive, so we convert and return as is.
-            pnl.cumulativePnl = int40(pnlValue);
-        }
-
-        // Store the cumulative PNL in the mapping
-        cumulativePnl[pnl.market][pnl.timestamp] = pnl;
+        _decodeAndStorePnl(_response);
     }
 }

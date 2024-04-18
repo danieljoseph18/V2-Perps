@@ -201,7 +201,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
      * @param args The arguments to pass to the HTTP request -> should be the tickers for which pricing is requested
      * @return requestKey The signature of the request
      */
-    // @audit - need to add timestamp to the args
     function requestPriceUpdate(string[] calldata args, address _requester)
         external
         payable
@@ -233,7 +232,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     }
 
     /// @dev - for this, we need to copy / call the function MarketUtils.calculateCumulativeMarketPnl but offchain
-    // @audit - need to add timestamp to the args
     function requestCumulativeMarketPnl(IMarket market, address _requester)
         external
         payable
@@ -245,23 +243,20 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         // If the market is not valid, revert
         if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
 
+        string[] memory args = Oracle.constructPnlArguments(market);
+
         // Compute the key and check if the same request exists:
         // if it does, return to prevent the consumer running multiple times for a given block.
-        requestKey = _generateKey(abi.encode(market, _requester, _blockTimestamp()));
+        requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
         if (requestKeys.contains(requestKey)) return bytes32(0);
 
-        // get all of the assets from the market
-        // pass the assets to the request as args
-        // convert assets to a string
-        string[] memory tickers = market.getTickers();
-
-        bytes32 requestId = _requestFulfillment(tickers, false);
+        bytes32 requestId = _requestFulfillment(args, false);
 
         RequestData memory data = RequestData({
             requester: _requester,
             blockTimestamp: _blockTimestamp(),
             requestType: RequestType.CUMULATIVE_PNL,
-            args: tickers
+            args: args
         });
 
         // Add the Request to Storage
@@ -285,7 +280,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         // Return if invalid requestId
         if (!requestData.contains(requestId)) return;
         // Return if an error is thrown
-        // @audit - what if the subscription runs out of fund --> need buffer
         if (err.length > 0) {
             _recreateRequest(requestId);
             return;
@@ -366,21 +360,19 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
             delete idToKey[_oldRequestId];
             requestKeys.remove(requestKey);
             delete keyToId[requestKey];
-            return;
         } else {
             ++numberOfRetries[requestKey];
+            // create a new request
+            bytes32 newRequestId =
+                _requestFulfillment(failedRequestData.args, failedRequestData.requestType == RequestType.PRICE_UPDATE);
+            // replace the old request with the new one
+            // Delete the old request
+            requestData.remove(_oldRequestId);
+            delete idToKey[_oldRequestId];
+            idToKey[newRequestId] = requestKey;
+            keyToId[requestKey] = newRequestId;
+            requestData.set(newRequestId, failedRequestData);
         }
-        // create a new request
-        bytes32 newRequestId =
-            _requestFulfillment(failedRequestData.args, failedRequestData.requestType == RequestType.PRICE_UPDATE);
-        // replace the old request with the new one
-        // Delete the old request
-        requestData.remove(_oldRequestId);
-        delete idToKey[_oldRequestId];
-        idToKey[newRequestId] = requestKey;
-        keyToId[requestKey] = newRequestId;
-        requestData.set(newRequestId, failedRequestData);
-        return;
     }
 
     function _requestFulfillment(string[] memory _args, bool _isPrice) private returns (bytes32 requestId) {

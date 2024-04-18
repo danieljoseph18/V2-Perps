@@ -8,6 +8,7 @@ import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {Borrowing} from "../libraries/Borrowing.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {Position} from "../positions/Position.sol";
@@ -53,6 +54,44 @@ library MarketUtils {
         uint256 skewDelta;
         uint256 feeAdditionUsd;
         uint256 indexFee;
+    }
+
+    function constructDepositParams(IPriceFeed priceFeed, IMarket market, bytes32 _depositKey)
+        external
+        view
+        returns (IMarket.ExecuteDeposit memory params)
+    {
+        // Fetch the request
+        params.market = market;
+        params.deposit = market.getRequest(_depositKey);
+        params.key = _depositKey;
+        // Get the signed prices
+        (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.deposit.requestTimestamp);
+        // Calculate cumulative borrow fees
+        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
+        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
+        // Calculate Cumulative PNL
+        params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.deposit.requestTimestamp);
+        params.marketToken = market.MARKET_TOKEN();
+    }
+
+    function constructWithdrawalParams(IPriceFeed priceFeed, IMarket market, bytes32 _withdrawalKey)
+        external
+        view
+        returns (IMarket.ExecuteWithdrawal memory params)
+    {
+        // Fetch the request
+        params.market = market;
+        params.withdrawal = market.getRequest(_withdrawalKey);
+        params.key = _withdrawalKey;
+        params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.withdrawal.requestTimestamp);
+        params.shouldUnwrap = params.withdrawal.reverseWrap;
+        // Get the signed prices
+        (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.withdrawal.requestTimestamp);
+        // Calculate cumulative borrow fees
+        params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, true);
+        params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarkets(market, false);
+        params.marketToken = market.MARKET_TOKEN();
     }
 
     function calculateDepositFee(
