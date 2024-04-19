@@ -5,7 +5,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {MathUtils} from "./MathUtils.sol";
-import {console2} from "forge-std/Test.sol";
+import {Pool} from "../markets/Pool.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
@@ -17,25 +17,23 @@ library Borrowing {
 
     function updateState(
         IMarket market,
-        IMarket.BorrowingValues memory borrowing,
+        Pool.Storage storage pool,
         string calldata _ticker,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) external view returns (IMarket.BorrowingValues memory) {
+    ) internal {
         if (_isLong) {
-            borrowing.longCumulativeBorrowFees +=
-                _calculateFeesSinceUpdate(borrowing.longBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.longBorrowingRate = _calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, true);
+            pool.cumulatives.longCumulativeBorrowFees +=
+                _calculateFeesSinceUpdate(pool.longBorrowingRate, pool.lastUpdate);
+            pool.longBorrowingRate =
+                uint64(_calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, true));
         } else {
-            borrowing.shortCumulativeBorrowFees +=
-                _calculateFeesSinceUpdate(borrowing.shortBorrowingRate, borrowing.lastBorrowUpdate);
-            borrowing.shortBorrowingRate = _calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, false);
+            pool.cumulatives.shortCumulativeBorrowFees +=
+                _calculateFeesSinceUpdate(pool.shortBorrowingRate, pool.lastUpdate);
+            pool.shortBorrowingRate =
+                uint64(_calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, false));
         }
-
-        borrowing.lastBorrowUpdate = uint48(block.timestamp);
-
-        return borrowing;
     }
 
     function getTotalFeesOwedByMarket(IMarket market, bool _isLong) external view returns (uint256 totalFeeUsd) {
@@ -105,7 +103,7 @@ library Borrowing {
     {
         uint256 borrowRate = MarketUtils.getBorrowingRate(market, _ticker, _isLong);
         if (borrowRate == 0) return 0;
-        uint256 timeElapsed = block.timestamp - MarketUtils.getLastBorrowingUpdate(market, _ticker);
+        uint256 timeElapsed = block.timestamp - MarketUtils.getLastUpdate(market, _ticker);
         if (timeElapsed == 0) return 0;
         pendingFees = borrowRate * timeElapsed;
     }
@@ -120,6 +118,7 @@ library Borrowing {
      * The calculation for the factor is simply (open interest usd / max open interest usd).
      * If OI is low, fee will be low, if OI is close to max, fee will be close to max.
      */
+    // @audit - ensure this rate is never > type(uint64).max (1e18)
     function _calculateRate(
         IMarket market,
         string calldata _ticker,

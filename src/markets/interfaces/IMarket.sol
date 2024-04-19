@@ -6,6 +6,7 @@ import {Oracle} from "../../oracle/Oracle.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {IMarketToken} from "./IMarketToken.sol";
 import {IRewardTracker} from "../../rewards/interfaces/IRewardTracker.sol";
+import {Pool} from "../Pool.sol";
 
 interface IMarket {
     /**
@@ -34,6 +35,8 @@ interface IMarket {
         bytes32 pnlRequestKey; // Id of the cumulative pnl request
     }
 
+    // Only used in memory as a cache for updating state
+    // No packing necessary
     struct ExecuteDeposit {
         IMarket market;
         IMarketToken marketToken;
@@ -46,6 +49,8 @@ interface IMarket {
         int256 cumulativePnl;
     }
 
+    // Only used in memory as a cache for updating state
+    // No packing necessary
     struct ExecuteWithdrawal {
         IMarket market;
         IMarketToken marketToken;
@@ -58,139 +63,6 @@ interface IMarket {
         int256 cumulativePnl;
         uint256 amountOut;
         bool shouldUnwrap;
-    }
-
-    struct MarketStorage {
-        Config config;
-        FundingValues funding;
-        BorrowingValues borrowing;
-        OpenInterestValues openInterest;
-        PnlValues pnl;
-        /**
-         * The size of the Price impact pool.
-         * Negative price impact is accumulated in the pool.
-         * Positive price impact is paid out of the pool.
-         * Units in USD (30 D.P).
-         */
-        uint256 impactPool;
-        /**
-         * Number of shares allocated to each sub-market.
-         * A market can contain multiple index tokens, each of which have
-         * a percentage of liquidity allocated to them.
-         * Units are in shares, where 100% = 10,000.
-         * Cumulative allocations must total up to 10,000.
-         */
-        uint256 allocationShare;
-    }
-
-    struct FundingValues {
-        /**
-         * The last time the funding rate was updated.
-         */
-        uint48 lastFundingUpdate;
-        /**
-         * The rate at which funding is accumulated.
-         */
-        int256 fundingRate;
-        /**
-         * The rate at which the funding rate is changing.
-         */
-        int256 fundingRateVelocity;
-        /**
-         * The value (in USD) of total market funding accumulated.
-         * Swings back and forth across 0 depending on the velocity / funding rate.
-         */
-        int256 fundingAccruedUsd;
-    }
-
-    struct BorrowingValues {
-        uint48 lastBorrowUpdate;
-        uint256 longBorrowingRate;
-        uint256 longCumulativeBorrowFees;
-        uint256 weightedAvgCumulativeLong;
-        uint256 shortBorrowingRate;
-        uint256 shortCumulativeBorrowFees;
-        uint256 weightedAvgCumulativeShort;
-    }
-
-    struct OpenInterestValues {
-        uint256 longOpenInterest;
-        uint256 shortOpenInterest;
-    }
-
-    struct PnlValues {
-        uint256 longAverageEntryPriceUsd;
-        uint256 shortAverageEntryPriceUsd;
-    }
-
-    struct Config {
-        /**
-         * Maximum Leverage for the Market
-         * Value to 2 Decimal Places -> 100 = 1x, 200 = 2x
-         */
-        uint32 maxLeverage;
-        /**
-         * Percentage of the position that must be maintained as margin.
-         * Used to prevent liquidation threshold from being at the point
-         * of insolvency.
-         */
-        uint64 maintenanceMargin;
-        /**
-         * % of liquidity that can't be allocated to positions
-         * Reserves should be higher for more volatile markets.
-         * Value as a percentage, where 100% = 1e18.
-         */
-        uint256 reserveFactor;
-        /**
-         * Funding Config Values
-         */
-        FundingConfig funding;
-        /**
-         * Price Impact Config Values
-         */
-        ImpactConfig impact;
-    }
-
-    struct FundingConfig {
-        /**
-         * Maximum Funding Velocity
-         * Units: % Per Day
-         */
-        int256 maxVelocity;
-        /**
-         * Sensitivity to Market Skew
-         * Units: USD
-         */
-        int256 skewScale;
-    }
-
-    // Used to scale price impact per market
-    // Both values lower for less volatile markets
-    struct ImpactConfig {
-        /**
-         * Dampening factor for the effect of skew in positive price impact.
-         * Value as a percentage, with 30 d.p of precision, as it deals with USD values.
-         * 100% = 1e30
-         */
-        int256 positiveSkewScalar;
-        /**
-         * Dampening factor for the effect of skew in negative price impact.
-         * Value as a percentage, with 30 d.p of precision, as it deals with USD values.
-         * 100% = 1e30
-         */
-        int256 negativeSkewScalar;
-        /**
-         * Dampening factor for the effect of liquidity in positive price impact.
-         * Value as a percentage, with 30 d.p of precision, as it deals with USD values.
-         * 100% = 1e30
-         */
-        int256 positiveLiquidityScalar;
-        /**
-         * Dampening factor for the effect of liquidity in negative price impact.
-         * Value as a percentage, with 30 d.p of precision, as it deals with USD values.
-         * 100% = 1e30
-         */
-        int256 negativeLiquidityScalar;
     }
 
     /**
@@ -273,7 +145,7 @@ interface IMarket {
     function borrowScale() external view returns (uint256);
     function getAssetIds() external view returns (bytes32[] memory);
     function getAssetsInMarket() external view returns (uint256);
-    function getStorage(string memory _ticker) external view returns (MarketStorage memory);
+    function getStorage(string memory _ticker) external view returns (Pool.Storage memory);
     function longTokenBalance() external view returns (uint256);
     function shortTokenBalance() external view returns (uint256);
     function longTokensReserved() external view returns (uint256);
@@ -282,16 +154,15 @@ interface IMarket {
     function getTickers() external view returns (string[] memory);
     function FUNDING_VELOCITY_CLAMP() external view returns (uint64);
     function requestExists(bytes32 _key) external view returns (bool);
-    function setAllocationShare(string calldata _ticker, uint256 _allocationShare) external;
+    function setAllocationShare(string calldata _ticker, uint8 _allocationShare) external;
     function addAsset(string calldata _ticker) external;
     function removeAsset(string calldata _ticker) external;
     function getState(bool _isLong) external view returns (State memory);
-    function getConfig(string calldata _ticker) external view returns (Config memory);
-    function getFundingValues(string calldata _ticker) external view returns (FundingValues memory);
-    function getBorrowingValues(string calldata _ticker) external view returns (BorrowingValues memory);
-    function getOpenInterestValues(string calldata _ticker) external view returns (OpenInterestValues memory);
-    function getPnlValues(string calldata _ticker) external view returns (PnlValues memory);
+    function getConfig(string calldata _ticker) external view returns (Pool.Config memory);
+    function getCumulatives(string calldata _ticker) external view returns (Pool.Cumulatives memory);
     function getImpactPool(string calldata _ticker) external view returns (uint256);
-    function getAllocationShare(string calldata _ticker) external view returns (uint256);
+    function getImpactValues(string calldata _ticker) external view returns (int16, int16, int16, int16);
+    function getOpenInterestValues(string calldata _ticker) external view returns (uint256, uint256);
+    function getAllocationShare(string calldata _ticker) external view returns (uint8);
     function collateralAmounts(address _user, bool _isLong) external view returns (uint256);
 }

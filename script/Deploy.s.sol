@@ -16,6 +16,7 @@ import {Roles} from "../src/access/Roles.sol";
 import {Oracle} from "../src/oracle/Oracle.sol";
 import {FeeDistributor} from "../src/rewards/FeeDistributor.sol";
 import {TransferStakedTokens} from "../src/rewards/TransferStakedTokens.sol";
+import {Pool} from "../src/markets/Pool.sol";
 
 contract Deploy is Script {
     IHelperConfig public helperConfig;
@@ -124,23 +125,19 @@ contract Deploy is Script {
         /**
          * ============ Set Up Contracts ============
          */
-        IMarket.Config memory defaultMarketConfig = IMarket.Config({
-            maxLeverage: 10000, // 100x
-            reserveFactor: 0.2e18,
-            maintenanceMargin: 0.005e18, // 0.5%
+        Pool.Config memory defaultMarketConfig = Pool.Config({
+            maxLeverage: 100, // 100x
+            maintenanceMargin: 50, // 0.5%
+            reserveFactor: 2000, // 20%
             // Skew Scale = Skew for Max Velocity
-            funding: IMarket.FundingConfig({
-                maxVelocity: 0.09e18, // 9% per day
-                skewScale: 1_000_000e30 // 1 Mil USD
-            }),
+            maxFundingVelocity: 90, // 9% per day
+            skewScale: 1_000_000, // 1 Mil USD
             // Should never be 0
-            // All are percentages between 1 (1e-30) and 1e30 (100%)
-            impact: IMarket.ImpactConfig({
-                positiveSkewScalar: 1e30,
-                negativeSkewScalar: 1e30,
-                positiveLiquidityScalar: 1e30,
-                negativeLiquidityScalar: 1e30
-            })
+            // All are percentages between up to 100% (1000)
+            positiveSkewScalar: 1000,
+            negativeSkewScalar: 1000,
+            positiveLiquidityScalar: 1000,
+            negativeLiquidityScalar: 1000
         });
 
         contracts.marketFactory.initialize(

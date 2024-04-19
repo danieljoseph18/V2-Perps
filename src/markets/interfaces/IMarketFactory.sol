@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IMarket} from "./IMarket.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
+import {Pool} from "../Pool.sol";
 
 interface IMarketFactory {
     event MarketFactoryInitialized(address priceStorage);
@@ -39,7 +39,7 @@ interface IMarketFactory {
     }
 
     function initialize(
-        IMarket.Config memory _defaultConfig,
+        Pool.Config memory _defaultConfig,
         address _priceFeed,
         address _referralStorage,
         address _positionManager,
@@ -48,7 +48,7 @@ interface IMarketFactory {
         uint256 _marketCreationFee,
         uint256 _marketExecutionFee
     ) external;
-    function setDefaultConfig(IMarket.Config memory _defaultConfig) external;
+    function setDefaultConfig(Pool.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
     function createNewMarket(DeployParams calldata _params) external payable;
     function executeMarketRequest(bytes32 _requestKey) external;

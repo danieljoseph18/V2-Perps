@@ -9,7 +9,6 @@ import {FeedRegistryInterface} from "@chainlink/contracts/src/v0.8/interfaces/Fe
 import {IUniswapV3Factory} from "../oracle/interfaces/IUniswapV3Factory.sol";
 import {IUniswapV2Factory} from "../oracle/interfaces/IUniswapV2Factory.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import {MultiAssetMarket} from "./MultiAssetMarket.sol";
 import {MarketToken} from "./MarketToken.sol";
 import {TradeStorage} from "../positions/TradeStorage.sol";
 import {RewardTracker} from "../rewards/RewardTracker.sol";
@@ -22,6 +21,7 @@ import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {LiquidityLocker} from "../rewards/LiquidityLocker.sol";
 import {TransferStakedTokens} from "../rewards/TransferStakedTokens.sol";
 import {Roles} from "../access/Roles.sol";
+import {Pool} from "./Pool.sol";
 
 /// @dev Needs MarketFactory Role
 /**
@@ -58,7 +58,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     mapping(string ticker => address[] markets) public marketsByTicker;
 
     bool private isInitialized;
-    IMarket.Config public defaultConfig;
+    Pool.Config public defaultConfig;
     address public feeReceiver;
     uint256 public marketCreationFee;
     uint256 public marketExecutionFee;
@@ -84,7 +84,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     }
 
     function initialize(
-        IMarket.Config memory _defaultConfig,
+        Pool.Config memory _defaultConfig,
         address _priceFeed,
         address _referralStorage,
         address _positionManager,
@@ -116,7 +116,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         uniV3Factory = IUniswapV3Factory(_uniV3Factory);
     }
 
-    function setDefaultConfig(IMarket.Config memory _defaultConfig) external onlyAdmin {
+    function setDefaultConfig(Pool.Config memory _defaultConfig) external onlyAdmin {
         defaultConfig = _defaultConfig;
         emit DefaultConfigSet();
     }
@@ -246,32 +246,19 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         MarketToken marketToken =
             new MarketToken(_params.marketTokenName, _params.marketTokenSymbol, address(roleStorage));
         // Create new Market contract
-        IMarket market;
-        if (_params.isMultiAsset) {
-            market = new MultiAssetMarket(
-                defaultConfig,
-                _params.owner,
-                feeReceiver,
-                address(feeDistributor),
-                WETH,
-                USDC,
-                address(marketToken),
-                _params.indexTokenTicker,
-                address(roleStorage)
-            );
-        } else {
-            market = new Market(
-                defaultConfig,
-                _params.owner,
-                feeReceiver,
-                address(feeDistributor),
-                WETH,
-                USDC,
-                address(marketToken),
-                _params.indexTokenTicker,
-                address(roleStorage)
-            );
-        }
+        IMarket market = new Market(
+            defaultConfig,
+            _params.owner,
+            feeReceiver,
+            address(feeDistributor),
+            WETH,
+            USDC,
+            address(marketToken),
+            _params.indexTokenTicker,
+            _params.isMultiAsset,
+            address(roleStorage)
+        );
+
         // Create new TradeStorage contract
         TradeStorage tradeStorage = new TradeStorage(market, referralStorage, priceFeed, address(roleStorage));
         // Create new Reward Tracker contract

@@ -14,6 +14,7 @@ import {MathUtils} from "../libraries/MathUtils.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {Oracle} from "../oracle/Oracle.sol";
+import {Pool} from "./Pool.sol";
 
 library MarketLogic {
     using SafeERC20 for IERC20;
@@ -85,7 +86,7 @@ library MarketLogic {
     /**
      * ============================= Validations =============================
      */
-    function validateConfig(IMarket.Config calldata _config) external pure {
+    function validateConfig(Pool.Config calldata _config) external pure {
         /* 1. Validate the initial inputs */
         // Check Leverage is within bounds
         if (_config.maxLeverage < MIN_LEVERAGE || _config.maxLeverage > MAX_LEVERAGE) {
@@ -101,34 +102,34 @@ library MarketLogic {
         }
         /* 2. Validate the Funding Values */
         // Check the Max Velocity is within bounds
-        if (_config.funding.maxVelocity < MIN_VELOCITY || _config.funding.maxVelocity > MAX_VELOCITY) {
+        if (_config.maxFundingVelocity < MIN_VELOCITY || _config.maxFundingVelocity > MAX_VELOCITY) {
             revert MarketLogic_InvalidMaxVelocity();
         }
         // Check the Skew Scale is within bounds
-        if (_config.funding.skewScale < MIN_SKEW_SCALE || _config.funding.skewScale > MAX_SKEW_SCALE) {
+        if (_config.skewScale < MIN_SKEW_SCALE || _config.skewScale > MAX_SKEW_SCALE) {
             revert MarketLogic_InvalidSkewScale();
         }
         /* 3. Validate Impact Values */
         // Check Skew Scalars are > 0 and <= 100%
-        if (_config.impact.positiveSkewScalar <= 0 || _config.impact.positiveSkewScalar > SIGNED_SCALAR) {
+        if (_config.positiveSkewScalar <= 0 || _config.positiveSkewScalar > SIGNED_SCALAR) {
             revert MarketLogic_InvalidSkewScalar();
         }
-        if (_config.impact.negativeSkewScalar <= 0 || _config.impact.negativeSkewScalar > SIGNED_SCALAR) {
+        if (_config.negativeSkewScalar <= 0 || _config.negativeSkewScalar > SIGNED_SCALAR) {
             revert MarketLogic_InvalidSkewScalar();
         }
         // Check negative skew scalar is >= positive skew scalar
-        if (_config.impact.negativeSkewScalar < _config.impact.positiveSkewScalar) {
+        if (_config.negativeSkewScalar < _config.positiveSkewScalar) {
             revert MarketLogic_InvalidSkewScalar();
         }
         // Check Liquidity Scalars are > 0 and <= 100%
-        if (_config.impact.positiveLiquidityScalar <= 0 || _config.impact.positiveLiquidityScalar > SIGNED_SCALAR) {
+        if (_config.positiveLiquidityScalar <= 0 || _config.positiveLiquidityScalar > SIGNED_SCALAR) {
             revert MarketLogic_InvalidLiquidityScalar();
         }
-        if (_config.impact.negativeLiquidityScalar <= 0 || _config.impact.negativeLiquidityScalar > SIGNED_SCALAR) {
+        if (_config.negativeLiquidityScalar <= 0 || _config.negativeLiquidityScalar > SIGNED_SCALAR) {
             revert MarketLogic_InvalidLiquidityScalar();
         }
         // Check negative liquidity scalar is >= positive liquidity scalar
-        if (_config.impact.negativeLiquidityScalar < _config.impact.positiveLiquidityScalar) {
+        if (_config.negativeLiquidityScalar < _config.positiveLiquidityScalar) {
             revert MarketLogic_InvalidLiquidityScalar();
         }
     }
@@ -312,8 +313,8 @@ library MarketLogic {
      */
     function addToken(
         IPriceFeed priceFeed,
-        IMarket.MarketStorage storage marketStorage,
-        IMarket.Config calldata _config,
+        Pool.Storage storage marketStorage,
+        Pool.Config calldata _config,
         string memory _ticker,
         bytes calldata _newAllocations,
         bytes32 _priceRequestKey
@@ -327,9 +328,7 @@ library MarketLogic {
         // Reallocate
         reallocate(priceFeed, _newAllocations, _priceRequestKey);
         // Initialize Storage
-        marketStorage.config = _config;
-        marketStorage.funding.lastFundingUpdate = uint48(block.timestamp);
-        marketStorage.borrowing.lastBorrowUpdate = uint48(block.timestamp);
+        Pool.initialize(marketStorage, _config);
         emit TokenAdded(_ticker);
     }
 
@@ -387,56 +386,6 @@ library MarketLogic {
         if (total != TOTAL_ALLOCATION) revert MarketLogic_InvalidCumulativeAllocation();
     }
 
-    function updateMarketState(
-        IMarket.MarketStorage storage marketStorage,
-        string calldata _ticker,
-        uint256 _sizeDelta,
-        uint256 _indexPrice,
-        uint256 _impactedPrice,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit,
-        bool _isLong,
-        bool _isIncrease
-    ) internal {
-        IMarket market = IMarket(address(this));
-        // If invalid ticker, revert
-        if (!market.isAssetInMarket(_ticker)) revert MarketLogic_InvalidTicker();
-        // 1. Depends on Open Interest Delta to determine Skew
-        marketStorage.funding = Funding.updateState(market, marketStorage.funding, _ticker, _indexPrice);
-        if (_sizeDelta != 0) {
-            // Use Impacted Price for Entry
-            // 2. Relies on Open Interest Delta
-            _updateWeightedAverages(
-                marketStorage,
-                market,
-                _ticker,
-                _impactedPrice == 0 ? _indexPrice : _impactedPrice, // If no price impact, set to the index price
-                _isIncrease ? int256(_sizeDelta) : -int256(_sizeDelta),
-                _isLong
-            );
-            // 3. Updated pre-borrowing rate if size delta > 0
-            if (_isIncrease) {
-                if (_isLong) {
-                    marketStorage.openInterest.longOpenInterest += _sizeDelta;
-                } else {
-                    marketStorage.openInterest.shortOpenInterest += _sizeDelta;
-                }
-            } else {
-                if (_isLong) {
-                    marketStorage.openInterest.longOpenInterest -= _sizeDelta;
-                } else {
-                    marketStorage.openInterest.shortOpenInterest -= _sizeDelta;
-                }
-            }
-        }
-        // 4. Relies on Updated Open interest
-        marketStorage.borrowing = Borrowing.updateState(
-            market, marketStorage.borrowing, _ticker, _collateralPrice, _collateralBaseUnit, _isLong
-        );
-        // Fire Event
-        emit MarketStateUpdated(_ticker, _isLong);
-    }
-
     /**
      * ============================= Token Transfers =============================
      */
@@ -465,42 +414,6 @@ library MarketLogic {
     /**
      * ========================= Private Functions =========================
      */
-
-    /**
-     * Updates the weighted average values for the market. Both rely on the market condition pre-open interest update.
-     */
-    function _updateWeightedAverages(
-        IMarket.MarketStorage storage marketStorage,
-        IMarket market,
-        string calldata _ticker,
-        uint256 _priceUsd,
-        int256 _sizeDeltaUsd,
-        bool _isLong
-    ) private {
-        if (_priceUsd == 0) revert MarketLogic_PriceIsZero();
-        if (_sizeDeltaUsd == 0) return;
-
-        if (_isLong) {
-            marketStorage.pnl.longAverageEntryPriceUsd = MarketUtils.calculateWeightedAverageEntryPrice(
-                marketStorage.pnl.longAverageEntryPriceUsd,
-                marketStorage.openInterest.longOpenInterest,
-                _sizeDeltaUsd,
-                _priceUsd
-            );
-            marketStorage.borrowing.weightedAvgCumulativeLong =
-                Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, true);
-        } else {
-            marketStorage.pnl.shortAverageEntryPriceUsd = MarketUtils.calculateWeightedAverageEntryPrice(
-                marketStorage.pnl.shortAverageEntryPriceUsd,
-                marketStorage.openInterest.shortOpenInterest,
-                _sizeDeltaUsd,
-                _priceUsd
-            );
-            marketStorage.borrowing.weightedAvgCumulativeShort =
-                Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, false);
-        }
-    }
-
     function _validateOpenInterest(
         IMarket market,
         IPriceFeed priceFeed,
@@ -515,14 +428,14 @@ library MarketLogic {
         // Get the Long Max Oi
         uint256 longMaxOi =
             MarketUtils.getAvailableOiUsd(market, _ticker, indexPrice, _longSignedPrice, indexBaseUnit, true);
-        IMarket.OpenInterestValues memory oi = market.getOpenInterestValues(_ticker);
+        (uint256 longOi, uint256 shortOi) = market.getOpenInterestValues(_ticker);
         // Get the Current oi
-        if (longMaxOi < oi.longOpenInterest) revert MarketLogic_InvalidAllocation();
+        if (longMaxOi < longOi) revert MarketLogic_InvalidAllocation();
         // Get the Short Max Oi
         uint256 shortMaxOi =
             MarketUtils.getAvailableOiUsd(market, _ticker, indexPrice, _shortSignedPrice, indexBaseUnit, false);
         // Get the Current oi
-        if (shortMaxOi < oi.shortOpenInterest) revert MarketLogic_InvalidAllocation();
+        if (shortMaxOi < shortOi) revert MarketLogic_InvalidAllocation();
     }
 
     function _generateKey(address _owner, address _tokenIn, uint256 _tokenAmount, bool _isDeposit)

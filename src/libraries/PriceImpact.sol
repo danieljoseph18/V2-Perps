@@ -28,7 +28,10 @@ library PriceImpact {
     int256 private constant SIGNED_PRICE_PRECISION = 1e30;
 
     struct ImpactState {
-        IMarket.ImpactConfig impact;
+        int16 positiveSkewScalar;
+        int16 negativeSkewScalar;
+        int16 positiveLiquidityScalar;
+        int16 negativeLiquidityScalar;
         uint256 longOi;
         uint256 shortOi;
         uint256 initialTotalOi;
@@ -54,7 +57,12 @@ library PriceImpact {
         if (_request.input.sizeDelta == 0) revert PriceImpact_SizeDeltaIsZero();
 
         ImpactState memory state;
-        state.impact = MarketUtils.getImpactConfig(market, _request.input.ticker);
+        (
+            state.positiveSkewScalar,
+            state.negativeSkewScalar,
+            state.positiveLiquidityScalar,
+            state.negativeLiquidityScalar
+        ) = market.getImpactValues(_request.input.ticker);
         // Get long / short Oi -> used to calculate skew
         state.longOi = MarketUtils.getOpenInterest(market, _request.input.ticker, true);
         state.shortOi = MarketUtils.getOpenInterest(market, _request.input.ticker, false);
@@ -108,8 +116,8 @@ library PriceImpact {
                 state.sizeDeltaUsd,
                 0,
                 state.initialSkew,
-                state.impact.positiveSkewScalar,
-                state.impact.positiveLiquidityScalar,
+                state.positiveSkewScalar,
+                state.positiveLiquidityScalar,
                 state.initialTotalOi,
                 state.updatedTotalOi,
                 state.availableOi,
@@ -120,8 +128,8 @@ library PriceImpact {
                 state.sizeDeltaUsd,
                 state.updatedSkew,
                 0,
-                state.impact.negativeSkewScalar,
-                state.impact.negativeLiquidityScalar,
+                state.negativeSkewScalar,
+                state.negativeLiquidityScalar,
                 state.initialTotalOi,
                 state.updatedTotalOi,
                 state.availableOi,
@@ -134,11 +142,11 @@ library PriceImpact {
             int256 skewScalar;
             int256 liquidityScalar;
             if (state.updatedSkew.abs() < state.initialSkew.abs()) {
-                skewScalar = state.impact.positiveSkewScalar;
-                liquidityScalar = state.impact.positiveLiquidityScalar;
+                skewScalar = state.positiveSkewScalar;
+                liquidityScalar = state.positiveLiquidityScalar;
             } else {
-                skewScalar = state.impact.negativeSkewScalar;
-                liquidityScalar = state.impact.negativeLiquidityScalar;
+                skewScalar = state.negativeSkewScalar;
+                liquidityScalar = state.negativeLiquidityScalar;
             }
             // Calculate the impact within bounds
             priceImpactUsd = _calculateImpact(

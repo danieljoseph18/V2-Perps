@@ -47,8 +47,6 @@ library TradeLogic {
     uint256 private constant MIN_FEE_FOR_EXECUTION = 0.05e18; // 5%
 
     struct Invariants {
-        IMarket.MarketStorage initialStorage;
-        IMarket.MarketStorage updatedStorage;
         IMarket.State initialState;
         IMarket.State updatedState;
         uint256 storedCollateral;
@@ -109,12 +107,12 @@ library TradeLogic {
         address _feeReceiver
     ) internal returns (Execution.FeeState memory feeState, Position.Request memory request) {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
-        if (address(this) != market.tradeStorage()) revert TradeLogic_InvalidCaller();
+
         // Initiate the execution
         Execution.Prices memory prices;
         (prices, request) = Execution.initiate(tradeStorage, market, priceFeed, _orderKey, _requestKey, _feeReceiver);
         // Cache the State of the Market Before the Position
-        Invariants memory invariants = _getInvariants(market, request.input.ticker, request.user, request.input.isLong);
+        Invariants memory invariants = _getInvariants(market, request.user, request.input.isLong);
         // Delete the Order from Storage
         tradeStorage.deleteOrder(_orderKey, request.input.isLimit);
         // Update the Market State for the Request
@@ -181,11 +179,9 @@ library TradeLogic {
         }
 
         // Cache the State of the Market After the Position
-        invariants.updatedStorage = market.getStorage(request.input.ticker);
         invariants.updatedState = market.getState(request.input.isLong);
 
         // Invariant Checks
-        Position.validateMarketDelta(market, invariants.initialStorage, invariants.updatedStorage, request);
         Position.validatePoolDelta(
             feeState,
             invariants.initialState,
@@ -206,7 +202,7 @@ library TradeLogic {
         address _feeReceiver
     ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
-        if (address(this) != market.tradeStorage()) revert TradeLogic_InvalidCaller();
+
         // Check that the price update was requested by the ADLer, if not, require some time to pass before enabling them to execute
         uint48 requestTimestamp = priceFeed.getRequestTimestamp(_requestKey);
         Execution.validatePriceRequest(priceFeed, _feeReceiver, _requestKey, requestTimestamp);
@@ -252,7 +248,7 @@ library TradeLogic {
         address _liquidator
     ) internal {
         ITradeStorage tradeStorage = ITradeStorage(address(this));
-        if (address(this) != market.tradeStorage()) revert TradeLogic_InvalidCaller();
+
         // Fetch the Position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         // Check the Position Exists
@@ -782,12 +778,11 @@ library TradeLogic {
         return _feeState;
     }
 
-    function _getInvariants(IMarket market, string memory _ticker, address _user, bool _isLong)
+    function _getInvariants(IMarket market, address _user, bool _isLong)
         private
         view
         returns (Invariants memory invariants)
     {
-        invariants.initialStorage = market.getStorage(_ticker);
         invariants.initialState = market.getState(_isLong);
         invariants.storedCollateral = market.collateralAmounts(_user, _isLong);
     }

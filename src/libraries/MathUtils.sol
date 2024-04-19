@@ -96,4 +96,12 @@ library MathUtils {
     function squared(uint256 x) external pure returns (uint256 xSquared) {
         xSquared = mulDiv(x, x, PRECISION);
     }
+
+    function expandDecimals(uint256 x, uint256 decimalsFrom, uint256 decimalsTo) external pure returns (uint256) {
+        return x * (10 ** (decimalsTo - decimalsFrom));
+    }
+
+    function expandDecimals(int256 x, uint256 decimalsFrom, uint256 decimalsTo) external pure returns (int256) {
+        return x * int256(10 ** (decimalsTo - decimalsFrom));
+    }
 }

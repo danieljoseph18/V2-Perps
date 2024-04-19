@@ -7,7 +7,6 @@ import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
 import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {mulDiv} from "@prb/math/Common.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
@@ -19,19 +18,15 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {MarketLogic} from "./MarketLogic.sol";
+import {Pool} from "./Pool.sol";
 
+/// @dev - Vault can support the trading of multiple assets under the same liquidity.
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using EnumerableMap for EnumerableMap.MarketRequestMap;
     using SignedMath for int256;
     using SafeERC20 for IERC20;
     using SafeERC20 for IMarketToken;
-
-    IMarketToken public immutable MARKET_TOKEN;
-    IRewardTracker public rewardTracker;
-    IFeeDistributor public feeDistributor;
-
-    address public tradeStorage;
 
     uint64 private constant MIN_BORROW_SCALE = 0.0001e18; // 0.01% per day
     uint64 private constant MAX_BORROW_SCALE = 0.01e18; // 1% per day
@@ -41,26 +36,36 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      */
     uint64 public constant FUNDING_VELOCITY_CLAMP = 0.00001e18; // 0.001% per day
 
+    IMarketToken public immutable MARKET_TOKEN;
     address private immutable WETH;
     address private immutable USDC;
+    bool private immutable IS_MULTI_ASSET;
 
-    EnumerableSet.Bytes32Set private assetIds;
-    bool private isInitialized;
-
-    // Owner / Configurator of the Pool
-    address private poolOwner;
-    // Address for the protocol to receive 10% of fees to
-    address private feeReceiver;
-
-    uint256 private longAccumulatedFees;
-    uint256 private shortAccumulatedFees;
-
+    /* 0. Address of the Reward Tracker contract for the Market. */
+    IRewardTracker public rewardTracker;
+    /* 1. Address of the Fee Distributor contract for the Market. */
+    IFeeDistributor feeDistributor;
+    /* 2. Address of the TradeStorage contract for the Market.*/
+    address public tradeStorage;
+    bool isInitialized;
+    /* 3. Address of the Pool Owner / Configurator. */
+    address poolOwner;
+    /* 4. Address for the protocol to receive 10% of fees to */
+    address feeReceiver;
+    /* 5. Accumulated fees from long positions */
+    uint256 public longAccumulatedFees;
+    /* 6. Accumulated fees from short positions */
+    uint256 public shortAccumulatedFees;
+    /* 7. Total long token balance */
     uint256 public longTokenBalance;
+    /* 8. Total short token balance */
     uint256 public shortTokenBalance;
+    /* 9. Long tokens reserved for liquidity */
     uint256 public longTokensReserved;
+    /* 10. Short tokens reserved for liquidity */
     uint256 public shortTokensReserved;
     /**
-     * Maximum borrowing fee per day as a percentage.
+     * 11. Maximum borrowing fee per day as a percentage.
      * The current borrowing fee will fluctuate along this scale,
      * based on the open interest to max open interest ratio.
      */
@@ -71,10 +76,11 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     // Store the Collateral Amount for each User
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
+    EnumerableSet.Bytes32Set private assetIds;
     EnumerableMap.MarketRequestMap private requests;
 
     // Each Asset's storage is tracked through this mapping
-    mapping(bytes32 assetId => MarketStorage assetStorage) private marketStorage;
+    mapping(bytes32 assetId => Pool.Storage assetStorage) private marketStorage;
 
     modifier orderExists(bytes32 _key) {
         _orderExists(_key);
@@ -85,7 +91,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      *  ========================= Constructor  =========================
      */
     constructor(
-        Config memory _config,
+        Pool.Config memory _config,
         address _poolOwner,
         address _feeReceiver,
         address _feeDistributor,
@@ -93,11 +99,13 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         address _usdc,
         address _marketToken,
         string memory _ticker,
+        bool _isMultiAsset,
         address _roleStorage
     ) RoleValidation(_roleStorage) {
         WETH = _weth;
         USDC = _usdc;
         MARKET_TOKEN = IMarketToken(_marketToken);
+        IS_MULTI_ASSET = _isMultiAsset;
         poolOwner = _poolOwner;
         feeDistributor = IFeeDistributor(_feeDistributor);
         feeReceiver = _feeReceiver;
@@ -107,10 +115,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         // Add Ticker
         tickers.push(_ticker);
         // Initialize Storage
-        marketStorage[assetId].allocationShare = 100;
-        marketStorage[assetId].config = _config;
-        marketStorage[assetId].funding.lastFundingUpdate = uint48(block.timestamp);
-        marketStorage[assetId].borrowing.lastBorrowUpdate = uint48(block.timestamp);
+        Pool.initialize(marketStorage[assetId], _config);
         emit TokenAdded(assetId);
     }
 
@@ -135,6 +140,31 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      * ========================= Setter Functions  =========================
      */
 
+    function addToken(
+        Pool.Config calldata _config,
+        string memory _ticker,
+        bytes calldata _newAllocations,
+        bytes32 _priceRequestKey
+    ) external onlyConfigurator(address(this)) nonReentrant {
+        MarketLogic.validateConfig(_config);
+        MarketLogic.addToken(
+            ITradeStorage(tradeStorage).priceFeed(),
+            marketStorage[keccak256(abi.encode(_ticker))],
+            _config,
+            _ticker,
+            _newAllocations,
+            _priceRequestKey
+        );
+    }
+
+    function removeToken(string memory _ticker, bytes calldata _newAllocations, bytes32 _priceRequestKey)
+        external
+        onlyConfigurator(address(this))
+        nonReentrant
+    {
+        MarketLogic.removeToken(ITradeStorage(tradeStorage).priceFeed(), _ticker, _newAllocations, _priceRequestKey);
+    }
+
     function transferPoolOwnership(address _newOwner) external {
         if (msg.sender != poolOwner || _newOwner == address(0)) revert Market_InvalidPoolOwner();
         poolOwner = _newOwner;
@@ -150,7 +180,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         borrowScale = _borrowScale;
     }
 
-    function updateConfig(Config calldata _config, string calldata _ticker) external {
+    function updateConfig(Pool.Config calldata _config, string calldata _ticker) external {
         MarketLogic.validateConfig(_config);
         bytes32 assetId = keccak256(abi.encode(_ticker));
         marketStorage[assetId].config = _config;
@@ -158,7 +188,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     }
 
     /**
-     * ========================= Deposit / Withdrawal Functions  =========================
+     * ========================= User Interaction Functions  =========================
      */
     function createRequest(
         address _owner,
@@ -217,27 +247,52 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Callback Functions  =========================
      */
-    function setAllocationShare(string calldata, uint256) external onlyCallback {
-        // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationShare;
-        revert Market_SingleAssetMarket();
+    function setAllocationShare(string calldata _ticker, uint8 _allocationShare) external onlyCallback {
+        if (!IS_MULTI_ASSET) revert Market_SingleAssetMarket();
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        marketStorage[assetId].allocationShare = _allocationShare;
     }
 
-    function addAsset(string calldata) external onlyCallback {
-        // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationShare;
-        revert Market_SingleAssetMarket();
+    function addAsset(string calldata _ticker) external onlyCallback {
+        if (!IS_MULTI_ASSET) revert Market_SingleAssetMarket();
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        if (!assetIds.add(assetId)) revert Market_FailedToAddAssetId();
+        tickers.push(_ticker);
+        emit TokenAdded(assetId);
     }
 
-    function removeAsset(string calldata) external onlyCallback {
-        // Redundant action to prevent compiler warning
-        delete marketStorage[bytes32(0)].allocationShare;
-        revert Market_SingleAssetMarket();
+    function removeAsset(string calldata _ticker) external onlyCallback {
+        if (!IS_MULTI_ASSET) revert Market_SingleAssetMarket();
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        if (!assetIds.remove(assetId)) revert Market_FailedToRemoveAssetId();
+        // Remove ticker by swap / pop method
+        uint16 len = uint16(tickers.length);
+        for (uint16 i = 0; i < len;) {
+            if (keccak256(abi.encode(tickers[i])) == assetId) {
+                tickers[i] = tickers[len - 1];
+                tickers.pop();
+                break;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+        // Remove storage
+        delete marketStorage[assetId];
     }
 
     /**
      * ========================= External State Functions  =========================
      */
+    /// @dev - Caller must've requested a price before calling this function
+    function reallocate(bytes calldata _allocations, bytes32 _priceRequestKey)
+        external
+        onlyConfigurator(address(this))
+        nonReentrant
+    {
+        MarketLogic.reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _priceRequestKey);
+    }
+
     function updateMarketState(
         string calldata _ticker,
         uint256 _sizeDelta,
@@ -248,8 +303,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         bool _isLong,
         bool _isIncrease
     ) external nonReentrant onlyTradeStorage(address(this)) {
-        MarketStorage storage self = marketStorage[keccak256(abi.encode(_ticker))];
-        MarketLogic.updateMarketState(
+        Pool.Storage storage self = marketStorage[keccak256(abi.encode(_ticker))];
+        Pool.updateState(
             self,
             _ticker,
             _sizeDelta,
@@ -322,16 +377,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         }
     }
 
-    /**
-     * Store the amount of collateral the user provided for their position.
-     * This is used to handle the accounting of collateral as it can fluctuate in value.
-     *
-     * Position collateral is a snapshot of the amount of collateral held by the position at
-     * entry, so stays constant.
-     *
-     * Any excess collateral will be absorbed by the pool.
-     * Any deficit will be taken from the pool.
-     */
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external
         onlyTradeStorage(address(this))
@@ -370,9 +415,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         onlyTradeStorage(address(this))
     {
         bytes32 assetId = keccak256(abi.encode(_ticker));
-        _priceImpactUsd > 0
-            ? marketStorage[assetId].impactPool += _priceImpactUsd.abs()
-            : marketStorage[assetId].impactPool -= _priceImpactUsd.abs();
+        Pool.updateImpactPool(marketStorage[assetId], _priceImpactUsd);
     }
 
     /**
@@ -398,34 +441,19 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         return assetIds.length();
     }
 
-    function getStorage(string calldata _ticker) external view returns (MarketStorage memory) {
+    function getStorage(string calldata _ticker) external view returns (Pool.Storage memory) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         return marketStorage[assetId];
     }
 
-    function getConfig(string calldata _ticker) external view returns (Config memory) {
+    function getConfig(string calldata _ticker) external view returns (Pool.Config memory) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         return marketStorage[assetId].config;
     }
 
-    function getFundingValues(string calldata _ticker) external view returns (FundingValues memory) {
+    function getCumulatives(string calldata _ticker) external view returns (Pool.Cumulatives memory) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
-        return marketStorage[assetId].funding;
-    }
-
-    function getBorrowingValues(string calldata _ticker) external view returns (BorrowingValues memory) {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        return marketStorage[assetId].borrowing;
-    }
-
-    function getOpenInterestValues(string calldata _ticker) external view returns (OpenInterestValues memory) {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        return marketStorage[assetId].openInterest;
-    }
-
-    function getPnlValues(string calldata _ticker) external view returns (PnlValues memory) {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        return marketStorage[assetId].pnl;
+        return marketStorage[assetId].cumulatives;
     }
 
     function getImpactPool(string calldata _ticker) external view returns (uint256) {
@@ -433,7 +461,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         return marketStorage[assetId].impactPool;
     }
 
-    function getAllocationShare(string calldata _ticker) external view returns (uint256) {
+    function getAllocationShare(string calldata _ticker) external view returns (uint8) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         return marketStorage[assetId].allocationShare;
     }
@@ -456,6 +484,21 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     function requestExists(bytes32 _key) external view returns (bool) {
         return requests.contains(_key);
+    }
+
+    function getImpactValues(string calldata _ticker) external view returns (int16, int16, int16, int16) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return (
+            marketStorage[assetId].config.positiveSkewScalar,
+            marketStorage[assetId].config.negativeSkewScalar,
+            marketStorage[assetId].config.positiveLiquidityScalar,
+            marketStorage[assetId].config.negativeLiquidityScalar
+        );
+    }
+
+    function getOpenInterestValues(string calldata _ticker) external view returns (uint256, uint256) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return (marketStorage[assetId].longOpenInterest, marketStorage[assetId].shortOpenInterest);
     }
 
     function getState(bool _isLong) external view returns (State memory) {
