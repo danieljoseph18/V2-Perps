@@ -2,11 +2,11 @@
 pragma solidity 0.8.23;
 
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
+import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
@@ -14,18 +14,16 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IPositionManager} from "./interfaces/IPositionManager.sol";
-import {Address} from "@openzeppelin/contracts/utils/Address.sol";
-import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
+import {LibString} from "../libraries/LibString.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
 contract Router is ReentrancyGuard, RoleValidation {
-    using SafeERC20 for IERC20;
-    using SafeERC20 for IWETH;
-    using SafeERC20 for IMarketToken;
-    using Address for address payable;
-    using Strings for uint256;
+    using SafeTransferLib for IERC20;
+    using SafeTransferLib for IWETH;
+    using SafeTransferLib for IVault;
+    using LibString for uint256;
 
     IMarketFactory private marketFactory;
     IPriceFeed private priceFeed;
@@ -154,8 +152,8 @@ contract Router is ReentrancyGuard, RoleValidation {
         bytes32 priceRequestKey = _requestPriceUpdate(priceFee, "");
         bytes32 pnlRequestKey = _requestPnlUpdate(market, priceFee);
 
-        IMarketToken marketToken = market.MARKET_TOKEN();
-        marketToken.safeTransferFrom(msg.sender, address(positionManager), _marketTokenAmountIn);
+        IVault vault = market.VAULT();
+        vault.safeTransferFrom(msg.sender, address(positionManager), _marketTokenAmountIn);
 
         market.createRequest(
             _owner, _tokenOut, _marketTokenAmountIn, _executionFee, priceRequestKey, pnlRequestKey, _shouldUnwrap, false
@@ -327,6 +325,6 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     // Send Fee to positionManager
     function _sendExecutionFee(uint256 _executionFee) private {
-        payable(address(positionManager)).sendValue(_executionFee);
+        SafeTransferLib.safeTransferETH(address(positionManager), _executionFee);
     }
 }

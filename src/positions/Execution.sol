@@ -6,8 +6,8 @@ import {Position} from "./Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {SignedMath} from "../libraries/SignedMath.sol";
+import {SafeCast} from "../libraries/SafeCast.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -15,6 +15,7 @@ import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
+import {EnumerableSet} from "../libraries/EnumerableSet.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 
 // Library for Handling Trade related logic
@@ -23,6 +24,7 @@ library Execution {
     using SafeCast for uint256;
     using MathUtils for uint256;
     using MathUtils for int256;
+    using EnumerableSet for EnumerableSet.Bytes32Set;
 
     error Execution_MinCollateralThreshold();
     error Execution_LiquidatablePosition();
@@ -36,6 +38,10 @@ library Execution {
     error Execution_InvalidPosition();
     error Execution_InvalidExecutor();
     error Execution_InvalidRequestTimestamp();
+    error Execution_StopLossAlreadySet();
+    error Execution_TakeProfitAlreadySet();
+    error Execution_OrderAlreadyExists();
+    error Execution_OrderAdditionFailed();
 
     /**
      * ========================= Data Structures =========================
@@ -192,59 +198,27 @@ library Execution {
     }
 
     /**
-     * Adjusts the execution price for ADL'd positions within specific boundaries to maintain market health.
-     * Impacted price is clamped between the average entry price (adjusted for a min profit) & index price.
-     *
-     * Steps:
-     * 1. Calculate acceleration factor based on the delta between the current PnL to pool ratio and the target ratio.
-     *    accelerationFactor = (pnl to pool ratio - target pnl ratio) / target pnl ratio
-     *
-     * 2. Compute the effective PnL impact adjusted by this acceleration factor.
-     *    pnlImpact = pnlBeingRealized * accelerationFactor
-     *
-     * 3. Determine the impact this PnL has as a percentage of the total pool.
-     *    poolImpact = pnlImpact / _poolUsd (Capped at 100%)
-     *
-     * 4. Calculate min profit price (price where profit = minProfitPercentage)
-     *    minProfitPrice = _averageEntryPrice +- (_averageEntryPrice * minProfitPercentage)
-     *
-     * 5. Calculate the price delta based on the pool impact.
-     *    priceDelta = (_indexPrice - minProfitPrice) * poolImpact --> returns a % of the max price delta
-     *
-     * 6. Apply the price delta to the index price.
-     *    impactedPrice = _indexPrice =- priceDelta
-     *
-     * This function is crucial for ensuring market solvency in extreme situations.
-     */
-    function _executeAdlImpact(
-        uint256 _indexPrice,
-        uint256 _averageEntryPrice,
-        uint256 _pnlBeingRealized,
-        uint256 _poolUsd,
-        uint256 _pnlToPoolRatio,
-        bool _isLong
-    ) private pure returns (uint256 impactedPrice) {
-        // Calculate the acceleration factor --> accelerate the effective price impact
-        uint256 accelerationFactor = (_pnlToPoolRatio - TARGET_PNL_FACTOR).percentage(TARGET_PNL_FACTOR);
-        // Calculate the effective pnl impact
-        uint256 pnlImpact = _pnlBeingRealized * accelerationFactor / PRECISION;
-        // Calculate the pnl to pool impact factor
-        uint256 poolImpact = pnlImpact.percentage(_poolUsd);
-        if (poolImpact > PRECISION) poolImpact = PRECISION;
-        // Calculate the minimum profit price for the position (where profit = 5% of position) --> so average entry price + 5%
-        uint256 minProfitPrice = _isLong
-            ? _averageEntryPrice + (_averageEntryPrice.percentage(MIN_PROFIT_PERCENTAGE))
-            : _averageEntryPrice - (_averageEntryPrice.percentage(MIN_PROFIT_PERCENTAGE));
-        // Apply the pool impact to the scale of the price
-        uint256 priceDelta = (_indexPrice.delta(minProfitPrice) * poolImpact) / PRECISION;
-        // Apply the price delta to the index price
-        if (_isLong) impactedPrice = _indexPrice - priceDelta;
-        else impactedPrice = _indexPrice + priceDelta;
-    }
-
-    /**
      * ========================= Main Execution Functions =========================
      */
+
+    /// @notice Creates a new Order Request
+    function createOrderRequest(Position.Request calldata _request, EnumerableSet.Bytes32Set storage orderSet)
+        internal
+    {
+        ITradeStorage tradeStorage = ITradeStorage(address(this));
+        // Generate the Key
+        bytes32 orderKey = Position.generateOrderKey(_request);
+        // Check if the Order already exists
+        if (orderSet.contains(orderKey)) revert Execution_OrderAlreadyExists();
+        // Add the Order to the Set
+        bool success = orderSet.add(orderKey);
+        if (!success) revert Execution_OrderAdditionFailed();
+        // Add the order to the mapping
+        tradeStorage.createOrder(_request);
+        // If SL / TP, tie to the position
+        _attachConditionalOrder(tradeStorage, _request, orderKey);
+    }
+
     function increaseCollateral(
         IMarket market,
         ITradeStorage tradeStorage,
@@ -871,9 +845,81 @@ library Execution {
         (positionFee, affiliateRebate, referrer) = Referral.applyFeeDiscount(referralStorage, _user, positionFee);
     }
     /**
-     * Extrapolated into an private function to prevent STD Errors
+     * Adjusts the execution price for ADL'd positions within specific boundaries to maintain market health.
+     * Impacted price is clamped between the average entry price (adjusted for a min profit) & index price.
+     *
+     * Steps:
+     * 1. Calculate acceleration factor based on the delta between the current PnL to pool ratio and the target ratio.
+     *    accelerationFactor = (pnl to pool ratio - target pnl ratio) / target pnl ratio
+     *
+     * 2. Compute the effective PnL impact adjusted by this acceleration factor.
+     *    pnlImpact = pnlBeingRealized * accelerationFactor
+     *
+     * 3. Determine the impact this PnL has as a percentage of the total pool.
+     *    poolImpact = pnlImpact / _poolUsd (Capped at 100%)
+     *
+     * 4. Calculate min profit price (price where profit = minProfitPercentage)
+     *    minProfitPrice = _averageEntryPrice +- (_averageEntryPrice * minProfitPercentage)
+     *
+     * 5. Calculate the price delta based on the pool impact.
+     *    priceDelta = (_indexPrice - minProfitPrice) * poolImpact --> returns a % of the max price delta
+     *
+     * 6. Apply the price delta to the index price.
+     *    impactedPrice = _indexPrice =- priceDelta
+     *
+     * This function is crucial for ensuring market solvency in extreme situations.
      */
 
+    function _executeAdlImpact(
+        uint256 _indexPrice,
+        uint256 _averageEntryPrice,
+        uint256 _pnlBeingRealized,
+        uint256 _poolUsd,
+        uint256 _pnlToPoolRatio,
+        bool _isLong
+    ) private pure returns (uint256 impactedPrice) {
+        // Calculate the acceleration factor --> accelerate the effective price impact
+        uint256 accelerationFactor = (_pnlToPoolRatio - TARGET_PNL_FACTOR).percentage(TARGET_PNL_FACTOR);
+        // Calculate the effective pnl impact
+        uint256 pnlImpact = _pnlBeingRealized * accelerationFactor / PRECISION;
+        // Calculate the pnl to pool impact factor
+        uint256 poolImpact = pnlImpact.percentage(_poolUsd);
+        if (poolImpact > PRECISION) poolImpact = PRECISION;
+        // Calculate the minimum profit price for the position (where profit = 5% of position) --> so average entry price + 5%
+        uint256 minProfitPrice = _isLong
+            ? _averageEntryPrice + (_averageEntryPrice.percentage(MIN_PROFIT_PERCENTAGE))
+            : _averageEntryPrice - (_averageEntryPrice.percentage(MIN_PROFIT_PERCENTAGE));
+        // Apply the pool impact to the scale of the price
+        uint256 priceDelta = (_indexPrice.delta(minProfitPrice) * poolImpact) / PRECISION;
+        // Apply the price delta to the index price
+        if (_isLong) impactedPrice = _indexPrice - priceDelta;
+        else impactedPrice = _indexPrice + priceDelta;
+    }
+
+    /// @dev - Attaches a Conditional Order to a Position --> Let's us ensure SL / TP orders only affect the position they're assigned to.
+    function _attachConditionalOrder(ITradeStorage tradeStorage, Position.Request calldata _request, bytes32 _orderKey)
+        private
+    {
+        bytes32 positionKey = Position.generateKey(_request);
+        Position.Data memory position = tradeStorage.getPosition(positionKey);
+        // If Request is a SL, tie to the Stop Loss Key for the Position
+        if (_request.requestType == Position.RequestType.STOP_LOSS) {
+            if (position.stopLossKey != bytes32(0)) revert Execution_StopLossAlreadySet();
+            if (position.user == address(0)) revert Execution_PositionNotActive();
+            position.stopLossKey = _orderKey;
+            tradeStorage.updatePosition(position, positionKey);
+        } else if (_request.requestType == Position.RequestType.TAKE_PROFIT) {
+            // If Request is a TP, tie to the Take Profit Key for the Position
+            if (position.takeProfitKey != bytes32(0)) revert Execution_TakeProfitAlreadySet();
+            if (position.user == address(0)) revert Execution_PositionNotActive();
+            position.takeProfitKey = _orderKey;
+            tradeStorage.updatePosition(position, positionKey);
+        }
+    }
+
+    /**
+     * Extrapolated into an private function to prevent STD Errors
+     */
     function _getPnlFactor(IMarket market, Prices memory _prices, string memory _ticker, bool _isLong)
         private
         view

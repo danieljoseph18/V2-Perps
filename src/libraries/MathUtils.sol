@@ -2,8 +2,8 @@
 pragma solidity 0.8.23;
 
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {SignedMath} from "./SignedMath.sol";
+import {SafeCast} from "./SafeCast.sol";
 
 library MathUtils {
     using SignedMath for int256;

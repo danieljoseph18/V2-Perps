@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {IERC20} from "../tokens/interfaces/IERC20.sol";
+import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IFeeDistributor} from "./interfaces/IFeeDistributor.sol";
 import {IRewardTracker} from "./interfaces/IRewardTracker.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
@@ -11,7 +11,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 
 contract FeeDistributor is ReentrancyGuard, RoleValidation {
-    using SafeERC20 for IERC20;
+    using SafeTransferLib for IERC20;
 
     error FeeDistributor_InvalidMarket();
     error FeeDistributor_InvalidRewardTracker();

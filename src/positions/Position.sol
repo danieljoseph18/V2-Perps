@@ -3,13 +3,14 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {SignedMath} from "../libraries/SignedMath.sol";
 import {SD59x18, sd, unwrap, exp} from "@prb/math/SD59x18.sol";
 import {Execution} from "../positions/Execution.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {SafeCast} from "../libraries/SafeCast.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 
@@ -49,6 +50,10 @@ library Position {
     error Position_InvalidFeeUpdate();
     error Position_InvalidPoolUpdate();
     error Position_InvalidVaultUpdate();
+    error Position_InvalidLiquidationFee();
+    error Position_InvalidTradingFee();
+    error Position_InvalidAdlFee();
+    error Position_InvalidFeeForExecution();
 
     uint8 private constant MIN_LEVERAGE = 100; // 1x
     uint8 private constant LEVERAGE_PRECISION = 100;
@@ -58,6 +63,14 @@ library Position {
     uint128 private constant MIN_SLIPPAGE = 0.0001e30; // 0.01%
     uint128 private constant MAX_SLIPPAGE = 0.9999e30; // 99.99%
     uint256 private constant MAX_ADL_PERCENTAGE = 0.66e18; // 66%
+    uint64 private constant MAX_LIQUIDATION_FEE = 0.1e18; // 10%
+    uint64 private constant MIN_LIQUIDATION_FEE = 0.001e18; // 1%
+    uint64 private constant MAX_TRADING_FEE = 0.01e18; // 1%
+    uint64 private constant MIN_TRADING_FEE = 0.00001e18; // 0.001%
+    uint64 private constant MAX_ADL_FEE = 0.05e18; // 5%
+    uint64 private constant MIN_ADL_FEE = 0.0001e18; // 0.01%
+    uint64 private constant MAX_FEE_FOR_EXECUTION = 0.3e18; // 30%
+    uint64 private constant MIN_FEE_FOR_EXECUTION = 0.05e18; // 5%
 
     // Data for an Open Position
     struct Data {
@@ -65,10 +78,10 @@ library Position {
         address user;
         address collateralToken; // WETH long, USDC short
         bool isLong;
+        uint48 lastUpdate;
         uint256 collateral; // USD
         uint256 size; // USD
         uint256 weightedAvgEntryPrice;
-        uint48 lastUpdate;
         FundingParams fundingParams;
         BorrowingParams borrowingParams;
         /**
@@ -82,7 +95,7 @@ library Position {
 
     struct FundingParams {
         int256 lastFundingAccrued;
-        int256 fundingOwed; // in Collateral Tokens
+        int256 fundingOwed;
     }
 
     struct BorrowingParams {
@@ -149,7 +162,7 @@ library Position {
      * =========================== Validation Functions ============================
      */
     function validateInputParameters(Input memory _trade, Conditionals memory _conditionals, address _market)
-        public
+        external
         view
         returns (bytes32 positionKey)
     {
@@ -168,6 +181,24 @@ library Position {
         if (_conditionals.takeProfitPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
     }
 
+    function validateFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
+        external
+        pure
+    {
+        if (_liquidationFee > MAX_LIQUIDATION_FEE || _liquidationFee < MIN_LIQUIDATION_FEE) {
+            revert Position_InvalidLiquidationFee();
+        }
+        if (_positionFee > MAX_TRADING_FEE || _positionFee < MIN_TRADING_FEE) {
+            revert Position_InvalidTradingFee();
+        }
+        if (_adlFee > MAX_ADL_FEE || _adlFee < MIN_ADL_FEE) {
+            revert Position_InvalidAdlFee();
+        }
+        if (_feeForExecution > MAX_FEE_FOR_EXECUTION || _feeForExecution < MIN_FEE_FOR_EXECUTION) {
+            revert Position_InvalidFeeForExecution();
+        }
+    }
+
     /**
      * For an increase:
      * - Fees should be accumulated in the fee pool
@@ -182,8 +213,8 @@ library Position {
      */
     function validatePoolDelta(
         Execution.FeeState memory _feeState,
-        IMarket.State memory _marketBefore,
-        IMarket.State memory _marketAfter,
+        IVault.State memory _marketBefore,
+        IVault.State memory _marketAfter,
         uint256 _collateralDelta,
         uint256 _userCollateralBefore,
         bool _isIncrease,

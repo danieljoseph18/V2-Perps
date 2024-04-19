@@ -2,8 +2,8 @@
 pragma solidity 0.8.23;
 
 import {RewardTracker} from "./RewardTracker.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
+import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {TransferStakedTokens} from "./TransferStakedTokens.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {ILiquidityLocker} from "./interfaces/ILiquidityLocker.sol";

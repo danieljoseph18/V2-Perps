@@ -2,11 +2,11 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {SignedMath} from "../libraries/SignedMath.sol";
 import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {SafeCast} from "./SafeCast.sol";
 import {Execution} from "../positions/Execution.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "./MathUtils.sol";

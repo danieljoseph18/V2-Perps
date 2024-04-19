@@ -5,31 +5,29 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "../tokens/interfaces/IERC20.sol";
+import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {Execution} from "../positions/Execution.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
-import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {Roles} from "../access/Roles.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
-import {IMarketToken} from "../markets/interfaces/IMarketToken.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
 // Contract picks up and executes all requests, as well as holds intermediary funds.
 contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
-    using SafeERC20 for IERC20;
-    using SafeERC20 for IWETH;
-    using SafeERC20 for IMarketToken;
-    using Address for address payable;
+    using SafeTransferLib for IERC20;
+    using SafeTransferLib for IWETH;
+    using SafeTransferLib for IVault;
 
     IWETH immutable WETH;
     IERC20 immutable USDC;
@@ -89,11 +87,11 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
-        IMarket.ExecuteDeposit memory params = MarketUtils.constructDepositParams(priceFeed, market, _key);
-
+        IVault.ExecuteDeposit memory params = MarketUtils.constructDepositParams(priceFeed, market, _key);
+        address vault = address(market.VAULT());
         // Approve the Market to spend the Collateral
-        if (params.deposit.isLongToken) WETH.approve(address(market), params.deposit.amountIn);
-        else USDC.approve(address(market), params.deposit.amountIn);
+        if (params.deposit.isLongToken) WETH.approve(address(vault), params.deposit.amountIn);
+        else USDC.approve(address(vault), params.deposit.amountIn);
 
         // Execute the Deposit
         market.executeDeposit(params);
@@ -105,8 +103,10 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         else feeToRefund = params.deposit.executionFee - feeForExecutor;
 
         // Send Execution Fee + Rebate
-        payable(params.deposit.owner).sendValue(feeForExecutor);
-        if (feeToRefund > 0) payable(msg.sender).sendValue(feeToRefund);
+        SafeTransferLib.safeTransferETH(params.deposit.owner, feeForExecutor);
+        if (feeToRefund > 0) {
+            SafeTransferLib.safeTransferETH(msg.sender, feeToRefund);
+        }
     }
 
     function executeWithdrawal(IMarket market, bytes32 _key) external payable nonReentrant {
@@ -115,11 +115,11 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
         // Fetch the request
-        IMarket.ExecuteWithdrawal memory params = MarketUtils.constructWithdrawalParams(priceFeed, market, _key);
+        IVault.ExecuteWithdrawal memory params = MarketUtils.constructWithdrawalParams(priceFeed, market, _key);
         // Calculate amountOut
         params.amountOut = MarketUtils.calculateWithdrawalAmount(
             market,
-            params.marketToken,
+            params.vault,
             params.longPrices,
             params.shortPrices,
             params.withdrawal.amountIn,
@@ -130,7 +130,8 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         );
 
         // Approve the Market to spend deposit tokens
-        IERC20(params.marketToken).approve(address(market), params.withdrawal.amountIn);
+        // @audit - could someone front-run this approval step?
+        IERC20(params.vault).approve(address(params.vault), params.withdrawal.amountIn);
 
         // Execute the Withdrawal
         market.executeWithdrawal(params);
@@ -140,10 +141,10 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
         uint256 feeToRefund = params.withdrawal.executionFee - feeForExecutor;
 
-        payable(params.withdrawal.owner).sendValue(feeForExecutor);
+        SafeTransferLib.safeTransferETH(msg.sender, feeForExecutor);
 
         if (feeToRefund > 0) {
-            payable(msg.sender).sendValue(feeToRefund);
+            SafeTransferLib.safeTransferETH(params.withdrawal.owner, feeToRefund);
         }
     }
 
@@ -156,7 +157,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         if (shouldUnwrap) {
             // If should unwrap, unwrap the WETH and transfer ETH to the user
             WETH.withdraw(amountOut);
-            payable(msg.sender).sendValue(amountOut);
+            SafeTransferLib.safeTransferETH(msg.sender, amountOut);
         } else {
             IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
         }
@@ -186,9 +187,9 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         uint256 executionCost = (initialGas - gasleft()) * tx.gasprice;
 
         uint256 feeToRefund = request.input.executionFee - executionCost;
-        payable(msg.sender).sendValue(executionCost);
+        SafeTransferLib.safeTransferETH(msg.sender, executionCost);
         if (feeToRefund > 0) {
-            payable(request.user).sendValue(feeToRefund);
+            SafeTransferLib.safeTransferETH(request.user, feeToRefund);
         }
     }
 
@@ -227,10 +228,10 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         (uint256 refundAmount, uint256 amountForExecutor) = Gas.getRefundForCancellation(request.input.executionFee);
         if (msg.sender == request.user) {
             // If user executes their own cancellation, send in a single transaction
-            payable(msg.sender).sendValue(refundAmount + amountForExecutor);
+            SafeTransferLib.safeTransferETH(msg.sender, refundAmount + amountForExecutor);
         } else {
-            payable(request.user).sendValue(refundAmount);
-            payable(msg.sender).sendValue(amountForExecutor);
+            SafeTransferLib.safeTransferETH(request.user, refundAmount);
+            SafeTransferLib.safeTransferETH(msg.sender, amountForExecutor);
         }
     }
 

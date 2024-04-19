@@ -4,7 +4,7 @@
 
 pragma solidity 0.8.23;
 
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {EnumerableSet} from "./EnumerableSet.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";

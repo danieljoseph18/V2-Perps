@@ -2,8 +2,8 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "./interfaces/IMarket.sol";
-import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IVault, IERC20} from "./interfaces/IVault.sol";
+import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {MarketUtils} from "./MarketUtils.sol";
@@ -11,14 +11,14 @@ import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {SignedMath} from "../libraries/SignedMath.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Pool} from "./Pool.sol";
 
 library MarketLogic {
-    using SafeERC20 for IERC20;
-    using SafeERC20 for IMarketToken;
+    using SafeTransferLib for IERC20;
+    using SafeTransferLib for IVault;
     using MathUtils for uint256;
     using SignedMath for int256;
     using EnumerableMap for EnumerableMap.MarketRequestMap;
@@ -134,6 +134,23 @@ library MarketLogic {
         }
     }
 
+    function validateAction(
+        IVault.State memory _initialState,
+        uint256 _amountIn,
+        uint256 _amountOut,
+        bool _isLongToken,
+        bool _isDeposit
+    ) external view {
+        // Cache the state after
+        IVault.State memory updatedState = IVault(address(this)).getState(_isLongToken);
+        // Validate the Vault State Delta
+        if (_isDeposit) {
+            MarketUtils.validateDeposit(_initialState, updatedState, _amountIn, _isLongToken);
+        } else {
+            MarketUtils.validateWithdrawal(_initialState, updatedState, _amountIn, _amountOut, _isLongToken);
+        }
+    }
+
     /**
      * ============================= Admin Functions =============================
      */
@@ -233,82 +250,6 @@ library MarketLogic {
     }
 
     /**
-     * ============================= Market Execution =============================
-     */
-    function executeDeposit(
-        EnumerableMap.MarketRequestMap storage requests,
-        IMarket.ExecuteDeposit calldata _params,
-        address _tokenIn
-    ) internal {
-        if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
-        // Cache the initial state
-        IMarket.State memory initialState = _params.market.getState(_params.deposit.isLongToken);
-        // Transfer deposit tokens from msg.sender
-        IERC20(_tokenIn).safeTransferFrom(msg.sender, address(this), _params.deposit.amountIn);
-        // Delete Deposit Request -> keep
-        if (!requests.remove(_params.key)) revert MarketLogic_FailedToRemoveRequest();
-
-        (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount) = MarketUtils.calculateDepositAmounts(_params);
-
-        // update storage -> keep
-        _params.market.accumulateFees(fee, _params.deposit.isLongToken);
-        _params.market.updatePoolBalance(afterFeeAmount, _params.deposit.isLongToken, true);
-
-        emit DepositExecuted(_params.key, _params.deposit.owner, _tokenIn, _params.deposit.amountIn, mintAmount);
-        // mint tokens to user
-        IMarketToken(_params.marketToken).mint(_params.deposit.owner, mintAmount);
-
-        // Validate the state change
-        _validateAction(initialState, _params.deposit.amountIn, 0, _params.deposit.isLongToken, true);
-    }
-
-    function executeWithdrawal(
-        EnumerableMap.MarketRequestMap storage requests,
-        IMarket.ExecuteWithdrawal calldata _params,
-        address _tokenOut,
-        uint256 _availableTokens // tokenBalance - tokensReserved
-    ) internal {
-        if (_params.market != IMarket(address(this))) revert MarketLogic_InvalidCaller();
-        // Cache the initial state
-        IMarket.State memory initialState = _params.market.getState(_params.withdrawal.isLongToken);
-        // Transfer Market Tokens in from msg.sender
-        IMarketToken(_params.marketToken).safeTransferFrom(msg.sender, address(this), _params.withdrawal.amountIn);
-        // Delete the Withdrawal from Storage
-        if (!requests.remove(_params.key)) revert MarketLogic_FailedToRemoveRequest();
-
-        // Calculate Amount Out after Fee
-        uint256 transferAmountOut = MarketUtils.calculateWithdrawalAmounts(_params);
-
-        // Calculate amount out / aum before burning
-        IMarketToken(_params.marketToken).burn(address(this), _params.withdrawal.amountIn);
-
-        // accumulate the fee
-        _params.market.accumulateFees(_params.amountOut - transferAmountOut, _params.withdrawal.isLongToken);
-        // validate whether the pool has enough tokens
-        if (transferAmountOut > _availableTokens) revert MarketLogic_InsufficientAvailableTokens();
-        // decrease the pool
-        _params.market.updatePoolBalance(_params.amountOut, _params.withdrawal.isLongToken, false);
-
-        emit WithdrawalExecuted(
-            _params.key, _params.withdrawal.owner, _tokenOut, _params.withdrawal.amountIn, transferAmountOut
-        );
-        // transfer tokens to user
-        transferOutTokens(
-            _params.withdrawal.owner,
-            _tokenOut,
-            transferAmountOut,
-            _availableTokens,
-            _params.withdrawal.isLongToken,
-            _params.withdrawal.reverseWrap
-        );
-
-        // Validate the state change
-        _validateAction(
-            initialState, _params.withdrawal.amountIn, transferAmountOut, _params.withdrawal.isLongToken, false
-        );
-    }
-
-    /**
      * ============================= Market State Update =============================
      */
     function addToken(
@@ -401,8 +342,7 @@ library MarketLogic {
         if (_isLongToken) {
             if (_shouldUnwrap) {
                 IWETH(_tokenOut).withdraw(_amount);
-                (bool success,) = _to.call{value: _amount}("");
-                if (!success) revert MarketLogic_FailedToTransferETH();
+                SafeTransferLib.safeTransferETH(_to, _amount);
             } else {
                 IERC20(_tokenOut).safeTransfer(_to, _amount);
             }
@@ -444,22 +384,5 @@ library MarketLogic {
         returns (bytes32)
     {
         return keccak256(abi.encode(_owner, _tokenIn, _tokenAmount, _isDeposit, block.timestamp));
-    }
-
-    function _validateAction(
-        IMarket.State memory _initialState,
-        uint256 _amountIn,
-        uint256 _amountOut,
-        bool _isLongToken,
-        bool _isDeposit
-    ) private view {
-        // Cache the state after
-        IMarket.State memory updatedState = IMarket(address(this)).getState(_isLongToken);
-        // Validate the Vault State Delta
-        if (_isDeposit) {
-            MarketUtils.validateDeposit(_initialState, updatedState, _amountIn, _isLongToken);
-        } else {
-            MarketUtils.validateWithdrawal(_initialState, updatedState, _amountIn, _amountOut, _isLongToken);
-        }
     }
 }

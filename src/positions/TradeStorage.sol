@@ -5,22 +5,23 @@ import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Funding} from "../libraries/Funding.sol";
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {EnumerableSet} from "../libraries/EnumerableSet.sol";
 import {Position} from "../positions/Position.sol";
 import {Execution} from "./Execution.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {SignedMath} from "../libraries/SignedMath.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {TradeLogic} from "./TradeLogic.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
+import {ITradeEngine} from "./interfaces/ITradeEngine.sol";
 
 contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SignedMath for int256;
 
+    ITradeEngine public tradeEngine;
     IMarket public market;
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
@@ -55,6 +56,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
      * ===================================== Setter Functions =====================================
      */
     function initialize(
+        ITradeEngine _tradeEngine,
         uint64 _liquidationFee, // 0.05e18 = 5%
         uint64 _positionFee, // 0.001e18 = 0.1%
         uint64 _adlFee, // Percentage of the output amount that goes to the ADL executor, 18 D.P
@@ -63,6 +65,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         uint64 _minCancellationTime // e.g 1 minutes
     ) external onlyMarketFactory {
         if (isInitialized) revert TradeStorage_AlreadyInitialized();
+        tradeEngine = _tradeEngine;
         liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
         minCollateralUsd = _minCollateralUsd;
@@ -85,7 +88,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         external
         onlyConfigurator(address(market))
     {
-        TradeLogic.validateFees(_liquidationFee, _positionFee, _adlFee, _feeForExecution);
+        Position.validateFees(_liquidationFee, _positionFee, _adlFee, _feeForExecution);
         liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
         adlFee = _adlFee;
@@ -103,7 +106,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     /// @dev Adds Order to EnumerableSet
     function createOrderRequest(Position.Request calldata _request) external onlyRouter {
-        TradeLogic.createOrderRequest(_request, _request.input.isLimit ? limitOrderKeys : marketOrderKeys);
+        Execution.createOrderRequest(_request, _request.input.isLimit ? limitOrderKeys : marketOrderKeys);
     }
 
     function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyPositionManager {
@@ -122,7 +125,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         nonReentrant
         returns (Execution.FeeState memory feeState, Position.Request memory request)
     {
-        return TradeLogic.executePositionRequest(
+        return tradeEngine.executePositionRequest(
             market, priceFeed, IPositionManager(msg.sender), referralStorage, _orderKey, _requestKey, _feeReceiver
         );
     }
@@ -132,7 +135,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.liquidatePosition(market, referralStorage, priceFeed, _positionKey, _requestKey, _liquidator);
+        tradeEngine.liquidatePosition(market, referralStorage, priceFeed, _positionKey, _requestKey, _liquidator);
     }
 
     function executeAdl(bytes32 _positionKey, bytes32 _requestKey, address _feeReceiver)
@@ -140,7 +143,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         nonReentrant
     {
-        TradeLogic.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestKey, _feeReceiver);
+        tradeEngine.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestKey, _feeReceiver);
     }
 
     /**

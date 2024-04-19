@@ -3,13 +3,12 @@ pragma solidity 0.8.23;
 
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {Market, IMarket} from "./Market.sol";
 import {FeedRegistryInterface} from "@chainlink/contracts/src/v0.8/interfaces/FeedRegistryInterface.sol";
 import {IUniswapV3Factory} from "../oracle/interfaces/IUniswapV3Factory.sol";
 import {IUniswapV2Factory} from "../oracle/interfaces/IUniswapV2Factory.sol";
-import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import {MarketToken} from "./MarketToken.sol";
+import {Vault} from "./Vault.sol";
 import {TradeStorage} from "../positions/TradeStorage.sol";
 import {RewardTracker} from "../rewards/RewardTracker.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
@@ -19,9 +18,11 @@ import {IReferralStorage} from "../referrals/ReferralStorage.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {LiquidityLocker} from "../rewards/LiquidityLocker.sol";
+import {TradeEngine} from "../positions/TradeEngine.sol";
 import {TransferStakedTokens} from "../rewards/TransferStakedTokens.sol";
 import {Roles} from "../access/Roles.sol";
 import {Pool} from "./Pool.sol";
+import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 
 /// @dev Needs MarketFactory Role
 /**
@@ -150,7 +151,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // Withdrawable amount is the balance minus the fees escrowed to incentivize executors
         withdrawableAmount -= (marketExecutionFee * requests.length());
         // Transfer the withdrawable amount to the fee receiver
-        payable(msg.sender).transfer(withdrawableAmount);
+        SafeTransferLib.safeTransferETH(payable(msg.sender), withdrawableAmount);
     }
 
     /**
@@ -214,7 +215,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         _initializeMarketContracts(request);
 
         // Send the Execution Fee to the fulfiller
-        payable(msg.sender).transfer(marketExecutionFee);
+        SafeTransferLib.safeTransferETH(payable(msg.sender), marketExecutionFee);
     }
 
     /**
@@ -243,8 +244,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // Set Up Price Oracle
         priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythData.id);
         // Create new Market Token
-        MarketToken marketToken =
-            new MarketToken(_params.marketTokenName, _params.marketTokenSymbol, address(roleStorage));
+        Vault vault = new Vault(WETH, USDC, _params.marketTokenName, _params.marketTokenSymbol, address(roleStorage));
         // Create new Market contract
         IMarket market = new Market(
             defaultConfig,
@@ -253,7 +253,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
             address(feeDistributor),
             WETH,
             USDC,
-            address(marketToken),
+            address(vault),
             _params.indexTokenTicker,
             _params.isMultiAsset,
             address(roleStorage)
@@ -261,6 +261,8 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
 
         // Create new TradeStorage contract
         TradeStorage tradeStorage = new TradeStorage(market, referralStorage, priceFeed, address(roleStorage));
+        // Create new Trade Engine contract
+        TradeEngine tradeEngine = new TradeEngine(tradeStorage, address(roleStorage));
         // Create new Reward Tracker contract
         RewardTracker rewardTracker = new RewardTracker(
             market,
@@ -274,11 +276,13 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
             new LiquidityLocker(address(rewardTracker), address(transferStakedTokens), WETH, USDC, address(roleStorage));
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
         market.initialize(address(tradeStorage), address(rewardTracker), 0.003e18);
+        // Initialize Vault with Market
+        vault.initialize(address(market));
         // Initialize TradeStorage with Default values
         // @gas - we can clean this up --> don't like the magic numbers
-        tradeStorage.initialize(0.05e18, 0.001e18, 0.01e18, 0.1e18, 2e30, 1 minutes);
+        tradeStorage.initialize(tradeEngine, 0.05e18, 0.001e18, 0.01e18, 0.1e18, 2e30, 1 minutes);
         // Initialize RewardTracker with Default values
-        rewardTracker.initialize(address(marketToken), address(feeDistributor), address(liquidityLocker));
+        rewardTracker.initialize(address(vault), address(feeDistributor), address(liquidityLocker));
         // Add to Storage
         isMarket[address(market)] = true;
         marketsByTicker[_params.indexTokenTicker].push(address(market));
@@ -287,7 +291,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
 
         // Set Up Roles -> Enable Requester to control Market
         roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), _params.owner));
-        roleStorage.setMinter(address(marketToken), address(market));
+        roleStorage.setMinter(address(vault), address(market));
 
         // Fire Event
         emit MarketCreated(address(market), _params.indexTokenTicker);

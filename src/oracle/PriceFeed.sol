@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {EnumerableSet} from "../libraries/EnumerableSet.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
@@ -13,7 +13,8 @@ import {ISwapRouter} from "./interfaces/ISwapRouter.sol";
 import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV2V3Interface.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
+import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {Oracle} from "./Oracle.sol";
 
 contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFeed {
@@ -337,7 +338,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         );
         if (amountOut == 0) revert PriceFeed_SwapFailed();
         // Send the settlement fee to the caller
-        payable(msg.sender).transfer(settlementReward);
+        SafeTransferLib.safeTransferETH(payable(msg.sender), settlementReward);
         // Emit an event to log the amount of LINK received
         emit LinkBalanceSettled(settlementReward);
     }

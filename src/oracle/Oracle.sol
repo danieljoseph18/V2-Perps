@@ -10,15 +10,16 @@ import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol";
 import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
 import {IUniswapV2Factory} from "./interfaces/IUniswapV2Factory.sol";
 import {FeedRegistryInterface} from "@chainlink/contracts/src/v0.8/interfaces/FeedRegistryInterface.sol";
-import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import {MerkleProofLib} from "../libraries/MerkleProofLib.sol";
 import {IPyth} from "@pyth/contracts/IPyth.sol";
 import {PythStructs} from "@pyth/contracts/PythStructs.sol";
-import {ERC20, IERC20, IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {IERC20} from "../tokens/interfaces/IERC20.sol";
+import {IERC20Metadata} from "../tokens/interfaces/IERC20Metadata.sol";
+import {SignedMath} from "../libraries/SignedMath.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {mulDiv} from "@prb/math/Common.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {SafeCast} from "../libraries/SafeCast.sol";
+import {LibString} from "../libraries/LibString.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 
 library Oracle {
@@ -27,7 +28,7 @@ library Oracle {
     using SignedMath for int32;
     using MathUtils for uint256;
     using SafeCast for uint256;
-    using Strings for uint256;
+    using LibString for uint256;
 
     error Oracle_SequencerDown();
     error Oracle_InvalidAmmDecimals();
@@ -104,13 +105,13 @@ library Oracle {
         if (_feedType == IPriceFeed.FeedType.UNI_V30) {
             // If feed type is token0, check if the token1 (stablecoin) is stored in the Merkle Tree
             bytes32 leaf = keccak256(abi.encodePacked(token1));
-            if (!MerkleProof.verify(_merkleProof, _merkleRoot, leaf)) {
+            if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, leaf)) {
                 revert Oracle_InvalidSecondaryStrategy();
             }
         } else {
             // If feed type is token1, check if the token0 (stablecoin) is stored in the Merkle Tree
             bytes32 leaf = keccak256(abi.encodePacked(token0));
-            if (!MerkleProof.verify(_merkleProof, _merkleRoot, leaf)) {
+            if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, leaf)) {
                 revert Oracle_InvalidSecondaryStrategy();
             }
         }
@@ -130,13 +131,13 @@ library Oracle {
         if (_feedType == IPriceFeed.FeedType.UNI_V20) {
             // If feed type is token0, check if the token1 (stablecoin) is stored in the Merkle Tree
             bytes32 leaf = keccak256(abi.encodePacked(pair.token1()));
-            if (!MerkleProof.verify(_merkleProof, _merkleRoot, leaf)) {
+            if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, leaf)) {
                 revert Oracle_InvalidSecondaryStrategy();
             }
         } else {
             // If feed type is token1, check if the token0 (stablecoin) is stored in the Merkle Tree
             bytes32 leaf = keccak256(abi.encodePacked(pair.token0()));
-            if (!MerkleProof.verify(_merkleProof, _merkleRoot, leaf)) {
+            if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, leaf)) {
                 revert Oracle_InvalidSecondaryStrategy();
             }
         }
@@ -145,7 +146,7 @@ library Oracle {
     function isValidPythFeed(bytes32[] calldata _merkleProof, bytes32 _merkleRoot, bytes32 _priceId) external pure {
         // Check if the Pyth feed is stored within the Merkle Tree as a whitelisted feed.
         // No need to check for bytes32(0) is this case will revert with this check.
-        if (!MerkleProof.verify(_merkleProof, _merkleRoot, _priceId)) {
+        if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, _priceId)) {
             revert Oracle_InvalidSecondaryStrategy();
         }
     }

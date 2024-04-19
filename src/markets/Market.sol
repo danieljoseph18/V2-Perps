@@ -5,12 +5,12 @@ import {IMarket} from "./interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
+import {SignedMath} from "../libraries/SignedMath.sol";
+import {EnumerableSet} from "../libraries/EnumerableSet.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
-import {IMarketToken, IERC20} from "./interfaces/IMarketToken.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IVault, IERC20} from "./interfaces/IVault.sol";
+import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -25,8 +25,8 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using EnumerableMap for EnumerableMap.MarketRequestMap;
     using SignedMath for int256;
-    using SafeERC20 for IERC20;
-    using SafeERC20 for IMarketToken;
+    using SafeTransferLib for IERC20;
+    using SafeTransferLib for IVault;
 
     uint64 private constant MIN_BORROW_SCALE = 0.0001e18; // 0.01% per day
     uint64 private constant MAX_BORROW_SCALE = 0.01e18; // 1% per day
@@ -36,7 +36,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
      */
     uint64 public constant FUNDING_VELOCITY_CLAMP = 0.00001e18; // 0.001% per day
 
-    IMarketToken public immutable MARKET_TOKEN;
+    IVault public immutable VAULT;
     address private immutable WETH;
     address private immutable USDC;
     bool private immutable IS_MULTI_ASSET;
@@ -73,9 +73,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     string[] private tickers;
 
-    // Store the Collateral Amount for each User
-    mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
-
     EnumerableSet.Bytes32Set private assetIds;
     EnumerableMap.MarketRequestMap private requests;
 
@@ -104,7 +101,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     ) RoleValidation(_roleStorage) {
         WETH = _weth;
         USDC = _usdc;
-        MARKET_TOKEN = IMarketToken(_marketToken);
+        VAULT = IVault(_marketToken);
         IS_MULTI_ASSET = _isMultiAsset;
         poolOwner = _poolOwner;
         feeDistributor = IFeeDistributor(_feeDistributor);
@@ -117,12 +114,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         // Initialize Storage
         Pool.initialize(marketStorage[assetId], _config);
         emit TokenAdded(assetId);
-    }
-
-    receive() external payable {
-        // Only accept ETH via fallback from the WETH contract when unwrapping WETH
-        // Ensure that the call depth is 1 (direct call from WETH contract)
-        if (msg.sender != WETH || gasleft() <= 2300) revert Market_InvalidETHTransfer();
     }
 
     function initialize(address _tradeStorage, address _rewardTracker, uint256 _borrowScale)
@@ -219,29 +210,34 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
     {
-        return MarketLogic.cancelRequest(requests, _key, _caller, WETH, USDC, address(MARKET_TOKEN));
+        return MarketLogic.cancelRequest(requests, _key, _caller, WETH, USDC, address(VAULT));
     }
 
-    function executeDeposit(ExecuteDeposit calldata _params)
+    /**
+     * ========================= Vault Actions
+     */
+    function executeDeposit(IVault.ExecuteDeposit calldata _params)
         external
         onlyPositionManager
         orderExists(_params.key)
         nonReentrant
     {
-        MarketLogic.executeDeposit(requests, _params, _params.deposit.isLongToken ? WETH : USDC);
+        // Delete Deposit Request
+        if (!requests.remove(_params.key)) revert Market_FailedToRemoveRequest();
+        // Execute the Deposit
+        VAULT.executeDeposit(_params, _params.deposit.isLongToken ? WETH : USDC, msg.sender);
     }
 
-    function executeWithdrawal(ExecuteWithdrawal calldata _params)
+    function executeWithdrawal(IVault.ExecuteWithdrawal calldata _params)
         external
         onlyPositionManager
         orderExists(_params.key)
         nonReentrant
     {
-        if (_params.withdrawal.isLongToken) {
-            MarketLogic.executeWithdrawal(requests, _params, WETH, longTokenBalance - longTokensReserved);
-        } else {
-            MarketLogic.executeWithdrawal(requests, _params, USDC, shortTokenBalance - shortTokensReserved);
-        }
+        // Delete the Withdrawal from Storage
+        if (!requests.remove(_params.key)) revert Market_FailedToRemoveRequest();
+        // Execute the withdrawal
+        VAULT.executeWithdrawal(_params, _params.withdrawal.isLongToken ? WETH : USDC, msg.sender);
     }
 
     /**
@@ -315,99 +311,6 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
             _isLong,
             _isIncrease
         );
-    }
-
-    /**
-     * ========================= Token Functions  =========================
-     */
-    function batchWithdrawFees() external onlyConfigurator(address(this)) nonReentrant {
-        uint256 longFees = longAccumulatedFees;
-        uint256 shortFees = shortAccumulatedFees;
-        longAccumulatedFees = 0;
-        shortAccumulatedFees = 0;
-        MarketLogic.batchWithdrawFees(WETH, USDC, address(feeDistributor), feeReceiver, poolOwner, longFees, shortFees);
-    }
-
-    function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
-        external
-        onlyTradeStorage(address(this))
-        nonReentrant
-    {
-        if (_isLongToken) {
-            MarketLogic.transferOutTokens(
-                _to, WETH, _amount, longTokenBalance - longTokensReserved, true, _shouldUnwrap
-            );
-        } else {
-            MarketLogic.transferOutTokens(
-                _to, USDC, _amount, shortTokenBalance - shortTokensReserved, false, _shouldUnwrap
-            );
-        }
-    }
-
-    function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorageOrMarket(address(this)) {
-        _isLong ? longAccumulatedFees += _amount : shortAccumulatedFees += _amount;
-        emit FeesAccumulated(_amount, _isLong);
-    }
-
-    function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease)
-        external
-        onlyTradeStorage(address(this))
-    {
-        if (_isIncrease) {
-            _isLong ? longTokensReserved += _amount : shortTokensReserved += _amount;
-        } else {
-            if (_isLong) {
-                if (_amount > longTokensReserved) longTokensReserved = 0;
-                else longTokensReserved -= _amount;
-            } else {
-                if (_amount > shortTokensReserved) shortTokensReserved = 0;
-                else shortTokensReserved -= _amount;
-            }
-        }
-    }
-
-    function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease)
-        external
-        onlyTradeStorageOrMarket(address(this))
-    {
-        if (_isIncrease) {
-            _isLong ? longTokenBalance += _amount : shortTokenBalance += _amount;
-        } else {
-            _isLong ? longTokenBalance -= _amount : shortTokenBalance -= _amount;
-        }
-    }
-
-    function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
-        external
-        onlyTradeStorage(address(this))
-    {
-        if (_isIncrease) {
-            // Case 1: Increase the collateral amount
-            collateralAmounts[_user][_isLong] += _amount;
-        } else {
-            // Case 2: Decrease the collateral amount
-            uint256 currentCollateral = collateralAmounts[_user][_isLong];
-
-            if (_amount > currentCollateral) {
-                // Amount to decrease is greater than stored collateral
-                uint256 excess = _amount - currentCollateral;
-                collateralAmounts[_user][_isLong] = 0;
-                // Subtract the extra amount from the pool
-                _isLong ? longTokenBalance -= excess : shortTokenBalance -= excess;
-            } else {
-                // Amount to decrease is less than or equal to stored collateral
-                collateralAmounts[_user][_isLong] -= _amount;
-            }
-
-            if (_isFullClose) {
-                // Transfer any remaining collateral to the pool
-                uint256 remaining = collateralAmounts[_user][_isLong];
-                if (remaining > 0) {
-                    collateralAmounts[_user][_isLong] = 0;
-                    _isLong ? longTokenBalance += remaining : shortTokenBalance += remaining;
-                }
-            }
-        }
     }
 
     function updateImpactPool(string calldata _ticker, int256 _priceImpactUsd)
@@ -499,25 +402,5 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
     function getOpenInterestValues(string calldata _ticker) external view returns (uint256, uint256) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         return (marketStorage[assetId].longOpenInterest, marketStorage[assetId].shortOpenInterest);
-    }
-
-    function getState(bool _isLong) external view returns (State memory) {
-        if (_isLong) {
-            return State({
-                totalSupply: MARKET_TOKEN.totalSupply(),
-                wethBalance: IERC20(WETH).balanceOf(address(this)),
-                usdcBalance: IERC20(USDC).balanceOf(address(this)),
-                accumulatedFees: longAccumulatedFees,
-                poolBalance: longTokenBalance
-            });
-        } else {
-            return State({
-                totalSupply: MARKET_TOKEN.totalSupply(),
-                wethBalance: IERC20(WETH).balanceOf(address(this)),
-                usdcBalance: IERC20(USDC).balanceOf(address(this)),
-                accumulatedFees: shortAccumulatedFees,
-                poolBalance: shortTokenBalance
-            });
-        }
     }
 }

@@ -3,13 +3,13 @@ pragma solidity 0.8.23;
 
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@solmate/utils/ReentrancyGuard.sol";
+import {IERC20} from "../tokens/interfaces/IERC20.sol";
+import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 
 contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
-    using SafeERC20 for IERC20;
+    using SafeTransferLib for IERC20;
 
     IWETH weth;
 

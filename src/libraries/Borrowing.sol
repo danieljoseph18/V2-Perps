@@ -3,7 +3,7 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
+import {SignedMath} from "./SignedMath.sol";
 import {MathUtils} from "./MathUtils.sol";
 import {Pool} from "../markets/Pool.sol";
 

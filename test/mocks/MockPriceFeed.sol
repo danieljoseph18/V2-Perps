@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
-import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {EnumerableSet} from "../../src/libraries/EnumerableSet.sol";
 import {EnumerableMap} from "../../../src/libraries/EnumerableMap.sol";
 import {IMarketFactory} from "../../../src/markets/interfaces/IMarketFactory.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";

@@ -2,10 +2,10 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "./interfaces/IMarket.sol";
-import {IMarketToken} from "./interfaces/IMarketToken.sol";
+import {IVault} from "./interfaces/IVault.sol";
 import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {SignedMath} from "../libraries/SignedMath.sol";
+import {SafeCast} from "../libraries/SafeCast.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
@@ -63,7 +63,7 @@ library MarketUtils {
     function constructDepositParams(IPriceFeed priceFeed, IMarket market, bytes32 _depositKey)
         external
         view
-        returns (IMarket.ExecuteDeposit memory params)
+        returns (IVault.ExecuteDeposit memory params)
     {
         // Fetch the request
         params.market = market;
@@ -76,13 +76,13 @@ library MarketUtils {
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, false);
         // Calculate Cumulative PNL
         params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.deposit.requestTimestamp);
-        params.marketToken = market.MARKET_TOKEN();
+        params.vault = market.VAULT();
     }
 
     function constructWithdrawalParams(IPriceFeed priceFeed, IMarket market, bytes32 _withdrawalKey)
         external
         view
-        returns (IMarket.ExecuteWithdrawal memory params)
+        returns (IVault.ExecuteWithdrawal memory params)
     {
         // Fetch the request
         params.market = market;
@@ -95,7 +95,7 @@ library MarketUtils {
         // Calculate cumulative borrow fees
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, false);
-        params.marketToken = market.MARKET_TOKEN();
+        params.vault = market.VAULT();
     }
 
     /**
@@ -190,7 +190,7 @@ library MarketUtils {
         return baseFee + feeAddition;
     }
 
-    function calculateDepositAmounts(IMarket.ExecuteDeposit calldata _params)
+    function calculateDepositAmounts(IVault.ExecuteDeposit calldata _params)
         external
         view
         returns (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount)
@@ -211,7 +211,7 @@ library MarketUtils {
         // Minimize
         mintAmount = calculateMintAmount(
             _params.market,
-            _params.marketToken,
+            _params.vault,
             _params.longPrices,
             _params.shortPrices,
             afterFeeAmount,
@@ -222,7 +222,7 @@ library MarketUtils {
         );
     }
 
-    function calculateWithdrawalAmounts(IMarket.ExecuteWithdrawal memory _params)
+    function calculateWithdrawalAmounts(IVault.ExecuteWithdrawal memory _params)
         external
         view
         returns (uint256 tokenAmountOut)
@@ -230,7 +230,7 @@ library MarketUtils {
         // Validate the Amount Out vs Expected Amount out
         uint256 amountOut = calculateWithdrawalAmount(
             _params.market,
-            _params.marketToken,
+            _params.vault,
             _params.longPrices,
             _params.shortPrices,
             _params.withdrawal.amountIn,
@@ -257,8 +257,8 @@ library MarketUtils {
     }
 
     function validateDeposit(
-        IMarket.State memory _initialState,
-        IMarket.State memory _updatedState,
+        IVault.State memory _initialState,
+        IVault.State memory _updatedState,
         uint256 _amountIn,
         bool _isLongToken
     ) external pure {
@@ -285,8 +285,8 @@ library MarketUtils {
      * - The vault balance should decrease by the amount out
      */
     function validateWithdrawal(
-        IMarket.State memory _initialState,
-        IMarket.State memory _updatedState,
+        IVault.State memory _initialState,
+        IVault.State memory _updatedState,
         uint256 _marketTokenAmountIn,
         uint256 _amountOut,
         bool _isLongToken
@@ -320,7 +320,7 @@ library MarketUtils {
     /// @dev - Calculate the Mint Amount to 18 decimal places
     function calculateMintAmount(
         IMarket market,
-        IMarketToken marketToken,
+        IVault vault,
         Oracle.Prices memory _longPrices,
         Oracle.Prices memory _shortPrices,
         uint256 _amountIn,
@@ -331,13 +331,7 @@ library MarketUtils {
     ) public view returns (uint256 marketTokenAmount) {
         // Maximize the AUM
         uint256 marketTokenPrice = getMarketTokenPrice(
-            market,
-            marketToken,
-            _longPrices.max,
-            _longBorrowFeesUsd,
-            _shortPrices.max,
-            _shortBorrowFeesUsd,
-            _cumulativePnl
+            market, vault, _longPrices.max, _longBorrowFeesUsd, _shortPrices.max, _shortBorrowFeesUsd, _cumulativePnl
         );
         // Long divisor -> (18dp * 30dp / x dp) should = 18dp -> dp = 30
         // Short divisor -> (6dp * 30dp / x dp) should = 18dp -> dp = 18
@@ -357,7 +351,7 @@ library MarketUtils {
 
     function calculateWithdrawalAmount(
         IMarket market,
-        IMarketToken marketToken,
+        IVault vault,
         Oracle.Prices memory _longPrices,
         Oracle.Prices memory _shortPrices,
         uint256 _marketTokenAmountIn,
@@ -368,13 +362,7 @@ library MarketUtils {
     ) public view returns (uint256 tokenAmount) {
         // Minimize the AUM
         uint256 marketTokenPrice = getMarketTokenPrice(
-            market,
-            marketToken,
-            _longPrices.min,
-            _longBorrowFeesUsd,
-            _shortPrices.min,
-            _shortBorrowFeesUsd,
-            _cumulativePnl
+            market, vault, _longPrices.min, _longBorrowFeesUsd, _shortPrices.min, _shortBorrowFeesUsd, _cumulativePnl
         );
         uint256 valueUsd = _marketTokenAmountIn.toUsd(marketTokenPrice, PRECISION);
         // Minimize the Value of the Amount Out
@@ -394,14 +382,14 @@ library MarketUtils {
      */
     function getMarketTokenPrice(
         IMarket market,
-        IMarketToken marketToken,
+        IVault vault,
         uint256 _longTokenPrice,
         uint256 _longBorrowFeesUsd,
         uint256 _shortTokenPrice,
         uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl
     ) public view returns (uint256 lpTokenPrice) {
-        uint256 totalSupply = marketToken.totalSupply();
+        uint256 totalSupply = vault.totalSupply();
         if (totalSupply == 0) {
             lpTokenPrice = 0;
         } else {
