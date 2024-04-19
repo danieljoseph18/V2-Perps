@@ -17,6 +17,7 @@ library PriceImpact {
     using SafeCast for uint256;
     using SafeCast for int256;
     using MathUtils for uint256;
+    using MathUtils for int256;
 
     error PriceImpact_SizeDeltaIsZero();
     error PriceImpact_InsufficientLiquidity();
@@ -28,10 +29,10 @@ library PriceImpact {
     int256 private constant SIGNED_PRICE_PRECISION = 1e30;
 
     struct ImpactState {
-        int16 positiveSkewScalar;
-        int16 negativeSkewScalar;
-        int16 positiveLiquidityScalar;
-        int16 negativeLiquidityScalar;
+        int256 positiveSkewScalar;
+        int256 negativeSkewScalar;
+        int256 positiveLiquidityScalar;
+        int256 negativeLiquidityScalar;
         uint256 longOi;
         uint256 shortOi;
         uint256 initialTotalOi;
@@ -63,6 +64,7 @@ library PriceImpact {
             state.positiveLiquidityScalar,
             state.negativeLiquidityScalar
         ) = market.getImpactValues(_request.input.ticker);
+        state = _getImpactValues(market, _request.input.ticker);
         // Get long / short Oi -> used to calculate skew
         state.longOi = MarketUtils.getOpenInterest(market, _request.input.ticker, true);
         state.shortOi = MarketUtils.getOpenInterest(market, _request.input.ticker, false);
@@ -277,5 +279,18 @@ library PriceImpact {
         if (slippage > _maxSlippage) {
             revert PriceImpact_SlippageExceedsMax();
         }
+    }
+
+    function _getImpactValues(IMarket market, string memory _ticker) private view returns (ImpactState memory state) {
+        (
+            state.positiveSkewScalar,
+            state.negativeSkewScalar,
+            state.positiveLiquidityScalar,
+            state.negativeLiquidityScalar
+        ) = market.getImpactValues(_ticker);
+        state.positiveSkewScalar = state.positiveSkewScalar.expandDecimals(2, 30);
+        state.negativeSkewScalar = state.negativeSkewScalar.expandDecimals(2, 30);
+        state.positiveLiquidityScalar = state.positiveLiquidityScalar.expandDecimals(2, 30);
+        state.negativeLiquidityScalar = state.negativeLiquidityScalar.expandDecimals(2, 30);
     }
 }

@@ -64,17 +64,17 @@ library MarketLogic {
     // Max 100 assets per market (could fit 12 more in last uint256, but 100 used for simplicity)
     // Fits 16 allocations per uint256
     uint8 private constant MAX_ASSETS = 100;
-    uint32 private constant MIN_LEVERAGE = 100; // Min 1x Leverage
-    uint32 private constant MAX_LEVERAGE = 1000_00; // Max 1000x leverage
-    uint64 private constant MIN_MAINTENANCE_MARGIN = 0.005e18; // 0.5%
-    uint64 private constant MAX_MAINTENANCE_MARGIN = 0.1e18; // 10%
-    uint64 private constant MIN_RESERVE_FACTOR = 0.1e18; // 10% reserve factor
-    uint64 private constant MAX_RESERVE_FACTOR = 0.5e18; // 50% reserve factor
-    int64 private constant MIN_VELOCITY = 0.001e18; // 0.1% per day
-    int64 private constant MAX_VELOCITY = 0.2e18; // 20% per day
-    int256 private constant MIN_SKEW_SCALE = 1000e30; // $1000
-    int256 private constant MAX_SKEW_SCALE = 10_000_000_000e30; // $10 Bn
-    int64 private constant SIGNED_SCALAR = 1e18;
+    uint32 private constant MIN_LEVERAGE = 1; // Min 1x Leverage
+    uint32 private constant MAX_LEVERAGE = 1000; // Max 1000x leverage
+    uint64 private constant MIN_MAINTENANCE_MARGIN = 50; // 0.5%
+    uint64 private constant MAX_MAINTENANCE_MARGIN = 1000; // 10%
+    uint64 private constant MIN_RESERVE_FACTOR = 1000; // 10% reserve factor
+    uint64 private constant MAX_RESERVE_FACTOR = 5000; // 50% reserve factor
+    int64 private constant MIN_VELOCITY = 10; // 0.1% per day
+    int64 private constant MAX_VELOCITY = 2000; // 20% per day
+    int256 private constant MIN_SKEW_SCALE = 1000; // $1000
+    int256 private constant MAX_SKEW_SCALE = 10_000_000_000; // $10 Bn
+    int16 private constant MAX_SCALAR = 10000;
     uint48 private constant TIME_TO_EXPIRATION = 1 minutes;
     string private constant LONG_TICKER = "WETH";
     string private constant SHORT_TICKER = "USDC";
@@ -111,10 +111,10 @@ library MarketLogic {
         }
         /* 3. Validate Impact Values */
         // Check Skew Scalars are > 0 and <= 100%
-        if (_config.positiveSkewScalar <= 0 || _config.positiveSkewScalar > SIGNED_SCALAR) {
+        if (_config.positiveSkewScalar <= 0 || _config.positiveSkewScalar > MAX_SCALAR) {
             revert MarketLogic_InvalidSkewScalar();
         }
-        if (_config.negativeSkewScalar <= 0 || _config.negativeSkewScalar > SIGNED_SCALAR) {
+        if (_config.negativeSkewScalar <= 0 || _config.negativeSkewScalar > MAX_SCALAR) {
             revert MarketLogic_InvalidSkewScalar();
         }
         // Check negative skew scalar is >= positive skew scalar
@@ -122,10 +122,10 @@ library MarketLogic {
             revert MarketLogic_InvalidSkewScalar();
         }
         // Check Liquidity Scalars are > 0 and <= 100%
-        if (_config.positiveLiquidityScalar <= 0 || _config.positiveLiquidityScalar > SIGNED_SCALAR) {
+        if (_config.positiveLiquidityScalar <= 0 || _config.positiveLiquidityScalar > MAX_SCALAR) {
             revert MarketLogic_InvalidLiquidityScalar();
         }
-        if (_config.negativeLiquidityScalar <= 0 || _config.negativeLiquidityScalar > SIGNED_SCALAR) {
+        if (_config.negativeLiquidityScalar <= 0 || _config.negativeLiquidityScalar > MAX_SCALAR) {
             revert MarketLogic_InvalidLiquidityScalar();
         }
         // Check negative liquidity scalar is >= positive liquidity scalar

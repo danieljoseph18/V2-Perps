@@ -133,11 +133,11 @@ contract Deploy is Script {
             maxFundingVelocity: 90, // 9% per day
             skewScale: 1_000_000, // 1 Mil USD
             // Should never be 0
-            // All are percentages between up to 100% (1000)
-            positiveSkewScalar: 1000,
-            negativeSkewScalar: 1000,
-            positiveLiquidityScalar: 1000,
-            negativeLiquidityScalar: 1000
+            // All are percentages between up to 100% (10000)
+            positiveSkewScalar: 10000,
+            negativeSkewScalar: 10000,
+            positiveLiquidityScalar: 10000,
+            negativeLiquidityScalar: 10000
         });
 
         contracts.marketFactory.initialize(

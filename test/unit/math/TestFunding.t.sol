@@ -158,8 +158,8 @@
 
 //     /**
 //      * Config:
-//      * maxVelocity: 0.09e18, // 9%
-//      * skewScale: 1_000_000e18 // 1 Mil USD
+//      * maxVelocity: 90, // 9%
+//      * skewScale: 1_000_000 // 1 Mil USD
 //      */
 //     function testVelocityCalculationForDifferentSkews() public setUpMarkets {
 //         // Different Skews

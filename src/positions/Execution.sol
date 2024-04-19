@@ -1031,8 +1031,9 @@ library Execution {
         view
         returns (uint256 maintenanceCollateral)
     {
-        maintenanceCollateral =
-            _position.collateral.percentage(MarketUtils.getMaintenanceMargin(market, _position.ticker));
+        // Expand to 18 decimals
+        uint256 maintenancePercentage = MarketUtils.getMaintenanceMargin(market, _position.ticker).expandDecimals(2, 18);
+        maintenanceCollateral = _position.collateral.percentage(maintenancePercentage);
     }
 
     function _validateCaller(IMarket market, ITradeStorage tradeStorage) private view {

@@ -19,6 +19,7 @@ library MarketUtils {
     using SafeCast for uint256;
     using MathUtils for uint256;
     using MathUtils for uint64;
+    using MathUtils for uint16;
 
     uint64 private constant PRECISION = 1e18;
     uint64 private constant BASE_FEE = 0.001e18; // 0.1%
@@ -607,7 +608,6 @@ library MarketUtils {
         // get the allocation and subtract by the markets reserveFactor
         uint256 remainingAllocationUsd =
             getPoolBalanceUsd(market, _ticker, _collateralTokenPrice, collateralBaseUnit, _isLong);
-
         availableOi = remainingAllocationUsd - remainingAllocationUsd.percentage(_getReserveFactor(market, _ticker));
 
         // get the pnl
@@ -858,6 +858,6 @@ library MarketUtils {
     }
 
     function _getReserveFactor(IMarket market, string calldata _ticker) private view returns (uint256) {
-        return market.getConfig(_ticker).reserveFactor;
+        return market.getConfig(_ticker).reserveFactor.expandDecimals(2, 18);
     }
 }

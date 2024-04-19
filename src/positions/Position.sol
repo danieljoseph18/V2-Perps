@@ -55,8 +55,7 @@ library Position {
     error Position_InvalidAdlFee();
     error Position_InvalidFeeForExecution();
 
-    uint8 private constant MIN_LEVERAGE = 100; // 1x
-    uint8 private constant LEVERAGE_PRECISION = 100;
+    uint8 private constant MIN_LEVERAGE = 1; // 1x
     uint64 private constant PRECISION = 1e18;
     uint64 private constant TARGET_PNL_RATIO = 0.35e18;
     // Max and Min Price Slippage
@@ -459,9 +458,9 @@ library Position {
         external
         view
     {
-        uint256 maxLeverage = MarketUtils.getMaxLeverage(market, _ticker);
+        uint8 maxLeverage = MarketUtils.getMaxLeverage(market, _ticker);
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
-        uint256 leverage = mulDiv(_sizeUsd, LEVERAGE_PRECISION, _collateralUsd);
+        uint256 leverage = _sizeUsd / _collateralUsd;
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
         if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
