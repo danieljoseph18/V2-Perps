@@ -62,7 +62,7 @@ library MarketUtils {
      * ======================= Constructor Functions =======================
      */
     function constructDepositParams(IPriceFeed priceFeed, IMarket market, bytes32 _depositKey)
-        external
+        internal
         view
         returns (IVault.ExecuteDeposit memory params)
     {
@@ -81,7 +81,7 @@ library MarketUtils {
     }
 
     function constructWithdrawalParams(IPriceFeed priceFeed, IMarket market, bytes32 _withdrawalKey)
-        external
+        internal
         view
         returns (IVault.ExecuteWithdrawal memory params)
     {
@@ -191,8 +191,8 @@ library MarketUtils {
         return baseFee + feeAddition;
     }
 
-    function calculateDepositAmounts(IVault.ExecuteDeposit calldata _params)
-        external
+    function calculateDepositAmounts(IVault.ExecuteDeposit memory _params)
+        internal
         view
         returns (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount)
     {
@@ -224,7 +224,7 @@ library MarketUtils {
     }
 
     function calculateWithdrawalAmounts(IVault.ExecuteWithdrawal memory _params)
-        external
+        internal
         view
         returns (uint256 tokenAmountOut)
     {
@@ -262,7 +262,7 @@ library MarketUtils {
         IVault.State memory _updatedState,
         uint256 _amountIn,
         bool _isLongToken
-    ) external pure {
+    ) internal pure {
         if (_isLongToken) {
             // Market's WETH Balance should increase by AmountIn
             if (_updatedState.wethBalance != _initialState.wethBalance + _amountIn) {
@@ -291,7 +291,7 @@ library MarketUtils {
         uint256 _marketTokenAmountIn,
         uint256 _amountOut,
         bool _isLongToken
-    ) external pure {
+    ) internal pure {
         uint256 minFee = _amountOut.percentage(BASE_FEE);
         uint256 maxFee = _amountOut.percentage(BASE_FEE + FEE_SCALE);
         if (_initialState.totalSupply != _updatedState.totalSupply + _marketTokenAmountIn) {
@@ -432,7 +432,7 @@ library MarketUtils {
         uint256 _prevPositionSize,
         int256 _sizeDelta,
         uint256 _indexPrice
-    ) external pure returns (uint256) {
+    ) internal pure returns (uint256) {
         if (_sizeDelta <= 0) {
             // If full close, Avg Entry Price is reset to 0
             if (_sizeDelta == -_prevPositionSize.toInt256()) return 0;
@@ -471,7 +471,7 @@ library MarketUtils {
     }
 
     /**
-     * Only to be called externally. Very gas inefficient, as it loops through all positions.
+     * Only to be called internally. Very gas inefficient, as it loops through all positions.
      */
     function calculateCumulativeMarketPnl(
         IMarket market,
@@ -479,7 +479,7 @@ library MarketUtils {
         uint48 _requestTimestamp,
         bool _isLong,
         bool _maximise
-    ) external view returns (int256 cumulativePnl) {
+    ) internal view returns (int256 cumulativePnl) {
         /**
          * For each token in the market:
          * 1. Get the current price of the token
@@ -504,8 +504,8 @@ library MarketUtils {
         }
     }
 
-    function getNetMarketPnl(IMarket market, string calldata _ticker, uint256 _indexPrice, uint256 _indexBaseUnit)
-        external
+    function getNetMarketPnl(IMarket market, string memory _ticker, uint256 _indexPrice, uint256 _indexBaseUnit)
+        internal
         view
         returns (int256)
     {
@@ -514,7 +514,7 @@ library MarketUtils {
         return longPnl + shortPnl;
     }
 
-    function getTotalOiForMarket(IMarket market, bool _isLong) external view returns (uint256) {
+    function getTotalOiForMarket(IMarket market, bool _isLong) internal view returns (uint256) {
         // get all asset ids from the market
         string[] memory tickers = market.getTickers();
         uint256 len = tickers.length;
@@ -531,17 +531,17 @@ library MarketUtils {
 
     function getTotalPoolBalanceUsd(
         IMarket market,
-        string calldata _ticker,
+        string memory _ticker,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice
-    ) external view returns (uint256 poolBalanceUsd) {
+    ) internal view returns (uint256 poolBalanceUsd) {
         uint256 longPoolUsd = getPoolBalanceUsd(market, _ticker, _longTokenPrice, LONG_BASE_UNIT, true);
         uint256 shortPoolUsd = getPoolBalanceUsd(market, _ticker, _shortTokenPrice, SHORT_BASE_UNIT, false);
         poolBalanceUsd = longPoolUsd + shortPoolUsd;
     }
 
     // In Collateral Tokens
-    function getPoolBalance(IMarket market, string calldata _ticker, bool _isLong)
+    function getPoolBalance(IMarket market, string memory _ticker, bool _isLong)
         public
         view
         returns (uint256 poolAmount)
@@ -557,7 +557,7 @@ library MarketUtils {
 
     function getPoolBalanceUsd(
         IMarket market,
-        string calldata _ticker,
+        string memory _ticker,
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
@@ -567,13 +567,13 @@ library MarketUtils {
 
     function validateAllocation(
         IMarket market,
-        string calldata _ticker,
+        string memory _ticker,
         uint256 _sizeDeltaUsd,
         uint256 _indexPrice,
         uint256 _collateralTokenPrice,
         uint256 _indexBaseUnit,
         bool _isLong
-    ) external view {
+    ) internal view {
         // Get Max OI for side
         uint256 availableUsd =
             getAvailableOiUsd(market, _ticker, _indexPrice, _collateralTokenPrice, _indexBaseUnit, _isLong);
@@ -584,12 +584,12 @@ library MarketUtils {
 
     function getTotalAvailableOiUsd(
         IMarket market,
-        string calldata _ticker,
+        string memory _ticker,
         uint256 _indexPrice,
         uint256 _longTokenPrice,
         uint256 _shortTokenPrice,
         uint256 _indexBaseUnit
-    ) external view returns (uint256 totalAvailableOiUsd) {
+    ) internal view returns (uint256 totalAvailableOiUsd) {
         uint256 longOiUsd = getAvailableOiUsd(market, _ticker, _indexPrice, _longTokenPrice, _indexBaseUnit, true);
         uint256 shortOiUsd = getAvailableOiUsd(market, _ticker, _indexPrice, _shortTokenPrice, _indexBaseUnit, false);
         totalAvailableOiUsd = longOiUsd + shortOiUsd;
@@ -598,7 +598,7 @@ library MarketUtils {
     /// @notice returns the available remaining open interest for a side in USD
     function getAvailableOiUsd(
         IMarket market,
-        string calldata _ticker,
+        string memory _ticker,
         uint256 _indexPrice,
         uint256 _collateralTokenPrice,
         uint256 _indexBaseUnit,
@@ -625,11 +625,11 @@ library MarketUtils {
 
     function getMaxOpenInterest(
         IMarket market,
-        string calldata _ticker,
+        string memory _ticker,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) external view returns (uint256 maxOpenInterest) {
+    ) internal view returns (uint256 maxOpenInterest) {
         // get the total liquidity available for that side
         uint256 totalAvailableLiquidity = market.totalAvailableLiquidity(_isLong);
         // calculate liquidity allocated to the market for that side
@@ -643,13 +643,13 @@ library MarketUtils {
     // The pnl factor is the ratio of the pnl to the pool usd
     function getPnlFactor(
         IMarket market,
-        string calldata _ticker,
+        string memory _ticker,
         uint256 _indexPrice,
         uint256 _indexBaseUnit,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) external view returns (int256 pnlFactor) {
+    ) internal view returns (int256 pnlFactor) {
         // get pool usd (if 0 return 0)
         uint256 poolUsd = getPoolBalanceUsd(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
 
@@ -674,11 +674,11 @@ library MarketUtils {
      */
     function getAdlThreshold(
         IMarket market,
-        string calldata _ticker,
+        string memory _ticker,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) external view returns (uint256 adlPrice) {
+    ) internal view returns (uint256 adlPrice) {
         // Get the current average entry price and open interest
         uint256 averageEntryPrice = _getAverageEntryPrice(market, _ticker, _isLong);
         uint256 openInterest = getOpenInterest(market, _ticker, _isLong);
@@ -728,7 +728,7 @@ library MarketUtils {
         uint256 _indexBaseUnit,
         uint256 _totalPoolSizeUsd,
         bool _isLong
-    ) external view returns (bytes32 positionKey) {
+    ) internal view returns (bytes32 positionKey) {
         // Get all Position Keys
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(_isLong);
         uint256 len = positionKeys.length;
@@ -756,8 +756,8 @@ library MarketUtils {
     /**
      * ======================= Getter Functions =======================
      */
-    function getCumulativeBorrowFees(IMarket market, string calldata _ticker)
-        external
+    function getCumulativeBorrowFees(IMarket market, string memory _ticker)
+        internal
         view
         returns (uint256 longCumulativeBorrowFees, uint256 shortCumulativeBorrowFees)
     {
@@ -765,7 +765,7 @@ library MarketUtils {
         return (cumulatives.longCumulativeBorrowFees, cumulatives.shortCumulativeBorrowFees);
     }
 
-    function getCumulativeBorrowFee(IMarket market, string calldata _ticker, bool _isLong)
+    function getCumulativeBorrowFee(IMarket market, string memory _ticker, bool _isLong)
         public
         view
         returns (uint256)
@@ -775,12 +775,12 @@ library MarketUtils {
             : market.getCumulatives(_ticker).shortCumulativeBorrowFees;
     }
 
-    function getLastUpdate(IMarket market, string calldata _ticker) external view returns (uint48) {
+    function getLastUpdate(IMarket market, string memory _ticker) internal view returns (uint48) {
         return market.getStorage(_ticker).lastUpdate;
     }
 
-    function getFundingRates(IMarket market, string calldata _ticker)
-        external
+    function getFundingRates(IMarket market, string memory _ticker)
+        internal
         view
         returns (int64 rate, int64 velocity)
     {
@@ -788,23 +788,23 @@ library MarketUtils {
         return (pool.fundingRate, pool.fundingRateVelocity);
     }
 
-    function getFundingAccrued(IMarket market, string calldata _ticker) external view returns (int256) {
+    function getFundingAccrued(IMarket market, string memory _ticker) internal view returns (int256) {
         return market.getStorage(_ticker).fundingAccruedUsd;
     }
 
-    function getBorrowingRate(IMarket market, string calldata _ticker, bool _isLong) external view returns (uint256) {
+    function getBorrowingRate(IMarket market, string memory _ticker, bool _isLong) internal view returns (uint256) {
         return _isLong ? market.getStorage(_ticker).longBorrowingRate : market.getStorage(_ticker).shortBorrowingRate;
     }
 
-    function getMaintenanceMargin(IMarket market, string calldata _ticker) external view returns (uint256) {
+    function getMaintenanceMargin(IMarket market, string memory _ticker) internal view returns (uint256) {
         return market.getConfig(_ticker).maintenanceMargin;
     }
 
-    function getMaxLeverage(IMarket market, string calldata _ticker) external view returns (uint8) {
+    function getMaxLeverage(IMarket market, string memory _ticker) internal view returns (uint8) {
         return market.getConfig(_ticker).maxLeverage;
     }
 
-    function getAllocation(IMarket market, string calldata _ticker) public view returns (uint8) {
+    function getAllocation(IMarket market, string memory _ticker) public view returns (uint8) {
         return market.getStorage(_ticker).allocationShare;
     }
 
@@ -812,8 +812,8 @@ library MarketUtils {
         return _isLong ? market.getStorage(_ticker).longOpenInterest : market.getStorage(_ticker).shortOpenInterest;
     }
 
-    function getAverageCumulativeBorrowFee(IMarket market, string calldata _ticker, bool _isLong)
-        external
+    function getAverageCumulativeBorrowFee(IMarket market, string memory _ticker, bool _isLong)
+        internal
         view
         returns (uint256)
     {
@@ -822,19 +822,19 @@ library MarketUtils {
             : market.getCumulatives(_ticker).weightedAvgCumulativeShort;
     }
 
-    function generateAssetId(string memory _ticker) external pure returns (bytes32) {
+    function generateAssetId(string memory _ticker) internal pure returns (bytes32) {
         return keccak256(abi.encode(_ticker));
     }
 
-    function hasSufficientLiquidity(IMarket market, uint256 _amount, bool _isLong) external view {
+    function hasSufficientLiquidity(IMarket market, uint256 _amount, bool _isLong) internal view {
         if (market.totalAvailableLiquidity(_isLong) < _amount) {
             revert MarketUtils_InsufficientFreeLiquidity();
         }
     }
 
     /// @dev - Allocations are in the same order as the tickers in the market array.
-    /// Only used to externally encode desired allocations to input into a function call.
-    function encodeAllocations(uint8[] calldata _allocs) public pure returns (bytes memory allocations) {
+    /// Only used to internally encode desired allocations to input into a function call.
+    function encodeAllocations(uint8[] memory _allocs) public pure returns (bytes memory allocations) {
         allocations = new bytes(_allocs.length);
         for (uint256 i = 0; i < _allocs.length;) {
             allocations[i] = bytes1(_allocs[i]);
@@ -857,7 +857,7 @@ library MarketUtils {
             : market.getCumulatives(_ticker).shortAverageEntryPriceUsd;
     }
 
-    function _getReserveFactor(IMarket market, string calldata _ticker) private view returns (uint256) {
+    function _getReserveFactor(IMarket market, string memory _ticker) private view returns (uint256) {
         return market.getConfig(_ticker).reserveFactor.expandDecimals(2, 18);
     }
 }

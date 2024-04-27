@@ -195,19 +195,8 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         /* Validate the Requests Pricing Strategies */
 
         // Reverts if a price wasn't signed.
-        try Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp) returns (
-            uint256 priceReponse
-        ) {
-            // Validate the price range from reference price --> will revert if failed to fetch ref price
-            if (request.tokenData.hasSecondaryFeed) {
-                try Oracle.validatePriceRange(priceFeed, request.indexTokenTicker, priceReponse) {
-                    // If the price is valid, continue
-                } catch {
-                    _deleteInvalidRequest(_requestKey);
-                    return;
-                }
-            }
-        } catch {
+        try Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp) {}
+        catch {
             _deleteInvalidRequest(_requestKey);
             return;
         }
@@ -240,6 +229,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Private Functions =========================
      */
+    // @audit - can we use create2 library to make deployment cheaper?
     function _initializeMarketContracts(DeployParams memory _params) private {
         // Set Up Price Oracle
         priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythData.id);
@@ -260,7 +250,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         );
 
         // Create new TradeStorage contract
-        TradeStorage tradeStorage = new TradeStorage(market, referralStorage, priceFeed, address(roleStorage));
+        TradeStorage tradeStorage = new TradeStorage(market, vault, referralStorage, priceFeed, address(roleStorage));
         // Create new Trade Engine contract
         TradeEngine tradeEngine = new TradeEngine(tradeStorage, address(roleStorage));
         // Create new Reward Tracker contract
@@ -290,7 +280,12 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         ++cumulativeMarketIndex;
 
         // Set Up Roles -> Enable Requester to control Market
-        roleStorage.setMarketRoles(address(market), Roles.MarketRoles(address(tradeStorage), _params.owner));
+        roleStorage.setMarketRoles(
+            address(market),
+            Roles.MarketRoles(
+                address(tradeStorage), address(tradeEngine), address(market), address(vault), _params.owner
+            )
+        );
         roleStorage.setMinter(address(vault), address(market));
 
         // Fire Event

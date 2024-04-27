@@ -16,13 +16,16 @@ import {Referral} from "../referrals/Referral.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {ITradeEngine} from "./interfaces/ITradeEngine.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 
+/// @notice Contract responsible for storing the state of active trades / requests
 contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using SignedMath for int256;
 
     ITradeEngine public tradeEngine;
     IMarket public market;
+    IVault public vault;
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
 
@@ -44,10 +47,15 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint256 public minCollateralUsd;
     uint64 public minCancellationTime;
 
-    constructor(IMarket _market, IReferralStorage _referralStorage, IPriceFeed _priceFeed, address _roleStorage)
-        RoleValidation(_roleStorage)
-    {
+    constructor(
+        IMarket _market,
+        IVault _vault,
+        IReferralStorage _referralStorage,
+        IPriceFeed _priceFeed,
+        address _roleStorage
+    ) RoleValidation(_roleStorage) {
         market = _market;
+        vault = _vault;
         referralStorage = _referralStorage;
         priceFeed = _priceFeed;
     }
@@ -113,12 +121,22 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         _deleteOrder(_orderKey, _isLimit);
     }
 
+    function setStopLoss(bytes32 _stopLossKey, bytes32 _requestKey) external onlyRouter {
+        orders[_requestKey].stopLossKey = _stopLossKey;
+    }
+
+    function setTakeProfit(bytes32 _takeProfitKey, bytes32 _requestKey) external onlyRouter {
+        orders[_requestKey].takeProfitKey = _takeProfitKey;
+    }
+
     /**
      * ===================================== Execution Functions =====================================
      */
 
     /// @dev needs to accept request id for limit order cases
     /// the request id at request time won't be the same as the request id at execution time
+    /// @notice Executes a Request for a Position
+    /// Called by keepers --> Routes the execution down the correct path.
     function executePositionRequest(bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
         external
         onlyPositionManager
@@ -126,7 +144,14 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         returns (Execution.FeeState memory feeState, Position.Request memory request)
     {
         return tradeEngine.executePositionRequest(
-            market, priceFeed, IPositionManager(msg.sender), referralStorage, _orderKey, _requestKey, _feeReceiver
+            market,
+            vault,
+            priceFeed,
+            IPositionManager(msg.sender),
+            referralStorage,
+            _orderKey,
+            _requestKey,
+            _feeReceiver
         );
     }
 
@@ -135,7 +160,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         nonReentrant
     {
-        tradeEngine.liquidatePosition(market, referralStorage, priceFeed, _positionKey, _requestKey, _liquidator);
+        tradeEngine.liquidatePosition(market, vault, referralStorage, priceFeed, _positionKey, _requestKey, _liquidator);
     }
 
     function executeAdl(bytes32 _positionKey, bytes32 _requestKey, address _feeReceiver)
@@ -143,7 +168,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         onlyPositionManager
         nonReentrant
     {
-        tradeEngine.executeAdl(market, referralStorage, priceFeed, _positionKey, _requestKey, _feeReceiver);
+        tradeEngine.executeAdl(market, vault, referralStorage, priceFeed, _positionKey, _requestKey, _feeReceiver);
     }
 
     /**

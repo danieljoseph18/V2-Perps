@@ -16,9 +16,9 @@ library Funding {
     using MathUtils for uint256;
     using MathUtils for int16;
 
-    int256 constant SIGNED_PRECISION = 1e18;
     int256 constant PRICE_PRECISION = 1e30;
     int64 constant SECONDS_IN_DAY = 86400;
+    int64 constant SIGNED_PRECISION = 1e18;
 
     function updateState(IMarket market, Pool.Storage storage pool, string calldata _ticker, uint256 _indexPrice)
         internal
@@ -57,7 +57,6 @@ library Funding {
 
     //  - proportionalSkew = skew / skewScale
     //  - velocity         = proportionalSkew * maxFundingVelocity
-    // @audit - make sure its always < max int16 (1e18)
     function _getCurrentVelocity(IMarket market, int256 _skew, int16 _maxVelocity, int48 _skewScale)
         private
         view
@@ -74,8 +73,8 @@ library Funding {
         }
         // Bound between -1e18 and 1e18
         int256 pSkewBounded = SignedMath.min(SignedMath.max(proportionalSkew, -SIGNED_PRECISION), SIGNED_PRECISION);
-        // Convert maxVelocity from a 2.Dp percentage to 30 Dp
-        int256 maxVelocity = _maxVelocity.expandDecimals(2, 30);
+        // Convert maxVelocity from a 2.Dp percentage to 18 Dp
+        int256 maxVelocity = _maxVelocity.expandDecimals(2, 18);
         // Calculate the velocity
         velocity = mulDivSigned(pSkewBounded, maxVelocity, SIGNED_PRECISION);
     }

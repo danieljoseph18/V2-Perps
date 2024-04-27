@@ -166,6 +166,11 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
     /// @dev For market orders, can just pass in bytes32(0) as the request id, as it's only required for limits
     /// @dev If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestKey as input
+    // @audit - review EIP-7412 --> TX reverts, signifies oracle data required
+    // design a custom revert for keepers to detect
+    // @audit - invariant --> pool amount does not exceed balance of token??
+    // e.g poolAmount(WETH) <= balanceOf(WETH)
+    // @audit - can we always work with sufficiently large numbers without overflow?
     function executePosition(IMarket market, bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
         external
         payable
@@ -251,7 +256,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         uint256 _affiliateRebate,
         uint256 _feeForExecutor,
         address _executor
-    ) external onlyTradeStorage(address(market)) {
+    ) external onlyTradeEngine(address(market)) {
         uint256 transferAmount = _collateralDelta;
         // Transfer Fee to Executor
         if (_feeForExecutor > 0) {

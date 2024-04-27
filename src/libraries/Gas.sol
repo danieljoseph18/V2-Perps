@@ -33,7 +33,7 @@ library Gas {
         Action _action,
         bool _hasPnlRequest,
         bool _isLimit
-    ) external view returns (uint256 priceUpdateFee) {
+    ) internal view returns (uint256 priceUpdateFee) {
         if (_msgValue < _executionFee) {
             revert Gas_InsufficientMsgValue(_msgValue, _executionFee);
         }
@@ -46,7 +46,7 @@ library Gas {
     }
 
     function getRefundForCancellation(uint256 _executionFee)
-        external
+        internal
         pure
         returns (uint256 refundAmount, uint256 amountForExecutor)
     {

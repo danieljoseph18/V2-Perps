@@ -86,7 +86,7 @@ library MarketLogic {
     /**
      * ============================= Validations =============================
      */
-    function validateConfig(Pool.Config calldata _config) external pure {
+    function validateConfig(Pool.Config calldata _config) internal pure {
         /* 1. Validate the initial inputs */
         // Check Leverage is within bounds
         if (_config.maxLeverage < MIN_LEVERAGE || _config.maxLeverage > MAX_LEVERAGE) {
@@ -140,7 +140,7 @@ library MarketLogic {
         uint256 _amountOut,
         bool _isLongToken,
         bool _isDeposit
-    ) external view {
+    ) internal view {
         // Cache the state after
         IVault.State memory updatedState = IVault(address(this)).getState(_isLongToken);
         // Validate the Vault State Delta
@@ -162,7 +162,7 @@ library MarketLogic {
         address _poolOwner,
         uint256 _longAccumulatedFees,
         uint256 _shortAccumulatedFees
-    ) external {
+    ) internal {
         uint256 longFees = _longAccumulatedFees;
         uint256 shortFees = _shortAccumulatedFees;
         // calculate percentages and distribute percentage to owner and feeDistributor
@@ -199,7 +199,7 @@ library MarketLogic {
         address _weth,
         bool _reverseWrap,
         bool _isDeposit
-    ) external {
+    ) internal {
         IMarket.Input memory request = IMarket.Input({
             amountIn: _amountIn,
             executionFee: _executionFee,
@@ -223,7 +223,7 @@ library MarketLogic {
         address _weth,
         address _usdc,
         address _marketToken
-    ) external returns (address tokenOut, uint256 amountOut, bool shouldUnwrap) {
+    ) internal returns (address tokenOut, uint256 amountOut, bool shouldUnwrap) {
         IMarket market = IMarket(address(this));
         // Check the Request Exists
         if (!market.requestExists(_key)) revert MarketLogic_InvalidKey();

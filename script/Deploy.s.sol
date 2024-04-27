@@ -151,6 +151,22 @@ contract Deploy is Script {
             0.005 ether
         );
 
+        /**
+         * (
+         *     uint256 _gasOverhead,
+         *     uint32 _callbackGasLimit,
+         *     uint256 _premiumFee,
+         *     uint64 _settlementFee,
+         *     address _nativeLinkPriceFeed,
+         *     address _sequencerUptimeFeed,
+         *     uint48 _timeToExpiration
+         * )
+         */
+        // @audit - dummy values
+        contracts.priceFeed.initialize(
+            0.01 gwei, 300_000, 0.0001 ether, 0.0001 ether, address(0), address(0), 20 seconds
+        );
+
         contracts.positionManager.updateGasEstimates(180000 gwei, 180000 gwei, 180000 gwei, 180000 gwei);
 
         contracts.referralStorage.setTier(0, 0.05e18);

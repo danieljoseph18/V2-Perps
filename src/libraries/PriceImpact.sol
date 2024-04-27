@@ -51,7 +51,7 @@ library PriceImpact {
      * 2. The liquidity of the market. The more illiquid, the higher the price impact will be.
      */
     function execute(IMarket market, Position.Request memory _request, Execution.Prices memory _prices)
-        external
+        internal
         view
         returns (uint256 impactedPrice, int256 priceImpactUsd)
     {

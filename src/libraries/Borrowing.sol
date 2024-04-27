@@ -36,7 +36,7 @@ library Borrowing {
         }
     }
 
-    function getTotalFeesOwedByMarket(IMarket market, bool _isLong) external view returns (uint256 totalFeeUsd) {
+    function getTotalFeesOwedByMarket(IMarket market, bool _isLong) internal view returns (uint256 totalFeeUsd) {
         string[] memory tickers = market.getTickers();
         uint256 len = tickers.length;
         totalFeeUsd;
@@ -61,7 +61,7 @@ library Borrowing {
      * p: The proportion of the new position size relative to the total open interest.
      */
     function getNextAverageCumulative(IMarket market, string calldata _ticker, int256 _sizeDeltaUsd, bool _isLong)
-        external
+        internal
         view
         returns (uint256 nextAverageCumulative)
     {
@@ -118,7 +118,6 @@ library Borrowing {
      * The calculation for the factor is simply (open interest usd / max open interest usd).
      * If OI is low, fee will be low, if OI is close to max, fee will be close to max.
      */
-    // @audit - ensure this rate is never > type(uint64).max (1e18)
     function _calculateRate(
         IMarket market,
         string calldata _ticker,
@@ -131,14 +130,14 @@ library Borrowing {
 
         uint256 maxOi = MarketUtils.getMaxOpenInterest(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
 
-        uint256 factor = openInterest.div(maxOi);
-
         borrowRatePerDay = market.borrowScale();
 
         // Opposite case cann occur if collateral decreases in value significantly.
         if (openInterest < maxOi) {
+            uint256 factor = openInterest.div(maxOi);
             borrowRatePerDay = borrowRatePerDay.percentage(factor);
         }
+        // If Oi > Max Oi, set rate to max rate per day
     }
 
     function _getTotalFeesOwedForAsset(IMarket market, string memory _ticker, bool _isLong)

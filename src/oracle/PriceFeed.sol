@@ -397,6 +397,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
             // Use yul to extract the encoded price from the bytes
             // offset = (32 * i) + 32 (first 32 bytes are the length of the byte string)
             // encodedPrice = mload(encodedPrices[offset:offset+32])
+            /// @solidity memory-safe-assembly
             assembly {
                 encodedPrice := mload(add(_encodedPrices, add(32, mul(i, 32))))
             }
@@ -413,6 +414,8 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
                 // Shift recorded values to the left and store the first 8 bytes (median price)
                 uint64(bytes8(encodedPrice << 192))
             );
+            // Validate the price range, and discard it if invalid
+            if (!Oracle.validatePrice(this, price)) return;
             // Store the constructed price struct in the mapping
             prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
 

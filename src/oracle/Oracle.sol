@@ -61,7 +61,7 @@ library Oracle {
     /**
      * ====================================== Validation Functions ======================================
      */
-    function isSequencerUp(IPriceFeed priceFeed) external view {
+    function isSequencerUp(IPriceFeed priceFeed) internal view {
         address sequencerUptimeFeed = priceFeed.sequencerUptimeFeed();
         if (sequencerUptimeFeed != address(0)) {
             IChainlinkFeed feed = IChainlinkFeed(sequencerUptimeFeed);
@@ -85,7 +85,7 @@ library Oracle {
         }
     }
 
-    function isValidChainlinkFeed(FeedRegistryInterface feedRegistry, address _feedAddress) external view {
+    function isValidChainlinkFeed(FeedRegistryInterface feedRegistry, address _feedAddress) internal view {
         if (!feedRegistry.isFeedEnabled(_feedAddress)) revert Oracle_InvalidSecondaryStrategy();
     }
 
@@ -95,7 +95,7 @@ library Oracle {
         IPriceFeed.FeedType _feedType,
         bytes32[] calldata _merkleProof,
         bytes32 _merkleRoot
-    ) external view {
+    ) internal view {
         IUniswapV3Pool pool = IUniswapV3Pool(_poolAddress);
         // Check if the pool address matches the one returned by the factory
         address token0 = pool.token0();
@@ -123,7 +123,7 @@ library Oracle {
         IPriceFeed.FeedType _feedType,
         bytes32[] calldata _merkleProof,
         bytes32 _merkleRoot
-    ) external view {
+    ) internal view {
         IUniswapV2Pair pair = IUniswapV2Pair(_poolAddress);
         // Check if the pair address matches the one returned by the factory
         address expectedPoolAddress = factory.getPair(pair.token0(), pair.token1());
@@ -143,7 +143,7 @@ library Oracle {
         }
     }
 
-    function isValidPythFeed(bytes32[] calldata _merkleProof, bytes32 _merkleRoot, bytes32 _priceId) external pure {
+    function isValidPythFeed(bytes32[] calldata _merkleProof, bytes32 _merkleRoot, bytes32 _priceId) internal pure {
         // Check if the Pyth feed is stored within the Merkle Tree as a whitelisted feed.
         // No need to check for bytes32(0) is this case will revert with this check.
         if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, _priceId)) {
@@ -151,7 +151,7 @@ library Oracle {
         }
     }
 
-    function validateFeedType(IPriceFeed.FeedType _feedType) external pure {
+    function validateFeedType(IPriceFeed.FeedType _feedType) internal pure {
         if (
             _feedType != IPriceFeed.FeedType.CHAINLINK && _feedType != IPriceFeed.FeedType.UNI_V30
                 && _feedType != IPriceFeed.FeedType.UNI_V31 && _feedType != IPriceFeed.FeedType.UNI_V20
@@ -164,7 +164,7 @@ library Oracle {
     /**
      * ====================================== Helper Functions ======================================
      */
-    function estimateRequestCost(IPriceFeed priceFeed) external view returns (uint256 cost) {
+    function estimateRequestCost(IPriceFeed priceFeed) internal view returns (uint256 cost) {
         // Get the current gas price
         uint256 gasPrice = tx.gasprice;
 
@@ -180,7 +180,7 @@ library Oracle {
     }
 
     function calculateSettlementFee(uint256 _ethAmount, uint256 _settlementFeePercentage)
-        external
+        internal
         pure
         returns (uint256)
     {
@@ -188,7 +188,7 @@ library Oracle {
     }
 
     /// @dev - Prepend the timestamp to the arguments before sending to the DON
-    function constructPriceArguments(string calldata _ticker) external view returns (string[] memory args) {
+    function constructPriceArguments(string memory _ticker) internal view returns (string[] memory args) {
         if (bytes(_ticker).length == 0) {
             // Only prices for Long and Short Tokens
             args = new string[](3);
@@ -205,7 +205,7 @@ library Oracle {
         }
     }
 
-    function constructMultiPriceArgs(IMarket market) external view returns (string[] memory args) {
+    function constructMultiPriceArgs(IMarket market) internal view returns (string[] memory args) {
         // Get the stringified timestamp
         string memory timestamp = block.timestamp.toString();
         // Return an array with the stringified timestamp appended before the tickers
@@ -225,7 +225,7 @@ library Oracle {
 
     /// @dev - Prepend the timestamp to the arguments before sending to the DON
     /// Use of loop not desirable, but the maximum possible loops is ~ 102
-    function constructPnlArguments(IMarket market) external view returns (string[] memory args) {
+    function constructPnlArguments(IMarket market) internal view returns (string[] memory args) {
         // Get the tickers
         string[] memory tickers = market.getTickers();
         // Get the stringified timestamp
@@ -245,7 +245,7 @@ library Oracle {
     /**
      * ====================================== Price Retrieval ======================================
      */
-    function getPrice(IPriceFeed priceFeed, string calldata _ticker, uint48 _blockTimestamp)
+    function getPrice(IPriceFeed priceFeed, string memory _ticker, uint48 _blockTimestamp)
         external
         view
         returns (uint256 medPrice)
@@ -295,7 +295,7 @@ library Oracle {
     }
 
     function getMaxVaultPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
-        external
+        internal
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
@@ -304,7 +304,7 @@ library Oracle {
     }
 
     function getMinVaultPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
-        external
+        internal
         view
         returns (uint256 longPrice, uint256 shortPrice)
     {
@@ -316,7 +316,7 @@ library Oracle {
      * ====================================== Pnl ======================================
      */
     function getCumulativePnl(IPriceFeed priceFeed, address _market, uint48 _blockTimestamp)
-        external
+        internal
         view
         returns (int256 cumulativePnl)
     {
@@ -328,13 +328,13 @@ library Oracle {
     /**
      * ====================================== Auxillary ======================================
      */
-    function getBaseUnit(IPriceFeed priceFeed, string calldata _ticker) external view returns (uint256 baseUnit) {
+    function getBaseUnit(IPriceFeed priceFeed, string memory _ticker) internal view returns (uint256 baseUnit) {
         baseUnit = 10 ** priceFeed.getTokenData(_ticker).tokenDecimals;
     }
 
     /// @dev - Wrapper around `getRequestTimestamp` with an additional validation step
     function getRequestTimestamp(IPriceFeed priceFeed, bytes32 _requestKey)
-        external
+        internal
         view
         returns (uint48 requestTimestamp)
     {
@@ -343,22 +343,15 @@ library Oracle {
         if (block.timestamp > requestTimestamp + priceFeed.timeToExpiration()) revert Oracle_RequestExpired();
     }
 
-    function validatePriceRange(IPriceFeed priceFeed, string calldata _ticker, uint256 _signedPrice) external view {
-        uint256 referencePrice = getReferencePrice(priceFeed, _ticker);
-        if (_signedPrice.delta(referencePrice) > referencePrice.percentage(MAX_PRICE_DEVIATION)) {
-            revert Oracle_InvalidPriceRetrieval();
-        }
-    }
-
-    function validateVaultTokenRanges(IPriceFeed priceFeed, uint256 _longPrice, uint256 _shortPrice) external view {
-        uint256 longReferencePrice = getReferencePrice(priceFeed, LONG_TICKER);
-        uint256 shortReferencePrice = getReferencePrice(priceFeed, SHORT_TICKER);
-        if (_longPrice.delta(longReferencePrice) > longReferencePrice.percentage(MAX_PRICE_DEVIATION)) {
-            revert Oracle_InvalidPriceRetrieval();
-        }
-        if (_shortPrice.delta(shortReferencePrice) > shortReferencePrice.percentage(MAX_PRICE_DEVIATION)) {
-            revert Oracle_InvalidPriceRetrieval();
-        }
+    function validatePrice(IPriceFeed priceFeed, IPriceFeed.Price memory _priceData) internal view returns (bool) {
+        // Get the Ref Price
+        uint256 referencePrice = _getReferencePrice(priceFeed, string(abi.encodePacked(_priceData.ticker)));
+        // If no secondary price feed, return true by default
+        if (referencePrice == 0) return true;
+        // Get the Med Price to 30 dp from the Price Data
+        uint256 medPrice = _priceData.med * (10 ** (PRICE_DECIMALS - _priceData.precision));
+        // Check if the Price is within the acceptable range
+        return medPrice.delta(referencePrice) <= referencePrice.percentage(MAX_PRICE_DEVIATION);
     }
 
     /**
@@ -374,14 +367,15 @@ library Oracle {
      * - Uniswap V3
      * - Uniswap V2
      */
-    function getReferencePrice(IPriceFeed priceFeed, string memory _ticker) public view returns (uint256 price) {
+    function _getReferencePrice(IPriceFeed priceFeed, string memory _ticker) private view returns (uint256 price) {
         IPriceFeed.TokenData memory tokenData = priceFeed.getTokenData(_ticker);
+        if (!tokenData.hasSecondaryFeed) return 0;
         if (tokenData.feedType == IPriceFeed.FeedType.CHAINLINK) {
             price = _getChainlinkPrice(tokenData);
         } else if (tokenData.feedType == IPriceFeed.FeedType.PYTH) {
             price = _getPythPrice(priceFeed, tokenData, _ticker);
         } else if (
-            tokenData.feedType == IPriceFeed.FeedType.UNI_V30 || tokenData.feedType == IPriceFeed.FeedType.UNI_V21
+            tokenData.feedType == IPriceFeed.FeedType.UNI_V30 || tokenData.feedType == IPriceFeed.FeedType.UNI_V31
         ) {
             price = _getUniswapV3Price(tokenData);
         } else if (

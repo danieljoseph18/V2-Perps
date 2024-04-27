@@ -88,6 +88,15 @@ interface IPriceFeed {
     event LinkBalanceSettled(uint256 indexed amount);
 
     function sequencerUptimeFeed() external view returns (address);
+    function initialize(
+        uint256 _gasOverhead,
+        uint32 _callbackGasLimit,
+        uint256 _premiumFee,
+        uint64 _settlementFee,
+        address _nativeLinkPriceFeed,
+        address _sequencerUptimeFeed,
+        uint48 _timeToExpiration
+    ) external;
     function getPrices(string memory _ticker, uint48 _timestamp) external view returns (Price memory signedPrices);
     function getCumulativePnl(address _market, uint48 _timestamp) external view returns (Pnl memory pnl);
     function updateBillingParameters(

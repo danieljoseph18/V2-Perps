@@ -40,6 +40,11 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
     // Store the Collateral Amount for each User
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
+    modifier onlyMarket() {
+        if (msg.sender != address(market)) revert RoleValidation_AccessDenied();
+        _;
+    }
+
     constructor(address _weth, address _usdc, string memory _name, string memory _symbol, address _roleStorage)
         ERC20(_name, _symbol, 18)
         RoleValidation(_roleStorage)
@@ -65,7 +70,7 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
      */
     function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease)
         external
-        onlyTradeStorage(address(this))
+        onlyTradeStorage(address(market))
     {
         if (_isIncrease) {
             _isLong ? longTokensReserved += _amount : shortTokensReserved += _amount;
@@ -80,17 +85,16 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         }
     }
 
-    // @audit - pool needs access
     function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease)
         external
-        onlyTradeStorage(address(this))
+        onlyTradeStorage(address(market))
     {
         _updatePoolBalance(_amount, _isLong, _isIncrease);
     }
 
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external
-        onlyTradeStorage(address(this))
+        onlyTradeStorage(address(market))
     {
         if (_isIncrease) {
             // Case 1: Increase the collateral amount
@@ -121,7 +125,7 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorage(address(this)) {
+    function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorage(address(market)) {
         _accumulateFees(_amount, _isLong);
     }
 
@@ -133,8 +137,10 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         MarketLogic.batchWithdrawFees(WETH, USDC, address(feeDistributor), feeReceiver, poolOwner, longFees, shortFees);
     }
 
-    // @audit - only market
-    function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager) external {
+    function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager)
+        external
+        onlyMarket
+    {
         // Cache the initial state
         State memory initialState = getState(_params.deposit.isLongToken);
         // Transfer deposit tokens from position manager
@@ -154,14 +160,14 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         MarketLogic.validateAction(initialState, _params.deposit.amountIn, 0, _params.deposit.isLongToken, true);
     }
 
-    // @audit - only controller
     function executeWithdrawal(ExecuteWithdrawal calldata _params, address _tokenOut, address _positionManager)
         external
+        onlyMarket
     {
         // Cache the initial state
         State memory initialState = getState(_params.withdrawal.isLongToken);
-        // Transfer Market Tokens in from msg.sender
-        // @audit - should be from position manager
+
+        // Transfer Market Tokens in
         IVault(this).safeTransferFrom(_positionManager, address(this), _params.withdrawal.amountIn);
 
         // Calculate Amount Out after Fee
@@ -201,9 +207,11 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
     /**
      * =============================== Token Transfers ===============================
      */
+    // @audit - does this follow token transfer best practices? Is it best to invoke a function,
+    // or to do an approve --> transfer from call?
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
-        onlyTradeStorage(address(this))
+        onlyTradeEngine(address(market))
     {
         _transferOutTokens(_isLongToken ? WETH : USDC, _to, _amount, _isLongToken, _shouldUnwrap);
     }

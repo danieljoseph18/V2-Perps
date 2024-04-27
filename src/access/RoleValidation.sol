@@ -34,18 +34,8 @@ contract RoleValidation {
         _;
     }
 
-    modifier onlyTradeStorageOrMarket(address _market) {
-        _validateMarketOrTradeStorage(_market);
-        _;
-    }
-
-    modifier onlyMarket(address _market) {
-        _validateMarket(_market);
-        _;
-    }
-
-    modifier onlyMinter(address _marketToken) {
-        _validateMinter(_marketToken);
+    modifier onlyTradeEngine(address _market) {
+        _validateTradeEngine(_market);
         _;
     }
 
@@ -67,22 +57,12 @@ contract RoleValidation {
         if (!roleStorage.hasRole(_role, msg.sender)) revert RoleValidation_AccessDenied();
     }
 
-    function _validateMarket(address _market) private view {
-        if (msg.sender != _market) revert RoleValidation_AccessDenied();
-    }
-
-    function _validateMinter(address _marketToken) private view {
-        if (roleStorage.getMinter(_marketToken) != msg.sender) revert RoleValidation_AccessDenied();
-    }
-
     function _validateTradeStorage(address _market) private view {
         if (!roleStorage.hasTradeStorageRole(_market, msg.sender)) revert RoleValidation_AccessDenied();
     }
 
-    function _validateMarketOrTradeStorage(address _market) private view {
-        if (!roleStorage.hasTradeStorageRole(_market, msg.sender) && msg.sender != _market) {
-            revert RoleValidation_AccessDenied();
-        }
+    function _validateTradeEngine(address _market) private view {
+        if (!roleStorage.hasTradeEngineRole(_market, msg.sender)) revert RoleValidation_AccessDenied();
     }
 
     function _validateConfigurator(address _market) private view {

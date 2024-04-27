@@ -10,12 +10,6 @@ import {Execution} from "../Execution.sol";
 import {Position} from "../Position.sol";
 
 interface ITradeEngine {
-    struct Invariants {
-        IVault.State initialState;
-        IVault.State updatedState;
-        uint256 storedCollateral;
-    }
-
     event AdlExecuted(address indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
     event LiquidatePosition(bytes32 indexed positionKey, address indexed liquidator, bool isLong);
     event CollateralEdited(bytes32 indexed positionKey, uint256 collateralDelta, bool isIncrease);
@@ -28,6 +22,7 @@ interface ITradeEngine {
 
     function executePositionRequest(
         IMarket market,
+        IVault vault,
         IPriceFeed priceFeed,
         IPositionManager positionManager,
         IReferralStorage referralStorage,
@@ -37,6 +32,7 @@ interface ITradeEngine {
     ) external returns (Execution.FeeState memory feeState, Position.Request memory request);
     function executeAdl(
         IMarket market,
+        IVault vault,
         IReferralStorage referralStorage,
         IPriceFeed priceFeed,
         bytes32 _positionKey,
@@ -45,6 +41,7 @@ interface ITradeEngine {
     ) external;
     function liquidatePosition(
         IMarket market,
+        IVault vault,
         IReferralStorage referralStorage,
         IPriceFeed priceFeed,
         bytes32 _positionKey,

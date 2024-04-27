@@ -16,6 +16,7 @@ import {Gas} from "../libraries/Gas.sol";
 import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 import {LibString} from "../libraries/LibString.sol";
+import {MathUtils} from "../libraries/MathUtils.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
@@ -24,6 +25,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     using SafeTransferLib for IWETH;
     using SafeTransferLib for IVault;
     using LibString for uint256;
+    using MathUtils for uint256;
 
     IMarketFactory private marketFactory;
     IPriceFeed private priceFeed;
@@ -33,6 +35,7 @@ contract Router is ReentrancyGuard, RoleValidation {
 
     string private constant LONG_TICKER = "ETH";
     string private constant SHORT_TICKER = "USDC";
+    uint64 private constant MAX_PERCENTAGE = 1e18;
 
     event DepositRequestCreated(IMarket market, address owner, address tokenIn, uint256 amountIn);
     event WithdrawalRequestCreated(IMarket market, address owner, address tokenOut, uint256 amountOut);
@@ -46,15 +49,18 @@ contract Router is ReentrancyGuard, RoleValidation {
     error Router_InvalidAmountIn();
     error Router_CantWrapUSDC();
     error Router_InvalidTokenIn();
-    error Router_InvalidKey();
     error Router_InvalidTokenOut();
     error Router_InvalidAsset();
     error Router_InvalidCollateralToken();
     error Router_InvalidAmountInForWrap();
-    error Router_ExecutionFeeTransferFailed();
-    error Router_InvalidCollateralDelta();
-    error Router_InvalidSizeDelta();
     error Router_InvalidPriceUpdateFee();
+    error Router_InvalidStopLossPercentage();
+    error Router_InvalidTakeProfitPercentage();
+    error Router_InvalidSlippage();
+    error Router_InvalidAssetId();
+    error Router_MarketDoesNotExist();
+    error Router_InvalidLimitPrice();
+    error Router_InvalidRequest();
 
     constructor(
         address _marketFactory,
@@ -163,53 +169,43 @@ contract Router is ReentrancyGuard, RoleValidation {
         emit WithdrawalRequestCreated(market, _owner, _tokenOut, _marketTokenAmountIn);
     }
 
-    // @audit - need min size so fee can never be 0
     function createPositionRequest(
         IMarket market,
         Position.Input memory _trade,
         Position.Conditionals calldata _conditionals
     ) external payable nonReentrant {
-        /**
-         * 3 Cases:
-         * 1. Position with no Conditionals -> Gas.Action.POSITION
-         * 2. Position with Stop Loss or Take Profit -> Gas.Action.POSITION_WITH_LIMIT
-         * 3. Position with Stop Loss and Take Profit -> Gas.Action.POSITION_WITH_LIMITS
-         */
-        uint256 priceUpdateFee;
-        if (_conditionals.stopLossSet && _conditionals.takeProfitSet) {
-            priceUpdateFee = Gas.validateExecutionFee(
-                priceFeed,
-                positionManager,
-                _trade.executionFee,
-                msg.value,
-                Gas.Action.POSITION_WITH_LIMITS,
-                false,
-                _trade.isLimit
-            );
-        } else if (_conditionals.stopLossSet || _conditionals.takeProfitSet) {
-            priceUpdateFee = Gas.validateExecutionFee(
-                priceFeed,
-                positionManager,
-                _trade.executionFee,
-                msg.value,
-                Gas.Action.POSITION_WITH_LIMIT,
-                false,
-                _trade.isLimit
-            );
-        } else {
-            priceUpdateFee = Gas.validateExecutionFee(
-                priceFeed, positionManager, _trade.executionFee, msg.value, Gas.Action.POSITION, false, _trade.isLimit
-            );
-        }
-
-        _trade.executionFee -= uint64(priceUpdateFee);
-
+        // Validate the Inputs
+        if (bytes(_trade.ticker).length == 0) revert Router_InvalidAssetId();
+        if (address(market) == address(0)) revert Router_MarketDoesNotExist();
+        if (_trade.isLimit && _trade.limitPrice == 0) revert Router_InvalidLimitPrice();
+        Position.checkSlippage(_trade.maxSlippage);
         // If Long, Collateral must be (W)ETH, if Short, Colalteral must be USDC
         if (_trade.isLong) {
             if (_trade.collateralToken != address(WETH)) revert Router_InvalidTokenIn();
         } else {
             if (_trade.collateralToken != address(USDC)) revert Router_InvalidTokenIn();
         }
+
+        uint256 priceUpdateFee;
+        Gas.Action action;
+
+        if (_conditionals.stopLossSet && _conditionals.takeProfitSet) {
+            action = Gas.Action.POSITION_WITH_LIMITS;
+            // Adjust the Execution Fee to a per-order basis (3x requests)
+            _trade.executionFee /= 3;
+        } else if (_conditionals.stopLossSet || _conditionals.takeProfitSet) {
+            action = Gas.Action.POSITION_WITH_LIMIT;
+            // Adjust the Execution Fee to a per-order basis (2x requests)
+            _trade.executionFee /= 2;
+        } else {
+            action = Gas.Action.POSITION;
+        }
+
+        priceUpdateFee = Gas.validateExecutionFee(
+            priceFeed, positionManager, _trade.executionFee, msg.value, action, false, _trade.isLimit
+        );
+
+        _trade.executionFee -= uint64(priceUpdateFee);
 
         // Handle Token Transfers
         if (_trade.isIncrease) _handleTokenTransfers(_trade);
@@ -218,8 +214,7 @@ contract Router is ReentrancyGuard, RoleValidation {
         // Limit Orders, Stop Loss, and Take Profit Order's prices will be updated at execution time
         bytes32 priceRequestKey = _trade.isLimit ? bytes32(0) : _requestPriceUpdate(priceUpdateFee, _trade.ticker);
 
-        // Construct the state for Order Creation
-        bytes32 positionKey = Position.validateInputParameters(_trade, _conditionals, address(market));
+        bytes32 positionKey = Position.generateKey(_trade.ticker, msg.sender, _trade.isLong);
 
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
 
@@ -227,13 +222,22 @@ contract Router is ReentrancyGuard, RoleValidation {
 
         // Set the Request Type
         Position.RequestType requestType = Position.getRequestType(_trade, position);
+        _validateRequestType(_trade, position, requestType);
 
         // Construct the Request from the user input
-        Position.Request memory request =
-            Position.createRequest(_trade, _conditionals, msg.sender, requestType, priceRequestKey);
+        Position.Request memory request = Position.createRequest(_trade, msg.sender, requestType, priceRequestKey);
 
         // Store the Order Request
         tradeStorage.createOrderRequest(request);
+
+        // Alter the request for conditionals and store here --> huge gas savings
+        if (request.requestType == Position.RequestType.CREATE_POSITION) {
+            // Cache the Request Key
+            bytes32 requestKey = Position.generateOrderKey(request);
+            // SL / TP should only be generated for new positions
+            if (_conditionals.stopLossSet) _createStopLoss(tradeStorage, request, _conditionals, requestKey);
+            if (_conditionals.takeProfitSet) _createTakeProfit(tradeStorage, request, _conditionals, requestKey);
+        }
 
         // Send Full Execution Fee to positionManager to Distribute
         _sendExecutionFee(_trade.executionFee);
@@ -305,6 +309,87 @@ contract Router is ReentrancyGuard, RoleValidation {
     function _requestPnlUpdate(IMarket market, uint256 _fee) private returns (bytes32 requestKey) {
         requestKey = priceFeed.requestCumulativeMarketPnl{value: _fee}(market, msg.sender);
         emit PnlRequested(requestKey, market, msg.sender);
+    }
+
+    function _validateRequestType(
+        Position.Input memory _trade,
+        Position.Data memory _position,
+        Position.RequestType _requestType
+    ) private pure {
+        bool positionShouldExist = _requestType != Position.RequestType.CREATE_POSITION;
+
+        if (positionShouldExist != (_position.user != address(0))) {
+            revert Router_InvalidRequest();
+        }
+
+        if (_requestType == Position.RequestType.POSITION_DECREASE && _trade.sizeDelta >= _position.size) {
+            revert Router_InvalidRequest();
+        }
+
+        if (_requestType != Position.RequestType.POSITION_INCREASE && _trade.sizeDelta == 0) {
+            revert Router_InvalidRequest();
+        }
+
+        if (_trade.collateralDelta == 0) {
+            revert Router_InvalidRequest();
+        }
+
+        // SL = 3, TP = 4 --> >= checks both
+        if (_requestType >= Position.RequestType.STOP_LOSS && !_trade.isLimit) {
+            revert Router_InvalidRequest();
+        }
+    }
+
+    function _createStopLoss(
+        ITradeStorage tradeStorage,
+        Position.Request memory _request,
+        Position.Conditionals memory _conditionals,
+        bytes32 _requestKey
+    ) internal {
+        if (_conditionals.stopLossPercentage == 0 || _conditionals.stopLossPercentage > MAX_PERCENTAGE) {
+            revert Router_InvalidStopLossPercentage();
+        }
+        // create and store stop loss
+        _request.input.collateralDelta = _request.input.collateralDelta.percentage(_conditionals.stopLossPercentage);
+        _request.input.sizeDelta = _request.input.sizeDelta.percentage(_conditionals.stopLossPercentage);
+        _request.input.isLimit = true;
+
+        _request.input.limitPrice = _conditionals.stopLossPrice;
+        _request.input.triggerAbove = _request.input.isLong ? false : true;
+        _request.requestType = Position.RequestType.STOP_LOSS;
+
+        // tie stop loss to original order
+        bytes32 stopLossKey = tradeStorage.createOrder(_request);
+        tradeStorage.setStopLoss(stopLossKey, _requestKey);
+
+        // Store the Stop Loss Request
+        tradeStorage.createOrderRequest(_request);
+    }
+
+    function _createTakeProfit(
+        ITradeStorage tradeStorage,
+        Position.Request memory _request,
+        Position.Conditionals memory _conditionals,
+        bytes32 _requestKey
+    ) internal {
+        if (_conditionals.takeProfitPercentage == 0 || _conditionals.takeProfitPercentage > MAX_PERCENTAGE) {
+            revert Router_InvalidTakeProfitPercentage();
+        }
+        // create and store take profit
+        _request.input.collateralDelta = _request.input.collateralDelta.percentage(_conditionals.takeProfitPercentage);
+        _request.input.sizeDelta = _request.input.sizeDelta.percentage(_conditionals.takeProfitPercentage);
+        _request.input.isLimit = true;
+
+        _request.input.limitPrice = _conditionals.takeProfitPrice;
+        _request.input.triggerAbove = _request.input.isLong ? true : false;
+        _request.requestType = Position.RequestType.TAKE_PROFIT;
+
+        // tie take profit to original order
+        bytes32 takeProfitKey = tradeStorage.createOrder(_request);
+        tradeStorage.setTakeProfit(takeProfitKey, _requestKey);
+
+        // Store the Take Profit Request
+        tradeStorage.createOrderRequest(_request);
     }
 
     function _handleTokenTransfers(Position.Input memory _trade) private {

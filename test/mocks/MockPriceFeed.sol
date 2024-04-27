@@ -327,6 +327,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
             // Use yul to extract the encoded price from the bytes
             // offset = (32 * i) + 32 (first 32 bytes are the length of the byte string)
             // encodedPrice = mload(encodedPrices[offset:offset+32])
+            /// @solidity memory-safe-assembly
             assembly {
                 encodedPrice := mload(add(_encodedPrices, add(32, mul(i, 32))))
             }

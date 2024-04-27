@@ -2,8 +2,12 @@
 pragma solidity 0.8.23;
 
 library Roles {
+    /// @notice All contracts associated with a newly deployed market
     struct MarketRoles {
         address tradeStorage;
+        address tradeEngine;
+        address market;
+        address vault;
         address configurator;
     }
 

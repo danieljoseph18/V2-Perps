@@ -131,11 +131,12 @@ library Position {
     // Request -> Constructed by Router based on User Input
     struct Request {
         Input input;
-        Conditionals conditionals;
         address user;
         uint48 requestTimestamp;
         RequestType requestType;
         bytes32 requestKey; // Key of the price update request
+        bytes32 stopLossKey;
+        bytes32 takeProfitKey;
     }
 
     // Bundled Request for Execution
@@ -148,8 +149,6 @@ library Position {
 
     // Request Type Classification
     enum RequestType {
-        COLLATERAL_INCREASE,
-        COLLATERAL_DECREASE,
         POSITION_INCREASE,
         POSITION_DECREASE,
         CREATE_POSITION,
@@ -160,28 +159,14 @@ library Position {
     /**
      * =========================== Validation Functions ============================
      */
-    function validateInputParameters(Input memory _trade, Conditionals memory _conditionals, address _market)
-        external
-        view
-        returns (bytes32 positionKey)
-    {
-        if (!(_trade.maxSlippage >= MIN_SLIPPAGE && _trade.maxSlippage <= MAX_SLIPPAGE)) {
+    function checkSlippage(uint256 _slippage) internal pure {
+        if (!(_slippage >= MIN_SLIPPAGE && _slippage <= MAX_SLIPPAGE)) {
             revert Position_InvalidSlippage();
         }
-        if (bytes(_trade.ticker).length == 0) revert Position_InvalidAssetId();
-        if (_market == address(0)) revert Position_MarketDoesNotExist();
-
-        positionKey = keccak256(abi.encode(_trade.ticker, msg.sender, _trade.isLong));
-
-        if (_trade.isLimit && _trade.limitPrice == 0) revert Position_InvalidLimitPrice();
-        else if (!_trade.isLimit && _trade.limitPrice != 0) revert Position_InvalidLimitPrice();
-
-        if (_conditionals.stopLossPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
-        if (_conditionals.takeProfitPercentage > PRECISION) revert Position_InvalidConditionalPercentage();
     }
 
     function validateFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
-        external
+        internal
         pure
     {
         if (_liquidationFee > MAX_LIQUIDATION_FEE || _liquidationFee < MIN_LIQUIDATION_FEE) {
@@ -198,264 +183,9 @@ library Position {
         }
     }
 
-    /**
-     * For an increase:
-     * - Fees should be accumulated in the fee pool
-     * - Users collateral amount should increase by collateral after fees
-     * - Settled funding should be settled through the pool balance
-     *
-     * For a decrease:
-     * - Fees should be accumulated in the fee pool
-     * - Users collateral amount should decrease by collateral after fees
-     * - Settled funding should be settled through the pool balance
-     * - PNL should be settled through the pool balance
-     */
-    function validatePoolDelta(
-        Execution.FeeState memory _feeState,
-        IVault.State memory _marketBefore,
-        IVault.State memory _marketAfter,
-        uint256 _collateralDelta,
-        uint256 _userCollateralBefore,
-        bool _isIncrease,
-        bool _isFullDecrease
-    ) external pure {
-        if (_isIncrease) {
-            // Fees should be accumulated in the fee pool
-            if (
-                _marketAfter.accumulatedFees
-                    != _marketBefore.accumulatedFees + _feeState.positionFee + _feeState.borrowFee
-            ) {
-                revert Position_InvalidFeeUpdate();
-            }
-            // Funding / PNL should be settled through the pool balance
-            // Calculate the Execpted Balance of the Market
-            uint256 expectedMarketBalance = _marketBefore.poolBalance;
-            // If user paid funding, pool should increase
-            if (_feeState.fundingFee < 0) expectedMarketBalance += _feeState.fundingFee.abs();
-            // If user got paid funding, pool should decrease
-            else if (_feeState.fundingFee > 0) expectedMarketBalance -= _feeState.fundingFee.abs();
-            // If user lost pnl, pool should increase
-            if (_feeState.realizedPnl < 0) expectedMarketBalance -= _feeState.realizedPnl.abs();
-            // If user gained pnl, pool should decrease
-            else if (_feeState.realizedPnl > 0) expectedMarketBalance += _feeState.realizedPnl.abs();
-
-            if (_marketAfter.poolBalance != expectedMarketBalance) {
-                revert Position_InvalidPoolUpdate();
-            }
-
-            // Vault Balance should increase by collateral delta - fee for executor - affiliate rebate
-            // @audit - wrong --> need to add is long ? then determine whether to use weth or usdc
-            // ideally in state snapshot we just snapshot 1 side
-            if (
-                _marketAfter.wethBalance
-                    != _marketBefore.wethBalance + _collateralDelta - _feeState.feeForExecutor - _feeState.affiliateRebate
-            ) {
-                revert Position_InvalidVaultUpdate();
-            }
-        } else {
-            // Fees should be accumulated in the fee pool
-            if (
-                _marketAfter.accumulatedFees
-                    != _marketBefore.accumulatedFees + _feeState.positionFee + _feeState.borrowFee
-            ) {
-                revert Position_InvalidFeeUpdate();
-            }
-
-            // Funding / PNL should be settled through the pool balance
-            // Calculate the Execpted Balance of the Market
-            /**
-             * Need to account for: collateral out, realized pnl, funding, fees, fee for executor, affiliate rebate
-             * Vault should decrease by:
-             * - Collateral Out
-             * - Fee for Executor
-             * - Affiliate Rebate
-             * - +- Pnl
-             * - +- Funding
-             *
-             * If liquidation, vault should only change by - liq fee
-             */
-            uint256 expectedMarketBalance = _marketBefore.poolBalance;
-
-            if (_feeState.isLiquidation) {
-                // If liquidation, all collateral after fees should be accumulated in the pool
-
-                expectedMarketBalance += _feeState.afterFeeAmount;
-                if (_feeState.amountOwedToUser > 0) {
-                    expectedMarketBalance -= _feeState.amountOwedToUser;
-                }
-                // If liquidation, only output should be the liquidation fee
-                // @audit - wrong --> need to add is long ? then determine whether to use weth or usdc
-                // ideally in state snapshot we just snapshot 1 side
-                if (
-                    _marketAfter.wethBalance
-                        != _marketBefore.wethBalance - (_feeState.feeForExecutor + _feeState.amountOwedToUser)
-                ) {
-                    revert Position_InvalidVaultUpdate();
-                }
-            } else {
-                uint256 expectedVaultDelta =
-                    (_feeState.afterFeeAmount + _feeState.feeForExecutor + _feeState.affiliateRebate);
-                // If user paid funding, pool should increase
-                if (_feeState.fundingFee < 0) {
-                    expectedMarketBalance += _feeState.fundingFee.abs();
-                } else if (_feeState.fundingFee > 0) {
-                    // If user got paid funding, pool should decrease
-                    uint256 absFundingFee = _feeState.fundingFee.abs();
-                    expectedMarketBalance -= absFundingFee;
-                    expectedVaultDelta += absFundingFee;
-                }
-                // If user lost pnl, pool should increase
-                if (_feeState.realizedPnl < 0) {
-                    expectedMarketBalance += _feeState.realizedPnl.abs();
-                } else if (_feeState.realizedPnl > 0) {
-                    // If user gained pnl, pool should decrease
-                    uint256 absPnl = _feeState.realizedPnl.abs();
-                    expectedMarketBalance -= absPnl;
-                    expectedVaultDelta += absPnl;
-                }
-                // @audit - wrong --> need to add is long ? then determine whether to use weth or usdc
-                // ideally in state snapshot we just snapshot 1 side
-                if (_marketAfter.wethBalance != _marketBefore.wethBalance - expectedVaultDelta) {
-                    revert Position_InvalidVaultUpdate();
-                }
-            }
-
-            if (_collateralDelta > _userCollateralBefore) {
-                // If deficit in collateral was covered by the pool (due to decrease in collateral value)
-                expectedMarketBalance -= (_collateralDelta - _userCollateralBefore);
-            } else if (_isFullDecrease && _userCollateralBefore - _collateralDelta > 0) {
-                // If excess collateral left on a full decrease, it's absorbed into the pool
-                expectedMarketBalance += (_userCollateralBefore - _collateralDelta);
-            }
-
-            if (_marketAfter.poolBalance != expectedMarketBalance) {
-                revert Position_InvalidPoolUpdate();
-            }
-        }
-    }
-
-    function validateCollateralIncrease(
-        Data memory _position,
-        Execution.FeeState memory _feeState,
-        Execution.Prices memory _prices,
-        uint256 _collateralDelta,
-        uint256 _collateralDeltaUsd,
-        uint256 _initialCollateral
-    ) external pure {
-        // ensure the position collateral has changed by the correct amount
-        uint256 expectedCollateralDelta = _collateralDelta - _feeState.positionFee - _feeState.borrowFee
-            - _feeState.affiliateRebate - _feeState.feeForExecutor;
-        // Account for funding
-        if (_feeState.fundingFee < 0) expectedCollateralDelta -= _feeState.fundingFee.abs();
-        else if (_feeState.fundingFee > 0) expectedCollateralDelta += _feeState.fundingFee.abs();
-        if (expectedCollateralDelta != _collateralDeltaUsd.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit))
-        {
-            revert Position_CollateralDelta();
-        }
-        // Validate Position Delta
-        if (_position.collateral != _initialCollateral + _collateralDeltaUsd) {
-            revert Position_CollateralDelta();
-        }
-    }
-
-    function validateCollateralDecrease(
-        Data memory _position,
-        Execution.FeeState memory _feeState,
-        Execution.Prices memory _prices,
-        uint256 _initialCollateral
-    ) external pure {
-        // ensure the position collateral has changed by the correct amount
-        uint256 expectedCollateralDelta = _feeState.afterFeeAmount + _feeState.positionFee + _feeState.borrowFee
-            + _feeState.affiliateRebate + _feeState.feeForExecutor;
-        // Account for funding
-        if (_feeState.fundingFee < 0) expectedCollateralDelta += _feeState.fundingFee.abs();
-        else if (_feeState.fundingFee > 0) expectedCollateralDelta -= _feeState.fundingFee.abs();
-        // Convert to USD
-        uint256 collateralDeltaUsd = expectedCollateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
-        // Validate Position Delta
-        if (_position.collateral != _initialCollateral - collateralDeltaUsd) {
-            revert Position_CollateralDelta();
-        }
-    }
-
-    function validateNewPosition(
-        uint256 _collateralIn,
-        uint256 _afterFeeAmount,
-        uint256 _positionFee,
-        uint256 _affiliateRebate,
-        uint256 _feeForExecutor
-    ) external pure {
-        if (_collateralIn != _afterFeeAmount + _positionFee + _affiliateRebate + _feeForExecutor) {
-            revert Position_NewPosition();
-        }
-    }
-
-    function validateIncreasePosition(
-        Data memory _position,
-        Execution.FeeState memory _feeState,
-        Execution.Prices memory _prices,
-        uint256 _collateralDelta,
-        uint256 _collateralDeltaUsd,
-        uint256 _initialCollateral,
-        uint256 _initialSize,
-        uint256 _sizeDelta
-    ) external pure {
-        uint256 expectedCollateralDelta = _collateralDelta - _feeState.positionFee - _feeState.affiliateRebate
-            - _feeState.borrowFee - _feeState.feeForExecutor;
-        // Account for funding paid out from / to the user
-        if (_feeState.fundingFee < 0) expectedCollateralDelta -= _feeState.fundingFee.abs();
-        else if (_feeState.fundingFee > 0) expectedCollateralDelta += _feeState.fundingFee.abs();
-        // Convert to USD
-        uint256 collateralDeltaUsd = expectedCollateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
-        if (_collateralDeltaUsd != collateralDeltaUsd) {
-            revert Position_IncreasePositionCollateral();
-        }
-        if (_position.collateral != _initialCollateral + collateralDeltaUsd) {
-            revert Position_IncreasePositionCollateral();
-        }
-        if (_position.size != _initialSize + _sizeDelta) {
-            revert Position_IncreasePositionSize();
-        }
-    }
-
-    // @gas - can combine with collateral decrease?
-    function validateDecreasePosition(
-        Data memory _position,
-        Execution.FeeState memory _feeState,
-        Execution.Prices memory _prices,
-        uint256 _initialCollateral,
-        uint256 _initialSize,
-        uint256 _sizeDelta,
-        int256 _pnl
-    ) external pure {
-        // Amount out should = collateralDelta +- pnl += fundingFee - borrow fee - trading fee - affiliateRebate - feeForExecutor
-        /**
-         * collat before should = collat after + collateralDelta + fees + pnl
-         * feeDiscount / 2, as 1/2 is rebate to referrer
-         */
-        uint256 expectedCollateralDelta = _feeState.afterFeeAmount + _feeState.positionFee + _feeState.affiliateRebate
-            + _feeState.borrowFee + _feeState.feeForExecutor;
-        // Account for funding / pnl paid out from collateral
-        if (_pnl < 0) expectedCollateralDelta += _pnl.abs();
-        else if (_pnl > 0) expectedCollateralDelta -= _pnl.abs();
-
-        if (_feeState.fundingFee < 0) expectedCollateralDelta += _feeState.fundingFee.abs();
-
-        // Convert to USD
-        uint256 collateralDeltaUsd = expectedCollateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
-
-        if (_initialCollateral != _position.collateral + collateralDeltaUsd) {
-            revert Position_DecreasePositionCollateral();
-        }
-
-        if (_initialSize != _position.size + _sizeDelta) {
-            revert Position_DecreasePositionSize();
-        }
-    }
-
     // 1x = 100
     function checkLeverage(IMarket market, string memory _ticker, uint256 _sizeUsd, uint256 _collateralUsd)
-        external
+        internal
         view
     {
         uint8 maxLeverage = MarketUtils.getMaxLeverage(market, _ticker);
@@ -465,36 +195,17 @@ library Position {
         if (leverage > maxLeverage) revert Position_OverMaxLeverage();
     }
 
-    /**
-     * We can add a bool for execute above / below. This should make categorization
-     * and execution easier.
-     */
     function getRequestType(Input memory _trade, Data memory _position)
-        external
+        internal
         pure
         returns (RequestType requestType)
     {
-        // Case 1: Position doesn't exist (Create Position (Market / Limit))
         if (_position.user == address(0)) {
-            if (!_trade.isIncrease) revert Position_InvalidDecrease();
-            if (_trade.sizeDelta == 0) revert Position_SizeDelta();
             requestType = RequestType.CREATE_POSITION;
-        } else if (_trade.sizeDelta == 0) {
-            // Case 2: Position exists but sizeDelta is 0 (Collateral Increase / Decrease)
-            if (_trade.isIncrease) {
-                requestType = RequestType.COLLATERAL_INCREASE;
-            } else {
-                requestType = RequestType.COLLATERAL_DECREASE;
-            }
         } else if (_trade.isIncrease) {
-            // Case 3: Trade is a Market / Limit Increase on an Existing Position
             requestType = RequestType.POSITION_INCREASE;
         } else {
-            // Case 4 & 5: Trade is a Market Decrease or Limit Order (SL / TP) on an Existing Position
-            if (_trade.sizeDelta > _position.size) revert Position_InvalidSizeDelta();
-
             if (_trade.isLimit) {
-                // Case 4: Trade is a Limit Order on an Existing Position (SL / TP)
                 if (_trade.triggerAbove) {
                     if (_trade.isLong) {
                         requestType = RequestType.TAKE_PROFIT;
@@ -506,7 +217,6 @@ library Position {
                     else requestType = RequestType.TAKE_PROFIT;
                 }
             } else {
-                // Case 5: Trade is a Market Decrease on an Existing Position
                 requestType = RequestType.POSITION_DECREASE;
             }
         }
@@ -515,8 +225,16 @@ library Position {
     /**
      * =========================== Constructor Functions ============================
      */
-    function generateKey(Request memory _request) external pure returns (bytes32 positionKey) {
+    function generateKey(Request memory _request) internal pure returns (bytes32 positionKey) {
         positionKey = keccak256(abi.encode(_request.input.ticker, _request.user, _request.input.isLong));
+    }
+
+    function generateKey(string memory _ticker, address _user, bool _isLong)
+        internal
+        pure
+        returns (bytes32 positionKey)
+    {
+        positionKey = keccak256(abi.encode(_ticker, _user, _isLong));
     }
 
     function generateOrderKey(Request memory _request) public pure returns (bytes32 orderKey) {
@@ -531,20 +249,19 @@ library Position {
         );
     }
 
-    function createRequest(
-        Input memory _trade,
-        Conditionals calldata _conditionals,
-        address _user,
-        RequestType _requestType,
-        bytes32 _requestKey
-    ) external view returns (Request memory request) {
+    function createRequest(Input memory _trade, address _user, RequestType _requestType, bytes32 _requestKey)
+        internal
+        view
+        returns (Request memory request)
+    {
         request = Request({
             input: _trade,
-            conditionals: _conditionals,
             user: _user,
             requestTimestamp: uint48(block.timestamp),
             requestType: _requestType,
-            requestKey: _requestKey
+            requestKey: _requestKey,
+            stopLossKey: bytes32(0),
+            takeProfitKey: bytes32(0)
         });
     }
 
@@ -553,7 +270,7 @@ library Position {
         Request memory _request,
         uint256 _impactedPrice,
         uint256 _collateralUsd
-    ) external view returns (Data memory position) {
+    ) internal view returns (Data memory position) {
         // Get Entry Funding & Borrowing Values
         (uint256 longBorrowFee, uint256 shortBorrowFee) =
             MarketUtils.getCumulativeBorrowFees(market, _request.input.ticker);
@@ -569,72 +286,9 @@ library Position {
             isLong: _request.input.isLong,
             fundingParams: FundingParams(MarketUtils.getFundingAccrued(market, _request.input.ticker), 0),
             borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
-            stopLossKey: bytes32(0),
-            takeProfitKey: bytes32(0)
+            stopLossKey: _request.stopLossKey,
+            takeProfitKey: _request.takeProfitKey
         });
-    }
-
-    // SL / TP are Decrease Orders tied to a Position
-    function createConditionalOrders(
-        Data memory _position,
-        Conditionals memory _conditionals,
-        Execution.Prices memory _prices,
-        uint256 _totalExecutionFee
-    ) external view returns (Request memory stopLossOrder, Request memory takeProfitOrder) {
-        // Construct the stop loss based on the values
-        uint256 slExecutionFee = _totalExecutionFee.percentage(2, 3); // 2/3 of the total execution fee
-        if (_conditionals.stopLossSet) {
-            stopLossOrder = Request({
-                input: Input({
-                    ticker: _position.ticker,
-                    collateralToken: _position.collateralToken,
-                    // Convert Percentage of Collateral from USD to Collateral Tokens
-                    collateralDelta: _position.collateral.percentage(_conditionals.stopLossPercentage).fromUsd(
-                        _prices.collateralPrice, _prices.collateralBaseUnit
-                        ),
-                    sizeDelta: _position.size.percentage(_conditionals.stopLossPercentage),
-                    limitPrice: _conditionals.stopLossPrice,
-                    maxSlippage: MAX_SLIPPAGE,
-                    executionFee: uint64(slExecutionFee),
-                    isLong: _position.isLong,
-                    isLimit: true,
-                    isIncrease: false,
-                    reverseWrap: true,
-                    triggerAbove: _position.isLong ? false : true
-                }),
-                conditionals: Conditionals(false, false, 0, 0, 0, 0),
-                user: _position.user,
-                requestTimestamp: uint48(block.timestamp),
-                requestType: RequestType.STOP_LOSS,
-                requestKey: bytes32(0)
-            });
-        }
-        // Construct the Take profit based on the values
-        if (_conditionals.takeProfitSet) {
-            takeProfitOrder = Request({
-                input: Input({
-                    ticker: _position.ticker,
-                    collateralToken: _position.collateralToken,
-                    collateralDelta: _position.collateral.percentage(_conditionals.takeProfitPercentage).fromUsd(
-                        _prices.collateralPrice, _prices.collateralBaseUnit
-                        ),
-                    sizeDelta: _position.size.percentage(_conditionals.takeProfitPercentage),
-                    limitPrice: _conditionals.takeProfitPrice,
-                    maxSlippage: MAX_SLIPPAGE,
-                    executionFee: uint64(_totalExecutionFee - slExecutionFee),
-                    isLong: !_position.isLong,
-                    isLimit: true,
-                    isIncrease: false,
-                    reverseWrap: true,
-                    triggerAbove: _position.isLong ? true : false
-                }),
-                conditionals: Conditionals(false, false, 0, 0, 0, 0),
-                user: _position.user,
-                requestTimestamp: uint48(block.timestamp),
-                requestType: RequestType.TAKE_PROFIT,
-                requestKey: bytes32(0)
-            });
-        }
     }
 
     function createLiquidationOrder(
@@ -642,8 +296,8 @@ library Position {
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         address _liquidator
-    ) external view returns (Settlement memory order) {
-        order = Settlement({
+    ) internal view returns (Settlement memory) {
+        return Settlement({
             request: Request({
                 input: Input({
                     ticker: _position.ticker,
@@ -659,11 +313,12 @@ library Position {
                     reverseWrap: false,
                     triggerAbove: false
                 }),
-                conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
                 requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.POSITION_DECREASE,
-                requestKey: bytes32(0)
+                requestKey: bytes32(0),
+                stopLossKey: bytes32(0),
+                takeProfitKey: bytes32(0)
             }),
             orderKey: bytes32(0),
             feeReceiver: _liquidator,
@@ -672,11 +327,11 @@ library Position {
     }
 
     function createAdlOrder(Data memory _position, uint256 _sizeDelta, uint256 _collateralDelta, address _feeReceiver)
-        external
+        internal
         view
-        returns (Settlement memory order)
+        returns (Settlement memory)
     {
-        order = Settlement({
+        return Settlement({
             request: Request({
                 input: Input({
                     ticker: _position.ticker,
@@ -692,11 +347,12 @@ library Position {
                     reverseWrap: false,
                     triggerAbove: false
                 }),
-                conditionals: Conditionals(false, false, 0, 0, 0, 0),
                 user: _position.user,
                 requestTimestamp: uint48(block.timestamp),
                 requestType: RequestType.POSITION_DECREASE,
-                requestKey: bytes32(0)
+                requestKey: bytes32(0),
+                stopLossKey: bytes32(0),
+                takeProfitKey: bytes32(0)
             }),
             orderKey: bytes32(0),
             feeReceiver: _feeReceiver,
@@ -713,7 +369,7 @@ library Position {
         uint256 _collateralDelta,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit
-    ) external view returns (uint256 positionFee, uint256 feeForExecutor) {
+    ) internal view returns (uint256 positionFee, uint256 feeForExecutor) {
         uint256 feePercentage = tradeStorage.tradingFee();
         uint256 executorPercentage = tradeStorage.feeForExecution();
         // Units usd to collateral amount
@@ -732,44 +388,40 @@ library Position {
 
     function getFundingFeeDelta(
         IMarket market,
-        string calldata _ticker,
+        string memory _ticker,
         uint256 _indexPrice,
         uint256 _sizeDelta,
         int256 _entryFundingAccrued
-    ) external view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
+    ) internal view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
         (, nextFundingAccrued) = Funding.calculateNextFunding(market, _ticker, _indexPrice);
         // Funding Fee Usd = Size Delta * Percentage Funding Accrued
         fundingFeeUsd = _sizeDelta.toInt256().percentageUsd(nextFundingAccrued - _entryFundingAccrued);
     }
 
     function getTotalFundingFees(IMarket market, Data memory _position, uint256 _indexPrice)
-        external
+        internal
         view
-        returns (int256 totalFeesOwedUsd)
+        returns (int256)
     {
         (, int256 nextFundingAccrued) = Funding.calculateNextFunding(market, _position.ticker, _indexPrice);
         // Total Fees Owed Usd = Position Size * Percentage Funding Accrued
-        totalFeesOwedUsd =
-            _position.size.toInt256().percentageInt(nextFundingAccrued - _position.fundingParams.lastFundingAccrued);
+        return _position.size.toInt256().percentageInt(nextFundingAccrued - _position.fundingParams.lastFundingAccrued);
     }
 
     function getTotalBorrowFees(IMarket market, Data memory _position, Execution.Prices memory _prices)
-        external
+        internal
         view
-        returns (uint256 collateralFeesOwed)
+        returns (uint256)
     {
         uint256 feesUsd = getTotalBorrowFeesUsd(market, _position);
-        collateralFeesOwed = feesUsd.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
+        // Convert fees from USD to Collateral Tokens
+        return feesUsd.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
     }
 
     /// @dev Gets Total Fees Owed By a Position in Tokens
     /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
     /// @dev Units: Fees in USD (% of fees applied to position size)
-    function getTotalBorrowFeesUsd(IMarket market, Data memory _position)
-        public
-        view
-        returns (uint256 totalFeesOwedUsd)
-    {
+    function getTotalBorrowFeesUsd(IMarket market, Data memory _position) public view returns (uint256) {
         uint256 borrowFee = _position.isLong
             ? MarketUtils.getCumulativeBorrowFee(market, _position.ticker, true)
                 - _position.borrowingParams.lastLongCumulativeBorrowFee
@@ -777,7 +429,7 @@ library Position {
                 - _position.borrowingParams.lastShortCumulativeBorrowFee;
         borrowFee += Borrowing.calculatePendingFees(market, _position.ticker, _position.isLong);
         uint256 feeSinceUpdate = borrowFee == 0 ? 0 : _position.size.percentage(borrowFee);
-        totalFeesOwedUsd = feeSinceUpdate + _position.borrowingParams.feesOwed;
+        return feeSinceUpdate + _position.borrowingParams.feesOwed;
     }
 
     /// @dev returns PNL in USD
@@ -808,19 +460,19 @@ library Position {
         uint256 _collateralTokenPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) external pure returns (int256 decreasePositionPnl) {
+    ) internal pure returns (int256) {
         // Calculate whole position Pnl
         int256 positionPnl =
             getPositionPnl(_positionSizeUsd, _weightedAvgEntryPrice, _impactedPrice, _indexBaseUnit, _isLong);
 
         // Get (% realised) * pnl
-        int256 realizedPnl = positionPnl.percentageSigned(_sizeDeltaUsd, _positionSizeUsd);
+        int256 realizedPnlUsd = positionPnl.percentageSigned(_sizeDeltaUsd, _positionSizeUsd);
 
-        // Units from USD to collateral tokens
-        decreasePositionPnl = realizedPnl.fromUsdToSigned(_collateralTokenPrice, _collateralBaseUnit);
+        // Return PNL in Collateral Tokens
+        return realizedPnlUsd.fromUsdToSigned(_collateralTokenPrice, _collateralBaseUnit);
     }
 
-    function getLiquidationPrice(Data memory _position) external pure returns (uint256 liquidationPrice) {
+    function getLiquidationPrice(Data memory _position) internal pure returns (uint256) {
         if (_position.isLong) {
             // For long positions, liquidation price is when:
             // collateral + PNL = 0
@@ -828,7 +480,7 @@ library Position {
             // (liquidationPrice - entryPrice) * (positionSize / entryPrice) + _position.collateral = 0
             // liquidationPrice = entryPrice - (_position.collateral * entryPrice) / positionSize
 
-            liquidationPrice = _position.weightedAvgEntryPrice
+            return _position.weightedAvgEntryPrice
                 - mulDiv(_position.collateral, _position.weightedAvgEntryPrice, _position.size);
         } else {
             // For short positions, liquidation price is when:
@@ -837,14 +489,14 @@ library Position {
             // (entryPrice - liquidationPrice) * (positionSize / entryPrice) - _position.collateral = 0
             // liquidationPrice = entryPrice + (_position.collateral * entryPrice) / positionSize
 
-            liquidationPrice = _position.weightedAvgEntryPrice
+            return _position.weightedAvgEntryPrice
                 + mulDiv(_position.collateral, _position.weightedAvgEntryPrice, _position.size);
         }
     }
 
     /**
      * @dev Calculates the Percentage to ADL a position by based on the PNL to Pool Ratio.
-     * Percentage to ADL = 1 - e ** (-sqrt(excessRatio) * (positionPnl/positionSize))
+     * Percentage to ADL = 1 - e ** (-excessRatio**2) * (positionPnl/positionSize))
      * where excessRatio = (currentPnlToPoolRatio/targetPnlToPoolRatio) - 1
      *
      * The maximum pnl to pool ratio is configured to 0.45e18, or 45%. We introduce
@@ -853,7 +505,7 @@ library Position {
      * purely based on the max ratio, once pnl exceeds 45%, the percentage to adl would be 0.
      */
     function calculateAdlPercentage(uint256 _pnlToPoolRatio, int256 _positionProfit, uint256 _positionSize)
-        external
+        internal
         pure
         returns (uint256 adlPercentage)
     {
@@ -863,52 +515,15 @@ library Position {
         if (adlPercentage > MAX_ADL_PERCENTAGE) adlPercentage = MAX_ADL_PERCENTAGE;
     }
 
-    /**
-     * =========================== Private Functions ============================
-     */
-
-    // Sizes must be valid percentages
-    function _validateConditionals(Conditionals memory _conditionals, uint256 _referencePrice, bool _isLong)
-        private
+    // Uses Signed Wad Math instead of PRB Math
+    // @audit - complete
+    function optimizedCalculateAdlPercentage(uint256 _pnlToPoolRatio, int256 _positionProfit, uint256 _positionSize)
+        internal
         pure
-        returns (Conditionals memory)
+        returns (uint256 adlPercentage)
     {
-        // Check the Validity of the Stop Loss / Take Profit
-        bool stopLossValid = true;
-        bool takeProfitValid = true;
-        if (_conditionals.stopLossSet) {
-            if (_conditionals.stopLossPercentage == 0 || _conditionals.stopLossPercentage > PRECISION) {
-                stopLossValid = false;
-            }
-            if (_isLong) {
-                if (_conditionals.stopLossPrice >= _referencePrice) stopLossValid = false;
-            } else {
-                if (_conditionals.stopLossPrice <= _referencePrice) stopLossValid = false;
-            }
-        }
-        if (_conditionals.takeProfitSet) {
-            if (_conditionals.takeProfitPercentage == 0 || _conditionals.takeProfitPercentage > PRECISION) {
-                takeProfitValid = false;
-            }
-            if (_isLong) {
-                if (_conditionals.takeProfitPrice <= _referencePrice) takeProfitValid = false;
-            } else {
-                if (_conditionals.takeProfitPrice >= _referencePrice) takeProfitValid = false;
-            }
-        }
-
-        // If Stop Loss / Take Profit are not valid set them to 0
-        if (!stopLossValid) {
-            _conditionals.stopLossSet = false;
-            _conditionals.stopLossPrice = 0;
-            _conditionals.stopLossPercentage = 0;
-        }
-        if (!takeProfitValid) {
-            _conditionals.takeProfitSet = false;
-            _conditionals.takeProfitPrice = 0;
-            _conditionals.takeProfitPercentage = 0;
-        }
-        // Return the Validated Conditionals
-        return _conditionals;
+        /**
+         * Excess ratio = ((pnlToPoolRatio / targetPnlRatio) - 1) ** 2
+         */
     }
 }
