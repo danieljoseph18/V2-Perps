@@ -1,88 +1,174 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {SignedMath} from "./SignedMath.sol";
-import {SafeCast} from "./SafeCast.sol";
+import {Casting} from "./Casting.sol";
 
 library MathUtils {
-    using SignedMath for int256;
-    using SafeCast for uint256;
+    using Casting for uint256;
+    using Casting for int256;
 
-    uint64 private constant PRECISION = 1e18;
-    int64 private constant SIGNED_PRECISION = 1e18;
-    int128 private constant PRICE_PRECISION = 1e30;
+    error MathUtils_InputTooSmall();
+    error MathUtils_IntOverflow(int256 x, int256 y);
+    error MathUtils_UintOverflow(uint256 x, uint256 y, uint256 denominator);
+
+    uint64 private constant UNIT = 1e18;
+    int128 private constant PRICE_UNIT = 1e30;
     uint256 internal constant MAX_UINT256 = 2 ** 256 - 1;
     uint256 internal constant WAD = 1e18; // The scalar of ETH and most ERC20s.
 
-    /// @dev Converts an Amount in Tokens to a USD amount
-    function toUsd(uint256 _amount, uint256 _price, uint256 _baseUnit) internal pure returns (uint256) {
-        return mulDiv(_amount, _price, _baseUnit);
-    }
-
-    /// @dev Converts an Amount in USD (uint) to an amount in Tokens
-    function fromUsd(uint256 _usdAmount, uint256 _price, uint256 _baseUnit) internal pure returns (uint256) {
-        return mulDiv(_usdAmount, _baseUnit, _price);
-    }
-
-    /// @dev Converts an Amount in USD (int) to an amount in Tokens
-    function fromUsdSigned(int256 _usdAmount, uint256 _price, uint256 _baseUnit) internal pure returns (uint256) {
-        return mulDiv(_usdAmount.abs(), _baseUnit, _price);
-    }
-
-    /// @dev Converts an Amount in USD (int) to an amount in Tokens (int)
-    function fromUsdToSigned(int256 _usdAmount, uint256 _price, uint256 _baseUnit) internal pure returns (int256) {
-        return mulDivSigned(_usdAmount, _baseUnit.toInt256(), _price.toInt256());
-    }
-
-    /// @dev Returns the percentage of an Amount to 18 D.P
-    function percentage(uint256 _amount, uint256 _percentage) internal pure returns (uint256) {
-        return mulDiv(_amount, _percentage, PRECISION);
-    }
-
-    /// @dev Returns the percentage of an Amount with a custom denominator
-    function percentage(uint256 _amount, uint256 _numerator, uint256 _denominator) internal pure returns (uint256) {
-        return mulDiv(_amount, _numerator, _denominator);
-    }
-
-    /// @dev Returns the percentage of an Amount (int) with a custom denominator
-    function percentageSigned(int256 _amount, uint256 _numerator, uint256 _denominator)
-        internal
-        pure
-        returns (int256)
-    {
-        return mulDivSigned(_amount, _numerator.toInt256(), _denominator.toInt256());
-    }
-
-    /// @dev Returns the percentage of an Amount (int) with a custom denominator as an integer
-    function percentageInt(int256 _amount, int256 _numerator) internal pure returns (int256) {
-        return mulDivSigned(_amount, _numerator, SIGNED_PRECISION);
-    }
-
-    /// @dev Returns the percentage of a USD Amount (int) with a custom denominator as an integer
-    function percentageUsd(int256 _usdAmount, int256 _numerator) internal pure returns (int256) {
-        return mulDivSigned(_usdAmount, _numerator, PRICE_PRECISION);
-    }
-
-    /// @dev Returns X / Y to 18 D.P
-    function div(uint256 _amount, uint256 _divisor) internal pure returns (uint256) {
-        return mulDiv(_amount, PRECISION, _divisor);
-    }
-
-    function ceilDiv(uint256 _amount, uint256 _divisor) internal pure returns (uint256) {
-        return mulDivCeil(_amount, PRECISION, _divisor);
-    }
-
-    function mulDivCeil(uint256 a, uint256 b, uint256 denominator) public pure returns (uint256 result) {
-        result = mulDiv(a, b, denominator);
-        if (a * b % denominator > 0) {
-            result += 1;
+    /// @dev Equivalent to `(x * WAD) / y` rounded down.
+    function divWad(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            // Equivalent to `require(y != 0 && (WAD == 0 || x <= type(uint256).max / WAD))`.
+            if iszero(mul(y, iszero(mul(WAD, gt(x, div(not(0), WAD)))))) {
+                mstore(0x00, 0x7c5f487d) // `DivWadFailed()`.
+                revert(0x1c, 0x04)
+            }
+            z := div(mul(x, WAD), y)
         }
     }
 
-    /// @dev Returns X * Y to 18 D.P
-    function mul(uint256 _amount, uint256 _multiplier) internal pure returns (uint256) {
-        return mulDiv(_amount, _multiplier, PRECISION);
+    /// @dev Equivalent to `(x * y) / WAD` rounded down.
+    function mulWad(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            // Equivalent to `require(y == 0 || x <= type(uint256).max / y)`.
+            if mul(y, gt(x, div(not(0), y))) {
+                mstore(0x00, 0xbac65e5b) // `MulWadFailed()`.
+                revert(0x1c, 0x04)
+            }
+            z := div(mul(x, y), WAD)
+        }
+    }
+
+    /// @dev Calculates `floor(x * y / d)` with full precision.
+    /// Throws if result overflows a uint256 or when `d` is zero.
+    /// Credit to Remco Bloemen under MIT license: https://2π.com/21/muldiv
+    function mulDiv(uint256 x, uint256 y, uint256 d) internal pure returns (uint256 result) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            for {} 1 {} {
+                // 512-bit multiply `[p1 p0] = x * y`.
+                // Compute the product mod `2**256` and mod `2**256 - 1`
+                // then use the Chinese Remainder Theorem to reconstruct
+                // the 512 bit result. The result is stored in two 256
+                // variables such that `product = p1 * 2**256 + p0`.
+
+                // Least significant 256 bits of the product.
+                result := mul(x, y) // Temporarily use `result` as `p0` to save gas.
+                let mm := mulmod(x, y, not(0))
+                // Most significant 256 bits of the product.
+                let p1 := sub(mm, add(result, lt(mm, result)))
+
+                // Handle non-overflow cases, 256 by 256 division.
+                if iszero(p1) {
+                    if iszero(d) {
+                        mstore(0x00, 0xae47f702) // `FullMulDivFailed()`.
+                        revert(0x1c, 0x04)
+                    }
+                    result := div(result, d)
+                    break
+                }
+
+                // Make sure the result is less than `2**256`. Also prevents `d == 0`.
+                if iszero(gt(d, p1)) {
+                    mstore(0x00, 0xae47f702) // `FullMulDivFailed()`.
+                    revert(0x1c, 0x04)
+                }
+
+                /*------------------- 512 by 256 division --------------------*/
+
+                // Make division exact by subtracting the remainder from `[p1 p0]`.
+                // Compute remainder using mulmod.
+                let r := mulmod(x, y, d)
+                // `t` is the least significant bit of `d`.
+                // Always greater or equal to 1.
+                let t := and(d, sub(0, d))
+                // Divide `d` by `t`, which is a power of two.
+                d := div(d, t)
+                // Invert `d mod 2**256`
+                // Now that `d` is an odd number, it has an inverse
+                // modulo `2**256` such that `d * inv = 1 mod 2**256`.
+                // Compute the inverse by starting with a seed that is correct
+                // correct for four bits. That is, `d * inv = 1 mod 2**4`.
+                let inv := xor(2, mul(3, d))
+                // Now use Newton-Raphson iteration to improve the precision.
+                // Thanks to Hensel's lifting lemma, this also works in modular
+                // arithmetic, doubling the correct bits in each step.
+                inv := mul(inv, sub(2, mul(d, inv))) // inverse mod 2**8
+                inv := mul(inv, sub(2, mul(d, inv))) // inverse mod 2**16
+                inv := mul(inv, sub(2, mul(d, inv))) // inverse mod 2**32
+                inv := mul(inv, sub(2, mul(d, inv))) // inverse mod 2**64
+                inv := mul(inv, sub(2, mul(d, inv))) // inverse mod 2**128
+                result :=
+                    mul(
+                        // Divide [p1 p0] by the factors of two.
+                        // Shift in bits from `p1` into `p0`. For this we need
+                        // to flip `t` such that it is `2**256 / t`.
+                        or(mul(sub(p1, gt(r, result)), add(div(sub(0, t), t), 1)), div(sub(result, r), t)),
+                        // inverse mod 2**256
+                        mul(inv, sub(2, mul(d, inv)))
+                    )
+                break
+            }
+        }
+    }
+
+    /// @notice Calculates x*y÷denominator with 512-bit precision.
+    ///
+    /// @dev This is an extension of {mulDiv} for signed numbers, which works by computing the signs and the absolute values separately.
+    ///
+    /// Notes:
+    /// - The result is rounded toward zero.
+    ///
+    /// Requirements:
+    /// - Refer to the requirements in {mulDiv}.
+    /// - None of the inputs can be `type(int256).min`.
+    /// - The result must fit in int256.
+    ///
+    /// @param x The multiplicand as an int256.
+    /// @param y The multiplier as an int256.
+    /// @param denominator The divisor as an int256.
+    /// @return result The result as an int256.
+    /// @custom:smtchecker abstract-function-nondet
+    function mulDivSigned(int256 x, int256 y, int256 denominator) internal pure returns (int256 result) {
+        if (x == type(int256).min || y == type(int256).min || denominator == type(int256).min) {
+            revert MathUtils_InputTooSmall();
+        }
+
+        // Get hold of the absolute values of x, y and the denominator.
+        uint256 xAbs;
+        uint256 yAbs;
+        uint256 dAbs;
+        unchecked {
+            xAbs = x < 0 ? uint256(-x) : uint256(x);
+            yAbs = y < 0 ? uint256(-y) : uint256(y);
+            dAbs = denominator < 0 ? uint256(-denominator) : uint256(denominator);
+        }
+
+        // Compute the absolute value of x*y÷denominator. The result must fit in int256.
+        uint256 resultAbs = mulDiv(xAbs, yAbs, dAbs);
+        if (resultAbs > uint256(type(int256).max)) {
+            revert MathUtils_IntOverflow(x, y);
+        }
+
+        // Get the signs of x, y and the denominator.
+        uint256 sx;
+        uint256 sy;
+        uint256 sd;
+        assembly ("memory-safe") {
+            // "sgt" is the "signed greater than" assembly instruction and "sub(0,1)" is -1 in two's complement.
+            sx := sgt(x, sub(0, 1))
+            sy := sgt(y, sub(0, 1))
+            sd := sgt(denominator, sub(0, 1))
+        }
+
+        // XOR over sx, sy and sd. What this does is to check whether there are 1 or 3 negative signs in the inputs.
+        // If there are, the result should be negative. Otherwise, it should be positive.
+        unchecked {
+            result = sx ^ sy ^ sd == 0 ? -int256(resultAbs) : int256(resultAbs);
+        }
     }
 
     /// @dev Returns the delta between x and y in integer form, so the final result can be negative.
@@ -95,16 +181,50 @@ library MathUtils {
         return x > y ? x - y : y - x;
     }
 
-    function squared(uint256 x) internal pure returns (uint256 xSquared) {
-        xSquared = mulDiv(x, x, PRECISION);
-    }
-
     function expandDecimals(uint256 x, uint256 decimalsFrom, uint256 decimalsTo) internal pure returns (uint256) {
         return x * (10 ** (decimalsTo - decimalsFrom));
     }
 
     function expandDecimals(int256 x, uint256 decimalsFrom, uint256 decimalsTo) internal pure returns (int256) {
         return x * int256(10 ** (decimalsTo - decimalsFrom));
+    }
+
+    /// @dev Exponentiate `x` to `y` by squaring, denominated in base `b`.
+    /// Reverts if the computation overflows.
+    function rpow(uint256 x, uint256 y, uint256 b) internal pure returns (uint256 z) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            z := mul(b, iszero(y)) // `0 ** 0 = 1`. Otherwise, `0 ** n = 0`.
+            if x {
+                z := xor(b, mul(xor(b, x), and(y, 1))) // `z = isEven(y) ? scale : x`
+                let half := shr(1, b) // Divide `b` by 2.
+                // Divide `y` by 2 every iteration.
+                for { y := shr(1, y) } y { y := shr(1, y) } {
+                    let xx := mul(x, x) // Store x squared.
+                    let xxRound := add(xx, half) // Round to the nearest number.
+                    // Revert if `xx + half` overflowed, or if `x ** 2` overflows.
+                    if or(lt(xxRound, xx), shr(128, x)) {
+                        mstore(0x00, 0x49f7642b) // `RPowOverflow()`.
+                        revert(0x1c, 0x04)
+                    }
+                    x := div(xxRound, b) // Set `x` to scaled `xxRound`.
+                    // If `y` is odd:
+                    if and(y, 1) {
+                        let zx := mul(z, x) // Compute `z * x`.
+                        let zxRound := add(zx, half) // Round to the nearest number.
+                        // If `z * x` overflowed or `zx + half` overflowed:
+                        if or(xor(div(zx, x), z), lt(zxRound, zx)) {
+                            // Revert if `x` is non-zero.
+                            if iszero(iszero(x)) {
+                                mstore(0x00, 0x49f7642b) // `RPowOverflow()`.
+                                revert(0x1c, 0x04)
+                            }
+                        }
+                        z := div(zxRound, b) // Return properly scaled `zxRound`.
+                    }
+                }
+            }
+        }
     }
 
     function wadExp(int256 x) internal pure returns (int256 r) {
@@ -118,7 +238,7 @@ library MathUtils {
             if (x >= 135305999368893231589) revert("EXP_OVERFLOW");
 
             // x is now in the range (-42, 136) * 1e18. Convert to (-42, 136) * 2**96
-            // for more intermediate precision and a binary basis. This base conversion
+            // for more intermediate UNIT and a binary basis. This base conversion
             // is a multiplication by 1e18 / 2**96 = 5**18 / 2**78.
             x = (x << 78) / 5 ** 18;
 
@@ -170,15 +290,26 @@ library MathUtils {
         return mulDivUp(x, WAD, y); // Equivalent to (x * WAD) / y rounded up.
     }
 
-    function mulDivUp(uint256 x, uint256 y, uint256 denominator) internal pure returns (uint256 z) {
+    function mulDivUp(uint256 x, uint256 y, uint256 d) internal pure returns (uint256 result) {
+        result = mulDiv(x, y, d);
         /// @solidity memory-safe-assembly
         assembly {
-            // Equivalent to require(denominator != 0 && (y == 0 || x <= type(uint256).max / y))
-            if iszero(mul(denominator, iszero(mul(y, gt(x, div(MAX_UINT256, y)))))) { revert(0, 0) }
+            if mulmod(x, y, d) {
+                result := add(result, 1)
+                if iszero(result) {
+                    mstore(0x00, 0xae47f702) // `FullMulDivFailed()`.
+                    revert(0x1c, 0x04)
+                }
+            }
+        }
+    }
 
-            // If x * y modulo the denominator is strictly greater than 0,
-            // 1 is added to round up the division of x * y by the denominator.
-            z := add(gt(mod(mul(x, y), denominator), 0), div(mul(x, y), denominator))
+    /// @dev Returns `x`, bounded to `minValue` and `maxValue`.
+    function clamp(int256 x, int256 minValue, int256 maxValue) internal pure returns (int256 z) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            z := xor(x, mul(xor(x, minValue), sgt(minValue, x)))
+            z := xor(z, mul(xor(z, maxValue), slt(maxValue, z)))
         }
     }
 }

@@ -12,13 +12,16 @@ import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
+import {Units} from "../libraries/Units.sol";
+import {Casting} from "../libraries/Casting.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 
 /// @notice Contract responsible for handling all execution logic associated with trades
 contract TradeEngine is ITradeEngine, RoleValidation {
     using MathUtils for uint256;
-    using SignedMath for int256;
+    using MathUtils for int256;
+    using Units for uint256;
+    using Casting for int256;
 
     ITradeStorage public tradeStorage;
 

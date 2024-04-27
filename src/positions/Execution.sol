@@ -6,8 +6,8 @@ import {Position} from "./Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
-import {SafeCast} from "../libraries/SafeCast.sol";
+import {Casting} from "../libraries/Casting.sol";
+import {Units} from "../libraries/Units.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -15,16 +15,18 @@ import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
-import {EnumerableSet} from "../libraries/EnumerableSet.sol";
+import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 
 // Library for Handling Trade related logic
 library Execution {
-    using SignedMath for int256;
-    using SafeCast for uint256;
+    using Casting for uint256;
+    using Casting for int256;
     using MathUtils for uint256;
     using MathUtils for int256;
-    using EnumerableSet for EnumerableSet.Bytes32Set;
+    using Units for uint256;
+    using Units for int256;
+    using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
 
     error Execution_MinCollateralThreshold();
     error Execution_LiquidatablePosition();
@@ -187,7 +189,7 @@ library Execution {
      */
 
     /// @notice Creates a new Order Request
-    function createOrderRequest(Position.Request calldata _request, EnumerableSet.Bytes32Set storage orderSet)
+    function createOrderRequest(Position.Request calldata _request, EnumerableSetLib.Bytes32Set storage orderSet)
         internal
     {
         ITradeStorage tradeStorage = ITradeStorage(address(this));

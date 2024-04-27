@@ -5,10 +5,12 @@ import {IMarket} from "./interfaces/IMarket.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {MarketUtils} from "./MarketUtils.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
+import {MathUtils} from "../libraries/MathUtils.sol";
+import {Casting} from "../libraries/Casting.sol";
 
 library Pool {
-    using SignedMath for int256;
+    using MathUtils for int256;
+    using Casting for int256;
 
     event MarketStateUpdated(string ticker, bool isLong);
 

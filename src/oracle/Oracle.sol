@@ -15,19 +15,20 @@ import {IPyth} from "@pyth/contracts/IPyth.sol";
 import {PythStructs} from "@pyth/contracts/PythStructs.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {IERC20Metadata} from "../tokens/interfaces/IERC20Metadata.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {mulDiv} from "@prb/math/Common.sol";
-import {SafeCast} from "../libraries/SafeCast.sol";
+import {Casting} from "../libraries/Casting.sol";
+import {Units} from "../libraries/Units.sol";
 import {LibString} from "../libraries/LibString.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
 
 library Oracle {
-    using SignedMath for int256;
-    using SignedMath for int64;
-    using SignedMath for int32;
     using MathUtils for uint256;
-    using SafeCast for uint256;
+    using MathUtils for int256;
+    using Units for uint256;
+    using Casting for uint256;
+    using Casting for int256;
+    using Casting for int32;
+    using Casting for int64;
     using LibString for uint256;
 
     error Oracle_SequencerDown();
@@ -261,7 +262,7 @@ library Oracle {
     {
         IPriceFeed.Price memory price = priceFeed.getPrices(_ticker, _blockTimestamp);
         uint256 medPrice = price.med * (10 ** (PRICE_DECIMALS - price.precision));
-        maxPrice = medPrice + mulDiv(medPrice, price.variance, MAX_VARIANCE);
+        maxPrice = medPrice + medPrice.mulDiv(price.variance, MAX_VARIANCE);
     }
 
     function getMinPrice(IPriceFeed priceFeed, string memory _ticker, uint48 _blockTimestamp)
@@ -271,7 +272,7 @@ library Oracle {
     {
         IPriceFeed.Price memory price = priceFeed.getPrices(_ticker, _blockTimestamp);
         uint256 medPrice = price.med * (10 ** (PRICE_DECIMALS - price.precision));
-        minPrice = medPrice - mulDiv(medPrice, price.variance, MAX_VARIANCE);
+        minPrice = medPrice - medPrice.mulDiv(price.variance, MAX_VARIANCE);
     }
 
     function getVaultPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
@@ -290,8 +291,8 @@ library Oracle {
     {
         IPriceFeed.Price memory signedPrice = priceFeed.getPrices(_isLong ? LONG_TICKER : SHORT_TICKER, _blockTimestamp);
         prices.med = signedPrice.med * (10 ** (PRICE_DECIMALS - signedPrice.precision));
-        prices.min = prices.med - mulDiv(prices.med, signedPrice.variance, MAX_VARIANCE);
-        prices.max = prices.med + mulDiv(prices.med, signedPrice.variance, MAX_VARIANCE);
+        prices.min = prices.med - prices.med.mulDiv(signedPrice.variance, MAX_VARIANCE);
+        prices.max = prices.med + prices.med.mulDiv(signedPrice.variance, MAX_VARIANCE);
     }
 
     function getMaxVaultPrices(IPriceFeed priceFeed, uint48 _blockTimestamp)
@@ -437,12 +438,12 @@ library Oracle {
         if (!successVolatile || !successStable) revert Oracle_InvalidAmmDecimals();
 
         if (_tokenData.feedType == IPriceFeed.FeedType.UNI_V20) {
-            price = mulDiv(
-                uint256(reserve1), 10 ** (PRICE_DECIMALS + volatileDecimals - stablecoinDecimals), uint256(reserve0)
+            price = uint256(reserve1).mulDiv(
+                10 ** (PRICE_DECIMALS + volatileDecimals - stablecoinDecimals), uint256(reserve0)
             );
         } else {
-            price = mulDiv(
-                uint256(reserve0), 10 ** (PRICE_DECIMALS + volatileDecimals - stablecoinDecimals), uint256(reserve1)
+            price = uint256(reserve0).mulDiv(
+                10 ** (PRICE_DECIMALS + volatileDecimals - stablecoinDecimals), uint256(reserve1)
             );
         }
     }

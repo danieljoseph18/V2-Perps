@@ -17,6 +17,7 @@ import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 import {LibString} from "../libraries/LibString.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {Units} from "../libraries/Units.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
@@ -26,6 +27,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     using SafeTransferLib for IVault;
     using LibString for uint256;
     using MathUtils for uint256;
+    using Units for uint256;
 
     IMarketFactory private marketFactory;
     IPriceFeed private priceFeed;

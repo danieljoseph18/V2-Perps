@@ -3,14 +3,16 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {SignedMath} from "./SignedMath.sol";
 import {MathUtils} from "./MathUtils.sol";
+import {Casting} from "./Casting.sol";
+import {Units} from "./Units.sol";
 import {Pool} from "../markets/Pool.sol";
 
 /// @dev Library responsible for handling Borrowing related Calculations
 library Borrowing {
-    using SignedMath for int256;
     using MathUtils for uint256;
+    using Casting for int256;
+    using Units for uint256;
 
     uint256 private constant PRECISION = 1e18;
     uint256 private constant SECONDS_PER_DAY = 86400;
@@ -86,12 +88,12 @@ library Borrowing {
         // If this point in execution is reached -> calculate the next average cumulative
         // Get the percentage of the new position size relative to the total open interest
         // Relative Size = (absSizeDelta / openInterestUsd)
-        uint256 relativeSize = absSizeDelta.div(openInterestUsd);
+        uint256 relativeSize = absSizeDelta.divWad(openInterestUsd);
         // Calculate the new weighted average entry cumulative fee
         /**
          * lastCumulative.mul(PRECISION - relativeSize) + currentCumulative.mul(relativeSize);
          */
-        nextAverageCumulative = lastCumulative.mul(PRECISION - relativeSize) + currentCumulative.mul(relativeSize);
+        nextAverageCumulative = lastCumulative.mulWad(PRECISION - relativeSize) + currentCumulative.mulWad(relativeSize);
     }
 
     /// @dev Units: Fees as a percentage (e.g 0.03e18 = 3%)
@@ -134,7 +136,7 @@ library Borrowing {
 
         // Opposite case cann occur if collateral decreases in value significantly.
         if (openInterest < maxOi) {
-            uint256 factor = openInterest.div(maxOi);
+            uint256 factor = openInterest.divWad(maxOi);
             borrowRatePerDay = borrowRatePerDay.percentage(factor);
         }
         // If Oi > Max Oi, set rate to max rate per day
@@ -149,7 +151,7 @@ library Borrowing {
             - MarketUtils.getAverageCumulativeBorrowFee(market, _ticker, _isLong);
         uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
         // Total Fees Owed = cumulativeFeePercentage * openInterestUsd
-        totalFeesOwedUsd = accumulatedFees.mul(openInterest);
+        totalFeesOwedUsd = accumulatedFees.mulWad(openInterest);
     }
 
     function _calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) private view returns (uint256 fee) {

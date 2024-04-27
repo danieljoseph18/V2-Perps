@@ -2,22 +2,20 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
 import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
-import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {SafeCast} from "./SafeCast.sol";
+import {Casting} from "./Casting.sol";
+import {Units} from "./Units.sol";
 import {Execution} from "../positions/Execution.sol";
-import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "./MathUtils.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
-    using SignedMath for int256;
-    using SafeCast for uint256;
-    using SafeCast for int256;
+    using Casting for uint256;
+    using Casting for int256;
     using MathUtils for uint256;
     using MathUtils for int256;
+    using Units for uint256;
 
     error PriceImpact_SizeDeltaIsZero();
     error PriceImpact_InsufficientLiquidity();
@@ -207,9 +205,9 @@ library PriceImpact {
          * In this case, skewFactor = skewScalar * (updatedSkew/updatedTotalOi)
          */
         int256 skewFactor = _initialTotalOi == 0
-            ? -mulDivSigned(_updatedSkew, _skewScalar, _updatedTotalOi.toInt256())
-            : mulDivSigned(_initialSkew, _skewScalar, _initialTotalOi.toInt256())
-                - mulDivSigned(_updatedSkew, _skewScalar, _updatedTotalOi.toInt256());
+            ? -_updatedSkew.mulDivSigned(_skewScalar, _updatedTotalOi.toInt256())
+            : _initialSkew.mulDivSigned(_skewScalar, _initialTotalOi.toInt256())
+                - _updatedSkew.mulDivSigned(_skewScalar, _updatedTotalOi.toInt256());
 
         /**
          * If position is a decrease, the liquidity factor can be ignored, as the
@@ -217,15 +215,15 @@ library PriceImpact {
          */
         if (_isIncrease) {
             if (_sizeDeltaUsd > _availableOi) revert PriceImpact_InvalidState();
-            int256 liquidityFactor = mulDivSigned(_sizeDeltaUsd, _liquidityScalar, _availableOi);
+            int256 liquidityFactor = _sizeDeltaUsd.mulDivSigned(_liquidityScalar, _availableOi);
 
             // Calculates the cumulative impact on both skew, and liquidity as a percentage.
-            int256 cumulativeImpact = mulDivSigned(skewFactor, liquidityFactor, SIGNED_PRICE_PRECISION);
+            int256 cumulativeImpact = skewFactor.mulDivSigned(liquidityFactor, SIGNED_PRICE_PRECISION);
 
             // Calculate the Price Impact
-            priceImpactUsd = mulDivSigned(_sizeDeltaUsd, cumulativeImpact, SIGNED_PRICE_PRECISION);
+            priceImpactUsd = _sizeDeltaUsd.mulDivSigned(cumulativeImpact, SIGNED_PRICE_PRECISION);
         } else {
-            priceImpactUsd = mulDivSigned(_sizeDeltaUsd, skewFactor, SIGNED_PRICE_PRECISION);
+            priceImpactUsd = _sizeDeltaUsd.mulDivSigned(skewFactor, SIGNED_PRICE_PRECISION);
         }
     }
 

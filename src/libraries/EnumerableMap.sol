@@ -4,7 +4,7 @@
 
 pragma solidity 0.8.23;
 
-import {EnumerableSet} from "./EnumerableSet.sol";
+import {EnumerableSetLib} from "./EnumerableSetLib.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
@@ -47,7 +47,7 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
  * ====
  */
 library EnumerableMap {
-    using EnumerableSet for EnumerableSet.Bytes32Set;
+    using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
 
     /**
      * @dev Query for a nonexistent map key.
@@ -58,7 +58,7 @@ library EnumerableMap {
      * ======================================== Market Creation Requests ========================================
      */
     struct DeployParamsMap {
-        EnumerableSet.Bytes32Set _keys;
+        EnumerableSetLib.Bytes32Set _keys;
         mapping(bytes32 => IMarketFactory.DeployParams) _values;
     }
 
@@ -168,7 +168,7 @@ library EnumerableMap {
      * ======================================== Market Deposits / Withdrawals ========================================
      */
     struct MarketRequestMap {
-        EnumerableSet.Bytes32Set _keys;
+        EnumerableSetLib.Bytes32Set _keys;
         mapping(bytes32 => IMarket.Input) _values;
     }
 
@@ -262,7 +262,7 @@ library EnumerableMap {
      * ======================================== Price Feed Requests ========================================
      */
     struct PriceRequestMap {
-        EnumerableSet.Bytes32Set _keys;
+        EnumerableSetLib.Bytes32Set _keys;
         mapping(bytes32 => IPriceFeed.RequestData) _values;
     }
 

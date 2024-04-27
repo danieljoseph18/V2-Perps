@@ -5,10 +5,9 @@ import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {Funding} from "../libraries/Funding.sol";
-import {EnumerableSet} from "../libraries/EnumerableSet.sol";
+import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {Position} from "../positions/Position.sol";
 import {Execution} from "./Execution.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
@@ -20,8 +19,7 @@ import {IVault} from "../markets/interfaces/IVault.sol";
 
 /// @notice Contract responsible for storing the state of active trades / requests
 contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
-    using EnumerableSet for EnumerableSet.Bytes32Set;
-    using SignedMath for int256;
+    using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
 
     ITradeEngine public tradeEngine;
     IMarket public market;
@@ -33,11 +31,11 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint8 private constant MIN_TIME_TO_EXPIRATION = 20 seconds;
 
     mapping(bytes32 _key => Position.Request _order) private orders;
-    EnumerableSet.Bytes32Set private marketOrderKeys;
-    EnumerableSet.Bytes32Set private limitOrderKeys;
+    EnumerableSetLib.Bytes32Set private marketOrderKeys;
+    EnumerableSetLib.Bytes32Set private limitOrderKeys;
 
     mapping(bytes32 _positionKey => Position.Data) private openPositions;
-    mapping(bool _isLong => EnumerableSet.Bytes32Set _positionKeys) private openPositionKeys;
+    mapping(bool _isLong => EnumerableSetLib.Bytes32Set _positionKeys) private openPositionKeys;
 
     bool private isInitialized;
     uint64 public liquidationFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
@@ -112,7 +110,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
      * ===================================== Order Functions =====================================
      */
 
-    /// @dev Adds Order to EnumerableSet
+    /// @dev Adds Order to EnumerableSetLib
     function createOrderRequest(Position.Request calldata _request) external onlyRouter {
         Execution.createOrderRequest(_request, _request.input.isLimit ? limitOrderKeys : marketOrderKeys);
     }

@@ -11,7 +11,7 @@ import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
+import {Units} from "../libraries/Units.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Pool} from "./Pool.sol";
@@ -20,7 +20,7 @@ library MarketLogic {
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IVault;
     using MathUtils for uint256;
-    using SignedMath for int256;
+    using Units for uint256;
     using EnumerableMap for EnumerableMap.MarketRequestMap;
 
     error MarketLogic_InvalidLeverage();

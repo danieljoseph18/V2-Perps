@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {EnumerableSet} from "../libraries/EnumerableSet.sol";
+import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {RoleValidation} from "../access/RoleValidation.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
@@ -19,7 +19,7 @@ import {Oracle} from "./Oracle.sol";
 
 contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
-    using EnumerableSet for EnumerableSet.Bytes32Set;
+    using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
     using EnumerableMap for EnumerableMap.PriceRequestMap;
 
     uint256 public constant PRICE_DECIMALS = 30;
@@ -86,8 +86,8 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
      */
     mapping(bytes32 requestKey => uint256 retries) numberOfRetries;
     EnumerableMap.PriceRequestMap private requestData;
-    EnumerableSet.Bytes32Set private assetIds;
-    EnumerableSet.Bytes32Set private requestKeys;
+    EnumerableSetLib.Bytes32Set private assetIds;
+    EnumerableSetLib.Bytes32Set private requestKeys;
 
     /**
      * @notice Initializes the contract with the Chainlink router address and sets the contract owner

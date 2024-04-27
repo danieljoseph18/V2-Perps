@@ -6,8 +6,7 @@ import {RoleValidation} from "../access/RoleValidation.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
-import {EnumerableSet} from "../libraries/EnumerableSet.sol";
+import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IVault, IERC20} from "./interfaces/IVault.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
@@ -22,9 +21,8 @@ import {Pool} from "./Pool.sol";
 
 /// @dev - Vault can support the trading of multiple assets under the same liquidity.
 contract Market is IMarket, RoleValidation, ReentrancyGuard {
-    using EnumerableSet for EnumerableSet.Bytes32Set;
+    using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
     using EnumerableMap for EnumerableMap.MarketRequestMap;
-    using SignedMath for int256;
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IVault;
 
@@ -73,7 +71,7 @@ contract Market is IMarket, RoleValidation, ReentrancyGuard {
 
     string[] private tickers;
 
-    EnumerableSet.Bytes32Set private assetIds;
+    EnumerableSetLib.Bytes32Set private assetIds;
     EnumerableMap.MarketRequestMap private requests;
 
     // Each Asset's storage is tracked through this mapping

@@ -6,19 +6,18 @@ import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {Funding} from "../libraries/Funding.sol";
-import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
-import {SD59x18, sd, unwrap, exp} from "@prb/math/SD59x18.sol";
 import {Execution} from "../positions/Execution.sol";
-import {SafeCast} from "../libraries/SafeCast.sol";
+import {Casting} from "../libraries/Casting.sol";
+import {Units} from "../libraries/Units.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
-    using SignedMath for int256;
-    using SafeCast for uint256;
-    using SafeCast for int256;
+    using Casting for uint256;
+    using Casting for int256;
+    using Units for uint256;
+    using Units for int256;
     using MathUtils for uint256;
     using MathUtils for int256;
 
@@ -444,9 +443,9 @@ library Position {
         int256 priceDelta = _indexPrice.diff(_weightedAvgEntryPrice);
         uint256 entryIndexAmount = _positionSizeUsd.fromUsd(_weightedAvgEntryPrice, _indexBaseUnit);
         if (_isLong) {
-            return mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
+            return priceDelta.mulDivSigned(entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
-            return -mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
+            return -priceDelta.mulDivSigned(entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         }
     }
 
@@ -481,7 +480,7 @@ library Position {
             // liquidationPrice = entryPrice - (_position.collateral * entryPrice) / positionSize
 
             return _position.weightedAvgEntryPrice
-                - mulDiv(_position.collateral, _position.weightedAvgEntryPrice, _position.size);
+                - _position.collateral.mulDiv(_position.weightedAvgEntryPrice, _position.size);
         } else {
             // For short positions, liquidation price is when:
             // collateral - PNL = 0
@@ -490,7 +489,7 @@ library Position {
             // liquidationPrice = entryPrice + (_position.collateral * entryPrice) / positionSize
 
             return _position.weightedAvgEntryPrice
-                + mulDiv(_position.collateral, _position.weightedAvgEntryPrice, _position.size);
+                + _position.collateral.mulDiv(_position.weightedAvgEntryPrice, _position.size);
         }
     }
 
@@ -509,21 +508,18 @@ library Position {
         pure
         returns (uint256 adlPercentage)
     {
-        uint256 excessRatio = (_pnlToPoolRatio.mulDivCeil(PRECISION, TARGET_PNL_RATIO) - PRECISION).squared();
-        SD59x18 exponent = sd(-excessRatio.toInt256()).mul(sd(_positionProfit)).div(sd(_positionSize.toInt256()));
-        adlPercentage = PRECISION - unwrap(exp(exponent)).toUint256();
-        if (adlPercentage > MAX_ADL_PERCENTAGE) adlPercentage = MAX_ADL_PERCENTAGE;
-    }
-
-    // Uses Signed Wad Math instead of PRB Math
-    // @audit - complete
-    function optimizedCalculateAdlPercentage(uint256 _pnlToPoolRatio, int256 _positionProfit, uint256 _positionSize)
-        internal
-        pure
-        returns (uint256 adlPercentage)
-    {
         /**
          * Excess ratio = ((pnlToPoolRatio / targetPnlRatio) - 1) ** 2
          */
+        uint256 excessRatio = (_pnlToPoolRatio.divWadUp(TARGET_PNL_RATIO) - PRECISION).rpow(2, PRECISION);
+        /**
+         * Exponent = -excessRatio * positionProfit / positionSize
+         */
+        int256 exponent = (-excessRatio.toInt256()).mulDivSigned(_positionProfit, _positionSize.toInt256());
+        /**
+         * adlPercentage = 1 - e ** exponent
+         */
+        adlPercentage = PRECISION - exponent.wadExp().toUint256();
+        if (adlPercentage > MAX_ADL_PERCENTAGE) adlPercentage = MAX_ADL_PERCENTAGE;
     }
 }

@@ -3,17 +3,15 @@ pragma solidity 0.8.23;
 
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {SafeCast} from "./SafeCast.sol";
-import {SignedMath} from "./SignedMath.sol";
+import {Casting} from "./Casting.sol";
 import {MathUtils} from "./MathUtils.sol";
 import {Pool} from "../markets/Pool.sol";
 
 /// @dev Library for Funding Related Calculations
 library Funding {
-    using SafeCast for *;
-    using SignedMath for int256;
+    using Casting for *;
     using MathUtils for uint256;
+    using MathUtils for int256;
     using MathUtils for int16;
 
     int256 constant PRICE_PRECISION = 1e30;
@@ -72,11 +70,11 @@ library Funding {
             return 0;
         }
         // Bound between -1e18 and 1e18
-        int256 pSkewBounded = SignedMath.min(SignedMath.max(proportionalSkew, -SIGNED_PRECISION), SIGNED_PRECISION);
+        int256 pSkewBounded = proportionalSkew.clamp(-SIGNED_PRECISION, SIGNED_PRECISION);
         // Convert maxVelocity from a 2.Dp percentage to 18 Dp
         int256 maxVelocity = _maxVelocity.expandDecimals(2, 18);
         // Calculate the velocity
-        velocity = mulDivSigned(pSkewBounded, maxVelocity, SIGNED_PRECISION);
+        velocity = pSkewBounded.mulDivSigned(maxVelocity, SIGNED_PRECISION);
     }
 
     /**
@@ -100,13 +98,11 @@ library Funding {
         (int256 storedFundingRate,) = MarketUtils.getFundingRates(market, _ticker);
         // Minus sign is needed as funding flows in the opposite direction of the skew
         // Essentially taking an average, where Signed Precision == units
-        int256 avgFundingRate = -mulDivSigned(storedFundingRate, fundingRate, 2 * SIGNED_PRECISION);
+        int256 avgFundingRate = -storedFundingRate.mulDivSigned(fundingRate, 2 * SIGNED_PRECISION);
 
-        unrecordedFunding = mulDivSigned(
-            mulDivSigned(avgFundingRate, _getProportionalFundingElapsed(market, _ticker), SIGNED_PRECISION),
-            _indexPrice.toInt256(),
-            SIGNED_PRECISION
-        );
+        unrecordedFunding = avgFundingRate.mulDivSigned(
+            _getProportionalFundingElapsed(market, _ticker), SIGNED_PRECISION
+        ).mulDivSigned(_indexPrice.toInt256(), SIGNED_PRECISION);
     }
 
     /**

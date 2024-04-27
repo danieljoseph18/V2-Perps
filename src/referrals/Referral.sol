@@ -2,11 +2,11 @@
 pragma solidity 0.8.23;
 
 import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
-import {MathUtils} from "../libraries/MathUtils.sol";
+import {Units} from "../libraries/Units.sol";
 
 // Library for referral related logic
 library Referral {
-    using MathUtils for uint256;
+    using Units for uint256;
 
     function applyFeeDiscount(IReferralStorage referralStorage, address _account, uint256 _fee)
         external

@@ -3,9 +3,7 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "./interfaces/IMarket.sol";
 import {IVault} from "./interfaces/IVault.sol";
-import {mulDiv, mulDivSigned} from "@prb/math/Common.sol";
-import {SignedMath} from "../libraries/SignedMath.sol";
-import {SafeCast} from "../libraries/SafeCast.sol";
+import {Casting} from "../libraries/Casting.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
@@ -13,13 +11,16 @@ import {MathUtils} from "../libraries/MathUtils.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {Position} from "../positions/Position.sol";
 import {Pool} from "./Pool.sol";
+import {Units} from "../libraries/Units.sol";
 
 library MarketUtils {
-    using SignedMath for int256;
-    using SafeCast for uint256;
+    using Casting for uint256;
+    using Casting for int256;
     using MathUtils for uint256;
-    using MathUtils for uint64;
+    using MathUtils for int256;
     using MathUtils for uint16;
+    using Units for uint256;
+    using Units for uint64;
 
     uint64 private constant PRECISION = 1e18;
     uint64 private constant BASE_FEE = 0.001e18; // 0.1%
@@ -339,14 +340,14 @@ library MarketUtils {
         // Minimize the Value of the Amount In
         if (marketTokenPrice == 0) {
             marketTokenAmount = _isLongToken
-                ? mulDiv(_amountIn, _longPrices.min, LONG_CONVERSION_FACTOR)
-                : mulDiv(_amountIn, _shortPrices.min, SHORT_CONVERSION_FACTOR);
+                ? _amountIn.mulDiv(_longPrices.min, LONG_CONVERSION_FACTOR)
+                : _amountIn.mulDiv(_shortPrices.min, SHORT_CONVERSION_FACTOR);
         } else {
             uint256 valueUsd = _isLongToken
                 ? _amountIn.toUsd(_longPrices.min, LONG_BASE_UNIT)
                 : _amountIn.toUsd(_shortPrices.min, SHORT_BASE_UNIT);
             // (30dp * 18dp / 30dp) = 18dp
-            marketTokenAmount = mulDiv(valueUsd, PRECISION, marketTokenPrice);
+            marketTokenAmount = valueUsd.mulDiv(PRECISION, marketTokenPrice);
         }
     }
 
@@ -397,7 +398,7 @@ library MarketUtils {
             uint256 aum = getAum(
                 market, _longTokenPrice, _longBorrowFeesUsd, _shortTokenPrice, _shortBorrowFeesUsd, _cumulativePnl
             );
-            lpTokenPrice = aum.div(totalSupply);
+            lpTokenPrice = aum.divWad(totalSupply);
         }
     }
 
@@ -464,9 +465,9 @@ library MarketUtils {
         int256 priceDelta = _indexPrice.diff(averageEntryPrice);
         uint256 entryIndexAmount = openInterest.fromUsd(averageEntryPrice, _indexBaseUnit);
         if (_isLong) {
-            netPnl = mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
+            netPnl = priceDelta.mulDivSigned(entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
-            netPnl = -mulDivSigned(priceDelta, entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
+            netPnl = -priceDelta.mulDivSigned(entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         }
     }
 
@@ -661,7 +662,7 @@ library MarketUtils {
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
 
         // (PNL / Pool USD)
-        uint256 factor = pnl.abs().ceilDiv(poolUsd);
+        uint256 factor = pnl.abs().divWadUp(poolUsd);
 
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;
     }
@@ -689,7 +690,7 @@ library MarketUtils {
         // Calculate the maximum PNL allowed based on the pool balance and max PNL factor
         uint256 maxProfit = poolUsd.percentage(MAX_PNL_FACTOR);
 
-        uint256 priceDelta = averageEntryPrice.mulDivCeil(maxProfit, openInterest);
+        uint256 priceDelta = averageEntryPrice.mulDivUp(maxProfit, openInterest);
 
         if (_isLong) {
             // For long positions, ADL price is:

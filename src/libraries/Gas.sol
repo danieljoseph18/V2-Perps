@@ -5,9 +5,11 @@ import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {MathUtils} from "./MathUtils.sol";
+import {Units} from "./Units.sol";
 
 library Gas {
     using MathUtils for uint256;
+    using Units for uint256;
 
     uint256 private constant CANCELLATION_PENALTY = 0.2e18; // 20%
     uint64 private constant CANCELLATION_REWARD = 0.5e18;

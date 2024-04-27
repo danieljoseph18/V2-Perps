@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
-import {EnumerableSet} from "../../src/libraries/EnumerableSet.sol";
+import {EnumerableSetLib} from "../../src/libraries/EnumerableSetLib.sol";
 import {EnumerableMap} from "../../../src/libraries/EnumerableMap.sol";
 import {IMarketFactory} from "../../../src/markets/interfaces/IMarketFactory.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
@@ -16,7 +16,7 @@ import {Oracle} from "../../src/oracle/Oracle.sol";
 
 contract MockPriceFeed is FunctionsClient, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
-    using EnumerableSet for EnumerableSet.Bytes32Set;
+    using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
     using EnumerableMap for EnumerableMap.PriceRequestMap;
 
     uint256 public constant PRICE_DECIMALS = 30;
@@ -83,8 +83,8 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
      */
     mapping(bytes32 requestKey => uint256 retries) numberOfRetries;
     EnumerableMap.PriceRequestMap private requestData;
-    EnumerableSet.Bytes32Set private assetIds;
-    EnumerableSet.Bytes32Set private requestKeys;
+    EnumerableSetLib.Bytes32Set private assetIds;
+    EnumerableSetLib.Bytes32Set private requestKeys;
 
     /**
      * @notice Initializes the contract with the Chainlink router address and sets the contract owner
