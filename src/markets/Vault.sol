@@ -142,7 +142,7 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         onlyMarket
     {
         // Cache the initial state
-        State memory initialState = getState(_params.deposit.isLongToken);
+        uint256 initialBalance = _params.deposit.isLongToken ? balanceOf[WETH] : balanceOf[USDC];
         // Transfer deposit tokens from position manager
         IERC20(_tokenIn).safeTransferFrom(_positionManager, address(this), _params.deposit.amountIn);
 
@@ -157,7 +157,7 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         _mint(_params.deposit.owner, mintAmount);
 
         // Validate the state change
-        MarketLogic.validateAction(initialState, _params.deposit.amountIn, 0, _params.deposit.isLongToken, true);
+        _validateDeposit(initialBalance, _params.deposit.amountIn, _params.deposit.isLongToken);
     }
 
     function executeWithdrawal(ExecuteWithdrawal calldata _params, address _tokenOut, address _positionManager)
@@ -165,7 +165,7 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         onlyMarket
     {
         // Cache the initial state
-        State memory initialState = getState(_params.withdrawal.isLongToken);
+        uint256 initialBalance = _params.withdrawal.isLongToken ? balanceOf[WETH] : balanceOf[USDC];
 
         // Transfer Market Tokens in
         IVault(this).safeTransferFrom(_positionManager, address(this), _params.withdrawal.amountIn);
@@ -199,16 +199,12 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         );
 
         // Validate the state change
-        MarketLogic.validateAction(
-            initialState, _params.withdrawal.amountIn, transferAmountOut, _params.withdrawal.isLongToken, false
-        );
+        _validateWithdrawal(initialBalance, transferAmountOut, _params.withdrawal.isLongToken);
     }
 
     /**
      * =============================== Token Transfers ===============================
      */
-    // @audit - does this follow token transfer best practices? Is it best to invoke a function,
-    // or to do an approve --> transfer from call?
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
         onlyTradeEngine(address(market))
@@ -251,26 +247,35 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         emit FeesAccumulated(_amount, _isLong);
     }
 
-    /**
-     * =============================== Getter Functions ===============================
-     */
-    function getState(bool _isLong) public view returns (State memory) {
+    function _validateDeposit(uint256 _initialBalance, uint256 _amountIn, bool _isLong) private view {
         if (_isLong) {
-            return State({
-                totalSupply: totalSupply,
-                wethBalance: IERC20(WETH).balanceOf(address(this)),
-                usdcBalance: IERC20(USDC).balanceOf(address(this)),
-                accumulatedFees: longAccumulatedFees,
-                poolBalance: longTokenBalance
-            });
+            uint256 wethBalance = balanceOf[WETH];
+            if (longTokenBalance > wethBalance) revert Vault_InvalidDeposit();
+            if (wethBalance != _initialBalance + _amountIn) {
+                revert Vault_InvalidDeposit();
+            }
         } else {
-            return State({
-                totalSupply: totalSupply,
-                wethBalance: IERC20(WETH).balanceOf(address(this)),
-                usdcBalance: IERC20(USDC).balanceOf(address(this)),
-                accumulatedFees: shortAccumulatedFees,
-                poolBalance: shortTokenBalance
-            });
+            uint256 usdcBalance = balanceOf[USDC];
+            if (shortTokenBalance > usdcBalance) revert Vault_InvalidDeposit();
+            if (usdcBalance != _initialBalance + _amountIn) {
+                revert Vault_InvalidDeposit();
+            }
+        }
+    }
+
+    function _validateWithdrawal(uint256 _initialBalance, uint256 _amountOut, bool _isLong) private view {
+        if (_isLong) {
+            uint256 wethBalance = balanceOf[WETH];
+            if (longTokenBalance > wethBalance) revert Vault_InvalidWithdrawal();
+            if (wethBalance != _initialBalance - _amountOut) {
+                revert Vault_InvalidWithdrawal();
+            }
+        } else {
+            uint256 usdcBalance = balanceOf[USDC];
+            if (shortTokenBalance > usdcBalance) revert Vault_InvalidWithdrawal();
+            if (usdcBalance != _initialBalance - _amountOut) {
+                revert Vault_InvalidWithdrawal();
+            }
         }
     }
 }

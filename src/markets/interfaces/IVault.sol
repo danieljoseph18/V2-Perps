@@ -7,15 +7,6 @@ import {EnumerableMap} from "../../libraries/EnumerableMap.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
 
 interface IVault is IERC20 {
-    // For snapshotting state for invariant checks
-    struct State {
-        uint256 totalSupply;
-        uint256 wethBalance;
-        uint256 usdcBalance;
-        uint256 accumulatedFees;
-        uint256 poolBalance;
-    }
-
     // Only used in memory as a cache for updating state
     // No packing necessary
     struct ExecuteDeposit {
@@ -57,12 +48,13 @@ interface IVault is IERC20 {
     error Vault_AlreadyInitialized();
     error Vault_InvalidETHTransfer();
     error Vault_InsufficientAvailableTokens();
+    error Vault_InvalidDeposit();
+    error Vault_InvalidWithdrawal();
 
     function initialize(address _market) external;
     function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager) external;
     function executeWithdrawal(ExecuteWithdrawal calldata _params, address _tokenOut, address _positionManager)
         external;
-    function getState(bool _isLong) external view returns (State memory);
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external;
     function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) external;

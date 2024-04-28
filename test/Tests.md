@@ -13,7 +13,7 @@
 - There is an issue of inconsistent prices being used in some places (specifically testAdl test case).
 When index token == collateral token, the prices used should also be the same but they are not.
 
-- Need to update the code license to a suitable one. GPL? GNU?
+- Need to update the code license to BUSL1.1
 
 ### Additions Required
 
@@ -46,5 +46,5 @@ When index token == collateral token, the prices used should also be the same bu
 - Accounting Exploits
 - Rounding Errors (Math)
 - Oracle Exploits (manipulation)
-- Front-running attacks
+- Front-running attacks -> with new open keeper role?
 - Vault errors - review ERC 4337 Vaults

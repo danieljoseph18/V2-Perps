@@ -47,6 +47,13 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
 
     address private immutable WETH;
     address private immutable USDC;
+    // Default Values
+    uint64 private constant LIQUIDATION_FEE = 0.05e18;
+    uint64 private constant POSITION_FEE = 0.001e18;
+    uint64 private constant ADL_FEE = 0.01e18;
+    uint64 private constant FEE_FOR_EXECUTION = 0.1e18;
+    uint128 private constant MIN_COLLATERAL_USD = 2e30;
+    uint8 private constant MIN_TIME_TO_EXECUTE = 1 minutes;
 
     EnumerableMap.DeployParamsMap private requests;
     mapping(address market => bool isMarket) public isMarket;
@@ -229,7 +236,6 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     /**
      * ========================= Private Functions =========================
      */
-    // @audit - can we use create2 library to make deployment cheaper?
     function _initializeMarketContracts(DeployParams memory _params) private {
         // Set Up Price Oracle
         priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythData.id);
@@ -269,8 +275,15 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // Initialize Vault with Market
         vault.initialize(address(market));
         // Initialize TradeStorage with Default values
-        // @gas - we can clean this up --> don't like the magic numbers
-        tradeStorage.initialize(tradeEngine, 0.05e18, 0.001e18, 0.01e18, 0.1e18, 2e30, 1 minutes);
+        tradeStorage.initialize(
+            tradeEngine,
+            LIQUIDATION_FEE,
+            POSITION_FEE,
+            ADL_FEE,
+            FEE_FOR_EXECUTION,
+            MIN_COLLATERAL_USD,
+            MIN_TIME_TO_EXECUTE
+        );
         // Initialize RewardTracker with Default values
         rewardTracker.initialize(address(vault), address(feeDistributor), address(liquidityLocker));
         // Add to Storage

@@ -72,7 +72,7 @@ interface IPriceFeed {
     error PriceFeed_AssetRemovalFailed();
     error PriceFeed_InvalidMarket();
     error PriceFeed_InvalidRequestType();
-    error PriceFeed_PriceNotSigned();
+    error PriceFeed_PriceRequired(string ticker);
     error PriceFeed_PnlNotSigned();
     error PriceFeed_AlreadyInitialized();
     error PriceFeed_PriceExpired();

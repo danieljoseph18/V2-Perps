@@ -437,7 +437,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
 
     function getPrices(string memory _ticker, uint48 _timestamp) external view returns (Price memory signedPrices) {
         signedPrices = prices[_ticker][_timestamp];
-        if (signedPrices.timestamp == 0) revert PriceFeed_PriceNotSigned();
+        if (signedPrices.timestamp == 0) revert PriceFeed_PriceRequired(_ticker);
         if (signedPrices.timestamp + MIN_EXPIRATION_TIME < block.timestamp) revert PriceFeed_PriceExpired();
     }
 

@@ -130,7 +130,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         );
 
         // Approve the Market to spend deposit tokens
-        // @audit - could someone front-run this approval step?
         IERC20(params.vault).approve(address(params.vault), params.withdrawal.amountIn);
 
         // Execute the Withdrawal
@@ -166,11 +165,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
     /// @dev For market orders, can just pass in bytes32(0) as the request id, as it's only required for limits
     /// @dev If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestKey as input
-    // @audit - review EIP-7412 --> TX reverts, signifies oracle data required
-    // design a custom revert for keepers to detect
-    // @audit - invariant --> pool amount does not exceed balance of token??
-    // e.g poolAmount(WETH) <= balanceOf(WETH)
-    // @audit - can we always work with sufficiently large numbers without overflow?
     function executePosition(IMarket market, bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
         external
         payable
@@ -202,12 +196,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     // up until a certain time buffer. After that time buffer, any user should be able to.
     /// @dev - Caller needs to call Router.requestExecutionPricing before
     function liquidatePosition(IMarket market, bytes32 _positionKey, bytes32 _requestKey) external payable {
-        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
-        // liquidate the position
-        try tradeStorage.liquidatePosition(_positionKey, _requestKey, msg.sender) {}
-        catch {
-            revert PositionManager_LiquidationFailed();
-        }
+        ITradeStorage(market.tradeStorage()).liquidatePosition(_positionKey, _requestKey, msg.sender);
     }
 
     function cancelOrderRequest(IMarket market, bytes32 _key, bool _isLimit) external payable nonReentrant {
@@ -244,9 +233,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     // up until a certain time buffer. After that time buffer, any user should be able to.
     /// @dev - Caller needs to call Router.requestExecutionPricing before and provide a valid requestKey
     function executeAdl(IMarket market, bytes32 _requestKey, bytes32 _positionKey) external payable {
-        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
-        // Execute the ADL
-        tradeStorage.executeAdl(_positionKey, _requestKey, msg.sender);
+        ITradeStorage(market.tradeStorage()).executeAdl(_positionKey, _requestKey, msg.sender);
     }
 
     function transferTokensForIncrease(

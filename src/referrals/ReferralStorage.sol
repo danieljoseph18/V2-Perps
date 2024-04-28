@@ -77,10 +77,9 @@ contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
         emit RegisterCode(msg.sender, _code);
     }
 
-    // @audit - Could someone spoof this role to bypass this modifier?
     function accumulateAffiliateRewards(address _market, address _account, bool _isLongToken, uint256 _amount)
         external
-        onlyTradeStorage(_market)
+        onlyTradeEngine(_market)
     {
         affiliateRewards[_account][_isLongToken] += _amount;
         emit AffiliateRewardsAccumulated(_account, _isLongToken, _amount);

@@ -258,67 +258,6 @@ library MarketUtils {
         tokenAmountOut = amountOut - fee;
     }
 
-    function validateDeposit(
-        IVault.State memory _initialState,
-        IVault.State memory _updatedState,
-        uint256 _amountIn,
-        bool _isLongToken
-    ) internal pure {
-        if (_isLongToken) {
-            // Market's WETH Balance should increase by AmountIn
-            if (_updatedState.wethBalance != _initialState.wethBalance + _amountIn) {
-                revert MarketUtils_DepositAmountIn();
-            }
-        } else {
-            // Market's USDC Balance should increase by AmountIn
-            if (_updatedState.usdcBalance != _initialState.usdcBalance + _amountIn) {
-                revert MarketUtils_DepositAmountIn();
-            }
-        }
-        if (_updatedState.totalSupply <= _initialState.totalSupply) {
-            revert MarketUtils_TokenMintFailed();
-        }
-    }
-
-    /**
-     * - Total Supply should decrease by the market token amount in
-     * - The Fee should increase within S.D of the max fee
-     * - The pool balance should decrease by the amount out
-     * - The vault balance should decrease by the amount out
-     */
-    function validateWithdrawal(
-        IVault.State memory _initialState,
-        IVault.State memory _updatedState,
-        uint256 _marketTokenAmountIn,
-        uint256 _amountOut,
-        bool _isLongToken
-    ) internal pure {
-        uint256 minFee = _amountOut.percentage(BASE_FEE);
-        uint256 maxFee = _amountOut.percentage(BASE_FEE + FEE_SCALE);
-        if (_initialState.totalSupply != _updatedState.totalSupply + _marketTokenAmountIn) {
-            revert MarketUtils_TokenBurnFailed();
-        }
-        if (_isLongToken) {
-            // WETH Balance should decrease by (AmountOut - Fee)
-            // WETH balance after is between (Before - AmountOut + MinFee) and (Before - AmountOut + MaxFee)
-            if (
-                _updatedState.wethBalance < _initialState.wethBalance - _amountOut + minFee
-                    || _updatedState.wethBalance > _initialState.wethBalance - _amountOut + maxFee
-            ) {
-                revert MarketUtils_WithdrawalAmountOut();
-            }
-        } else {
-            // USDC Balance should decrease by (AmountOut - Fee)
-            // USDC balance after is between (Before - AmountOut + MinFee) and (Before - AmountOut + MaxFee)
-            if (
-                _updatedState.usdcBalance < _initialState.usdcBalance - _amountOut + minFee
-                    || _updatedState.usdcBalance > _initialState.usdcBalance - _amountOut + maxFee
-            ) {
-                revert MarketUtils_WithdrawalAmountOut();
-            }
-        }
-    }
-
     /// @dev - Calculate the Mint Amount to 18 decimal places
     function calculateMintAmount(
         IMarket market,

@@ -134,23 +134,6 @@ library MarketLogic {
         }
     }
 
-    function validateAction(
-        IVault.State memory _initialState,
-        uint256 _amountIn,
-        uint256 _amountOut,
-        bool _isLongToken,
-        bool _isDeposit
-    ) internal view {
-        // Cache the state after
-        IVault.State memory updatedState = IVault(address(this)).getState(_isLongToken);
-        // Validate the Vault State Delta
-        if (_isDeposit) {
-            MarketUtils.validateDeposit(_initialState, updatedState, _amountIn, _isLongToken);
-        } else {
-            MarketUtils.validateWithdrawal(_initialState, updatedState, _amountIn, _amountOut, _isLongToken);
-        }
-    }
-
     /**
      * ============================= Admin Functions =============================
      */
