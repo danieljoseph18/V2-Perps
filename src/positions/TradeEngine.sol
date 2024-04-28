@@ -40,7 +40,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         bytes32 _orderKey,
         bytes32 _requestKey,
         address _feeReceiver
-    ) external onlyRoles(1 << 4) returns (Execution.FeeState memory, Position.Request memory) {
+    ) external onlyRoles(_ROLE_4) returns (Execution.FeeState memory, Position.Request memory) {
         // Initiate the execution
         (Execution.Prices memory prices, Position.Request memory request) =
             Execution.initiate(tradeStorage, market, vault, priceFeed, _orderKey, _requestKey, _feeReceiver);
@@ -90,7 +90,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         bytes32 _positionKey,
         bytes32 _requestKey,
         address _feeReceiver
-    ) external onlyRoles(1 << 4) {
+    ) external onlyRoles(_ROLE_4) {
         // Fetch the Position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         // Check the Position Exists
@@ -127,7 +127,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         bytes32 _positionKey,
         bytes32 _requestKey,
         address _liquidator
-    ) external onlyRoles(1 << 4) {
+    ) external onlyRoles(_ROLE_4) {
         // Fetch the Position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         // Check the Position Exists

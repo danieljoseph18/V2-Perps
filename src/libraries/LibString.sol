@@ -74,4 +74,20 @@ library LibString {
             mstore(str, length)
         }
     }
+
+    /// @dev Returns a string from a small bytes32 string.
+    /// `s` must be null-terminated, or behavior will be undefined.
+    function fromSmallString(bytes32 s) internal pure returns (string memory result) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            result := mload(0x40)
+            let n := 0
+            for {} byte(n, s) { n := add(n, 1) } {} // Scan for '\0'.
+            mstore(result, n)
+            let o := add(result, 0x20)
+            mstore(o, s)
+            mstore(add(o, n), 0)
+            mstore(0x40, add(result, 0x40))
+        }
+    }
 }

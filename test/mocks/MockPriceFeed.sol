@@ -13,11 +13,13 @@ import {IUniswapV3Factory} from "../../src/oracle/interfaces/IUniswapV3Factory.s
 import {IWETH} from "../../src/tokens/interfaces/IWETH.sol";
 import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV2V3Interface.sol";
 import {Oracle} from "../../src/oracle/Oracle.sol";
+import {LibString} from "../../src/libraries/LibString.sol";
 
 contract MockPriceFeed is FunctionsClient, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
     using EnumerableMap for EnumerableMap.PriceRequestMap;
+    using LibString for bytes15;
 
     uint256 public constant PRICE_DECIMALS = 30;
     // Length of 1 Bytes32 Word
@@ -344,8 +346,9 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
                 // Shift recorded values to the left and store the first 8 bytes (median price)
                 uint64(bytes8(encodedPrice << 192))
             );
+
             // Store the constructed price struct in the mapping
-            prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
+            prices[price.ticker.fromSmallString()][price.timestamp] = price;
 
             unchecked {
                 ++i;

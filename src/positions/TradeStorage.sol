@@ -45,11 +45,6 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     uint256 public minCollateralUsd;
     uint64 public minCancellationTime;
 
-    modifier onlyCallback() {
-        _isCallback();
-        _;
-    }
-
     constructor(IMarket _market, IVault _vault, IReferralStorage _referralStorage, IPriceFeed _priceFeed) {
         _initializeOwner(msg.sender);
         market = _market;
@@ -83,7 +78,7 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     }
 
     // Time until a position request can be cancelled by a user
-    function setMinCancellationTime(uint64 _minCancellationTime) external onlyRoles(1 << 2) {
+    function setMinCancellationTime(uint64 _minCancellationTime) external onlyRoles(_ROLE_2) {
         if (_minCancellationTime > MAX_TIME_TO_EXPIRATION || _minCancellationTime < MIN_TIME_TO_EXPIRATION) {
             revert TradeStorage_InvalidExecutionTime();
         }
@@ -92,7 +87,7 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
 
     function setFees(uint64 _liquidationFee, uint64 _positionFee, uint64 _adlFee, uint64 _feeForExecution)
         external
-        onlyRoles(1 << 2)
+        onlyRoles(_ROLE_2)
     {
         Position.validateFees(_liquidationFee, _positionFee, _adlFee, _feeForExecution);
         liquidationFee = _liquidationFee;
@@ -111,20 +106,54 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
      */
 
     /// @dev Adds Order to EnumerableSetLib
-    function createOrderRequest(Position.Request calldata _request) external onlyRoles(1 << 3) {
-        Execution.createOrderRequest(_request, _request.input.isLimit ? limitOrderKeys : marketOrderKeys);
+    function createOrderRequest(Position.Request calldata _request) external onlyRoles(_ROLE_3) {
+        EnumerableSetLib.Bytes32Set storage orderSet = _request.input.isLimit ? limitOrderKeys : marketOrderKeys;
+
+        bytes32 orderKey = Position.generateOrderKey(_request);
+        if (orderSet.contains(orderKey)) revert TradeStorage_OrderAlreadyExists();
+
+        bool success = orderSet.add(orderKey);
+        if (!success) revert TradeStorage_OrderAdditionFailed();
+
+        orders[orderKey] = _request;
+
+        if (_request.requestType >= Position.RequestType.STOP_LOSS) _attachConditionalOrder(_request, orderKey);
     }
 
-    function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyRoles(1 << 1) {
+    function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyRoles(_ROLE_1) {
         _deleteOrder(_orderKey, _isLimit);
     }
 
-    function setStopLoss(bytes32 _stopLossKey, bytes32 _requestKey) external onlyRoles(1 << 3) {
+    function setStopLoss(bytes32 _stopLossKey, bytes32 _requestKey) external onlyRoles(_ROLE_3) {
         orders[_requestKey].stopLossKey = _stopLossKey;
     }
 
-    function setTakeProfit(bytes32 _takeProfitKey, bytes32 _requestKey) external onlyRoles(1 << 3) {
+    function setTakeProfit(bytes32 _takeProfitKey, bytes32 _requestKey) external onlyRoles(_ROLE_3) {
         orders[_requestKey].takeProfitKey = _takeProfitKey;
+    }
+
+    function deletePosition(bytes32 _positionKey, bool _isLong) external onlyRoles(_ROLE_5) {
+        delete openPositions[_positionKey];
+        bool success = openPositionKeys[_isLong].remove(_positionKey);
+        if (!success) revert TradeStorage_PositionRemovalFailed();
+    }
+
+    function createPosition(Position.Data calldata _position, bytes32 _positionKey) external onlyRoles(_ROLE_5) {
+        openPositions[_positionKey] = _position;
+        bool success = openPositionKeys[_position.isLong].add(_positionKey);
+        if (!success) revert TradeStorage_PositionAdditionFailed();
+    }
+
+    function deleteOrder(bytes32 _orderKey, bool _isLimit) external onlyRoles(_ROLE_5) {
+        _deleteOrder(_orderKey, _isLimit);
+    }
+
+    function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external onlyRoles(_ROLE_5) {
+        openPositions[_positionKey] = _position;
+    }
+
+    function createOrder(Position.Request memory _request) external onlyRoles(_ROLE_3) returns (bytes32 orderKey) {
+        orders[orderKey] = _request;
     }
 
     /**
@@ -137,7 +166,7 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     /// Called by keepers --> Routes the execution down the correct path.
     function executePositionRequest(bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
         external
-        onlyRoles(1 << 1)
+        onlyRoles(_ROLE_1)
         nonReentrant
         returns (Execution.FeeState memory feeState, Position.Request memory request)
     {
@@ -148,7 +177,7 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
 
     function liquidatePosition(bytes32 _positionKey, bytes32 _requestKey, address _liquidator)
         external
-        onlyRoles(1 << 1)
+        onlyRoles(_ROLE_1)
         nonReentrant
     {
         tradeEngine.liquidatePosition(vault, referralStorage, priceFeed, _positionKey, _requestKey, _liquidator);
@@ -156,37 +185,10 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
 
     function executeAdl(bytes32 _positionKey, bytes32 _requestKey, address _feeReceiver)
         external
-        onlyRoles(1 << 1)
+        onlyRoles(_ROLE_1)
         nonReentrant
     {
         tradeEngine.executeAdl(vault, referralStorage, priceFeed, _positionKey, _requestKey, _feeReceiver);
-    }
-
-    /**
-     * ===================================== Callback Functions =====================================
-     */
-    function deleteOrder(bytes32 _orderKey, bool _isLimit) external onlyCallback {
-        _deleteOrder(_orderKey, _isLimit);
-    }
-
-    function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external onlyCallback {
-        openPositions[_positionKey] = _position;
-    }
-
-    function createPosition(Position.Data calldata _position, bytes32 _positionKey) external onlyCallback {
-        openPositions[_positionKey] = _position;
-        bool success = openPositionKeys[_position.isLong].add(_positionKey);
-        if (!success) revert TradeStorage_PositionAdditionFailed();
-    }
-
-    function createOrder(Position.Request memory _request) external onlyCallback returns (bytes32 orderKey) {
-        orders[orderKey] = _request;
-    }
-
-    function deletePosition(bytes32 _positionKey, bool _isLong) external onlyCallback {
-        delete openPositions[_positionKey];
-        bool success = openPositionKeys[_isLong].remove(_positionKey);
-        if (!success) revert TradeStorage_PositionRemovalFailed();
     }
 
     /**
@@ -199,8 +201,22 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
         emit OrderRequestCancelled(_orderKey);
     }
 
-    function _isCallback() private view {
-        if (msg.sender != address(this)) revert TradeStorage_AccessDenied();
+    /// @dev - Attaches a Conditional Order to a live Position --> Let's us ensure SL / TP orders only affect the position they're assigned to.
+    function _attachConditionalOrder(Position.Request calldata _request, bytes32 _orderKey) private {
+        bytes32 positionKey = Position.generateKey(_request);
+        Position.Data memory position = openPositions[positionKey];
+        if (position.user == address(0)) revert TradeStorage_InactivePosition();
+        // If Request is a SL, tie to the Stop Loss Key for the Position
+        if (_request.requestType == Position.RequestType.STOP_LOSS) {
+            if (position.stopLossKey != bytes32(0)) revert TradeStorage_StopLossAlreadySet();
+            position.stopLossKey = _orderKey;
+            openPositions[positionKey] = position;
+        } else if (_request.requestType == Position.RequestType.TAKE_PROFIT) {
+            // If Request is a TP, tie to the Take Profit Key for the Position
+            if (position.takeProfitKey != bytes32(0)) revert TradeStorage_TakeProfitAlreadySet();
+            position.takeProfitKey = _orderKey;
+            openPositions[positionKey] = position;
+        }
     }
 
     /**

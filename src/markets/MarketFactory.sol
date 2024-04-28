@@ -98,6 +98,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         address _priceFeed,
         address _referralStorage,
         address _positionManager,
+        address _router,
         address _feeDistributor,
         address _feeReceiver,
         uint256 _marketCreationFee,
@@ -109,6 +110,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         feeDistributor = IFeeDistributor(_feeDistributor);
         positionManager = IPositionManager(_positionManager);
         transferStakedTokens = new TransferStakedTokens();
+        router = _router;
         defaultConfig = _defaultConfig;
         feeReceiver = _feeReceiver;
         marketCreationFee = _marketCreationFee;
@@ -198,8 +200,6 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     function executeMarketRequest(bytes32 _requestKey) external nonReentrant {
         // Get the Request
         DeployParams memory request = requests.get(_requestKey);
-        // Users can't execute their own requests
-        if (msg.sender == request.owner) revert MarketFactory_SelfExecution();
 
         // Reverts if a price wasn't signed.
         try Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp) {}
@@ -285,30 +285,31 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         markets[cumulativeMarketIndex] = marketAddress;
         ++cumulativeMarketIndex;
 
-        // Set Market's roles (1,2,3,4)
-        OwnableRoles(marketAddress).grantRoles(address(positionManager), 1 << 1);
-        OwnableRoles(marketAddress).grantRoles(_params.owner, 1 << 2);
-        OwnableRoles(marketAddress).grantRoles(router, 1 << 3);
-        OwnableRoles(marketAddress).grantRoles(tradeStorageAddress, 1 << 4);
+        // Set Market's roles (1,2,3,4,5)
+        OwnableRoles(marketAddress).grantRoles(address(positionManager), _ROLE_1);
+        OwnableRoles(marketAddress).grantRoles(_params.owner, _ROLE_2);
+        OwnableRoles(marketAddress).grantRoles(router, _ROLE_3);
+        OwnableRoles(marketAddress).grantRoles(tradeStorageAddress, _ROLE_4);
+        OwnableRoles(marketAddress).grantRoles(address(tradeEngine), _ROLE_5);
         // Transfer ownership to super admin
         OwnableRoles(marketAddress).transferOwnership(owner());
 
         // Set Vault's roles (2,4,5)
-        OwnableRoles(vaultAddress).grantRoles(_params.owner, 1 << 2);
-        OwnableRoles(vaultAddress).grantRoles(tradeStorageAddress, 1 << 4);
-        OwnableRoles(vaultAddress).grantRoles(address(tradeEngine), 1 << 5);
+        OwnableRoles(vaultAddress).grantRoles(_params.owner, _ROLE_2);
+        OwnableRoles(vaultAddress).grantRoles(address(tradeEngine), _ROLE_5);
         // Transfer ownership to super admin
         OwnableRoles(vaultAddress).transferOwnership(owner());
 
-        // Set TradeStorage's roles (1,2,3)
-        OwnableRoles(tradeStorageAddress).grantRoles(address(positionManager), 1 << 1);
-        OwnableRoles(tradeStorageAddress).grantRoles(_params.owner, 1 << 2);
-        OwnableRoles(tradeStorageAddress).grantRoles(router, 1 << 3);
+        // Set TradeStorage's roles (1,2,3,5)
+        OwnableRoles(tradeStorageAddress).grantRoles(address(positionManager), _ROLE_1);
+        OwnableRoles(tradeStorageAddress).grantRoles(_params.owner, _ROLE_2);
+        OwnableRoles(tradeStorageAddress).grantRoles(router, _ROLE_3);
+        OwnableRoles(tradeStorageAddress).grantRoles(address(tradeEngine), _ROLE_5);
         // Transfer ownership to super admin
         OwnableRoles(tradeStorageAddress).transferOwnership(owner());
 
         // Set TradeEngine's roles (4)
-        OwnableRoles(address(tradeEngine)).grantRoles(tradeStorageAddress, 1 << 4);
+        OwnableRoles(address(tradeEngine)).grantRoles(tradeStorageAddress, _ROLE_4);
         // Transfer ownership to super admin
         OwnableRoles(address(tradeEngine)).transferOwnership(owner());
 

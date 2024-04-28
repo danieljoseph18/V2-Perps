@@ -63,8 +63,12 @@ contract Router is ReentrancyGuard, OwnableRoles {
     error Router_MarketDoesNotExist();
     error Router_InvalidLimitPrice();
     error Router_InvalidRequest();
+    error Router_SizeExceedsPosition();
+    error Router_SizeIsZero();
+    error Router_InvalidConditional();
 
     constructor(address _marketFactory, address _priceFeed, address _usdc, address _weth, address _positionManager) {
+        _initializeOwner(msg.sender);
         marketFactory = IMarketFactory(_marketFactory);
         priceFeed = IPriceFeed(_priceFeed);
         USDC = IERC20(_usdc);
@@ -311,27 +315,19 @@ contract Router is ReentrancyGuard, OwnableRoles {
         Position.Data memory _position,
         Position.RequestType _requestType
     ) private pure {
-        bool positionShouldExist = _requestType != Position.RequestType.CREATE_POSITION;
+        bool shouldExist = _requestType != Position.RequestType.CREATE_POSITION;
+        bool exists = _position.user != address(0);
 
-        if (positionShouldExist != (_position.user != address(0))) {
+        if (shouldExist != exists) {
             revert Router_InvalidRequest();
         }
-
-        if (_requestType == Position.RequestType.POSITION_DECREASE && _trade.sizeDelta >= _position.size) {
-            revert Router_InvalidRequest();
-        }
-
-        if (_requestType != Position.RequestType.POSITION_INCREASE && _trade.sizeDelta == 0) {
-            revert Router_InvalidRequest();
-        }
-
-        if (_trade.collateralDelta == 0) {
-            revert Router_InvalidRequest();
+        if (_requestType == Position.RequestType.POSITION_DECREASE && _trade.sizeDelta > _position.size) {
+            revert Router_SizeExceedsPosition();
         }
 
         // SL = 3, TP = 4 --> >= checks both
         if (_requestType >= Position.RequestType.STOP_LOSS && !_trade.isLimit) {
-            revert Router_InvalidRequest();
+            revert Router_InvalidConditional();
         }
     }
 

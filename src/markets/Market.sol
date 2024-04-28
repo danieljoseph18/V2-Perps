@@ -107,7 +107,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         string memory _ticker,
         bytes calldata _newAllocations,
         bytes32 _priceRequestKey
-    ) external onlyRoles(1 << 2) nonReentrant {
+    ) external onlyRoles(_ROLE_2) nonReentrant {
         if (!IS_MULTI_ASSET) revert Market_SingleAssetMarket();
         if (assetIds.length() >= MAX_ASSETS) revert Market_MaxAssetsReached();
         bytes32 assetId = keccak256(abi.encode(_ticker));
@@ -128,7 +128,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         string memory _ticker,
         bytes calldata _newAllocations,
         bytes32 _priceRequestKey
-    ) external onlyRoles(1 << 2) nonReentrant {
+    ) external onlyRoles(_ROLE_2) nonReentrant {
         if (!IS_MULTI_ASSET) revert Market_SingleAssetMarket();
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (!assetIds.contains(assetId)) revert Market_TokenDoesNotExist();
@@ -163,7 +163,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
 
     function updateConfig(Pool.Config calldata _config, uint256 _borrowScale, string calldata _ticker)
         external
-        onlyRoles(1 << 2)
+        onlyRoles(_ROLE_2)
     {
         if (_borrowScale < MIN_BORROW_SCALE || _borrowScale > MAX_BORROW_SCALE) revert Market_InvalidBorrowScale();
         Pool.validateConfig(_config);
@@ -185,7 +185,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         bytes32 _pnlRequestKey,
         bool _reverseWrap,
         bool _isDeposit
-    ) external payable onlyRoles(1 << 3) {
+    ) external payable onlyRoles(_ROLE_3) {
         Pool.Input memory request = Pool.createRequest(
             _owner,
             _transferToken,
@@ -203,7 +203,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
 
     function cancelRequest(bytes32 _key, address _caller)
         external
-        onlyRoles(1 << 1)
+        onlyRoles(_ROLE_1)
         returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
     {
         // Check the Request Exists
@@ -235,7 +235,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
      */
     function executeDeposit(IVault.ExecuteDeposit calldata _params)
         external
-        onlyRoles(1 << 1)
+        onlyRoles(_ROLE_1)
         orderExists(_params.key)
         nonReentrant
     {
@@ -247,7 +247,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
 
     function executeWithdrawal(IVault.ExecuteWithdrawal calldata _params)
         external
-        onlyRoles(1 << 1)
+        onlyRoles(_ROLE_1)
         orderExists(_params.key)
         nonReentrant
     {
@@ -263,7 +263,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     /// @dev - Caller must've requested a price before calling this function
     function reallocate(bytes calldata _allocations, bytes32 _priceRequestKey)
         external
-        onlyRoles(1 << 2)
+        onlyRoles(_ROLE_2)
         nonReentrant
     {
         _reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _priceRequestKey);
@@ -278,12 +278,12 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         uint256 _collateralBaseUnit,
         bool _isLong,
         bool _isIncrease
-    ) external nonReentrant onlyRoles(1 << 4) {
+    ) external nonReentrant onlyRoles(_ROLE_5) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (!assetIds.contains(assetId)) revert Market_TokenDoesNotExist();
         Pool.Storage storage self = marketStorage[assetId];
         Pool.updateState(
-            VAULT,
+            this,
             self,
             _ticker,
             _sizeDelta,
@@ -296,7 +296,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         );
     }
 
-    function updateImpactPool(string calldata _ticker, int256 _priceImpactUsd) external onlyRoles(1 << 4) {
+    function updateImpactPool(string calldata _ticker, int256 _priceImpactUsd) external onlyRoles(_ROLE_5) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         _priceImpactUsd > 0
             ? marketStorage[assetId].impactPool += _priceImpactUsd.abs()

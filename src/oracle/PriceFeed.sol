@@ -16,11 +16,13 @@ import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/shared/inte
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {Oracle} from "./Oracle.sol";
+import {LibString} from "../../src/libraries/LibString.sol";
 
 contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
     using EnumerableMap for EnumerableMap.PriceRequestMap;
+    using LibString for bytes15;
 
     uint256 public constant PRICE_DECIMALS = 30;
     // Length of 1 Bytes32 Word
@@ -160,7 +162,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
 
     function supportAsset(string memory _ticker, TokenData memory _tokenData, bytes32 _pythId)
         external
-        onlyRoles(1 << 0)
+        onlyRoles(_ROLE_0)
     {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (assetIds.contains(assetId)) return; // Return if already supported
@@ -205,7 +207,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     function requestPriceUpdate(string[] calldata args, address _requester)
         external
         payable
-        onlyRoles(1 << 3)
+        onlyRoles(_ROLE_3)
         nonReentrant
         returns (bytes32 requestKey)
     {
@@ -236,7 +238,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     function requestCumulativeMarketPnl(IMarket market, address _requester)
         external
         payable
-        onlyRoles(1 << 3)
+        onlyRoles(_ROLE_3)
         nonReentrant
         returns (bytes32 requestKey)
     {
@@ -417,7 +419,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
             // Validate the price range, and discard it if invalid
             if (!Oracle.validatePrice(this, price)) return;
             // Store the constructed price struct in the mapping
-            prices[string(abi.encodePacked(price.ticker))][price.timestamp] = price;
+            prices[price.ticker.fromSmallString()][price.timestamp] = price;
 
             unchecked {
                 ++i;

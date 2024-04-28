@@ -14,12 +14,14 @@ interface ITradeStorage {
 
     error TradeStorage_AlreadyInitialized();
     error TradeStorage_OrderAlreadyExists();
+    error TradeStorage_InactivePosition();
     error TradeStorage_OrderAdditionFailed();
+    error TradeStorage_StopLossAlreadySet();
+    error TradeStorage_TakeProfitAlreadySet();
     error TradeStorage_PositionAdditionFailed();
     error TradeStorage_OrderRemovalFailed();
     error TradeStorage_PositionRemovalFailed();
     error TradeStorage_InvalidExecutionTime();
-    error TradeStorage_AccessDenied();
 
     function initialize(
         ITradeEngine _tradeEngine,

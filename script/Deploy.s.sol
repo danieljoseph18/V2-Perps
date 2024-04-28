@@ -134,6 +134,7 @@ contract Deploy is Script {
             address(contracts.priceFeed),
             address(contracts.referralStorage),
             address(contracts.positionManager),
+            address(contracts.router),
             address(contracts.feeDistributor),
             msg.sender,
             0.01 ether,

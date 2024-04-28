@@ -124,6 +124,8 @@ contract TestFunding is Test {
         priceFeed.updatePrices(encodedPrices);
         marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         market = IMarket(payable(marketFactory.markets(0)));
+        bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
+        priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.VAULT().rewardTracker()));

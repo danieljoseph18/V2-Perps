@@ -50,6 +50,7 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     uint256 public averagePositionCost;
 
     constructor(address _marketFactory, address _referralStorage, address _priceFeed, address _weth, address _usdc) {
+        _initializeOwner(msg.sender);
         marketFactory = IMarketFactory(_marketFactory);
         referralStorage = IReferralStorage(_referralStorage);
         priceFeed = IPriceFeed(_priceFeed);

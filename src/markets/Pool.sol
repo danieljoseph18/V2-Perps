@@ -6,6 +6,7 @@ import {IVault} from "./interfaces/IVault.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {MarketUtils} from "./MarketUtils.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 
 library Pool {
     event MarketStateUpdated(string ticker, bool isLong);
@@ -30,6 +31,7 @@ library Pool {
     int256 private constant MIN_SKEW_SCALE = 1000; // $1000
     int256 private constant MAX_SKEW_SCALE = 10_000_000_000; // $10 Bn
     int16 private constant MAX_SCALAR = 10000;
+    uint256 private constant _ROLE_5 = 1 << 5;
 
     struct Input {
         uint256 amountIn;
@@ -136,7 +138,7 @@ library Pool {
         /**
          * % of liquidity that CAN'T be allocated to positions
          * Reserves should be higher for more volatile markets.
-         * 2 d.p precision. 2500 = 25%
+         * 4 d.p precision. 2500 = 25%
          */
         uint16 reserveFactor;
         /**
@@ -185,7 +187,7 @@ library Pool {
 
     /// @dev Needs to be external to keep bytecode size below threshold.
     function updateState(
-        IVault vault,
+        IMarket market,
         Storage storage pool,
         string calldata _ticker,
         uint256 _sizeDelta,
@@ -196,8 +198,8 @@ library Pool {
         bool _isLong,
         bool _isIncrease
     ) external {
-        IMarket market = IMarket(address(this));
-        if (msg.sender != address(this)) revert Pool_InvalidUpdate();
+        // Market uses delegate call, so msg.sender in this context should be TradeEngine
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_5) revert Pool_InvalidUpdate();
         // 1. Depends on Open Interest Delta to determine Skew
         Funding.updateState(market, pool, _ticker, _indexPrice);
         if (_sizeDelta != 0) {
@@ -227,7 +229,7 @@ library Pool {
             }
         }
         // 4. Relies on Updated Open interest
-        Borrowing.updateState(market, vault, pool, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+        Borrowing.updateState(market, market.VAULT(), pool, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
         // 5. Update the last update time
         pool.lastUpdate = uint48(block.timestamp);
         // Fire Event

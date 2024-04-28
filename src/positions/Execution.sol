@@ -19,6 +19,7 @@ import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
+import {console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -83,6 +84,7 @@ library Execution {
     uint64 private constant MAX_PNL_FACTOR = 0.45e18;
     uint64 private constant TARGET_PNL_FACTOR = 0.35e18;
     uint64 private constant MIN_PROFIT_PERCENTAGE = 0.05e18;
+    uint256 private constant _ROLE_4 = 1 << 4;
 
     /**
      * ========================= Construction Functions =========================
@@ -96,8 +98,8 @@ library Execution {
         bytes32 _requestKey,
         address _feeReceiver
     ) external view returns (Prices memory prices, Position.Request memory request) {
-        // Check caller is TradeEngine for Market
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != 1 << 5) revert Execution_AccessDenied();
+        // TradeEngine uses delegate call, so msg.sender in this context should be TradeStorage
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert Execution_AccessDenied();
         // Fetch and validate request from key
         request = tradeStorage.getOrder(_orderKey);
         // Validate the request before continuing execution
@@ -144,8 +146,8 @@ library Execution {
         uint48 _requestTimestamp,
         address _feeReceiver
     ) external view returns (Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) {
-        // Check caller is TradeEngine for Market
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != 1 << 5) revert Execution_AccessDenied();
+        // TradeEngine uses delegate call, so msg.sender in this context should be TradeStorage
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert Execution_AccessDenied();
         // Get current MarketUtils and token data
         prices = getTokenPrices(priceFeed, _position.ticker, _requestTimestamp, _position.isLong, false);
 
@@ -182,25 +184,6 @@ library Execution {
     /**
      * ========================= Main Execution Functions =========================
      */
-
-    /// @notice Creates a new Order Request
-    function createOrderRequest(Position.Request calldata _request, EnumerableSetLib.Bytes32Set storage orderSet)
-        internal
-    {
-        ITradeStorage tradeStorage = ITradeStorage(address(this));
-        // Generate the Key
-        bytes32 orderKey = Position.generateOrderKey(_request);
-        // Check if the Order already exists
-        if (orderSet.contains(orderKey)) revert Execution_OrderAlreadyExists();
-        // Add the Order to the Set
-        bool success = orderSet.add(orderKey);
-        if (!success) revert Execution_OrderAdditionFailed();
-        // Add the order to the mapping
-        tradeStorage.createOrder(_request);
-        // If SL / TP, tie to the position
-        _attachConditionalOrder(tradeStorage, _request, orderKey);
-    }
-
     function decreaseCollateral(
         IMarket market,
         ITradeStorage tradeStorage,
@@ -244,6 +227,10 @@ library Execution {
         uint256 collateralDeltaUsd =
             _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
         position = _updatePosition(position, collateralDeltaUsd, 0, _prices.impactedPrice, false);
+
+        console2.log("COllateral Delta Usd: ", collateralDeltaUsd);
+        console2.log("Remaining Collateral: ", position.collateral);
+
         // Get remaining collateral in USD
         uint256 remainingCollateralUsd = position.collateral;
         // Check if the Decrease puts the position below the min collateral threshold
@@ -269,6 +256,7 @@ library Execution {
         feeState = _calculatePositionFees(
             tradeStorage,
             referralStorage,
+            feeState,
             _params.request.input.sizeDelta,
             _params.request.input.collateralDelta,
             _prices.collateralPrice,
@@ -285,6 +273,12 @@ library Execution {
             feeState.borrowFee,
             feeState.fundingFee
         );
+
+        console2.log("After Fee Amount: ", feeState.afterFeeAmount);
+        console2.log("Before Fee Amount: ", _params.request.input.collateralDelta);
+        console2.log("Collateral Price: ", _prices.collateralPrice);
+        console2.log("Collateral Base Unit: ", _prices.collateralBaseUnit);
+
         // Cache Collateral Delta in USD
         uint256 collateralDeltaUsd = feeState.afterFeeAmount.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
         // Check that the Position meets the minimum collateral threshold
@@ -364,6 +358,8 @@ library Execution {
         (_params.request.input.collateralDelta, _params.request.input.sizeDelta, feeState.isFullDecrease) =
             _validateCollateralDelta(position, _params, _prices);
 
+        console2.log("Is Full Decrease? ", feeState.isFullDecrease);
+
         (position, feeState) = _calculateFees(
             market,
             tradeStorage,
@@ -374,6 +370,7 @@ library Execution {
             _params.request.input.sizeDelta,
             _params.request.input.collateralDelta
         );
+        console2.log("Is Full Decrease 1? ", feeState.isFullDecrease);
         // No Calculation for After Fee Amount here --> liquidations can be insolvent, so it's only checked for decrease case.
         // Calculate Pnl for decrease
         feeState.realizedPnl = _calculatePnl(_prices, position, _params.request.input.sizeDelta);
@@ -399,9 +396,8 @@ library Execution {
                 _initiateLiquidation(_params, _prices, feeState, position.size, position.collateral, _liquidationFee);
         } else {
             // Decrease Case
-            (position, feeState.afterFeeAmount) = _initiateDecreasePosition(
-                market, _params, position, _prices, feeState, _minCollateralUsd, feeState.isFullDecrease
-            );
+            (position, feeState.afterFeeAmount) =
+                _initiateDecreasePosition(market, _params, position, _prices, feeState, _minCollateralUsd);
         }
     }
 
@@ -577,6 +573,7 @@ library Execution {
         _feeState = _calculatePositionFees(
             tradeStorage,
             referralStorage,
+            _feeState,
             _sizeDelta,
             _collateralDelta,
             _prices.collateralPrice,
@@ -698,9 +695,9 @@ library Execution {
         Position.Data memory _position,
         Prices memory _prices,
         FeeState memory _feeState,
-        uint256 _minCollateralUsd,
-        bool _isFullDecrease
+        uint256 _minCollateralUsd
     ) private view returns (Position.Data memory, uint256) {
+        console2.log("Is Full Decrease 2? ", _feeState.isFullDecrease);
         // Calculate After Fee Amount
         _feeState.afterFeeAmount = _calculateAmountAfterFees(
             _params.request.input.collateralDelta,
@@ -725,9 +722,11 @@ library Execution {
             ? _feeState.afterFeeAmount + _feeState.realizedPnl.abs()
             : _feeState.afterFeeAmount - _feeState.realizedPnl.abs();
 
+        console2.log("Is Full Decrease 3? ", _feeState.isFullDecrease);
+
         // Check if the Decrease puts the position below the min collateral threshold
         // Only check these if it's not a full decrease
-        if (!_isFullDecrease) {
+        if (!_feeState.isFullDecrease) {
             // Get remaining collateral in USD
             if (_position.collateral < _minCollateralUsd) revert Execution_MinCollateralThreshold();
             // Check Leverage
@@ -740,22 +739,28 @@ library Execution {
     function _calculatePositionFees(
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
+        FeeState memory _feeState,
         uint256 _sizeDelta,
         uint256 _collateralDelta,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         address _user
-    ) private view returns (FeeState memory feeState) {
+    ) private view returns (FeeState memory) {
         // Calculate Fee + Fee for executor
-        (feeState.positionFee, feeState.feeForExecutor) =
+        (_feeState.positionFee, _feeState.feeForExecutor) =
             Position.calculateFee(tradeStorage, _sizeDelta, _collateralDelta, _collateralPrice, _collateralBaseUnit);
 
+        console2.log("Position Fee: ", _feeState.positionFee);
+        console2.log("Fee for Executor: ", _feeState.feeForExecutor);
+
         // Calculate & Apply Fee Discount for Referral Code
-        (feeState.positionFee, feeState.affiliateRebate, feeState.referrer) =
-            Referral.applyFeeDiscount(referralStorage, _user, feeState.positionFee);
+        (_feeState.positionFee, _feeState.affiliateRebate, _feeState.referrer) =
+            Referral.applyFeeDiscount(referralStorage, _user, _feeState.positionFee);
 
         // If Position Fee, or Fee for Executor is 0, revert
-        if (feeState.positionFee == 0 || feeState.feeForExecutor == 0) revert Execution_ZeroFees();
+        if (_feeState.positionFee == 0 || _feeState.feeForExecutor == 0) revert Execution_ZeroFees();
+
+        return _feeState;
     }
     /**
      * Adjusts the execution price for ADL'd positions within specific boundaries to maintain market health.
@@ -807,27 +812,6 @@ library Execution {
         // Apply the price delta to the index price
         if (_isLong) impactedPrice = _indexPrice - priceDelta;
         else impactedPrice = _indexPrice + priceDelta;
-    }
-
-    /// @dev - Attaches a Conditional Order to a Position --> Let's us ensure SL / TP orders only affect the position they're assigned to.
-    function _attachConditionalOrder(ITradeStorage tradeStorage, Position.Request calldata _request, bytes32 _orderKey)
-        private
-    {
-        bytes32 positionKey = Position.generateKey(_request);
-        Position.Data memory position = tradeStorage.getPosition(positionKey);
-        // If Request is a SL, tie to the Stop Loss Key for the Position
-        if (_request.requestType == Position.RequestType.STOP_LOSS) {
-            if (position.stopLossKey != bytes32(0)) revert Execution_StopLossAlreadySet();
-            if (position.user == address(0)) revert Execution_PositionNotActive();
-            position.stopLossKey = _orderKey;
-            tradeStorage.updatePosition(position, positionKey);
-        } else if (_request.requestType == Position.RequestType.TAKE_PROFIT) {
-            // If Request is a TP, tie to the Take Profit Key for the Position
-            if (position.takeProfitKey != bytes32(0)) revert Execution_TakeProfitAlreadySet();
-            if (position.user == address(0)) revert Execution_PositionNotActive();
-            position.takeProfitKey = _orderKey;
-            tradeStorage.updatePosition(position, positionKey);
-        }
     }
 
     /**
@@ -895,11 +879,15 @@ library Execution {
         Position.Settlement memory _params,
         Prices memory _prices
     ) private pure returns (uint256 collateralDelta, uint256 sizeDelta, bool isFullDecrease) {
+        console2.log("Position Size in validate: ", _position.size);
+        console2.log("Size delta in validate: ", _params.request.input.sizeDelta);
+
         if (
             _params.request.input.sizeDelta >= _position.size
                 || _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit)
                     >= _position.collateral
         ) {
+            console2.log("Entered full decrease");
             collateralDelta = _position.collateral.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
             sizeDelta = _position.size;
             isFullDecrease = true;

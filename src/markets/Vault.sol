@@ -14,6 +14,7 @@ import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {Units} from "../libraries/Units.sol";
+import {console2} from "forge-std/Test.sol";
 
 contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
@@ -78,7 +79,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     /**
      * =============================== Storage Functions ===============================
      */
-    function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(1 << 4) {
+    function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_5) {
         if (_isIncrease) {
             _isLong ? longTokensReserved += _amount : shortTokensReserved += _amount;
         } else {
@@ -92,13 +93,13 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         }
     }
 
-    function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(1 << 4) {
+    function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_5) {
         _updatePoolBalance(_amount, _isLong, _isIncrease);
     }
 
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external
-        onlyRoles(1 << 4)
+        onlyRoles(_ROLE_5)
     {
         if (_isIncrease) {
             // Case 1: Increase the collateral amount
@@ -129,11 +130,11 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         }
     }
 
-    function accumulateFees(uint256 _amount, bool _isLong) external onlyRoles(1 << 4) {
+    function accumulateFees(uint256 _amount, bool _isLong) external onlyRoles(_ROLE_5) {
         _accumulateFees(_amount, _isLong);
     }
 
-    function batchWithdrawFees() external onlyRoles(1 << 2) nonReentrant {
+    function batchWithdrawFees() external onlyRoles(_ROLE_2) nonReentrant {
         uint256 longFees = longAccumulatedFees;
         uint256 shortFees = shortAccumulatedFees;
         longAccumulatedFees = 0;
@@ -166,7 +167,8 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         onlyMarket
     {
         // Cache the initial state
-        uint256 initialBalance = _params.deposit.isLongToken ? balanceOf[WETH] : balanceOf[USDC];
+        uint256 initialBalance =
+            _params.deposit.isLongToken ? IERC20(WETH).balanceOf(address(this)) : IERC20(USDC).balanceOf(address(this));
         // Transfer deposit tokens from position manager
         IERC20(_tokenIn).safeTransferFrom(_positionManager, address(this), _params.deposit.amountIn);
 
@@ -189,7 +191,9 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         onlyMarket
     {
         // Cache the initial state
-        uint256 initialBalance = _params.withdrawal.isLongToken ? balanceOf[WETH] : balanceOf[USDC];
+        uint256 initialBalance = _params.withdrawal.isLongToken
+            ? IERC20(WETH).balanceOf(address(this))
+            : IERC20(USDC).balanceOf(address(this));
 
         // Transfer Market Tokens in
         this.safeTransferFrom(_positionManager, address(this), _params.withdrawal.amountIn);
@@ -231,7 +235,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
      */
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
-        onlyRoles(1 << 5)
+        onlyRoles(_ROLE_5)
     {
         _transferOutTokens(_isLongToken ? WETH : USDC, _to, _amount, _isLongToken, _shouldUnwrap);
     }
@@ -255,11 +259,14 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     }
 
     function _updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) private {
+        console2.log("Updating pool balance");
         if (_isIncrease) {
             _isLong ? longTokenBalance += _amount : shortTokenBalance += _amount;
         } else {
             _isLong ? longTokenBalance -= _amount : shortTokenBalance -= _amount;
         }
+        console2.log("Long Pool Balance After: ", longTokenBalance);
+        console2.log("Short Pool Balance After: ", shortTokenBalance);
     }
 
     function _accumulateFees(uint256 _amount, bool _isLong) private {
@@ -269,14 +276,20 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
 
     function _validateDeposit(uint256 _initialBalance, uint256 _amountIn, bool _isLong) private view {
         if (_isLong) {
-            uint256 wethBalance = balanceOf[WETH];
+            uint256 wethBalance = IERC20(WETH).balanceOf(address(this));
+            console2.log("Weth Balance: ", wethBalance);
             if (longTokenBalance > wethBalance) revert Vault_InvalidDeposit();
+            console2.log("Initial Balance: ", _initialBalance);
+            console2.log("Amount In: ", _amountIn);
             if (wethBalance != _initialBalance + _amountIn) {
                 revert Vault_InvalidDeposit();
             }
         } else {
-            uint256 usdcBalance = balanceOf[USDC];
+            uint256 usdcBalance = IERC20(USDC).balanceOf(address(this));
+            console2.log("USDC Balance: ", usdcBalance);
             if (shortTokenBalance > usdcBalance) revert Vault_InvalidDeposit();
+            console2.log("Initial Balance: ", _initialBalance);
+            console2.log("Amount In: ", _amountIn);
             if (usdcBalance != _initialBalance + _amountIn) {
                 revert Vault_InvalidDeposit();
             }
@@ -285,13 +298,13 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
 
     function _validateWithdrawal(uint256 _initialBalance, uint256 _amountOut, bool _isLong) private view {
         if (_isLong) {
-            uint256 wethBalance = balanceOf[WETH];
+            uint256 wethBalance = IERC20(WETH).balanceOf(address(this));
             if (longTokenBalance > wethBalance) revert Vault_InvalidWithdrawal();
             if (wethBalance != _initialBalance - _amountOut) {
                 revert Vault_InvalidWithdrawal();
             }
         } else {
-            uint256 usdcBalance = balanceOf[USDC];
+            uint256 usdcBalance = IERC20(USDC).balanceOf(address(this));
             if (shortTokenBalance > usdcBalance) revert Vault_InvalidWithdrawal();
             if (usdcBalance != _initialBalance - _amountOut) {
                 revert Vault_InvalidWithdrawal();

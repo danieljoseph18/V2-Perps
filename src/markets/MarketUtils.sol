@@ -12,6 +12,7 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {Position} from "../positions/Position.sol";
 import {Pool} from "./Pool.sol";
 import {Units} from "../libraries/Units.sol";
+import {console2} from "forge-std/Test.sol";
 
 library MarketUtils {
     using Casting for uint256;
@@ -463,6 +464,7 @@ library MarketUtils {
         // get the allocation and subtract by the markets reserveFactor
         uint256 remainingAllocationUsd =
             getPoolBalanceUsd(market, vault, _ticker, _collateralTokenPrice, collateralBaseUnit, _isLong);
+        console2.log("Remaining Alloc Usd: ", remainingAllocationUsd);
         availableOi = remainingAllocationUsd - remainingAllocationUsd.percentage(_getReserveFactor(market, _ticker));
 
         // get the pnl
@@ -754,6 +756,7 @@ library MarketUtils {
     }
 
     function _getReserveFactor(IMarket market, string memory _ticker) private view returns (uint256) {
-        return market.getConfig(_ticker).reserveFactor.expandDecimals(2, 18);
+        console2.log("Reserve Factor: ", market.getConfig(_ticker).reserveFactor.expandDecimals(4, 18));
+        return market.getConfig(_ticker).reserveFactor.expandDecimals(4, 18);
     }
 }

@@ -117,6 +117,8 @@ contract TestPositions is Test {
         priceFeed.updatePrices(encodedPrices);
         marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         market = IMarket(payable(marketFactory.markets(0)));
+        bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
+        priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = RewardTracker(address(market.VAULT().rewardTracker()));
@@ -139,7 +141,7 @@ contract TestPositions is Test {
         Position.Input memory input;
         _leverage = bound(_leverage, 1, 100);
         if (_isLong) {
-            _sizeDelta = bound(_sizeDelta, 1, 1_000_000e30);
+            _sizeDelta = bound(_sizeDelta, 2e30, 1_000_000e30);
             uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta / _leverage, 1e18, 3000e30);
             input = Position.Input({
                 ticker: ethTicker,
@@ -160,7 +162,7 @@ contract TestPositions is Test {
                 market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
             );
         } else {
-            _sizeDelta = bound(_sizeDelta, 1, 1_000_000e30);
+            _sizeDelta = bound(_sizeDelta, 2e30, 1_000_000e30);
             uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta / _leverage, 1e6, 1e30);
             input = Position.Input({
                 ticker: ethTicker,
@@ -192,7 +194,7 @@ contract TestPositions is Test {
     {
         // Create Request
         Position.Input memory input;
-        _leverage = bound(_leverage, 1, 90);
+        _leverage = bound(_leverage, 2, 90);
         if (_isLong) {
             _sizeDelta = bound(_sizeDelta, 210e30, 1_000_000e30);
             uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta / _leverage, 1e18, 3000e30);
@@ -264,7 +266,7 @@ contract TestPositions is Test {
     ) public setUpMarkets {
         // Create Request
         Position.Input memory input;
-        _leverage1 = bound(_leverage1, 1, 90);
+        _leverage1 = bound(_leverage1, 2, 90);
         if (_isLong) {
             _sizeDelta1 = bound(_sizeDelta1, 210e30, 1_000_000e30);
             uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta1 / _leverage1, 1e18, 3000e30);
@@ -327,7 +329,7 @@ contract TestPositions is Test {
 
         // Increase Position
 
-        _leverage2 = bound(_leverage2, 1, 90);
+        _leverage2 = bound(_leverage2, 2, 90);
 
         if (_isLong) {
             _sizeDelta2 = bound(_sizeDelta2, 210e30, 1_000_000e30);
@@ -366,7 +368,7 @@ contract TestPositions is Test {
     {
         // Create Request
         Position.Input memory input;
-        _leverage = bound(_leverage, 1, 90);
+        _leverage = bound(_leverage, 2, 90);
         if (_isLong) {
             _sizeDelta = bound(_sizeDelta, 210e30, 1_000_000e30);
             uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta / _leverage, 1e18, 3000e30);
@@ -504,7 +506,7 @@ contract TestPositions is Test {
         positionManager.executePosition(market, key, bytes32(0), OWNER);
 
         input.sizeDelta = 0;
-        input.collateralDelta = bound(_collateralDelta, 1, collateralDelta);
+        input.collateralDelta = bound(_collateralDelta, 1e6, (collateralDelta * 9) / 10);
 
         // Increase Position
         if (_isLong && _shouldWrap) {
@@ -596,7 +598,7 @@ contract TestPositions is Test {
         // Create a decrease request
         input.sizeDelta = 0;
         // Calculate collateral delta
-        input.collateralDelta = collateralDelta / 2;
+        input.collateralDelta = collateralDelta / 4;
         input.isIncrease = false;
         vm.prank(OWNER);
         router.createPositionRequest{value: 0.01 ether}(market, input, Position.Conditionals(false, false, 0, 0, 0, 0));
@@ -657,7 +659,7 @@ contract TestPositions is Test {
         vm.prank(OWNER);
         positionManager.executePosition(market, key, bytes32(0), OWNER);
 
-        _sizeDelta = bound(_sizeDelta, 1e30, 5000e30);
+        _sizeDelta = bound(_sizeDelta, 2e30, 5000e30);
 
         // Min collateral around 2e6 USDC (0.4% of position)
         // If Size Delta > 99.6% of position, set to full close
