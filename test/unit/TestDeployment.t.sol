@@ -3,8 +3,6 @@ pragma solidity 0.8.23;
 
 import {Test} from "forge-std/Test.sol";
 import {Deploy} from "../../script/Deploy.s.sol";
-import {RoleStorage} from "../../src/access/RoleStorage.sol";
-import {Market, IMarket} from "../../../src/markets/Market.sol";
 import {MarketFactory} from "../../src/markets/MarketFactory.sol";
 import {IPriceFeed} from "../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage} from "../../src/positions/TradeStorage.sol";
@@ -13,7 +11,6 @@ import {PositionManager} from "../../src/router/PositionManager.sol";
 import {Router} from "../../src/router/Router.sol";
 
 contract TestDeployment is Test {
-    RoleStorage roleStorage;
     MarketFactory marketFactory;
     IPriceFeed priceFeed; // Deployed in Helper Config
     ReferralStorage referralStorage;
@@ -24,7 +21,6 @@ contract TestDeployment is Test {
     function setUp() public {
         Deploy deploy = new Deploy();
         Deploy.Contracts memory contracts = deploy.run();
-        roleStorage = contracts.roleStorage;
         marketFactory = contracts.marketFactory;
         priceFeed = contracts.priceFeed;
         referralStorage = contracts.referralStorage;
@@ -34,7 +30,6 @@ contract TestDeployment is Test {
     }
 
     function testDeployment() public {
-        assertNotEq(address(roleStorage), address(0));
         assertNotEq(address(marketFactory), address(0));
         assertNotEq(address(priceFeed), address(0));
         assertNotEq(address(referralStorage), address(0));

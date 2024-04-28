@@ -16,18 +16,9 @@ library MathUtils {
     uint256 internal constant MAX_UINT256 = 2 ** 256 - 1;
     uint256 internal constant WAD = 1e18; // The scalar of ETH and most ERC20s.
 
-    /// @dev Equivalent to `(x * WAD) / y` rounded down.
-    function divWad(uint256 x, uint256 y) internal pure returns (uint256 z) {
-        /// @solidity memory-safe-assembly
-        assembly {
-            // Equivalent to `require(y != 0 && (WAD == 0 || x <= type(uint256).max / WAD))`.
-            if iszero(mul(y, iszero(mul(WAD, gt(x, div(not(0), WAD)))))) {
-                mstore(0x00, 0x7c5f487d) // `DivWadFailed()`.
-                revert(0x1c, 0x04)
-            }
-            z := div(mul(x, WAD), y)
-        }
-    }
+    /**
+     * ========================== Multiplication ==========================
+     */
 
     /// @dev Equivalent to `(x * y) / WAD` rounded down.
     function mulWad(uint256 x, uint256 y) internal pure returns (uint256 z) {
@@ -39,6 +30,23 @@ library MathUtils {
                 revert(0x1c, 0x04)
             }
             z := div(mul(x, y), WAD)
+        }
+    }
+
+    /**
+     * ========================== Division ==========================
+     */
+
+    /// @dev Equivalent to `(x * WAD) / y` rounded down.
+    function divWad(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            // Equivalent to `require(y != 0 && (WAD == 0 || x <= type(uint256).max / WAD))`.
+            if iszero(mul(y, iszero(mul(WAD, gt(x, div(not(0), WAD)))))) {
+                mstore(0x00, 0x7c5f487d) // `DivWadFailed()`.
+                revert(0x1c, 0x04)
+            }
+            z := div(mul(x, WAD), y)
         }
     }
 
@@ -171,23 +179,27 @@ library MathUtils {
         }
     }
 
-    /// @dev Returns the delta between x and y in integer form, so the final result can be negative.
-    function diff(uint256 x, uint256 y) internal pure returns (int256) {
-        return x.toInt256() - y.toInt256();
+    function divWadUp(uint256 x, uint256 y) internal pure returns (uint256) {
+        return mulDivUp(x, WAD, y); // Equivalent to (x * WAD) / y rounded up.
     }
 
-    /// @dev Returns the absolute delta between x and y
-    function delta(uint256 x, uint256 y) internal pure returns (uint256) {
-        return x > y ? x - y : y - x;
+    function mulDivUp(uint256 x, uint256 y, uint256 d) internal pure returns (uint256 result) {
+        result = mulDiv(x, y, d);
+        /// @solidity memory-safe-assembly
+        assembly {
+            if mulmod(x, y, d) {
+                result := add(result, 1)
+                if iszero(result) {
+                    mstore(0x00, 0xae47f702) // `FullMulDivFailed()`.
+                    revert(0x1c, 0x04)
+                }
+            }
+        }
     }
 
-    function expandDecimals(uint256 x, uint256 decimalsFrom, uint256 decimalsTo) internal pure returns (uint256) {
-        return x * (10 ** (decimalsTo - decimalsFrom));
-    }
-
-    function expandDecimals(int256 x, uint256 decimalsFrom, uint256 decimalsTo) internal pure returns (int256) {
-        return x * int256(10 ** (decimalsTo - decimalsFrom));
-    }
+    /**
+     * ========================== Exponentiation ==========================
+     */
 
     /// @dev Exponentiate `x` to `y` by squaring, denominated in base `b`.
     /// Reverts if the computation overflows.
@@ -286,22 +298,26 @@ library MathUtils {
         }
     }
 
-    function divWadUp(uint256 x, uint256 y) internal pure returns (uint256) {
-        return mulDivUp(x, WAD, y); // Equivalent to (x * WAD) / y rounded up.
+    /**
+     * ========================== Utility / Rounding ==========================
+     */
+
+    /// @dev Returns the delta between x and y in integer form, so the final result can be negative.
+    function diff(uint256 x, uint256 y) internal pure returns (int256) {
+        return x.toInt256() - y.toInt256();
     }
 
-    function mulDivUp(uint256 x, uint256 y, uint256 d) internal pure returns (uint256 result) {
-        result = mulDiv(x, y, d);
-        /// @solidity memory-safe-assembly
-        assembly {
-            if mulmod(x, y, d) {
-                result := add(result, 1)
-                if iszero(result) {
-                    mstore(0x00, 0xae47f702) // `FullMulDivFailed()`.
-                    revert(0x1c, 0x04)
-                }
-            }
-        }
+    /// @dev Returns the absolute delta between x and y
+    function absDiff(uint256 x, uint256 y) internal pure returns (uint256) {
+        return x > y ? x - y : y - x;
+    }
+
+    function expandDecimals(uint256 x, uint256 decimalsFrom, uint256 decimalsTo) internal pure returns (uint256) {
+        return x * (10 ** (decimalsTo - decimalsFrom));
+    }
+
+    function expandDecimals(int256 x, uint256 decimalsFrom, uint256 decimalsTo) internal pure returns (int256) {
+        return x * int256(10 ** (decimalsTo - decimalsFrom));
     }
 
     /// @dev Returns `x`, bounded to `minValue` and `maxValue`.

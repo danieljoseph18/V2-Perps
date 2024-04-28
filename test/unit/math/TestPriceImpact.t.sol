@@ -1,328 +1,326 @@
-// // SPDX-License-Identifier: MIT
-// pragma solidity 0.8.23;
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
 
-// import {Test, console, console2} from "forge-std/Test.sol";
-// import {Deploy} from "../../../script/Deploy.s.sol";
-// import {RoleStorage} from "../../../src/access/RoleStorage.sol";
-// import {Market, IMarket, IMarketToken} from "../../../src/markets/Market.sol";
-// import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
-// import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-// import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
-// import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-// import {PositionManager} from "../../../src/router/PositionManager.sol";
-// import {Router} from "../../../src/router/Router.sol";
-// import {WETH} from "../../../src/tokens/WETH.sol";
-// import {Oracle} from "../../../src/oracle/Oracle.sol";
-// import {MockUSDC} from "../../mocks/MockUSDC.sol";
-// import {Position} from "../../../src/positions/Position.sol";
-// import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
-// import {RewardTracker} from "../../../src/rewards/RewardTracker.sol";
-// import {LiquidityLocker} from "../../../src/rewards/LiquidityLocker.sol";
-// import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
-// import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
-// import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
-// import {MathUtils} from "../../../src/libraries/MathUtils.sol";
-// import {Referral} from "../../../src/referrals/Referral.sol";
-// import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-// import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
-// import {Execution} from "../../../src/positions/Execution.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
+import {Deploy} from "../../../script/Deploy.s.sol";
+import {IMarket} from "../../../src/markets/Market.sol";
+import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
+import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
+import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
+import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
+import {PositionManager} from "../../../src/router/PositionManager.sol";
+import {Router} from "../../../src/router/Router.sol";
+import {WETH} from "../../../src/tokens/WETH.sol";
+import {Oracle} from "../../../src/oracle/Oracle.sol";
+import {MockUSDC} from "../../mocks/MockUSDC.sol";
+import {Position} from "../../../src/positions/Position.sol";
+import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
+import {RewardTracker} from "../../../src/rewards/RewardTracker.sol";
+import {LiquidityLocker} from "../../../src/rewards/LiquidityLocker.sol";
+import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
+import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
+import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
+import {MathUtils} from "../../../src/libraries/MathUtils.sol";
+import {Referral} from "../../../src/referrals/Referral.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
+import {Execution} from "../../../src/positions/Execution.sol";
 
-// contract TestPriceImpact is Test {
-//     using MathUtils for uint256;
+contract TestPriceImpact is Test {
+    using MathUtils for uint256;
 
-//     RoleStorage roleStorage;
+    MarketFactory marketFactory;
+    MockPriceFeed priceFeed; // Deployed in Helper Config
+    ITradeStorage tradeStorage;
+    ReferralStorage referralStorage;
+    PositionManager positionManager;
+    Router router;
+    address OWNER;
+    IMarket market;
+    FeeDistributor feeDistributor;
+    TransferStakedTokens transferStakedTokens;
+    RewardTracker rewardTracker;
+    LiquidityLocker liquidityLocker;
 
-//     MarketFactory marketFactory;
-//     MockPriceFeed priceFeed; // Deployed in Helper Config
-//     ITradeStorage tradeStorage;
-//     ReferralStorage referralStorage;
-//     PositionManager positionManager;
-//     Router router;
-//     address OWNER;
-//     Market market;
-//     FeeDistributor feeDistributor;
-//     TransferStakedTokens transferStakedTokens;
-//     RewardTracker rewardTracker;
-//     LiquidityLocker liquidityLocker;
+    address weth;
+    address usdc;
+    address link;
 
-//     address weth;
-//     address usdc;
-//     address link;
+    string ethTicker = "ETH";
+    string usdcTicker = "USDC";
+    string[] tickers;
 
-//     string ethTicker = "ETH";
-//     string usdcTicker = "USDC";
-//     string[] tickers;
+    address USER = makeAddr("USER");
+    address USER1 = makeAddr("USER1");
+    address USER2 = makeAddr("USER2");
 
-//     address USER = makeAddr("USER");
-//     address USER1 = makeAddr("USER1");
-//     address USER2 = makeAddr("USER2");
+    uint8[] precisions;
+    uint16[] variances;
+    uint48[] timestamps;
+    uint64[] meds;
 
-//     uint8[] precisions;
-//     uint16[] variances;
-//     uint48[] timestamps;
-//     uint64[] meds;
+    function setUp() public {
+        Deploy deploy = new Deploy();
+        Deploy.Contracts memory contracts = deploy.run();
 
-//     function setUp() public {
-//         Deploy deploy = new Deploy();
-//         Deploy.Contracts memory contracts = deploy.run();
-//         roleStorage = contracts.roleStorage;
+        marketFactory = contracts.marketFactory;
+        priceFeed = MockPriceFeed(address(contracts.priceFeed));
+        referralStorage = contracts.referralStorage;
+        positionManager = contracts.positionManager;
+        router = contracts.router;
+        feeDistributor = contracts.feeDistributor;
+        transferStakedTokens = contracts.transferStakedTokens;
+        OWNER = contracts.owner;
+        (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
+        tickers.push(ethTicker);
+        tickers.push(usdcTicker);
+        // Pass some time so block timestamp isn't 0
+        vm.warp(block.timestamp + 1 days);
+        vm.roll(block.number + 1);
+    }
 
-//         marketFactory = contracts.marketFactory;
-//         priceFeed = MockPriceFeed(address(contracts.priceFeed));
-//         referralStorage = contracts.referralStorage;
-//         positionManager = contracts.positionManager;
-//         router = contracts.router;
-//         feeDistributor = contracts.feeDistributor;
-//         transferStakedTokens = contracts.transferStakedTokens;
-//         OWNER = contracts.owner;
-//         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
-//         tickers.push(ethTicker);
-//         tickers.push(usdcTicker);
-//         // Pass some time so block timestamp isn't 0
-//         vm.warp(block.timestamp + 1 days);
-//         vm.roll(block.number + 1);
-//     }
+    receive() external payable {}
 
-//     receive() external payable {}
+    modifier setUpMarkets() {
+        vm.deal(OWNER, 2_000_000 ether);
+        MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
+        vm.deal(USER, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER, 1_000_000_000e6);
+        vm.deal(USER1, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER1, 1_000_000_000e6);
+        vm.deal(USER2, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER2, 1_000_000_000e6);
+        vm.prank(USER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER1);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER2);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.startPrank(OWNER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
+            isMultiAsset: false,
+            owner: OWNER,
+            indexTokenTicker: "ETH",
+            marketTokenName: "BRRR",
+            marketTokenSymbol: "BRRR",
+            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
+            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
+            stablecoinMerkleProof: new bytes32[](0),
+            requestTimestamp: uint48(block.timestamp)
+        });
+        marketFactory.createNewMarket{value: 0.01 ether}(request);
+        // Set Prices
+        precisions.push(0);
+        precisions.push(0);
+        variances.push(100);
+        variances.push(100);
+        timestamps.push(uint48(block.timestamp));
+        timestamps.push(uint48(block.timestamp));
+        meds.push(3000);
+        meds.push(1);
+        bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
+        priceFeed.updatePrices(encodedPrices);
+        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
+        market = IMarket(payable(marketFactory.markets(0)));
+        vm.stopPrank();
+        tradeStorage = ITradeStorage(market.tradeStorage());
+        rewardTracker = RewardTracker(address(market.VAULT().rewardTracker()));
+        liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
+        // Call the deposit function with sufficient gas
+        vm.prank(OWNER);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
+        vm.prank(OWNER);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
-//     modifier setUpMarkets() {
-//         vm.deal(OWNER, 2_000_000 ether);
-//         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
-//         vm.deal(USER, 2_000_000 ether);
-//         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
-//         vm.deal(USER1, 2_000_000 ether);
-//         MockUSDC(usdc).mint(USER1, 1_000_000_000e6);
-//         vm.deal(USER2, 2_000_000 ether);
-//         MockUSDC(usdc).mint(USER2, 1_000_000_000e6);
-//         vm.prank(USER);
-//         WETH(weth).deposit{value: 1_000_000 ether}();
-//         vm.prank(USER1);
-//         WETH(weth).deposit{value: 1_000_000 ether}();
-//         vm.prank(USER2);
-//         WETH(weth).deposit{value: 1_000_000 ether}();
-//         vm.startPrank(OWNER);
-//         WETH(weth).deposit{value: 1_000_000 ether}();
-//         IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
-//             isMultiAsset: false,
-//             owner: OWNER,
-//             indexTokenTicker: "ETH",
-//             marketTokenName: "BRRR",
-//             marketTokenSymbol: "BRRR",
-//             tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-//             pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-//             stablecoinMerkleProof: new bytes32[](0),
-//             requestTimestamp: uint48(block.timestamp)
-//         });
-//         marketFactory.createNewMarket{value: 0.01 ether}(request);
-//         // Set Prices
-//         precisions.push(0);
-//         precisions.push(0);
-//         variances.push(100);
-//         variances.push(100);
-//         timestamps.push(uint48(block.timestamp));
-//         timestamps.push(uint48(block.timestamp));
-//         meds.push(3000);
-//         meds.push(1);
-//         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
-//         priceFeed.updatePrices(encodedPrices);
-//         marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-//         market = Market(payable(marketFactory.markets(0)));
-//         vm.stopPrank();
-//         tradeStorage = ITradeStorage(market.tradeStorage());
-//         rewardTracker = RewardTracker(address(market.rewardTracker()));
-//         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
-//         // Call the deposit function with sufficient gas
-//         vm.prank(OWNER);
-//         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
-//         vm.prank(OWNER);
-//         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        vm.startPrank(OWNER);
+        MockUSDC(usdc).approve(address(router), type(uint256).max);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
+        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        vm.stopPrank();
+        _;
+    }
 
-//         vm.startPrank(OWNER);
-//         MockUSDC(usdc).approve(address(router), type(uint256).max);
-//         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
-//         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
-//         vm.stopPrank();
-//         _;
-//     }
+    modifier setUpNoLiquidity() {
+        vm.deal(OWNER, 2_000_000 ether);
+        MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
+        vm.deal(USER, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER, 1_000_000_000e6);
+        vm.deal(USER1, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER1, 1_000_000_000e6);
+        vm.deal(USER2, 2_000_000 ether);
+        MockUSDC(usdc).mint(USER2, 1_000_000_000e6);
+        vm.prank(USER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER1);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.prank(USER2);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        vm.startPrank(OWNER);
+        WETH(weth).deposit{value: 1_000_000 ether}();
+        IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
+            isMultiAsset: false,
+            owner: OWNER,
+            indexTokenTicker: "ETH",
+            marketTokenName: "BRRR",
+            marketTokenSymbol: "BRRR",
+            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
+            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
+            stablecoinMerkleProof: new bytes32[](0),
+            requestTimestamp: uint48(block.timestamp)
+        });
+        marketFactory.createNewMarket{value: 0.01 ether}(request);
+        // Set Prices
+        precisions.push(0);
+        precisions.push(0);
+        variances.push(100);
+        variances.push(100);
+        timestamps.push(uint48(block.timestamp));
+        timestamps.push(uint48(block.timestamp));
+        meds.push(3000);
+        meds.push(1);
+        bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
+        priceFeed.updatePrices(encodedPrices);
+        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
+        market = IMarket(payable(marketFactory.markets(0)));
+        vm.stopPrank();
+        tradeStorage = ITradeStorage(market.tradeStorage());
+        rewardTracker = RewardTracker(address(market.VAULT().rewardTracker()));
+        liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
+        _;
+    }
 
-//     modifier setUpNoLiquidity() {
-//         vm.deal(OWNER, 2_000_000 ether);
-//         MockUSDC(usdc).mint(OWNER, 1_000_000_000e6);
-//         vm.deal(USER, 2_000_000 ether);
-//         MockUSDC(usdc).mint(USER, 1_000_000_000e6);
-//         vm.deal(USER1, 2_000_000 ether);
-//         MockUSDC(usdc).mint(USER1, 1_000_000_000e6);
-//         vm.deal(USER2, 2_000_000 ether);
-//         MockUSDC(usdc).mint(USER2, 1_000_000_000e6);
-//         vm.prank(USER);
-//         WETH(weth).deposit{value: 1_000_000 ether}();
-//         vm.prank(USER1);
-//         WETH(weth).deposit{value: 1_000_000 ether}();
-//         vm.prank(USER2);
-//         WETH(weth).deposit{value: 1_000_000 ether}();
-//         vm.startPrank(OWNER);
-//         WETH(weth).deposit{value: 1_000_000 ether}();
-//         IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
-//             isMultiAsset: false,
-//             owner: OWNER,
-//             indexTokenTicker: "ETH",
-//             marketTokenName: "BRRR",
-//             marketTokenSymbol: "BRRR",
-//             tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-//             pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-//             stablecoinMerkleProof: new bytes32[](0),
-//             requestTimestamp: uint48(block.timestamp)
-//         });
-//         marketFactory.createNewMarket{value: 0.01 ether}(request);
-//         // Set Prices
-//         precisions.push(0);
-//         precisions.push(0);
-//         variances.push(100);
-//         variances.push(100);
-//         timestamps.push(uint48(block.timestamp));
-//         timestamps.push(uint48(block.timestamp));
-//         meds.push(3000);
-//         meds.push(1);
-//         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
-//         priceFeed.updatePrices(encodedPrices);
-//         marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-//         market = Market(payable(marketFactory.markets(0)));
-//         vm.stopPrank();
-//         tradeStorage = ITradeStorage(market.tradeStorage());
-//         rewardTracker = RewardTracker(address(market.rewardTracker()));
-//         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
-//         _;
-//     }
+    /**
+     * Input Requirements:
+     * - Position.Request --> ticker, sizeDelta, isLong, isIncrease
+     *
+     * Mocked Variable Requirements:
+     * - Long and Short oi
+     * - Long and Short -> totalAvailableLiquidity
+     */
+    struct PriceImpactTest {
+        uint256 indexPrice;
+        uint256 sizeDelta;
+        uint256 longOi;
+        uint256 shortOi;
+        uint256 longAvailable;
+        uint256 shortAvailable;
+        bool isLong;
+        bool isIncrease;
+    }
 
-//     /**
-//      * Input Requirements:
-//      * - Position.Request --> ticker, sizeDelta, isLong, isIncrease
-//      *
-//      * Mocked Variable Requirements:
-//      * - Long and Short oi
-//      * - Long and Short -> totalAvailableLiquidity
-//      */
-//     struct PriceImpactTest {
-//         uint256 indexPrice;
-//         uint256 sizeDelta;
-//         uint256 longOi;
-//         uint256 shortOi;
-//         uint256 longAvailable;
-//         uint256 shortAvailable;
-//         bool isLong;
-//         bool isIncrease;
-//     }
+    // @audit broken
+    function testPriceImpact(PriceImpactTest memory _test) public setUpNoLiquidity {
+        // // Bound Inputs
+        // _test.longAvailable = bound(_test.longAvailable, 1 ether, 100_000 ether);
+        // _test.shortAvailable = bound(_test.shortAvailable, 3000e6, 300_000_000e6);
+        // _test.indexPrice = bound(_test.indexPrice, 100e30, 1_000_000e30); // $1 - $1M
 
-//     function testPriceImpact(PriceImpactTest memory _test) public setUpNoLiquidity {
-//         // Bound Inputs
-//         _test.longAvailable = bound(_test.longAvailable, 1 ether, 100_000 ether);
-//         _test.shortAvailable = bound(_test.shortAvailable, 3000e6, 300_000_000e6);
-//         _test.indexPrice = bound(_test.indexPrice, 100e30, 1_000_000e30); // $1 - $1M
+        // uint256 maxLongAvailableUsd = _test.longAvailable.toUsd(_test.indexPrice, 1e18) * 8 / 10;
+        // uint256 maxShortAvailableUsd = _test.shortAvailable.toUsd(1e30, 1e6) * 8 / 10;
 
-//         uint256 maxLongAvailableUsd = _test.longAvailable.toUsd(_test.indexPrice, 1e18) * 8 / 10;
-//         uint256 maxShortAvailableUsd = _test.shortAvailable.toUsd(1e30, 1e6) * 8 / 10;
+        // // Constrain longOi and shortOi based on available liquidity
+        // _test.longOi = bound(_test.longOi, 0, maxLongAvailableUsd);
+        // _test.shortOi = bound(_test.shortOi, 0, maxShortAvailableUsd);
 
-//         // Constrain longOi and shortOi based on available liquidity
-//         _test.longOi = bound(_test.longOi, 0, maxLongAvailableUsd);
-//         _test.shortOi = bound(_test.shortOi, 0, maxShortAvailableUsd);
+        // uint256 availableLiquidityUsd;
+        // if (_test.isLong) {
+        //     availableLiquidityUsd = maxLongAvailableUsd - _test.longOi;
+        // } else {
+        //     availableLiquidityUsd = maxShortAvailableUsd - _test.shortOi;
+        // }
 
-//         uint256 availableLiquidityUsd;
-//         if (_test.isLong) {
-//             availableLiquidityUsd = maxLongAvailableUsd - _test.longOi;
-//         } else {
-//             availableLiquidityUsd = maxShortAvailableUsd - _test.shortOi;
-//         }
+        // // Ensure sizeDelta is within the available liquidity for the respective side
+        // if (_test.isIncrease) {
+        //     _test.sizeDelta = bound(_test.sizeDelta, 0, availableLiquidityUsd);
+        // } else {
+        //     uint256 existingOiUsd;
+        //     if (_test.isLong) {
+        //         existingOiUsd = _test.longOi;
+        //     } else {
+        //         existingOiUsd = _test.shortOi;
+        //     }
+        //     _test.sizeDelta = bound(_test.sizeDelta, 0, existingOiUsd);
+        // }
 
-//         // Ensure sizeDelta is within the available liquidity for the respective side
-//         if (_test.isIncrease) {
-//             _test.sizeDelta = bound(_test.sizeDelta, 0, availableLiquidityUsd);
-//         } else {
-//             uint256 existingOiUsd;
-//             if (_test.isLong) {
-//                 existingOiUsd = _test.longOi;
-//             } else {
-//                 existingOiUsd = _test.shortOi;
-//             }
-//             _test.sizeDelta = bound(_test.sizeDelta, 0, existingOiUsd);
-//         }
+        // vm.assume(_test.sizeDelta > 0);
 
-//         vm.assume(_test.sizeDelta > 0);
+        // // Mock Storage
+        // IMarket.OpenInterestValues memory openInterest = market.getOpenInterestValues(ethTicker);
+        // openInterest.longOpenInterest = _test.longOi;
+        // openInterest.shortOpenInterest = _test.shortOi;
+        // vm.mockCall(
+        //     address(market),
+        //     abi.encodeWithSelector(market.getOpenInterestValues.selector, ethTicker),
+        //     abi.encode(openInterest)
+        // );
+        // vm.mockCall(
+        //     address(market),
+        //     abi.encodeWithSelector(market.totalAvailableLiquidity.selector, true),
+        //     abi.encode(_test.longAvailable)
+        // );
+        // vm.mockCall(
+        //     address(market),
+        //     abi.encodeWithSelector(market.totalAvailableLiquidity.selector, false),
+        //     abi.encode(_test.shortAvailable)
+        // );
 
-//         // Mock Storage
-//         IMarket.OpenInterestValues memory openInterest = market.getOpenInterestValues(ethTicker);
-//         openInterest.longOpenInterest = _test.longOi;
-//         openInterest.shortOpenInterest = _test.shortOi;
-//         vm.mockCall(
-//             address(market),
-//             abi.encodeWithSelector(market.getOpenInterestValues.selector, ethTicker),
-//             abi.encode(openInterest)
-//         );
-//         vm.mockCall(
-//             address(market),
-//             abi.encodeWithSelector(market.totalAvailableLiquidity.selector, true),
-//             abi.encode(_test.longAvailable)
-//         );
-//         vm.mockCall(
-//             address(market),
-//             abi.encodeWithSelector(market.totalAvailableLiquidity.selector, false),
-//             abi.encode(_test.shortAvailable)
-//         );
+        // console2.log("sizeDelta: ", _test.sizeDelta);
+        // console2.log("Available Liquidity: ", _test.isLong ? _test.longAvailable : _test.shortAvailable);
 
-//         console2.log("sizeDelta: ", _test.sizeDelta);
-//         console2.log("Available Liquidity: ", _test.isLong ? _test.longAvailable : _test.shortAvailable);
+        // // Structure Execution.Prices struct
+        // Execution.Prices memory impactPrices = _getPrices(_test.indexPrice, _test.isLong);
 
-//         // Structure Execution.Prices struct
-//         Execution.Prices memory impactPrices = _getPrices(_test.indexPrice, _test.isLong);
+        // // Structure Position.Request struct
+        // Position.Request memory request = _createRequest(_test.sizeDelta, _test.isLong, _test.isIncrease);
 
-//         // Structure Position.Request struct
-//         Position.Request memory request = _createRequest(_test.sizeDelta, _test.isLong, _test.isIncrease);
+        // // Call the priceImpact function
+        // PriceImpact.execute(market, request, impactPrices);
+    }
 
-//         // Call the priceImpact function
-//         PriceImpact.execute(market, request, impactPrices);
-//     }
+    function _getPrices(uint256 _indexPrice, bool _isLong)
+        private
+        pure
+        returns (Execution.Prices memory impactPrices)
+    {
+        impactPrices = Execution.Prices({
+            indexPrice: _indexPrice,
+            indexBaseUnit: 1e18,
+            impactedPrice: _indexPrice,
+            longMarketTokenPrice: _indexPrice,
+            shortMarketTokenPrice: 1e30,
+            priceImpactUsd: 0,
+            collateralPrice: _isLong ? _indexPrice : 1e30,
+            collateralBaseUnit: _isLong ? 1e18 : 1e6
+        });
+    }
 
-//     function _getPrices(uint256 _indexPrice, bool _isLong)
-//         private
-//         pure
-//         returns (Execution.Prices memory impactPrices)
-//     {
-//         impactPrices = Execution.Prices({
-//             indexPrice: _indexPrice,
-//             indexBaseUnit: 1e18,
-//             impactedPrice: _indexPrice,
-//             longMarketTokenPrice: _indexPrice,
-//             shortMarketTokenPrice: 1e30,
-//             priceImpactUsd: 0,
-//             collateralPrice: _isLong ? _indexPrice : 1e30,
-//             collateralBaseUnit: _isLong ? 1e18 : 1e6
-//         });
-//     }
-
-//     function _createRequest(uint256 _sizeDelta, bool _isLong, bool _isIncrease)
-//         private
-//         view
-//         returns (Position.Request memory request)
-//     {
-//         request = Position.Request({
-//             input: Position.Input({
-//                 ticker: ethTicker,
-//                 collateralToken: weth,
-//                 collateralDelta: 0,
-//                 sizeDelta: _sizeDelta,
-//                 limitPrice: 0,
-//                 maxSlippage: 1e30,
-//                 executionFee: 0,
-//                 isLong: _isLong,
-//                 isLimit: false,
-//                 isIncrease: _isIncrease,
-//                 reverseWrap: false,
-//                 triggerAbove: false
-//             }),
-//             conditionals: Position.Conditionals(false, false, 0, 0, 0, 0),
-//             user: USER,
-//             requestTimestamp: uint48(block.timestamp),
-//             requestType: Position.RequestType.CREATE_POSITION,
-//             requestKey: 0
-//         });
-//     }
-// }
+    // @audit broken
+    function _createRequest(uint256 _sizeDelta, bool _isLong, bool _isIncrease)
+        private
+        view
+        returns (Position.Request memory request)
+    {
+        // request = Position.Request({
+        //     input: Position.Input({
+        //         ticker: ethTicker,
+        //         collateralToken: weth,
+        //         collateralDelta: 0,
+        //         sizeDelta: _sizeDelta,
+        //         limitPrice: 0,
+        //         maxSlippage: 1e30,
+        //         executionFee: 0,
+        //         isLong: _isLong,
+        //         isLimit: false,
+        //         isIncrease: _isIncrease,
+        //         reverseWrap: false,
+        //         triggerAbove: false
+        //     }),
+        //     conditionals: Position.Conditionals(false, false, 0, 0, 0, 0),
+        //     user: USER,
+        //     requestTimestamp: uint48(block.timestamp),
+        //     requestType: Position.RequestType.CREATE_POSITION,
+        //     requestKey: 0
+        // });
+    }
+}

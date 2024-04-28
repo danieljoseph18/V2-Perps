@@ -9,7 +9,7 @@ import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
@@ -21,7 +21,7 @@ import {Units} from "../libraries/Units.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
-contract Router is ReentrancyGuard, RoleValidation {
+contract Router is ReentrancyGuard, OwnableRoles {
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IWETH;
     using SafeTransferLib for IVault;
@@ -64,14 +64,7 @@ contract Router is ReentrancyGuard, RoleValidation {
     error Router_InvalidLimitPrice();
     error Router_InvalidRequest();
 
-    constructor(
-        address _marketFactory,
-        address _priceFeed,
-        address _usdc,
-        address _weth,
-        address _positionManager,
-        address _roleStorage
-    ) RoleValidation(_roleStorage) {
+    constructor(address _marketFactory, address _priceFeed, address _usdc, address _weth, address _positionManager) {
         marketFactory = IMarketFactory(_marketFactory);
         priceFeed = IPriceFeed(_priceFeed);
         USDC = IERC20(_usdc);
@@ -84,12 +77,12 @@ contract Router is ReentrancyGuard, RoleValidation {
     /**
      * ========================================= Setter Functions =========================================
      */
-    function updateConfig(address _marketFactory, address _positionManager) external onlyAdmin {
+    function updateConfig(address _marketFactory, address _positionManager) external onlyOwner {
         marketFactory = IMarketFactory(_marketFactory);
         positionManager = IPositionManager(_positionManager);
     }
 
-    function updatePriceFeed(IPriceFeed _priceFeed) external onlyAdmin {
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyOwner {
         priceFeed = _priceFeed;
     }
 

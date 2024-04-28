@@ -5,13 +5,13 @@ import {RewardTracker} from "./RewardTracker.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {TransferStakedTokens} from "./TransferStakedTokens.sol";
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {ILiquidityLocker} from "./interfaces/ILiquidityLocker.sol";
 
 /// @title LiquidityLocker
 /// @dev Contract that allows users to lock LP tokens for a set duration in exchange for XP at various multipliers.
 /// @notice Users can still claim rev-share from their reward tokens.
-contract LiquidityLocker is ILiquidityLocker, RoleValidation, ReentrancyGuard {
+contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
     RewardTracker public rewardTracker;
     TransferStakedTokens public stakeTransferrer;
 
@@ -49,21 +49,16 @@ contract LiquidityLocker is ILiquidityLocker, RoleValidation, ReentrancyGuard {
     uint256 public wethBalance;
     uint256 public usdcBalance;
 
-    constructor(
-        address _rewardTracker,
-        address _transferStakedTokens,
-        address _weth,
-        address _usdc,
-        address _roleStorage
-    ) RoleValidation(_roleStorage) {
+    constructor(address _rewardTracker, address _transferStakedTokens, address _weth, address _usdc) {
         require(_rewardTracker != address(0));
+        _initializeOwner(msg.sender);
         rewardTracker = RewardTracker(_rewardTracker);
         stakeTransferrer = TransferStakedTokens(_transferStakedTokens);
         WETH = _weth;
         USDC = _usdc;
     }
 
-    function setHandler(address _handler, bool _isActive) external onlyAdmin {
+    function setHandler(address _handler, bool _isActive) external onlyOwner {
         isHandler[_handler] = _isActive;
     }
 

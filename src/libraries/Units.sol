@@ -11,7 +11,7 @@ library Units {
     using MathUtils for int256;
 
     uint64 private constant UNIT = 1e18;
-    int64 private constant SIGNED_UNIT = 1e18;
+    int64 private constant sUNIT = 1e18;
     int128 private constant PRICE_UNIT = 1e30;
 
     /// @dev Converts an Amount in Tokens to a USD amount
@@ -55,7 +55,7 @@ library Units {
 
     /// @dev Returns the percentage of an Amount (int) with a custom denominator as an integer
     function percentageInt(int256 _amount, int256 _numerator) internal pure returns (int256) {
-        return _amount.mulDivSigned(_numerator, SIGNED_UNIT);
+        return _amount.mulDivSigned(_numerator, sUNIT);
     }
 
     /// @dev Returns the percentage of a USD Amount (int) with a custom denominator as an integer

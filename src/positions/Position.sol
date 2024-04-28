@@ -471,7 +471,7 @@ library Position {
         return realizedPnlUsd.fromUsdToSigned(_collateralTokenPrice, _collateralBaseUnit);
     }
 
-    function getLiquidationPrice(Data memory _position) internal pure returns (uint256) {
+    function getLiquidationPrice(Data memory _position) public pure returns (uint256) {
         if (_position.isLong) {
             // For long positions, liquidation price is when:
             // collateral + PNL = 0
@@ -504,7 +504,7 @@ library Position {
      * purely based on the max ratio, once pnl exceeds 45%, the percentage to adl would be 0.
      */
     function calculateAdlPercentage(uint256 _pnlToPoolRatio, int256 _positionProfit, uint256 _positionSize)
-        internal
+        public
         pure
         returns (uint256 adlPercentage)
     {

@@ -21,7 +21,6 @@ interface ITradeEngine {
     error TradeEngine_PositionDoesNotExist();
 
     function executePositionRequest(
-        IMarket market,
         IVault vault,
         IPriceFeed priceFeed,
         IPositionManager positionManager,
@@ -31,7 +30,6 @@ interface ITradeEngine {
         address _feeReceiver
     ) external returns (Execution.FeeState memory feeState, Position.Request memory request);
     function executeAdl(
-        IMarket market,
         IVault vault,
         IReferralStorage referralStorage,
         IPriceFeed priceFeed,
@@ -40,7 +38,6 @@ interface ITradeEngine {
         address _feeReceiver
     ) external;
     function liquidatePosition(
-        IMarket market,
         IVault vault,
         IReferralStorage referralStorage,
         IPriceFeed priceFeed,
@@ -48,4 +45,5 @@ interface ITradeEngine {
         bytes32 _requestKey,
         address _liquidator
     ) external;
+    function market() external view returns (IMarket);
 }

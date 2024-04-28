@@ -3,8 +3,9 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {ITradeEngine} from "../positions/interfaces/ITradeEngine.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
@@ -16,7 +17,6 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IPositionManager} from "./interfaces/IPositionManager.sol";
-import {Roles} from "../access/Roles.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
@@ -24,7 +24,7 @@ import {IVault} from "../markets/interfaces/IVault.sol";
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
 // Contract picks up and executes all requests, as well as holds intermediary funds.
-contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
+contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IWETH;
     using SafeTransferLib for IVault;
@@ -49,14 +49,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
     uint256 public averageWithdrawalCost;
     uint256 public averagePositionCost;
 
-    constructor(
-        address _marketFactory,
-        address _referralStorage,
-        address _priceFeed,
-        address _weth,
-        address _usdc,
-        address _roleStorage
-    ) RoleValidation(_roleStorage) {
+    constructor(address _marketFactory, address _referralStorage, address _priceFeed, address _weth, address _usdc) {
         marketFactory = IMarketFactory(_marketFactory);
         referralStorage = IReferralStorage(_referralStorage);
         priceFeed = IPriceFeed(_priceFeed);
@@ -68,7 +61,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
 
     function updateGasEstimates(uint256 _base, uint256 _deposit, uint256 _withdrawal, uint256 _position)
         external
-        onlyAdmin
+        onlyOwner
     {
         baseGasLimit = _base;
         averageDepositCost = _deposit;
@@ -77,7 +70,7 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         emit GasLimitsUpdated(_deposit, _withdrawal, _position);
     }
 
-    function updatePriceFeed(IPriceFeed _priceFeed) external onlyAdmin {
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyOwner {
         priceFeed = _priceFeed;
     }
 
@@ -118,7 +111,6 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         IVault.ExecuteWithdrawal memory params = MarketUtils.constructWithdrawalParams(priceFeed, market, _key);
         // Calculate amountOut
         params.amountOut = MarketUtils.calculateWithdrawalAmount(
-            market,
             params.vault,
             params.longPrices,
             params.shortPrices,
@@ -236,14 +228,18 @@ contract PositionManager is IPositionManager, RoleValidation, ReentrancyGuard {
         ITradeStorage(market.tradeStorage()).executeAdl(_positionKey, _requestKey, msg.sender);
     }
 
+    /// @dev - Should only be callable from the TradeEngine associated with a valid market
     function transferTokensForIncrease(
-        IMarket market,
         address _collateralToken,
         uint256 _collateralDelta,
         uint256 _affiliateRebate,
         uint256 _feeForExecutor,
         address _executor
-    ) external onlyTradeEngine(address(market)) {
+    ) external {
+        // Check if the caller is a valid TradeEngine
+        address market = address(ITradeEngine(msg.sender).market());
+        if (!marketFactory.isMarket(market)) revert PositionManager_InvalidMarket();
+
         uint256 transferAmount = _collateralDelta;
         // Transfer Fee to Executor
         if (_feeForExecutor > 0) {

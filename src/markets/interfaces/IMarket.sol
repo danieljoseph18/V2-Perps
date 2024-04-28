@@ -10,27 +10,11 @@ import {Pool} from "../Pool.sol";
 
 interface IMarket {
     /**
-     * ================ Structs ================
-     */
-    struct Input {
-        uint256 amountIn;
-        uint256 executionFee;
-        address owner;
-        uint48 requestTimestamp;
-        bool isLongToken;
-        bool reverseWrap;
-        bool isDeposit;
-        bytes32 key;
-        bytes32 priceRequestKey; // Key of the price update request
-        bytes32 pnlRequestKey; // Id of the cumulative pnl request
-    }
-
-    /**
      * ================ Errors ================
      */
+    error Market_AccessDenied();
     error Market_InvalidKey();
     error Market_InvalidPoolOwner();
-    error Market_InvalidFeeDistributor();
     error Market_TokenAlreadyExists();
     error Market_FailedToAddAssetId();
     error Market_FailedToRemoveAssetId();
@@ -39,6 +23,15 @@ interface IMarket {
     error Market_InvalidBorrowScale();
     error Market_SingleAssetMarket();
     error Market_FailedToRemoveRequest();
+    error Market_MaxAssetsReached();
+    error Market_TokenDoesNotExist();
+    error Market_MinimumAssetsReached();
+    error Market_AllocationLength();
+    error Market_InvalidCumulativeAllocation();
+    error Market_InvalidAllocation();
+    error Market_NotRequestOwner();
+    error Market_RequestNotExpired();
+    error Market_FailedToAddRequest();
 
     /**
      * ================ Events ================
@@ -47,6 +40,8 @@ interface IMarket {
     event MarketConfigUpdated(bytes32 indexed assetId);
     event Market_Initialized();
     event FeesAccumulated(uint256 amount, bool _isLong);
+    event RequestCanceled(bytes32 indexed key, address indexed caller);
+    event RequestCreated(bytes32 indexed key, address indexed owner, address tokenIn, uint256 amountIn, bool isDeposit);
 
     function createRequest(
         address _owner,
@@ -66,15 +61,13 @@ interface IMarket {
     function executeWithdrawal(IVault.ExecuteWithdrawal calldata _params) external;
 
     // Getter
-    function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total);
-    function getRequest(bytes32 _key) external view returns (Input memory);
-    function getRequestAtIndex(uint256 _index) external view returns (Input memory);
-    function rewardTracker() external view returns (IRewardTracker);
+    function getRequest(bytes32 _key) external view returns (Pool.Input memory);
+    function getRequestAtIndex(uint256 _index) external view returns (Pool.Input memory);
 
     /**
      * ================ Functions ================
      */
-    function initialize(address _tradeStorage, address _rewardTracker, uint256 _borrowScale) external;
+    function initialize(address _tradeStorage, uint256 _borrowScale) external;
     function updateMarketState(
         string calldata _ticker,
         uint256 _sizeDelta,
@@ -91,23 +84,11 @@ interface IMarket {
     function VAULT() external view returns (IVault);
     function borrowScale() external view returns (uint256);
     function getAssetIds() external view returns (bytes32[] memory);
-    function getAssetsInMarket() external view returns (uint256);
     function getStorage(string memory _ticker) external view returns (Pool.Storage memory);
-    function longTokenBalance() external view returns (uint256);
-    function shortTokenBalance() external view returns (uint256);
-    function longTokensReserved() external view returns (uint256);
-    function shortTokensReserved() external view returns (uint256);
-    function isAssetInMarket(string memory _ticker) external view returns (bool);
     function getTickers() external view returns (string[] memory);
     function FUNDING_VELOCITY_CLAMP() external view returns (uint64);
-    function requestExists(bytes32 _key) external view returns (bool);
-    function setAllocationShare(string calldata _ticker, uint8 _allocationShare) external;
-    function addAsset(string calldata _ticker) external;
-    function removeAsset(string calldata _ticker) external;
     function getConfig(string calldata _ticker) external view returns (Pool.Config memory);
     function getCumulatives(string calldata _ticker) external view returns (Pool.Cumulatives memory);
     function getImpactPool(string calldata _ticker) external view returns (uint256);
     function getImpactValues(string calldata _ticker) external view returns (int16, int16, int16, int16);
-    function getOpenInterestValues(string calldata _ticker) external view returns (uint256, uint256);
-    function getAllocationShare(string calldata _ticker) external view returns (uint8);
 }

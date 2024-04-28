@@ -54,6 +54,7 @@ library Oracle {
     string private constant SHORT_TICKER = "USDC";
     uint8 private constant PRICE_DECIMALS = 30;
     uint8 private constant CHAINLINK_DECIMALS = 8;
+    uint8 private constant MAX_STRATEGY = 5;
     uint16 private constant MAX_VARIANCE = 10_000;
     uint64 private constant MAX_PRICE_DEVIATION = 0.1e18;
     uint64 private constant OVERESTIMATION_FACTOR = 0.1e18;
@@ -153,11 +154,8 @@ library Oracle {
     }
 
     function validateFeedType(IPriceFeed.FeedType _feedType) internal pure {
-        if (
-            _feedType != IPriceFeed.FeedType.CHAINLINK && _feedType != IPriceFeed.FeedType.UNI_V30
-                && _feedType != IPriceFeed.FeedType.UNI_V31 && _feedType != IPriceFeed.FeedType.UNI_V20
-                && _feedType != IPriceFeed.FeedType.UNI_V21 && _feedType != IPriceFeed.FeedType.PYTH
-        ) {
+        // 6 strategies are supported
+        if (uint8(_feedType) > MAX_STRATEGY) {
             revert Oracle_InvalidPoolType();
         }
     }
@@ -165,7 +163,7 @@ library Oracle {
     /**
      * ====================================== Helper Functions ======================================
      */
-    function estimateRequestCost(IPriceFeed priceFeed) internal view returns (uint256 cost) {
+    function estimateRequestCost(IPriceFeed priceFeed) external view returns (uint256 cost) {
         // Get the current gas price
         uint256 gasPrice = tx.gasprice;
 
@@ -352,7 +350,7 @@ library Oracle {
         // Get the Med Price to 30 dp from the Price Data
         uint256 medPrice = _priceData.med * (10 ** (PRICE_DECIMALS - _priceData.precision));
         // Check if the Price is within the acceptable range
-        return medPrice.delta(referencePrice) <= referencePrice.percentage(MAX_PRICE_DEVIATION);
+        return medPrice.absDiff(referencePrice) <= referencePrice.percentage(MAX_PRICE_DEVIATION);
     }
 
     /**

@@ -49,7 +49,6 @@ interface IPositionManager {
     function averagePositionCost() external view returns (uint256);
     function baseGasLimit() external view returns (uint256);
     function transferTokensForIncrease(
-        IMarket market,
         address _collateralToken,
         uint256 _collateralDelta,
         uint256 _affiliateRebate,

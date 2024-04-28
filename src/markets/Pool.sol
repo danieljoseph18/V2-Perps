@@ -2,19 +2,47 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "./interfaces/IMarket.sol";
+import {IVault} from "./interfaces/IVault.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {MarketUtils} from "./MarketUtils.sol";
-import {MathUtils} from "../libraries/MathUtils.sol";
-import {Casting} from "../libraries/Casting.sol";
 
 library Pool {
-    using MathUtils for int256;
-    using Casting for int256;
-
     event MarketStateUpdated(string ticker, bool isLong);
 
     error Pool_InvalidTicker();
+    error Pool_InvalidLeverage();
+    error Pool_InvalidReserveFactor();
+    error Pool_InvalidMaxVelocity();
+    error Pool_InvalidSkewScale();
+    error Pool_InvalidSkewScalar();
+    error Pool_InvalidLiquidityScalar();
+    error Pool_InvalidUpdate();
+
+    uint8 private constant MAX_ASSETS = 100;
+    uint32 private constant MAX_LEVERAGE = 1000; // Max 1000x leverage
+    uint64 private constant MIN_MAINTENANCE_MARGIN = 50; // 0.5%
+    uint64 private constant MAX_MAINTENANCE_MARGIN = 1000; // 10%
+    uint64 private constant MIN_RESERVE_FACTOR = 1000; // 10% reserve factor
+    uint64 private constant MAX_RESERVE_FACTOR = 5000; // 50% reserve factor
+    int64 private constant MIN_VELOCITY = 10; // 0.1% per day
+    int64 private constant MAX_VELOCITY = 2000; // 20% per day
+    int256 private constant MIN_SKEW_SCALE = 1000; // $1000
+    int256 private constant MAX_SKEW_SCALE = 10_000_000_000; // $10 Bn
+    int16 private constant MAX_SCALAR = 10000;
+
+    struct Input {
+        uint256 amountIn;
+        uint256 executionFee;
+        address owner;
+        uint48 requestTimestamp;
+        bool isLongToken;
+        bool reverseWrap;
+        bool isDeposit;
+        bytes32 key;
+        bytes32 priceRequestKey; // Key of the price update request
+        bytes32 pnlRequestKey; // Id of the cumulative pnl request
+    }
 
     struct Storage {
         Config config;
@@ -155,7 +183,9 @@ library Pool {
         pool.lastUpdate = uint48(block.timestamp);
     }
 
+    /// @dev Needs to be external to keep bytecode size below threshold.
     function updateState(
+        IVault vault,
         Storage storage pool,
         string calldata _ticker,
         uint256 _sizeDelta,
@@ -165,10 +195,9 @@ library Pool {
         uint256 _collateralBaseUnit,
         bool _isLong,
         bool _isIncrease
-    ) internal {
+    ) external {
         IMarket market = IMarket(address(this));
-        // If invalid ticker, revert
-        if (!market.isAssetInMarket(_ticker)) revert Pool_InvalidTicker();
+        if (msg.sender != address(this)) revert Pool_InvalidUpdate();
         // 1. Depends on Open Interest Delta to determine Skew
         Funding.updateState(market, pool, _ticker, _indexPrice);
         if (_sizeDelta != 0) {
@@ -198,15 +227,87 @@ library Pool {
             }
         }
         // 4. Relies on Updated Open interest
-        Borrowing.updateState(market, pool, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+        Borrowing.updateState(market, vault, pool, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
         // 5. Update the last update time
         pool.lastUpdate = uint48(block.timestamp);
         // Fire Event
         emit MarketStateUpdated(_ticker, _isLong);
     }
 
-    function updateImpactPool(Storage storage pool, int256 _priceImpactUsd) internal {
-        _priceImpactUsd > 0 ? pool.impactPool += _priceImpactUsd.abs() : pool.impactPool -= _priceImpactUsd.abs();
+    /**
+     * ============================= External Functions =============================
+     */
+    function createRequest(
+        address _owner,
+        address _transferToken, // Token In for Deposits, Out for Withdrawals
+        uint256 _amountIn,
+        uint256 _executionFee,
+        bytes32 _priceRequestKey,
+        bytes32 _pnlRequestKey,
+        address _weth,
+        bool _reverseWrap,
+        bool _isDeposit
+    ) external view returns (Pool.Input memory) {
+        return Pool.Input({
+            amountIn: _amountIn,
+            executionFee: _executionFee,
+            owner: _owner,
+            requestTimestamp: uint48(block.timestamp),
+            isLongToken: _transferToken == _weth,
+            reverseWrap: _reverseWrap,
+            isDeposit: _isDeposit,
+            key: _generateKey(_owner, _transferToken, _amountIn, _isDeposit),
+            priceRequestKey: _priceRequestKey,
+            pnlRequestKey: _pnlRequestKey
+        });
+    }
+
+    function validateConfig(Config calldata _config) external pure {
+        /* 1. Validate the initial inputs */
+        // Check Leverage is within bounds
+        if (_config.maxLeverage == 0 || _config.maxLeverage > MAX_LEVERAGE) {
+            revert Pool_InvalidLeverage();
+        }
+        // Check maintenance margin is within bounds
+        if (_config.maintenanceMargin < MIN_MAINTENANCE_MARGIN || _config.maintenanceMargin > MAX_MAINTENANCE_MARGIN) {
+            revert Pool_InvalidLeverage();
+        }
+        // Check the Reserve Factor is within bounds
+        if (_config.reserveFactor < MIN_RESERVE_FACTOR || _config.reserveFactor > MAX_RESERVE_FACTOR) {
+            revert Pool_InvalidReserveFactor();
+        }
+        /* 2. Validate the Funding Values */
+        // Check the Max Velocity is within bounds
+        if (_config.maxFundingVelocity < MIN_VELOCITY || _config.maxFundingVelocity > MAX_VELOCITY) {
+            revert Pool_InvalidMaxVelocity();
+        }
+        // Check the Skew Scale is within bounds
+        if (_config.skewScale < MIN_SKEW_SCALE || _config.skewScale > MAX_SKEW_SCALE) {
+            revert Pool_InvalidSkewScale();
+        }
+        /* 3. Validate Impact Values */
+        // Check Skew Scalars are > 0 and <= 100%
+        if (_config.positiveSkewScalar <= 0 || _config.positiveSkewScalar > MAX_SCALAR) {
+            revert Pool_InvalidSkewScalar();
+        }
+        if (_config.negativeSkewScalar <= 0 || _config.negativeSkewScalar > MAX_SCALAR) {
+            revert Pool_InvalidSkewScalar();
+        }
+        // Check negative skew scalar is >= positive skew scalar
+        if (_config.negativeSkewScalar < _config.positiveSkewScalar) {
+            revert Pool_InvalidSkewScalar();
+        }
+        // Check Liquidity Scalars are > 0 and <= 100%
+        if (_config.positiveLiquidityScalar <= 0 || _config.positiveLiquidityScalar > MAX_SCALAR) {
+            revert Pool_InvalidLiquidityScalar();
+        }
+        if (_config.negativeLiquidityScalar <= 0 || _config.negativeLiquidityScalar > MAX_SCALAR) {
+            revert Pool_InvalidLiquidityScalar();
+        }
+        // Check negative liquidity scalar is >= positive liquidity scalar
+        if (_config.negativeLiquidityScalar < _config.positiveLiquidityScalar) {
+            revert Pool_InvalidLiquidityScalar();
+        }
     }
 
     /**
@@ -239,5 +340,13 @@ library Pool {
             _storage.cumulatives.weightedAvgCumulativeShort =
                 Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, false);
         }
+    }
+
+    function _generateKey(address _owner, address _tokenIn, uint256 _tokenAmount, bool _isDeposit)
+        private
+        view
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(_owner, _tokenIn, _tokenAmount, _isDeposit, block.timestamp));
     }
 }

@@ -3,7 +3,7 @@ pragma solidity 0.8.23;
 
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {Funding} from "../libraries/Funding.sol";
 import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {Position} from "../positions/Position.sol";
@@ -18,7 +18,7 @@ import {ITradeEngine} from "./interfaces/ITradeEngine.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 
 /// @notice Contract responsible for storing the state of active trades / requests
-contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
+contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
 
     ITradeEngine public tradeEngine;
@@ -45,13 +45,13 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     uint256 public minCollateralUsd;
     uint64 public minCancellationTime;
 
-    constructor(
-        IMarket _market,
-        IVault _vault,
-        IReferralStorage _referralStorage,
-        IPriceFeed _priceFeed,
-        address _roleStorage
-    ) RoleValidation(_roleStorage) {
+    modifier onlyCallback() {
+        _isCallback();
+        _;
+    }
+
+    constructor(IMarket _market, IVault _vault, IReferralStorage _referralStorage, IPriceFeed _priceFeed) {
+        _initializeOwner(msg.sender);
         market = _market;
         vault = _vault;
         referralStorage = _referralStorage;
@@ -69,7 +69,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         uint64 _feeForExecution, // Percentage of the Trading Fee that goes to the keeper, 18 D.P
         uint256 _minCollateralUsd, // 2e30 = 2 USD
         uint64 _minCancellationTime // e.g 1 minutes
-    ) external onlyMarketFactory {
+    ) external onlyOwner {
         if (isInitialized) revert TradeStorage_AlreadyInitialized();
         tradeEngine = _tradeEngine;
         liquidationFee = _liquidationFee;
@@ -83,7 +83,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     }
 
     // Time until a position request can be cancelled by a user
-    function setMinCancellationTime(uint64 _minCancellationTime) external onlyConfigurator(address(market)) {
+    function setMinCancellationTime(uint64 _minCancellationTime) external onlyRoles(1 << 2) {
         if (_minCancellationTime > MAX_TIME_TO_EXPIRATION || _minCancellationTime < MIN_TIME_TO_EXPIRATION) {
             revert TradeStorage_InvalidExecutionTime();
         }
@@ -92,7 +92,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
 
     function setFees(uint64 _liquidationFee, uint64 _positionFee, uint64 _adlFee, uint64 _feeForExecution)
         external
-        onlyConfigurator(address(market))
+        onlyRoles(1 << 2)
     {
         Position.validateFees(_liquidationFee, _positionFee, _adlFee, _feeForExecution);
         liquidationFee = _liquidationFee;
@@ -102,7 +102,7 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         emit FeesSet(_liquidationFee, _positionFee);
     }
 
-    function updatePriceFeed(IPriceFeed _priceFeed) external onlyAdmin {
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyOwner {
         priceFeed = _priceFeed;
     }
 
@@ -111,19 +111,19 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
      */
 
     /// @dev Adds Order to EnumerableSetLib
-    function createOrderRequest(Position.Request calldata _request) external onlyRouter {
+    function createOrderRequest(Position.Request calldata _request) external onlyRoles(1 << 3) {
         Execution.createOrderRequest(_request, _request.input.isLimit ? limitOrderKeys : marketOrderKeys);
     }
 
-    function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyPositionManager {
+    function cancelOrderRequest(bytes32 _orderKey, bool _isLimit) external onlyRoles(1 << 1) {
         _deleteOrder(_orderKey, _isLimit);
     }
 
-    function setStopLoss(bytes32 _stopLossKey, bytes32 _requestKey) external onlyRouter {
+    function setStopLoss(bytes32 _stopLossKey, bytes32 _requestKey) external onlyRoles(1 << 3) {
         orders[_requestKey].stopLossKey = _stopLossKey;
     }
 
-    function setTakeProfit(bytes32 _takeProfitKey, bytes32 _requestKey) external onlyRouter {
+    function setTakeProfit(bytes32 _takeProfitKey, bytes32 _requestKey) external onlyRoles(1 << 3) {
         orders[_requestKey].takeProfitKey = _takeProfitKey;
     }
 
@@ -137,36 +137,29 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
     /// Called by keepers --> Routes the execution down the correct path.
     function executePositionRequest(bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
         external
-        onlyPositionManager
+        onlyRoles(1 << 1)
         nonReentrant
         returns (Execution.FeeState memory feeState, Position.Request memory request)
     {
         return tradeEngine.executePositionRequest(
-            market,
-            vault,
-            priceFeed,
-            IPositionManager(msg.sender),
-            referralStorage,
-            _orderKey,
-            _requestKey,
-            _feeReceiver
+            vault, priceFeed, IPositionManager(msg.sender), referralStorage, _orderKey, _requestKey, _feeReceiver
         );
     }
 
     function liquidatePosition(bytes32 _positionKey, bytes32 _requestKey, address _liquidator)
         external
-        onlyPositionManager
+        onlyRoles(1 << 1)
         nonReentrant
     {
-        tradeEngine.liquidatePosition(market, vault, referralStorage, priceFeed, _positionKey, _requestKey, _liquidator);
+        tradeEngine.liquidatePosition(vault, referralStorage, priceFeed, _positionKey, _requestKey, _liquidator);
     }
 
     function executeAdl(bytes32 _positionKey, bytes32 _requestKey, address _feeReceiver)
         external
-        onlyPositionManager
+        onlyRoles(1 << 1)
         nonReentrant
     {
-        tradeEngine.executeAdl(market, vault, referralStorage, priceFeed, _positionKey, _requestKey, _feeReceiver);
+        tradeEngine.executeAdl(vault, referralStorage, priceFeed, _positionKey, _requestKey, _feeReceiver);
     }
 
     /**
@@ -204,6 +197,10 @@ contract TradeStorage is ITradeStorage, RoleValidation, ReentrancyGuard {
         if (!success) revert TradeStorage_OrderRemovalFailed();
         delete orders[_orderKey];
         emit OrderRequestCancelled(_orderKey);
+    }
+
+    function _isCallback() private view {
+        if (msg.sender != address(this)) revert TradeStorage_AccessDenied();
     }
 
     /**

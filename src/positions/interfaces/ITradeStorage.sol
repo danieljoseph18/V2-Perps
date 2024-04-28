@@ -19,6 +19,7 @@ interface ITradeStorage {
     error TradeStorage_OrderRemovalFailed();
     error TradeStorage_PositionRemovalFailed();
     error TradeStorage_InvalidExecutionTime();
+    error TradeStorage_AccessDenied();
 
     function initialize(
         ITradeEngine _tradeEngine,

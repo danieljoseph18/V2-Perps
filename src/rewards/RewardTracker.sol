@@ -7,11 +7,11 @@ import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IFeeDistributor} from "./interfaces/IFeeDistributor.sol";
 import {IRewardTracker} from "./interfaces/IRewardTracker.sol";
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ILiquidityLocker} from "./interfaces/ILiquidityLocker.sol";
 
-contract RewardTracker is IERC20, ReentrancyGuard, IRewardTracker, RoleValidation {
+contract RewardTracker is IERC20, ReentrancyGuard, IRewardTracker, OwnableRoles {
     using SafeTransferLib for IERC20;
 
     uint256 public constant BASIS_POINTS_DIVISOR = 10000;
@@ -48,9 +48,8 @@ contract RewardTracker is IERC20, ReentrancyGuard, IRewardTracker, RoleValidatio
     bool public inPrivateClaimingMode;
     mapping(address => bool) public isHandler;
 
-    constructor(IMarket _market, string memory _name, string memory _symbol, address _roleStorage)
-        RoleValidation(_roleStorage)
-    {
+    constructor(IMarket _market, string memory _name, string memory _symbol) {
+        _initializeOwner(msg.sender);
         market = _market;
         name = _name;
         symbol = _symbol;
@@ -59,10 +58,7 @@ contract RewardTracker is IERC20, ReentrancyGuard, IRewardTracker, RoleValidatio
     /**
      * =============================== Setter Functions ===============================
      */
-    function initialize(address _depositToken, address _distributor, address _liquidityLocker)
-        external
-        onlyMarketFactory
-    {
+    function initialize(address _depositToken, address _distributor, address _liquidityLocker) external onlyOwner {
         if (isInitialized) revert RewardTracker_AlreadyInitialized();
         isInitialized = true;
         depositToken = _depositToken;
@@ -70,19 +66,19 @@ contract RewardTracker is IERC20, ReentrancyGuard, IRewardTracker, RoleValidatio
         liquidityLocker = ILiquidityLocker(_liquidityLocker);
     }
 
-    function setInPrivateTransferMode(bool _inPrivateTransferMode) external onlyAdmin {
+    function setInPrivateTransferMode(bool _inPrivateTransferMode) external onlyOwner {
         inPrivateTransferMode = _inPrivateTransferMode;
     }
 
-    function setInPrivateStakingMode(bool _inPrivateStakingMode) external onlyAdmin {
+    function setInPrivateStakingMode(bool _inPrivateStakingMode) external onlyOwner {
         inPrivateStakingMode = _inPrivateStakingMode;
     }
 
-    function setInPrivateClaimingMode(bool _inPrivateClaimingMode) external onlyAdmin {
+    function setInPrivateClaimingMode(bool _inPrivateClaimingMode) external onlyOwner {
         inPrivateClaimingMode = _inPrivateClaimingMode;
     }
 
-    function setHandler(address _handler, bool _isActive) external onlyAdmin {
+    function setHandler(address _handler, bool _isActive) external onlyOwner {
         isHandler[_handler] = _isActive;
     }
 

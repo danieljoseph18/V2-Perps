@@ -43,6 +43,27 @@ library Funding {
     }
 
     /**
+     * @dev Returns the current funding rate given current market conditions.
+     */
+    function getCurrentFundingRate(IMarket market, string calldata _ticker) public view returns (int64) {
+        // example:
+        //  - fundingRate         = 0
+        //  - velocity            = 0.0025
+        //  - timeDelta           = 29,000s
+        //  - maxFundingVelocity  = 0.025 (2.5%)
+        //  - skew                = 300
+        //  - skewScale           = 10,000
+        //
+        // currentFundingRate = fundingRate + velocity * (timeDelta / secondsInDay)
+        // currentFundingRate = 0 + 0.0025 * (29,000 / 86,400)
+        //                    = 0 + 0.0025 * 0.33564815
+        //                    = 0.00083912
+        (int64 fundingRate, int64 fundingRateVelocity) = MarketUtils.getFundingRates(market, _ticker);
+        return fundingRate
+            + (fundingRateVelocity * _getProportionalFundingElapsed(market, _ticker) / int64(SIGNED_PRECISION));
+    }
+
+    /**
      * ============================== Private Functions ==============================
      */
     function _recompute(IMarket market, string calldata _ticker, uint256 _indexPrice)
@@ -94,7 +115,7 @@ library Funding {
         view
         returns (int64 fundingRate, int256 unrecordedFunding)
     {
-        fundingRate = _getCurrentFundingRate(market, _ticker);
+        fundingRate = getCurrentFundingRate(market, _ticker);
         (int256 storedFundingRate,) = MarketUtils.getFundingRates(market, _ticker);
         // Minus sign is needed as funding flows in the opposite direction of the skew
         // Essentially taking an average, where Signed Precision == units
@@ -103,27 +124,6 @@ library Funding {
         unrecordedFunding = avgFundingRate.mulDivSigned(
             _getProportionalFundingElapsed(market, _ticker), SIGNED_PRECISION
         ).mulDivSigned(_indexPrice.toInt256(), SIGNED_PRECISION);
-    }
-
-    /**
-     * @dev Returns the current funding rate given current market conditions.
-     */
-    function _getCurrentFundingRate(IMarket market, string calldata _ticker) private view returns (int64) {
-        // example:
-        //  - fundingRate         = 0
-        //  - velocity            = 0.0025
-        //  - timeDelta           = 29,000s
-        //  - maxFundingVelocity  = 0.025 (2.5%)
-        //  - skew                = 300
-        //  - skewScale           = 10,000
-        //
-        // currentFundingRate = fundingRate + velocity * (timeDelta / secondsInDay)
-        // currentFundingRate = 0 + 0.0025 * (29,000 / 86,400)
-        //                    = 0 + 0.0025 * 0.33564815
-        //                    = 0.00083912
-        (int64 fundingRate, int64 fundingRateVelocity) = MarketUtils.getFundingRates(market, _ticker);
-        return fundingRate
-            + (fundingRateVelocity * _getProportionalFundingElapsed(market, _ticker) / int64(SIGNED_PRECISION));
     }
 
     function _calculateSkewUsd(IMarket market, string calldata _ticker) private view returns (int256 skewUsd) {

@@ -6,7 +6,7 @@ pragma solidity 0.8.23;
 
 import {EnumerableSetLib} from "./EnumerableSetLib.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
-import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {Pool} from "../markets/Pool.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 
 /**
@@ -33,7 +33,7 @@ import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
  * The following new map types are introducted:
  *
  * - `bytes32 -> DeployParams` (`DeployParamsMap`)
- * - `bytes32 -> IMarket.Input` (`MarketRequestMap`)
+ * - `bytes32 -> Pool.Input` (`MarketRequestMap`)
  * - `bytes32 -> IPriceFeed.RequestData` (`PriceRequestMap`)
  *
  * [WARNING]
@@ -169,14 +169,14 @@ library EnumerableMap {
      */
     struct MarketRequestMap {
         EnumerableSetLib.Bytes32Set _keys;
-        mapping(bytes32 => IMarket.Input) _values;
+        mapping(bytes32 => Pool.Input) _values;
     }
 
     /**
      * @dev Adds a key-value pair to a map, or updates the value for an existing
      * key. O(1).
      */
-    function set(MarketRequestMap storage map, bytes32 key, IMarket.Input memory value) internal returns (bool) {
+    function set(MarketRequestMap storage map, bytes32 key, Pool.Input memory value) internal returns (bool) {
         map._values[key] = value;
         return map._keys.add(key);
     }
@@ -213,7 +213,7 @@ library EnumerableMap {
      *
      * - `index` must be strictly less than {length}.
      */
-    function at(MarketRequestMap storage map, uint256 index) internal view returns (bytes32, IMarket.Input memory) {
+    function at(MarketRequestMap storage map, uint256 index) internal view returns (bytes32, Pool.Input memory) {
         bytes32 key = map._keys.at(index);
         return (key, map._values[key]);
     }
@@ -222,8 +222,8 @@ library EnumerableMap {
      * @dev Tries to returns the value associated with `key`. O(1).
      * Does not revert if `key` is not in the map.
      */
-    function tryGet(MarketRequestMap storage map, bytes32 key) internal view returns (bool, IMarket.Input memory) {
-        IMarket.Input memory value = map._values[key];
+    function tryGet(MarketRequestMap storage map, bytes32 key) internal view returns (bool, Pool.Input memory) {
+        Pool.Input memory value = map._values[key];
         if (value.owner == address(0)) {
             return (contains(map, key), value);
         } else {
@@ -238,8 +238,8 @@ library EnumerableMap {
      *
      * - `key` must be in the map.
      */
-    function get(MarketRequestMap storage map, bytes32 key) internal view returns (IMarket.Input memory) {
-        IMarket.Input memory value = map._values[key];
+    function get(MarketRequestMap storage map, bytes32 key) internal view returns (Pool.Input memory) {
+        Pool.Input memory value = map._values[key];
         if (value.owner == address(0) && !contains(map, key)) {
             revert EnumerableMapNonexistentKey(key);
         }

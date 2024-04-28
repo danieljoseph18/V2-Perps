@@ -2,6 +2,7 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 import {Position} from "./Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Funding} from "../libraries/Funding.sol";
@@ -17,13 +18,13 @@ import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 
 // Library for Handling Trade related logic
 library Execution {
     using Casting for uint256;
     using Casting for int256;
     using MathUtils for uint256;
-    using MathUtils for int256;
     using Units for uint256;
     using Units for int256;
     using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
@@ -39,12 +40,12 @@ library Execution {
     error Execution_PositionNotProfitable();
     error Execution_InvalidPosition();
     error Execution_InvalidExecutor();
-    error Execution_InvalidRequestTimestamp();
     error Execution_StopLossAlreadySet();
     error Execution_TakeProfitAlreadySet();
     error Execution_OrderAlreadyExists();
     error Execution_OrderAdditionFailed();
     error Execution_ZeroFees();
+    error Execution_AccessDenied();
 
     /**
      * ========================= Data Structures =========================
@@ -86,21 +87,17 @@ library Execution {
     /**
      * ========================= Construction Functions =========================
      */
-    /**
-     * audit - probably need additional checks for size delta and collateral delta
-     * 1. If create new position --> leverage should be 1-100x
-     * 2. if increase position --> leverage should be 1-100x
-     * 3. if decrease position --> leverage should be 1-100x
-     * 4. if edit collateral --> leverage should be 1-100x after edit
-     */
     function initiate(
         ITradeStorage tradeStorage,
         IMarket market,
+        IVault vault,
         IPriceFeed priceFeed,
         bytes32 _orderKey,
         bytes32 _requestKey,
         address _feeReceiver
-    ) internal view returns (Prices memory prices, Position.Request memory request) {
+    ) external view returns (Prices memory prices, Position.Request memory request) {
+        // Check caller is TradeEngine for Market
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != 1 << 5) revert Execution_AccessDenied();
         // Fetch and validate request from key
         request = tradeStorage.getOrder(_orderKey);
         // Validate the request before continuing execution
@@ -121,12 +118,13 @@ library Execution {
 
         if (request.input.sizeDelta != 0) {
             // Execute Price Impact
-            (prices.impactedPrice, prices.priceImpactUsd) = PriceImpact.execute(market, request, prices);
+            (prices.impactedPrice, prices.priceImpactUsd) = PriceImpact.execute(market, vault, request, prices);
 
             // Validate the available allocation if increase
             if (request.input.isIncrease) {
                 MarketUtils.validateAllocation(
                     market,
+                    vault,
                     request.input.ticker,
                     request.input.sizeDelta,
                     prices.indexPrice,
@@ -140,20 +138,19 @@ library Execution {
 
     function initiateAdlOrder(
         IMarket market,
-        ITradeStorage tradeStorage,
+        IVault vault,
         IPriceFeed priceFeed,
-        bytes32 _positionKey,
+        Position.Data memory _position,
         uint48 _requestTimestamp,
         address _feeReceiver
-    ) internal view returns (Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) {
-        // Check the position in question is active
-        Position.Data memory position = tradeStorage.getPosition(_positionKey);
-        if (position.size == 0) revert Execution_PositionNotActive();
+    ) external view returns (Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) {
+        // Check caller is TradeEngine for Market
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != 1 << 5) revert Execution_AccessDenied();
         // Get current MarketUtils and token data
-        prices = getTokenPrices(priceFeed, position.ticker, _requestTimestamp, position.isLong, false);
+        prices = getTokenPrices(priceFeed, _position.ticker, _requestTimestamp, _position.isLong, false);
 
         // Get starting PNL Factor
-        startingPnlFactor = _getPnlFactor(market, prices, position.ticker, position.isLong);
+        startingPnlFactor = _getPnlFactor(market, vault, prices, _position.ticker, _position.isLong);
         uint256 absPnlFactor = startingPnlFactor.abs();
 
         // Check the PNL Factor is greater than the max PNL Factor
@@ -163,25 +160,23 @@ library Execution {
 
         // Check the Position being ADLd is profitable
         int256 pnl = Position.getPositionPnl(
-            position.size, position.weightedAvgEntryPrice, prices.indexPrice, prices.indexBaseUnit, position.isLong
+            _position.size, _position.weightedAvgEntryPrice, prices.indexPrice, prices.indexBaseUnit, _position.isLong
         );
 
         if (pnl < 0) revert Execution_PositionNotProfitable();
 
         // Calculate the Percentage to ADL
-        uint256 adlPercentage = Position.calculateAdlPercentage(absPnlFactor, pnl, position.size);
+        uint256 adlPercentage = Position.calculateAdlPercentage(absPnlFactor, pnl, _position.size);
         // Execute the ADL impact
-        uint256 poolUsd = MarketUtils.getPoolBalanceUsd(
-            market, position.ticker, prices.collateralPrice, prices.collateralBaseUnit, position.isLong
-        );
+        uint256 poolUsd = _getPoolUsd(market, vault, prices, _position.ticker, _position.isLong);
         prices.impactedPrice = _executeAdlImpact(
-            prices.indexPrice, position.weightedAvgEntryPrice, pnl.abs(), poolUsd, absPnlFactor, position.isLong
+            prices.indexPrice, _position.weightedAvgEntryPrice, pnl.abs(), poolUsd, absPnlFactor, _position.isLong
         );
 
         prices.priceImpactUsd = 0;
 
         // Construct an ADL Order
-        params = _createAdlOrder(position, prices, adlPercentage, _feeReceiver);
+        params = _createAdlOrder(_position, prices, adlPercentage, _feeReceiver);
     }
 
     /**
@@ -253,7 +248,7 @@ library Execution {
         uint256 remainingCollateralUsd = position.collateral;
         // Check if the Decrease puts the position below the min collateral threshold
         if (remainingCollateralUsd < _minCollateralUsd) revert Execution_MinCollateralThreshold();
-        if (_checkIsLiquidatable(market, position, _prices)) revert Execution_LiquidatablePosition();
+        if (checkIsLiquidatable(market, position, _prices)) revert Execution_LiquidatablePosition();
         // Check the Leverage
         Position.checkLeverage(market, _params.request.input.ticker, position.size, remainingCollateralUsd);
     }
@@ -415,13 +410,14 @@ library Execution {
      */
     function validateAdl(
         IMarket market,
+        IVault vault,
         Prices memory _prices,
         int256 _startingPnlFactor,
         string memory _ticker,
         bool _isLong
     ) internal view {
         // Get the new PNL to pool ratio
-        int256 newPnlFactor = _getPnlFactor(market, _prices, _ticker, _isLong);
+        int256 newPnlFactor = _getPnlFactor(market, vault, _prices, _ticker, _isLong);
         // PNL to pool has reduced
         if (newPnlFactor >= _startingPnlFactor) revert Execution_PNLFactorNotReduced();
     }
@@ -492,6 +488,33 @@ library Execution {
         prices.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexTicker);
     }
 
+    function checkIsLiquidatable(IMarket market, Position.Data memory _position, Prices memory _prices)
+        public
+        view
+        returns (bool isLiquidatable)
+    {
+        // Get the PNL for the position
+        int256 pnl = Position.getPositionPnl(
+            _position.size, _position.weightedAvgEntryPrice, _prices.indexPrice, _prices.indexBaseUnit, _position.isLong
+        );
+
+        // Get the Borrow Fees Owed in USD
+        uint256 borrowingFeesUsd = Position.getTotalBorrowFeesUsd(market, _position);
+
+        // Get the Funding Fees Owed in USD
+        int256 fundingFeesUsd = Position.getTotalFundingFees(market, _position, _prices.indexPrice);
+
+        // Calculate the total losses
+        int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd;
+
+        // Check if the losses exceed the collateral value
+        if (losses < 0 && losses.abs() > _position.collateral) {
+            isLiquidatable = true;
+        } else {
+            isLiquidatable = false;
+        }
+    }
+
     /**
      * ========================= Private Helper Functions =========================
      */
@@ -523,33 +546,6 @@ library Execution {
             }
         }
         return _position;
-    }
-
-    function _checkIsLiquidatable(IMarket market, Position.Data memory _position, Prices memory _prices)
-        public
-        view
-        returns (bool isLiquidatable)
-    {
-        // Get the PNL for the position
-        int256 pnl = Position.getPositionPnl(
-            _position.size, _position.weightedAvgEntryPrice, _prices.indexPrice, _prices.indexBaseUnit, _position.isLong
-        );
-
-        // Get the Borrow Fees Owed in USD
-        uint256 borrowingFeesUsd = Position.getTotalBorrowFeesUsd(market, _position);
-
-        // Get the Funding Fees Owed in USD
-        int256 fundingFeesUsd = Position.getTotalFundingFees(market, _position, _prices.indexPrice);
-
-        // Calculate the total losses
-        int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd;
-
-        // Check if the losses exceed the collateral value
-        if (losses < 0 && losses.abs() > _position.collateral) {
-            isLiquidatable = true;
-        } else {
-            isLiquidatable = false;
-        }
     }
 
     function _createAdlOrder(
@@ -807,7 +803,7 @@ library Execution {
             ? _averageEntryPrice + (_averageEntryPrice.percentage(MIN_PROFIT_PERCENTAGE))
             : _averageEntryPrice - (_averageEntryPrice.percentage(MIN_PROFIT_PERCENTAGE));
         // Apply the pool impact to the scale of the price
-        uint256 priceDelta = (_indexPrice.delta(minProfitPrice) * poolImpact) / PRECISION;
+        uint256 priceDelta = (_indexPrice.absDiff(minProfitPrice) * poolImpact) / PRECISION;
         // Apply the price delta to the index price
         if (_isLong) impactedPrice = _indexPrice - priceDelta;
         else impactedPrice = _indexPrice + priceDelta;
@@ -837,13 +833,14 @@ library Execution {
     /**
      * Extrapolated into an private function to prevent STD Errors
      */
-    function _getPnlFactor(IMarket market, Prices memory _prices, string memory _ticker, bool _isLong)
+    function _getPnlFactor(IMarket market, IVault vault, Prices memory _prices, string memory _ticker, bool _isLong)
         private
         view
         returns (int256 pnlFactor)
     {
         pnlFactor = MarketUtils.getPnlFactor(
             market,
+            vault,
             _ticker,
             _prices.indexPrice,
             _prices.indexBaseUnit,
@@ -861,6 +858,17 @@ library Execution {
     function _checkLimitPrice(uint256 _indexPrice, uint256 _limitPrice, bool _triggerAbove) private pure {
         bool limitPriceCondition = _triggerAbove ? _indexPrice >= _limitPrice : _indexPrice <= _limitPrice;
         if (!limitPriceCondition) revert Execution_LimitPriceNotMet(_limitPrice, _indexPrice);
+    }
+
+    // Internal to prevent STD Err
+    function _getPoolUsd(IMarket market, IVault vault, Prices memory _prices, string memory _ticker, bool _isLong)
+        private
+        view
+        returns (uint256 poolUsd)
+    {
+        return MarketUtils.getPoolBalanceUsd(
+            market, vault, _ticker, _prices.collateralPrice, _prices.collateralBaseUnit, _isLong
+        );
     }
 
     function _calculateAmountAfterFees(

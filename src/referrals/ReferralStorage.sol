@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
+import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
+import {ITradeEngine} from "../positions/interfaces/ITradeEngine.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 
-contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
+contract ReferralStorage is OwnableRoles, IReferralStorage, ReentrancyGuard {
     using SafeTransferLib for IERC20;
 
     IWETH weth;
+    IMarketFactory factory;
 
     uint256 public constant PRECISION = 1e18;
     address public longToken;
@@ -32,12 +35,12 @@ contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
         _;
     }
 
-    constructor(address _longToken, address _shortToken, address _weth, address _roleStorage)
-        RoleValidation(_roleStorage)
-    {
+    constructor(address _longToken, address _shortToken, address _weth, address _marketFactory) {
+        _initializeOwner(msg.sender);
         longToken = _longToken;
         shortToken = _shortToken;
         weth = IWETH(_weth);
+        factory = IMarketFactory(_marketFactory);
     }
 
     // Wrap any ETH sent to the contract into WETH
@@ -45,23 +48,23 @@ contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
         IWETH(weth).deposit{value: msg.value}();
     }
 
-    function setHandler(address _handler, bool _isActive) external onlyAdmin {
+    function setHandler(address _handler, bool _isActive) external onlyOwner {
         isHandler[_handler] = _isActive;
         emit SetHandler(_handler, _isActive);
     }
 
-    function setTier(uint256 _tierId, uint256 _totalDiscount) external override onlyAdmin {
+    function setTier(uint256 _tierId, uint256 _totalDiscount) external override onlyOwner {
         if (_totalDiscount > PRECISION) revert ReferralStorage_InvalidTotalDiscount();
         tiers[_tierId] = _totalDiscount;
         emit SetTier(_tierId, _totalDiscount);
     }
 
-    function setReferrerTier(address _referrer, uint256 _tierId) external override onlyAdmin {
+    function setReferrerTier(address _referrer, uint256 _tierId) external override onlyOwner {
         referrerTiers[_referrer] = _tierId;
         emit SetReferrerTier(_referrer, _tierId);
     }
 
-    function setTraderReferralCode(address _account, bytes32 _code) external override onlyAdmin {
+    function setTraderReferralCode(address _account, bytes32 _code) external override onlyOwner {
         _setTraderReferralCode(_account, _code);
     }
 
@@ -77,11 +80,14 @@ contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
         emit RegisterCode(msg.sender, _code);
     }
 
-    function accumulateAffiliateRewards(address _market, address _account, bool _isLongToken, uint256 _amount)
-        external
-        onlyTradeEngine(_market)
-    {
+    function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount) external {
+        // Get the market from the caller in Market Factory
+        address market = address(ITradeEngine(msg.sender).market());
+        // If no market associated with caller, revert
+        if (!factory.isMarket(market)) revert ReferralStorage_InvalidMarket();
+        // accumulate affiliate rewards
         affiliateRewards[_account][_isLongToken] += _amount;
+        // fire event
         emit AffiliateRewardsAccumulated(_account, _isLongToken, _amount);
     }
 
@@ -109,7 +115,7 @@ contract ReferralStorage is RoleValidation, IReferralStorage, ReentrancyGuard {
         emit SetCodeOwner(msg.sender, _newAccount, _code);
     }
 
-    function govSetCodeOwner(bytes32 _code, address _newAccount) external override onlyAdmin {
+    function govSetCodeOwner(bytes32 _code, address _newAccount) external override onlyOwner {
         if (_code == bytes32(0)) revert ReferralStorage_InvalidCode();
 
         codeOwners[_code] = _newAccount;

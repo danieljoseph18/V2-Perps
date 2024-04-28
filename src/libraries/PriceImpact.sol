@@ -2,6 +2,7 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 import {Position} from "../positions/Position.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Casting} from "./Casting.sol";
@@ -48,8 +49,8 @@ library PriceImpact {
      * 1. How the action affects the skew of the market. Positions should be punished for increasing, and rewarded for decreasing.
      * 2. The liquidity of the market. The more illiquid, the higher the price impact will be.
      */
-    function execute(IMarket market, Position.Request memory _request, Execution.Prices memory _prices)
-        internal
+    function execute(IMarket market, IVault vault, Position.Request memory _request, Execution.Prices memory _prices)
+        external
         view
         returns (uint256 impactedPrice, int256 priceImpactUsd)
     {
@@ -70,6 +71,7 @@ library PriceImpact {
         if (_request.input.isLong) {
             state.availableOi = MarketUtils.getAvailableOiUsd(
                 market,
+                vault,
                 _request.input.ticker,
                 _prices.indexPrice,
                 _prices.longMarketTokenPrice,
@@ -79,6 +81,7 @@ library PriceImpact {
         } else {
             state.availableOi = MarketUtils.getAvailableOiUsd(
                 market,
+                vault,
                 _request.input.ticker,
                 _prices.indexPrice,
                 _prices.shortMarketTokenPrice,
@@ -271,7 +274,7 @@ library PriceImpact {
     }
 
     function _checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) private pure {
-        uint256 impactDelta = _signedPrice.delta(_impactedPrice);
+        uint256 impactDelta = _signedPrice.absDiff(_impactedPrice);
         uint256 slippage = PRICE_PRECISION.percentage(impactDelta, _signedPrice);
 
         if (slippage > _maxSlippage) {

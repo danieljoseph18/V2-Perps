@@ -6,11 +6,12 @@ import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IFeeDistributor} from "./interfaces/IFeeDistributor.sol";
 import {IRewardTracker} from "./interfaces/IRewardTracker.sol";
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 
-contract FeeDistributor is ReentrancyGuard, RoleValidation {
+contract FeeDistributor is ReentrancyGuard, OwnableRoles {
     using SafeTransferLib for IERC20;
 
     error FeeDistributor_InvalidMarket();
@@ -36,9 +37,8 @@ contract FeeDistributor is ReentrancyGuard, RoleValidation {
 
     mapping(IMarket market => FeeParams) public accumulatedFees;
 
-    constructor(address _marketFactory, address _weth, address _usdc, address _roleStorage)
-        RoleValidation(_roleStorage)
-    {
+    constructor(address _marketFactory, address _weth, address _usdc) {
+        _initializeOwner(msg.sender);
         marketFactory = IMarketFactory(_marketFactory);
         weth = _weth;
         usdc = _usdc;
@@ -73,7 +73,8 @@ contract FeeDistributor is ReentrancyGuard, RoleValidation {
     }
 
     function distribute(IMarket market) external returns (uint256 wethAmount, uint256 usdcAmount) {
-        if (msg.sender != address(market.rewardTracker())) revert FeeDistributor_InvalidRewardTracker();
+        IVault vault = market.VAULT();
+        if (msg.sender != address(vault.rewardTracker())) revert FeeDistributor_InvalidRewardTracker();
         (wethAmount, usdcAmount) = pendingRewards(market);
         if (wethAmount == 0 && usdcAmount == 0) return (wethAmount, usdcAmount);
 

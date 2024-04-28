@@ -41,7 +41,7 @@ library Gas {
         }
         uint256 estimatedFee;
         (estimatedFee, priceUpdateFee) =
-            _estimateExecutionFee(priceFeed, positionManager, _action, _hasPnlRequest, _isLimit);
+            estimateExecutionFee(priceFeed, positionManager, _action, _hasPnlRequest, _isLimit);
         if (_executionFee < estimatedFee + priceUpdateFee) {
             revert Gas_InsufficientExecutionFee(_executionFee, estimatedFee);
         }
@@ -57,20 +57,20 @@ library Gas {
         amountForExecutor = (_executionFee - refundAmount).percentage(CANCELLATION_REWARD);
     }
 
-    /**
-     * ============================== Private Functions ==============================
-     */
-    function _estimateExecutionFee(
+    function estimateExecutionFee(
         IPriceFeed priceFeed,
         IPositionManager positionManager,
         Action _action,
         bool _hasPnlRequest,
         bool _isLimit
-    ) private view returns (uint256 estimatedCost, uint256 priceUpdateCost) {
+    ) public view returns (uint256 estimatedCost, uint256 priceUpdateCost) {
         uint256 actionCost = _getActionCost(positionManager, _action);
         priceUpdateCost = _getPriceUpdateCost(priceFeed, _hasPnlRequest, _isLimit);
         estimatedCost = (actionCost + priceUpdateCost).percentage(BUFFER_PERCENTAGE);
     }
+    /**
+     * ============================== Private Functions ==============================
+     */
 
     function _getActionCost(IPositionManager positionManager, Action _action) private view returns (uint256) {
         if (_action == Action.DEPOSIT) {

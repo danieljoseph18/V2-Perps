@@ -6,7 +6,7 @@ import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/l
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
 import {ISwapRouter} from "./interfaces/ISwapRouter.sol";
@@ -17,7 +17,7 @@ import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {Oracle} from "./Oracle.sol";
 
-contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFeed {
+contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
     using EnumerableMap for EnumerableMap.PriceRequestMap;
@@ -100,9 +100,9 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         address _uniV3Factory,
         uint64 _subId,
         bytes32 _donId,
-        address _router,
-        address _roleStorage
-    ) FunctionsClient(_router) RoleValidation(_roleStorage) {
+        address _router
+    ) FunctionsClient(_router) {
+        _initializeOwner(msg.sender);
         marketFactory = IMarketFactory(_marketFactory);
         WETH = _weth;
         LINK = _link;
@@ -120,7 +120,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         address _nativeLinkPriceFeed,
         address _sequencerUptimeFeed,
         uint48 _timeToExpiration
-    ) external onlyAdmin {
+    ) external onlyOwner {
         if (isInitialized) revert PriceFeed_AlreadyInitialized();
         gasOverhead = _gasOverhead;
         callbackGasLimit = _callbackGasLimit;
@@ -140,7 +140,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         uint256 _premiumFee,
         uint64 _settlementFee,
         address _nativeLinkPriceFeed
-    ) external onlyAdmin {
+    ) external onlyOwner {
         subscriptionId = _subId;
         donId = _donId;
         gasOverhead = _gasOverhead;
@@ -152,7 +152,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
 
     function setJavascriptSourceCode(string memory _priceUpdateSource, string memory _cumulativePnlSource)
         external
-        onlyAdmin
+        onlyOwner
     {
         priceUpdateSource = _priceUpdateSource;
         cumulativePnlSource = _cumulativePnlSource;
@@ -160,7 +160,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
 
     function supportAsset(string memory _ticker, TokenData memory _tokenData, bytes32 _pythId)
         external
-        onlyMarketFactory
+        onlyRoles(1 << 0)
     {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (assetIds.contains(assetId)) return; // Return if already supported
@@ -174,7 +174,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     }
 
     /// @dev - No need to unsupport Pyth Ids --> save gas if asset is re-supported
-    function unsupportAsset(string memory _ticker) external onlyAdmin {
+    function unsupportAsset(string memory _ticker) external onlyOwner {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (!assetIds.contains(assetId)) return; // Return if not supported
         bool success = assetIds.remove(assetId);
@@ -183,15 +183,15 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         emit SupportRemoved(_ticker);
     }
 
-    function updateSequencerUptimeFeed(address _sequencerUptimeFeed) external onlyAdmin {
+    function updateSequencerUptimeFeed(address _sequencerUptimeFeed) external onlyOwner {
         sequencerUptimeFeed = _sequencerUptimeFeed;
     }
 
-    function setTimeToExpiration(uint48 _timeToExpiration) external onlyAdmin {
+    function setTimeToExpiration(uint48 _timeToExpiration) external onlyOwner {
         timeToExpiration = _timeToExpiration;
     }
 
-    function clearInvalidRequest(bytes32 _requestId) external onlyAdmin {
+    function clearInvalidRequest(bytes32 _requestId) external onlyOwner {
         if (requestData.contains(_requestId)) {
             if (!requestData.remove(_requestId)) revert PriceFeed_FailedToClearRequest();
         }
@@ -205,7 +205,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     function requestPriceUpdate(string[] calldata args, address _requester)
         external
         payable
-        onlyRouter
+        onlyRoles(1 << 3)
         nonReentrant
         returns (bytes32 requestKey)
     {
@@ -236,7 +236,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
     function requestCumulativeMarketPnl(IMarket market, address _requester)
         external
         payable
-        onlyRouter
+        onlyRoles(1 << 3)
         nonReentrant
         returns (bytes32 requestKey)
     {
@@ -303,7 +303,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, RoleValidation, IPriceFe
         emit Response(requestId, data, response, err);
     }
 
-    function settleEthForLink() external onlyAdmin nonReentrant {
+    function settleEthForLink() external onlyOwner nonReentrant {
         // Get the amount of Ether held within the contract
         uint256 ethBalance = address(this).balance;
         if (ethBalance == 0) revert PriceFeed_ZeroBalance();

@@ -2,6 +2,7 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "./MathUtils.sol";
 import {Casting} from "./Casting.sol";
@@ -19,6 +20,7 @@ library Borrowing {
 
     function updateState(
         IMarket market,
+        IVault vault,
         Pool.Storage storage pool,
         string calldata _ticker,
         uint256 _collateralPrice,
@@ -29,12 +31,12 @@ library Borrowing {
             pool.cumulatives.longCumulativeBorrowFees +=
                 _calculateFeesSinceUpdate(pool.longBorrowingRate, pool.lastUpdate);
             pool.longBorrowingRate =
-                uint64(_calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, true));
+                uint64(_calculateRate(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, true));
         } else {
             pool.cumulatives.shortCumulativeBorrowFees +=
                 _calculateFeesSinceUpdate(pool.shortBorrowingRate, pool.lastUpdate);
             pool.shortBorrowingRate =
-                uint64(_calculateRate(market, _ticker, _collateralPrice, _collateralBaseUnit, false));
+                uint64(_calculateRate(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, false));
         }
     }
 
@@ -122,6 +124,7 @@ library Borrowing {
      */
     function _calculateRate(
         IMarket market,
+        IVault vault,
         string calldata _ticker,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
@@ -130,7 +133,8 @@ library Borrowing {
         // Factor = (open interest usd / max open interest usd)
         uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
 
-        uint256 maxOi = MarketUtils.getMaxOpenInterest(market, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+        uint256 maxOi =
+            MarketUtils.getMaxOpenInterest(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
 
         borrowRatePerDay = market.borrowScale();
 

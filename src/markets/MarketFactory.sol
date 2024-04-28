@@ -2,9 +2,10 @@
 pragma solidity 0.8.23;
 
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
-import {Market, IMarket} from "./Market.sol";
+import {Market} from "./Market.sol";
+import {IMarket} from "./interfaces/IMarket.sol";
 import {FeedRegistryInterface} from "@chainlink/contracts/src/v0.8/interfaces/FeedRegistryInterface.sol";
 import {IUniswapV3Factory} from "../oracle/interfaces/IUniswapV3Factory.sol";
 import {IUniswapV2Factory} from "../oracle/interfaces/IUniswapV2Factory.sol";
@@ -20,7 +21,6 @@ import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {LiquidityLocker} from "../rewards/LiquidityLocker.sol";
 import {TradeEngine} from "../positions/TradeEngine.sol";
 import {TransferStakedTokens} from "../rewards/TransferStakedTokens.sol";
-import {Roles} from "../access/Roles.sol";
 import {Pool} from "./Pool.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 
@@ -32,7 +32,7 @@ import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
  * single asset markets with validated price sources (including reference price) are the lowest risk. Multi asset markets,
  * supporting illiquid assets, with price sources without references for verification are the highest risk.
  */
-contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
+contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     using EnumerableMap for EnumerableMap.DeployParamsMap;
 
     IPriceFeed priceFeed;
@@ -40,6 +40,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     IFeeDistributor feeDistributor;
     IPositionManager positionManager;
     TransferStakedTokens transferStakedTokens;
+    address router;
 
     FeedRegistryInterface private feedRegistry;
     IUniswapV2Factory private uniV2Factory;
@@ -86,7 +87,8 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
     uint256 cumulativeMarketIndex;
     uint256 requestNonce;
 
-    constructor(address _weth, address _usdc, address _roleStorage) RoleValidation(_roleStorage) {
+    constructor(address _weth, address _usdc) {
+        _initializeOwner(msg.sender);
         WETH = _weth;
         USDC = _usdc;
     }
@@ -100,7 +102,7 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         address _feeReceiver,
         uint256 _marketCreationFee,
         uint256 _marketExecutionFee
-    ) external onlyAdmin {
+    ) external onlyOwner {
         if (isInitialized) revert MarketFactory_AlreadyInitialized();
         priceFeed = IPriceFeed(_priceFeed);
         referralStorage = IReferralStorage(_referralStorage);
@@ -117,42 +119,42 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
 
     function setFeedValidators(address _chainlinkFeedRegistry, address _uniV2Factory, address _uniV3Factory)
         external
-        onlyAdmin
+        onlyOwner
     {
         feedRegistry = FeedRegistryInterface(_chainlinkFeedRegistry);
         uniV2Factory = IUniswapV2Factory(_uniV2Factory);
         uniV3Factory = IUniswapV3Factory(_uniV3Factory);
     }
 
-    function setDefaultConfig(Pool.Config memory _defaultConfig) external onlyAdmin {
+    function setDefaultConfig(Pool.Config memory _defaultConfig) external onlyOwner {
         defaultConfig = _defaultConfig;
         emit DefaultConfigSet();
     }
 
-    function updatePriceFeed(IPriceFeed _priceFeed) external onlyAdmin {
+    function updatePriceFeed(IPriceFeed _priceFeed) external onlyOwner {
         priceFeed = _priceFeed;
     }
 
-    function updateMarketFees(uint256 _marketCreationFee, uint256 _marketExecutionFee) external onlyAdmin {
+    function updateMarketFees(uint256 _marketCreationFee, uint256 _marketExecutionFee) external onlyOwner {
         marketCreationFee = _marketCreationFee;
         marketExecutionFee = _marketExecutionFee;
     }
 
-    function updateMerkleRoots(bytes32 _pythMerkleRoot, bytes32 _stablecoinMerkleRoot) external onlyAdmin {
+    function updateMerkleRoots(bytes32 _pythMerkleRoot, bytes32 _stablecoinMerkleRoot) external onlyOwner {
         pythMerkleRoot = _pythMerkleRoot;
         stablecoinMerkleRoot = _stablecoinMerkleRoot;
     }
 
-    function updateFeeDistributor(address _feeDistributor) external onlyAdmin {
+    function updateFeeDistributor(address _feeDistributor) external onlyOwner {
         feeDistributor = IFeeDistributor(_feeDistributor);
     }
 
-    function updatePositionManager(address _positionManager) external onlyAdmin {
+    function updatePositionManager(address _positionManager) external onlyOwner {
         positionManager = IPositionManager(_positionManager);
     }
 
     /// @dev - Function called by the admin to withdraw the fees collected from market creation
-    function withdrawCreationTaxes() external onlyAdmin {
+    function withdrawCreationTaxes() external onlyOwner {
         // Calculate the withdrawable amount (amount not held in escrow for open positions)
         uint256 withdrawableAmount = address(this).balance;
         // Withdrawable amount is the balance minus the fees escrowed to incentivize executors
@@ -199,15 +201,13 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // Users can't execute their own requests
         if (msg.sender == request.owner) revert MarketFactory_SelfExecution();
 
-        /* Validate the Requests Pricing Strategies */
-
         // Reverts if a price wasn't signed.
         try Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp) {}
         catch {
             _deleteInvalidRequest(_requestKey);
             return;
         }
-        /* Create and initiate the market contracts */
+
         _initializeMarketContracts(request);
 
         // Send the Execution Fee to the fulfiller
@@ -240,40 +240,32 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
         // Set Up Price Oracle
         priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythData.id);
         // Create new Market Token
-        Vault vault = new Vault(WETH, USDC, _params.marketTokenName, _params.marketTokenSymbol, address(roleStorage));
+        Vault vault = new Vault(_params.owner, WETH, USDC, _params.marketTokenName, _params.marketTokenSymbol);
         // Create new Market contract
-        IMarket market = new Market(
-            defaultConfig,
-            _params.owner,
-            feeReceiver,
-            address(feeDistributor),
-            WETH,
-            USDC,
-            address(vault),
-            _params.indexTokenTicker,
-            _params.isMultiAsset,
-            address(roleStorage)
+        Market market = new Market(
+            defaultConfig, _params.owner, WETH, USDC, address(vault), _params.indexTokenTicker, _params.isMultiAsset
         );
+        address marketAddress = address(market);
 
         // Create new TradeStorage contract
-        TradeStorage tradeStorage = new TradeStorage(market, vault, referralStorage, priceFeed, address(roleStorage));
+        TradeStorage tradeStorage = new TradeStorage(IMarket(marketAddress), vault, referralStorage, priceFeed);
         // Create new Trade Engine contract
-        TradeEngine tradeEngine = new TradeEngine(tradeStorage, address(roleStorage));
+        TradeEngine tradeEngine = new TradeEngine(tradeStorage, IMarket(marketAddress));
         // Create new Reward Tracker contract
         RewardTracker rewardTracker = new RewardTracker(
-            market,
+            IMarket(marketAddress),
             // Prepend Staked Prefix
             string(abi.encodePacked("Staked ", _params.marketTokenName)),
-            string(abi.encodePacked("s", _params.marketTokenSymbol)),
-            address(roleStorage)
+            string(abi.encodePacked("s", _params.marketTokenSymbol))
         );
         // Deploy LiquidityLocker
         LiquidityLocker liquidityLocker =
-            new LiquidityLocker(address(rewardTracker), address(transferStakedTokens), WETH, USDC, address(roleStorage));
+            new LiquidityLocker(address(rewardTracker), address(transferStakedTokens), WETH, USDC);
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
-        market.initialize(address(tradeStorage), address(rewardTracker), 0.003e18);
+        address tradeStorageAddress = address(tradeStorage);
+        market.initialize(tradeStorageAddress, 0.003e18);
         // Initialize Vault with Market
-        vault.initialize(address(market));
+        vault.initialize(marketAddress, address(feeDistributor), address(rewardTracker), feeReceiver);
         // Initialize TradeStorage with Default values
         tradeStorage.initialize(
             tradeEngine,
@@ -285,24 +277,43 @@ contract MarketFactory is IMarketFactory, RoleValidation, ReentrancyGuard {
             MIN_TIME_TO_EXECUTE
         );
         // Initialize RewardTracker with Default values
-        rewardTracker.initialize(address(vault), address(feeDistributor), address(liquidityLocker));
+        address vaultAddress = address(vault);
+        rewardTracker.initialize(vaultAddress, address(feeDistributor), address(liquidityLocker));
         // Add to Storage
-        isMarket[address(market)] = true;
-        marketsByTicker[_params.indexTokenTicker].push(address(market));
-        markets[cumulativeMarketIndex] = address(market);
+        isMarket[marketAddress] = true;
+        marketsByTicker[_params.indexTokenTicker].push(marketAddress);
+        markets[cumulativeMarketIndex] = marketAddress;
         ++cumulativeMarketIndex;
 
-        // Set Up Roles -> Enable Requester to control Market
-        roleStorage.setMarketRoles(
-            address(market),
-            Roles.MarketRoles(
-                address(tradeStorage), address(tradeEngine), address(market), address(vault), _params.owner
-            )
-        );
-        roleStorage.setMinter(address(vault), address(market));
+        // Set Market's roles (1,2,3,4)
+        OwnableRoles(marketAddress).grantRoles(address(positionManager), 1 << 1);
+        OwnableRoles(marketAddress).grantRoles(_params.owner, 1 << 2);
+        OwnableRoles(marketAddress).grantRoles(router, 1 << 3);
+        OwnableRoles(marketAddress).grantRoles(tradeStorageAddress, 1 << 4);
+        // Transfer ownership to super admin
+        OwnableRoles(marketAddress).transferOwnership(owner());
+
+        // Set Vault's roles (2,4,5)
+        OwnableRoles(vaultAddress).grantRoles(_params.owner, 1 << 2);
+        OwnableRoles(vaultAddress).grantRoles(tradeStorageAddress, 1 << 4);
+        OwnableRoles(vaultAddress).grantRoles(address(tradeEngine), 1 << 5);
+        // Transfer ownership to super admin
+        OwnableRoles(vaultAddress).transferOwnership(owner());
+
+        // Set TradeStorage's roles (1,2,3)
+        OwnableRoles(tradeStorageAddress).grantRoles(address(positionManager), 1 << 1);
+        OwnableRoles(tradeStorageAddress).grantRoles(_params.owner, 1 << 2);
+        OwnableRoles(tradeStorageAddress).grantRoles(router, 1 << 3);
+        // Transfer ownership to super admin
+        OwnableRoles(tradeStorageAddress).transferOwnership(owner());
+
+        // Set TradeEngine's roles (4)
+        OwnableRoles(address(tradeEngine)).grantRoles(tradeStorageAddress, 1 << 4);
+        // Transfer ownership to super admin
+        OwnableRoles(address(tradeEngine)).transferOwnership(owner());
 
         // Fire Event
-        emit MarketCreated(address(market), _params.indexTokenTicker);
+        emit MarketCreated(marketAddress, _params.indexTokenTicker);
     }
 
     function _validateSecondaryStrategy(DeployParams calldata _params) private view {

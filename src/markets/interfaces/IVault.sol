@@ -3,8 +3,10 @@ pragma solidity 0.8.23;
 
 import {IERC20} from "../../tokens/interfaces/IERC20.sol";
 import {IMarket} from "./IMarket.sol";
+import {Pool} from "../Pool.sol";
 import {EnumerableMap} from "../../libraries/EnumerableMap.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
+import {IRewardTracker} from "../../rewards/interfaces/IRewardTracker.sol";
 
 interface IVault is IERC20 {
     // Only used in memory as a cache for updating state
@@ -12,7 +14,7 @@ interface IVault is IERC20 {
     struct ExecuteDeposit {
         IMarket market;
         IVault vault;
-        IMarket.Input deposit;
+        Pool.Input deposit;
         Oracle.Prices longPrices;
         Oracle.Prices shortPrices;
         bytes32 key;
@@ -26,7 +28,7 @@ interface IVault is IERC20 {
     struct ExecuteWithdrawal {
         IMarket market;
         IVault vault;
-        IMarket.Input withdrawal;
+        Pool.Input withdrawal;
         Oracle.Prices longPrices;
         Oracle.Prices shortPrices;
         bytes32 key;
@@ -44,14 +46,17 @@ interface IVault is IERC20 {
         bytes32 indexed key, address indexed account, address indexed token, uint256 amountIn, uint256 amountOut
     );
     event FeesAccumulated(uint256 amount, bool isLong);
+    event FeesWithdrawn(uint256 longFees, uint256 shortFees);
 
     error Vault_AlreadyInitialized();
     error Vault_InvalidETHTransfer();
     error Vault_InsufficientAvailableTokens();
     error Vault_InvalidDeposit();
     error Vault_InvalidWithdrawal();
+    error Vault_AccessDenied();
 
-    function initialize(address _market) external;
+    function initialize(address _market, address _feeDistributor, address _rewardTracker, address _feeReceiver)
+        external;
     function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager) external;
     function executeWithdrawal(ExecuteWithdrawal calldata _params, address _tokenOut, address _positionManager)
         external;
@@ -62,4 +67,10 @@ interface IVault is IERC20 {
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap) external;
     function accumulateFees(uint256 _amount, bool _isLong) external;
     function collateralAmounts(address _user, bool _isLong) external view returns (uint256);
+    function longTokenBalance() external view returns (uint256);
+    function shortTokenBalance() external view returns (uint256);
+    function longTokensReserved() external view returns (uint256);
+    function shortTokensReserved() external view returns (uint256);
+    function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total);
+    function rewardTracker() external view returns (IRewardTracker);
 }

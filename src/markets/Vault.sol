@@ -4,9 +4,8 @@ pragma solidity 0.8.23;
 import {ERC20} from "../tokens/ERC20.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {IVault} from "./interfaces/IVault.sol";
-import {RoleValidation} from "../access/RoleValidation.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
-import {MarketLogic} from "./MarketLogic.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
@@ -14,20 +13,24 @@ import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
+import {Units} from "../libraries/Units.sol";
 
-contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
+contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
-    using SafeTransferLib for IVault;
+    using SafeTransferLib for Vault;
+    using Units for uint256;
 
     address private immutable WETH;
     address private immutable USDC;
 
+    uint64 private constant FEES_TO_OWNERS = 0.1e18; // 10% to Owner and 10% to Protocol
+
     IMarket market;
     IRewardTracker public rewardTracker;
-    IFeeDistributor feeDistributor;
+    IFeeDistributor public feeDistributor;
 
-    address poolOwner;
-    address feeReceiver;
+    address public poolOwner;
+    address public feeReceiver;
 
     uint256 public longAccumulatedFees;
     uint256 public shortAccumulatedFees;
@@ -41,14 +44,15 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
     modifier onlyMarket() {
-        if (msg.sender != address(market)) revert RoleValidation_AccessDenied();
+        if (msg.sender != address(market)) revert Vault_AccessDenied();
         _;
     }
 
-    constructor(address _weth, address _usdc, string memory _name, string memory _symbol, address _roleStorage)
+    constructor(address _poolOwner, address _weth, address _usdc, string memory _name, string memory _symbol)
         ERC20(_name, _symbol, 18)
-        RoleValidation(_roleStorage)
     {
+        _initializeOwner(msg.sender);
+        poolOwner = _poolOwner;
         WETH = _weth;
         USDC = _usdc;
     }
@@ -59,19 +63,22 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         if (msg.sender != WETH || gasleft() <= 2300) revert Vault_InvalidETHTransfer();
     }
 
-    function initialize(address _market) external onlyMarketFactory {
+    function initialize(address _market, address _feeDistributor, address _rewardTracker, address _feeReceiver)
+        external
+        onlyOwner
+    {
         if (isInitialized) revert Vault_AlreadyInitialized();
         market = IMarket(_market);
+        feeDistributor = IFeeDistributor(_feeDistributor);
+        rewardTracker = IRewardTracker(_rewardTracker);
+        feeReceiver = _feeReceiver;
         isInitialized = true;
     }
 
     /**
      * =============================== Storage Functions ===============================
      */
-    function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease)
-        external
-        onlyTradeStorage(address(market))
-    {
+    function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(1 << 4) {
         if (_isIncrease) {
             _isLong ? longTokensReserved += _amount : shortTokensReserved += _amount;
         } else {
@@ -85,16 +92,13 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease)
-        external
-        onlyTradeStorage(address(market))
-    {
+    function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(1 << 4) {
         _updatePoolBalance(_amount, _isLong, _isIncrease);
     }
 
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external
-        onlyTradeStorage(address(market))
+        onlyRoles(1 << 4)
     {
         if (_isIncrease) {
             // Case 1: Increase the collateral amount
@@ -125,16 +129,36 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         }
     }
 
-    function accumulateFees(uint256 _amount, bool _isLong) external onlyTradeStorage(address(market)) {
+    function accumulateFees(uint256 _amount, bool _isLong) external onlyRoles(1 << 4) {
         _accumulateFees(_amount, _isLong);
     }
 
-    function batchWithdrawFees() external onlyConfigurator(address(this)) nonReentrant {
+    function batchWithdrawFees() external onlyRoles(1 << 2) nonReentrant {
         uint256 longFees = longAccumulatedFees;
         uint256 shortFees = shortAccumulatedFees;
         longAccumulatedFees = 0;
         shortAccumulatedFees = 0;
-        MarketLogic.batchWithdrawFees(WETH, USDC, address(feeDistributor), feeReceiver, poolOwner, longFees, shortFees);
+
+        // calculate percentages and distribute percentage to owner and feeDistributor
+        uint256 longOwnerFees = longFees.percentage(FEES_TO_OWNERS);
+        uint256 shortOwnerFees = shortFees.percentage(FEES_TO_OWNERS);
+        uint256 longDistributorFee = longFees - (longOwnerFees * 2); // 2 because 10% to owner and 10% to protocol
+        uint256 shortDistributorFee = shortFees - (shortOwnerFees * 2);
+
+        // Send Fees to Distribute to LPs
+        address distributor = address(feeDistributor);
+
+        IERC20(WETH).approve(distributor, longDistributorFee);
+        IERC20(USDC).approve(distributor, shortDistributorFee);
+        IFeeDistributor(distributor).accumulateFees(longDistributorFee, shortDistributorFee);
+        // Send Fees to Protocol
+        IERC20(WETH).safeTransfer(feeReceiver, longOwnerFees);
+        IERC20(USDC).safeTransfer(feeReceiver, shortOwnerFees);
+        // Send Fees to Owner
+        IERC20(WETH).safeTransfer(poolOwner, longOwnerFees);
+        IERC20(USDC).safeTransfer(poolOwner, shortOwnerFees);
+
+        emit FeesWithdrawn(longFees, shortFees);
     }
 
     function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager)
@@ -168,7 +192,7 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
         uint256 initialBalance = _params.withdrawal.isLongToken ? balanceOf[WETH] : balanceOf[USDC];
 
         // Transfer Market Tokens in
-        IVault(this).safeTransferFrom(_positionManager, address(this), _params.withdrawal.amountIn);
+        this.safeTransferFrom(_positionManager, address(this), _params.withdrawal.amountIn);
 
         // Calculate Amount Out after Fee
         uint256 transferAmountOut = MarketUtils.calculateWithdrawalAmounts(_params);
@@ -207,7 +231,7 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
      */
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
-        onlyTradeEngine(address(market))
+        onlyRoles(1 << 5)
     {
         _transferOutTokens(_isLongToken ? WETH : USDC, _to, _amount, _isLongToken, _shouldUnwrap);
     }
@@ -215,10 +239,6 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
     /**
      * =============================== Private Functions ===============================
      */
-    function _transferInTokens(address _token, address _from, uint256 _amount) private {
-        IERC20(_token).safeTransferFrom(_from, address(this), _amount);
-    }
-
     function _transferOutTokens(address _tokenOut, address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         private
     {
@@ -277,5 +297,12 @@ contract Vault is ERC20, IVault, RoleValidation, ReentrancyGuard {
                 revert Vault_InvalidWithdrawal();
             }
         }
+    }
+
+    /**
+     * =============================== Getter Functions ===============================
+     */
+    function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total) {
+        total = _isLong ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
     }
 }
