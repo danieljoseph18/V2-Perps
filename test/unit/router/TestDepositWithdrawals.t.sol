@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console} from "forge-std/Test.sol";
+import "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {IMarket, IVault} from "../../../src/markets/Market.sol";
 import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
@@ -106,8 +106,8 @@ contract TestDepositWithdrawals is Test {
         // Set Prices
         precisions.push(0);
         precisions.push(0);
-        variances.push(100);
-        variances.push(100);
+        variances.push(0);
+        variances.push(0);
         timestamps.push(uint48(block.timestamp));
         timestamps.push(uint48(block.timestamp));
         meds.push(3000);
@@ -136,7 +136,10 @@ contract TestDepositWithdrawals is Test {
         _;
     }
 
-    function testExecutingDepositRequest(uint256 _amountIn, bool _isLongToken, bool _shouldWrap) public setUpMarkets {
+    function test_executing_deposit_requests(uint256 _amountIn, bool _isLongToken, bool _shouldWrap)
+        public
+        setUpMarkets
+    {
         if (_isLongToken) {
             _amountIn = bound(_amountIn, 1, 500_000 ether);
             if (_shouldWrap) {
@@ -162,10 +165,12 @@ contract TestDepositWithdrawals is Test {
         positionManager.executeDeposit{value: 0.01 ether}(market, depositKey);
     }
 
-    function testExecutingWithdrawalRequest(uint256 _amountIn, uint256 _amountOut, bool _isLongToken, bool _shouldWrap)
-        public
-        setUpMarkets
-    {
+    function test_executing_withdrawal_requests(
+        uint256 _amountIn,
+        uint256 _amountOut,
+        bool _isLongToken,
+        bool _shouldWrap
+    ) public setUpMarkets {
         if (_isLongToken) {
             _amountIn = bound(_amountIn, 1 ether, 500_000 ether);
             if (_shouldWrap) {

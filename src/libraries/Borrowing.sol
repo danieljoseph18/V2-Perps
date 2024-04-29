@@ -29,14 +29,14 @@ library Borrowing {
     ) internal {
         if (_isLong) {
             pool.cumulatives.longCumulativeBorrowFees +=
-                _calculateFeesSinceUpdate(pool.longBorrowingRate, pool.lastUpdate);
+                calculateFeesSinceUpdate(pool.longBorrowingRate, pool.lastUpdate);
             pool.longBorrowingRate =
-                uint64(_calculateRate(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, true));
+                uint64(calculateRate(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, true));
         } else {
             pool.cumulatives.shortCumulativeBorrowFees +=
-                _calculateFeesSinceUpdate(pool.shortBorrowingRate, pool.lastUpdate);
+                calculateFeesSinceUpdate(pool.shortBorrowingRate, pool.lastUpdate);
             pool.shortBorrowingRate =
-                uint64(_calculateRate(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, false));
+                uint64(calculateRate(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, false));
         }
     }
 
@@ -45,7 +45,7 @@ library Borrowing {
         uint256 len = tickers.length;
         totalFeeUsd;
         for (uint256 i = 0; i < len;) {
-            totalFeeUsd += _getTotalFeesOwedForAsset(market, tickers[i], _isLong);
+            totalFeeUsd += getTotalFeesOwedForAsset(market, tickers[i], _isLong);
             unchecked {
                 ++i;
             }
@@ -112,9 +112,12 @@ library Borrowing {
         pendingFees = borrowRate * timeElapsed;
     }
 
-    /**
-     * ============================== Private Functions ==============================
-     */
+    function calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) public view returns (uint256 fee) {
+        uint256 timeElapsed = block.timestamp - _lastUpdate;
+        if (timeElapsed == 0) return 0;
+        // Fees = (borrowRatePerDay * timeElapsed)
+        fee = _rate.percentage(timeElapsed, SECONDS_PER_DAY);
+    }
 
     /**
      * Borrow scale represents the maximium possible borrowing fee per day.
@@ -122,14 +125,14 @@ library Borrowing {
      * The calculation for the factor is simply (open interest usd / max open interest usd).
      * If OI is low, fee will be low, if OI is close to max, fee will be close to max.
      */
-    function _calculateRate(
+    function calculateRate(
         IMarket market,
         IVault vault,
         string calldata _ticker,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) private view returns (uint256 borrowRatePerDay) {
+    ) public view returns (uint256 borrowRatePerDay) {
         // Factor = (open interest usd / max open interest usd)
         uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
 
@@ -146,8 +149,8 @@ library Borrowing {
         // If Oi > Max Oi, set rate to max rate per day
     }
 
-    function _getTotalFeesOwedForAsset(IMarket market, string memory _ticker, bool _isLong)
-        private
+    function getTotalFeesOwedForAsset(IMarket market, string memory _ticker, bool _isLong)
+        public
         view
         returns (uint256 totalFeesOwedUsd)
     {
@@ -156,12 +159,5 @@ library Borrowing {
         uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
         // Total Fees Owed = cumulativeFeePercentage * openInterestUsd
         totalFeesOwedUsd = accumulatedFees.mulWad(openInterest);
-    }
-
-    function _calculateFeesSinceUpdate(uint256 _rate, uint256 _lastUpdate) private view returns (uint256 fee) {
-        uint256 timeElapsed = block.timestamp - _lastUpdate;
-        if (timeElapsed == 0) return 0;
-        // Fees = (borrowRatePerDay * timeElapsed)
-        fee = _rate.percentage(timeElapsed, SECONDS_PER_DAY);
     }
 }

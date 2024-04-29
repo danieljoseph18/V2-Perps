@@ -14,7 +14,6 @@ import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {Units} from "../libraries/Units.sol";
-import {console2} from "forge-std/Test.sol";
 
 contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
@@ -259,14 +258,11 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     }
 
     function _updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) private {
-        console2.log("Updating pool balance");
         if (_isIncrease) {
             _isLong ? longTokenBalance += _amount : shortTokenBalance += _amount;
         } else {
             _isLong ? longTokenBalance -= _amount : shortTokenBalance -= _amount;
         }
-        console2.log("Long Pool Balance After: ", longTokenBalance);
-        console2.log("Short Pool Balance After: ", shortTokenBalance);
     }
 
     function _accumulateFees(uint256 _amount, bool _isLong) private {
@@ -277,19 +273,17 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     function _validateDeposit(uint256 _initialBalance, uint256 _amountIn, bool _isLong) private view {
         if (_isLong) {
             uint256 wethBalance = IERC20(WETH).balanceOf(address(this));
-            console2.log("Weth Balance: ", wethBalance);
+
             if (longTokenBalance > wethBalance) revert Vault_InvalidDeposit();
-            console2.log("Initial Balance: ", _initialBalance);
-            console2.log("Amount In: ", _amountIn);
+
             if (wethBalance != _initialBalance + _amountIn) {
                 revert Vault_InvalidDeposit();
             }
         } else {
             uint256 usdcBalance = IERC20(USDC).balanceOf(address(this));
-            console2.log("USDC Balance: ", usdcBalance);
+
             if (shortTokenBalance > usdcBalance) revert Vault_InvalidDeposit();
-            console2.log("Initial Balance: ", _initialBalance);
-            console2.log("Amount In: ", _amountIn);
+
             if (usdcBalance != _initialBalance + _amountIn) {
                 revert Vault_InvalidDeposit();
             }

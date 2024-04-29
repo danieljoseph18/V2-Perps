@@ -19,7 +19,6 @@ import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
-import {console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -228,9 +227,6 @@ library Execution {
             _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
         position = _updatePosition(position, collateralDeltaUsd, 0, _prices.impactedPrice, false);
 
-        console2.log("COllateral Delta Usd: ", collateralDeltaUsd);
-        console2.log("Remaining Collateral: ", position.collateral);
-
         // Get remaining collateral in USD
         uint256 remainingCollateralUsd = position.collateral;
         // Check if the Decrease puts the position below the min collateral threshold
@@ -273,11 +269,6 @@ library Execution {
             feeState.borrowFee,
             feeState.fundingFee
         );
-
-        console2.log("After Fee Amount: ", feeState.afterFeeAmount);
-        console2.log("Before Fee Amount: ", _params.request.input.collateralDelta);
-        console2.log("Collateral Price: ", _prices.collateralPrice);
-        console2.log("Collateral Base Unit: ", _prices.collateralBaseUnit);
 
         // Cache Collateral Delta in USD
         uint256 collateralDeltaUsd = feeState.afterFeeAmount.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
@@ -358,8 +349,6 @@ library Execution {
         (_params.request.input.collateralDelta, _params.request.input.sizeDelta, feeState.isFullDecrease) =
             _validateCollateralDelta(position, _params, _prices);
 
-        console2.log("Is Full Decrease? ", feeState.isFullDecrease);
-
         (position, feeState) = _calculateFees(
             market,
             tradeStorage,
@@ -370,7 +359,7 @@ library Execution {
             _params.request.input.sizeDelta,
             _params.request.input.collateralDelta
         );
-        console2.log("Is Full Decrease 1? ", feeState.isFullDecrease);
+
         // No Calculation for After Fee Amount here --> liquidations can be insolvent, so it's only checked for decrease case.
         // Calculate Pnl for decrease
         feeState.realizedPnl = _calculatePnl(_prices, position, _params.request.input.sizeDelta);
@@ -697,7 +686,6 @@ library Execution {
         FeeState memory _feeState,
         uint256 _minCollateralUsd
     ) private view returns (Position.Data memory, uint256) {
-        console2.log("Is Full Decrease 2? ", _feeState.isFullDecrease);
         // Calculate After Fee Amount
         _feeState.afterFeeAmount = _calculateAmountAfterFees(
             _params.request.input.collateralDelta,
@@ -721,8 +709,6 @@ library Execution {
         _feeState.afterFeeAmount = _feeState.realizedPnl > 0
             ? _feeState.afterFeeAmount + _feeState.realizedPnl.abs()
             : _feeState.afterFeeAmount - _feeState.realizedPnl.abs();
-
-        console2.log("Is Full Decrease 3? ", _feeState.isFullDecrease);
 
         // Check if the Decrease puts the position below the min collateral threshold
         // Only check these if it's not a full decrease
@@ -749,9 +735,6 @@ library Execution {
         // Calculate Fee + Fee for executor
         (_feeState.positionFee, _feeState.feeForExecutor) =
             Position.calculateFee(tradeStorage, _sizeDelta, _collateralDelta, _collateralPrice, _collateralBaseUnit);
-
-        console2.log("Position Fee: ", _feeState.positionFee);
-        console2.log("Fee for Executor: ", _feeState.feeForExecutor);
 
         // Calculate & Apply Fee Discount for Referral Code
         (_feeState.positionFee, _feeState.affiliateRebate, _feeState.referrer) =
@@ -879,15 +862,11 @@ library Execution {
         Position.Settlement memory _params,
         Prices memory _prices
     ) private pure returns (uint256 collateralDelta, uint256 sizeDelta, bool isFullDecrease) {
-        console2.log("Position Size in validate: ", _position.size);
-        console2.log("Size delta in validate: ", _params.request.input.sizeDelta);
-
         if (
             _params.request.input.sizeDelta >= _position.size
                 || _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit)
                     >= _position.collateral
         ) {
-            console2.log("Entered full decrease");
             collateralDelta = _position.collateral.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
             sizeDelta = _position.size;
             isFullDecrease = true;
@@ -909,7 +888,7 @@ library Execution {
         returns (uint256 maintenanceCollateral)
     {
         // Expand to 18 decimals
-        uint256 maintenancePercentage = MarketUtils.getMaintenanceMargin(market, _position.ticker).expandDecimals(2, 18);
+        uint256 maintenancePercentage = MarketUtils.getMaintenanceMargin(market, _position.ticker).expandDecimals(4, 18);
         maintenanceCollateral = _position.collateral.percentage(maintenancePercentage);
     }
 }

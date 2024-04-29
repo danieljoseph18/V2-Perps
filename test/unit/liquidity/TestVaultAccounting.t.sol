@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console, console2} from "forge-std/Test.sol";
+import "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {IMarket} from "../../../src/markets/Market.sol";
+import {IVault} from "../../../src/markets/Vault.sol";
 import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
@@ -41,6 +42,7 @@ contract TestVaultAccounting is Test {
     Router router;
     address OWNER;
     IMarket market;
+    IVault vault;
     FeeDistributor feeDistributor;
     TransferStakedTokens transferStakedTokens;
     RewardTracker rewardTracker;
@@ -117,8 +119,8 @@ contract TestVaultAccounting is Test {
         // Set Prices
         precisions.push(0);
         precisions.push(0);
-        variances.push(100);
-        variances.push(100);
+        variances.push(0);
+        variances.push(0);
         timestamps.push(uint48(block.timestamp));
         timestamps.push(uint48(block.timestamp));
         meds.push(3000);
@@ -130,8 +132,9 @@ contract TestVaultAccounting is Test {
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
+        vault = market.VAULT();
         tradeStorage = ITradeStorage(market.tradeStorage());
-        rewardTracker = RewardTracker(address(market.VAULT().rewardTracker()));
+        rewardTracker = RewardTracker(address(vault.rewardTracker()));
         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
@@ -148,10 +151,10 @@ contract TestVaultAccounting is Test {
     }
 
     struct TokenBalances {
-        uint256 marketBalanceBefore;
+        uint256 vaultBalanceBefore;
         uint256 executorBalanceBefore;
         uint256 referralStorageBalanceBefore;
-        uint256 marketBalanceAfter;
+        uint256 vaultBalanceAfter;
         uint256 executorBalanceAfter;
         uint256 referralStorageBalanceAfter;
     }
@@ -253,7 +256,7 @@ contract TestVaultAccounting is Test {
             vm.stopPrank();
         }
         // Cache State of the Vault
-        tokenBalances.marketBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.vaultBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(vault));
         tokenBalances.executorBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
         tokenBalances.referralStorageBalanceBefore =
             IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
@@ -263,7 +266,7 @@ contract TestVaultAccounting is Test {
         positionManager.executePosition(market, key, bytes32(0), OWNER);
 
         // Cache State of the Vault
-        tokenBalances.marketBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.vaultBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(vault));
         tokenBalances.executorBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
         tokenBalances.referralStorageBalanceAfter =
             IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
@@ -290,8 +293,8 @@ contract TestVaultAccounting is Test {
 
         // Check the market balance
         assertEq(
-            tokenBalances.marketBalanceAfter,
-            tokenBalances.marketBalanceBefore + input.collateralDelta - _vaultTest.feeForExecutor
+            tokenBalances.vaultBalanceAfter,
+            tokenBalances.vaultBalanceBefore + input.collateralDelta - _vaultTest.feeForExecutor
                 - _vaultTest.affiliateRebate,
             "Market Balance"
         );
@@ -393,7 +396,7 @@ contract TestVaultAccounting is Test {
         positionManager.executePosition(market, key, bytes32(0), OWNER);
 
         // Cache State of the Vault
-        tokenBalances.marketBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.vaultBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(vault));
         tokenBalances.executorBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
         tokenBalances.referralStorageBalanceBefore =
             IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
@@ -435,7 +438,7 @@ contract TestVaultAccounting is Test {
         uint256 _collateralDelta
     ) private {
         // Cache State of the Vault
-        tokenBalances.marketBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.vaultBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(vault));
         tokenBalances.executorBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
         tokenBalances.referralStorageBalanceAfter =
             IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
@@ -462,8 +465,8 @@ contract TestVaultAccounting is Test {
 
         // Check the market balance
         assertEq(
-            tokenBalances.marketBalanceAfter,
-            tokenBalances.marketBalanceBefore + _collateralDelta - feeForExecutor - affiliateRebate,
+            tokenBalances.vaultBalanceAfter,
+            tokenBalances.vaultBalanceBefore + _collateralDelta - feeForExecutor - affiliateRebate,
             "Market Balance"
         );
         // Check the executor balance
@@ -564,10 +567,13 @@ contract TestVaultAccounting is Test {
         positionManager.executePosition(market, _vaultTest.key, bytes32(0), OWNER);
 
         // Cache State of the Vault
-        tokenBalances.marketBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.vaultBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(vault));
+        console2.log("Market Balance Before: ", tokenBalances.vaultBalanceBefore);
         tokenBalances.executorBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
+        console2.log("Executor Balance Before: ", tokenBalances.executorBalanceBefore);
         tokenBalances.referralStorageBalanceBefore =
             IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
+        console2.log("Referral Storage Balance Before: ", tokenBalances.referralStorageBalanceBefore);
 
         // Get the Position's collateral
         Position.Data memory position =
@@ -600,10 +606,13 @@ contract TestVaultAccounting is Test {
         private
     {
         // Cache State of the Vault
-        tokenBalances.marketBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(market));
+        tokenBalances.vaultBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(vault));
+        console2.log("Market Balance After: ", tokenBalances.vaultBalanceAfter);
         tokenBalances.executorBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(OWNER);
+        console2.log("Executor Balance After: ", tokenBalances.executorBalanceAfter);
         tokenBalances.referralStorageBalanceAfter =
             IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
+        console2.log("Referral Storage Balance After: ", tokenBalances.referralStorageBalanceAfter);
 
         /**
          * Can record the total amount the balance decreased by, then use the
@@ -614,9 +623,9 @@ contract TestVaultAccounting is Test {
          */
 
         // Asset market balance has decreased
-        assertLt(tokenBalances.marketBalanceAfter, tokenBalances.marketBalanceBefore, "Market Balance");
+        assertLt(tokenBalances.vaultBalanceAfter, tokenBalances.vaultBalanceBefore, "Market Balance");
 
-        uint256 totalDecrease = tokenBalances.marketBalanceBefore - tokenBalances.marketBalanceAfter;
+        uint256 totalDecrease = tokenBalances.vaultBalanceBefore - tokenBalances.vaultBalanceAfter;
 
         uint256 executorBalanceDelta = tokenBalances.executorBalanceAfter - tokenBalances.executorBalanceBefore;
         uint256 referralStorageBalanceDelta =
@@ -624,5 +633,8 @@ contract TestVaultAccounting is Test {
         uint256 userBalanceDelta = IERC20(_vaultTest.collateralToken).balanceOf(USER) - _userBalanceBefore;
 
         assertEq(totalDecrease, userBalanceDelta + executorBalanceDelta + referralStorageBalanceDelta, "Total Decrease");
+
+        // Market balance should always be 0
+        assertEq(IERC20(_vaultTest.collateralToken).balanceOf(address(market)), 0, "Market Balance not 0");
     }
 }

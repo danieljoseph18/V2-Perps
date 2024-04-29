@@ -3,6 +3,7 @@ pragma solidity 0.8.23;
 
 import {Position} from "../../positions/Position.sol";
 import {IMarket} from "../../markets/interfaces/IMarket.sol";
+import {IVault} from "../../markets/interfaces/IVault.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 
 interface IPositionManager {
@@ -49,6 +50,8 @@ interface IPositionManager {
     function averagePositionCost() external view returns (uint256);
     function baseGasLimit() external view returns (uint256);
     function transferTokensForIncrease(
+        IMarket market,
+        IVault vault,
         address _collateralToken,
         uint256 _collateralDelta,
         uint256 _affiliateRebate,

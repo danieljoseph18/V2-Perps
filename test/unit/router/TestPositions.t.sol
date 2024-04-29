@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console} from "forge-std/Test.sol";
+import "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {IMarket} from "../../../src/markets/Market.sol";
 import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
@@ -107,8 +107,8 @@ contract TestPositions is Test {
         // Set Prices
         precisions.push(0);
         precisions.push(0);
-        variances.push(100);
-        variances.push(100);
+        variances.push(0);
+        variances.push(0);
         timestamps.push(uint48(block.timestamp));
         timestamps.push(uint48(block.timestamp));
         meds.push(3000);
@@ -137,7 +137,7 @@ contract TestPositions is Test {
         _;
     }
 
-    function testRequestingAPosition(uint256 _sizeDelta, uint256 _leverage, bool _isLong) public setUpMarkets {
+    function test_requesting_a_position(uint256 _sizeDelta, uint256 _leverage, bool _isLong) public setUpMarkets {
         Position.Input memory input;
         _leverage = bound(_leverage, 1, 100);
         if (_isLong) {
@@ -188,7 +188,7 @@ contract TestPositions is Test {
         }
     }
 
-    function testExecuteNewPositionFunction(uint256 _sizeDelta, uint256 _leverage, bool _isLong, bool _shouldWrap)
+    function test_execute_new_position(uint256 _sizeDelta, uint256 _leverage, bool _isLong, bool _shouldWrap)
         public
         setUpMarkets
     {
@@ -256,7 +256,7 @@ contract TestPositions is Test {
         positionManager.executePosition(market, key, bytes32(0), OWNER);
     }
 
-    function testIncreasingAnExistingPosition(
+    function test_increasing_existing_position(
         uint256 _sizeDelta1,
         uint256 _sizeDelta2,
         uint256 _leverage1,
@@ -362,10 +362,12 @@ contract TestPositions is Test {
         positionManager.executePosition(market, key, bytes32(0), OWNER);
     }
 
-    function testPositionsAreWipedOnceExecuted(uint256 _sizeDelta, uint256 _leverage, bool _isLong, bool _shouldWrap)
-        public
-        setUpMarkets
-    {
+    function test_positions_are_wiped_once_executed(
+        uint256 _sizeDelta,
+        uint256 _leverage,
+        bool _isLong,
+        bool _shouldWrap
+    ) public setUpMarkets {
         // Create Request
         Position.Input memory input;
         _leverage = bound(_leverage, 2, 90);
@@ -434,7 +436,7 @@ contract TestPositions is Test {
         key = tradeStorage.getOrderAtIndex(0, false);
     }
 
-    function testExecutingACollateralIncrease(
+    function test_executing_collateral_increase(
         uint256 _sizeDelta,
         uint256 _leverage,
         uint256 _collateralDelta,
@@ -527,7 +529,7 @@ contract TestPositions is Test {
         positionManager.executePosition(market, key, bytes32(0), OWNER);
     }
 
-    function testExecutingACollateralDecrease(uint256 _sizeDelta, uint256 _leverage, bool _isLong, bool _shouldWrap)
+    function test_executing_collateral_decrease(uint256 _sizeDelta, uint256 _leverage, bool _isLong, bool _shouldWrap)
         public
         setUpMarkets
     {
@@ -609,7 +611,7 @@ contract TestPositions is Test {
         positionManager.executePosition(market, key, bytes32(0), OWNER);
     }
 
-    function testDecreasingAPosition(uint256 _sizeDelta, bool _isLong) public setUpMarkets {
+    function test_decreasing_positions(uint256 _sizeDelta, bool _isLong) public setUpMarkets {
         // Create Request
         Position.Input memory input;
         if (_isLong) {

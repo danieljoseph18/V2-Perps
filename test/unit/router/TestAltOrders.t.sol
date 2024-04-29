@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console, console2} from "forge-std/Test.sol";
+import "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {IMarket} from "../../../src/markets/Market.sol";
+import {IVault} from "../../../src/markets/Vault.sol";
 import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
@@ -21,6 +22,7 @@ import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
 import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 import {MathUtils} from "../../../src/libraries/MathUtils.sol";
+import {Pool} from "../../../src/markets/Pool.sol";
 import {Units} from "../../../src/libraries/Units.sol";
 
 contract TestAltOrders is Test {
@@ -35,6 +37,7 @@ contract TestAltOrders is Test {
     Router router;
     address OWNER;
     IMarket market;
+    IVault vault;
     FeeDistributor feeDistributor;
     TransferStakedTokens transferStakedTokens;
     RewardTracker rewardTracker;
@@ -111,8 +114,8 @@ contract TestAltOrders is Test {
         // Set Prices
         precisions.push(0);
         precisions.push(0);
-        variances.push(100);
-        variances.push(100);
+        variances.push(0);
+        variances.push(0);
         timestamps.push(uint48(block.timestamp));
         timestamps.push(uint48(block.timestamp));
         meds.push(3000);
@@ -133,6 +136,8 @@ contract TestAltOrders is Test {
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
+        vault = market.VAULT();
+
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
         router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
@@ -144,7 +149,7 @@ contract TestAltOrders is Test {
     /**
      * ================================== Limit / Stop Loss / Take Profit ==================================
      */
-    function testStopLossTakeProfitOrdersCanBeAttachedToOpenPositions(
+    function test_stop_loss_take_profit_orders_can_be_attached_to_open_positions(
         uint256 _sizeDelta,
         uint256 _limitPrice,
         uint256 _leverage,
@@ -220,9 +225,12 @@ contract TestAltOrders is Test {
         // Create Stop Loss Order
         input.isLimit = true;
         input.isIncrease = false;
-        input.limitPrice = _limitPrice;
+        input.limitPrice = _limitPrice * 1e30;
         input.collateralDelta = 0;
-        input.triggerAbove = _limitPrice > 3000e30 ? true : false;
+        input.triggerAbove = input.limitPrice > 3000e30 ? true : false;
+
+        // Move the price to where it can be executed and execute
+        skip(1 minutes);
 
         vm.prank(OWNER);
         router.createPositionRequest{value: 0.01 ether}(market, input, Position.Conditionals(false, false, 0, 0, 0, 0));
@@ -243,23 +251,19 @@ contract TestAltOrders is Test {
             }
         }
 
-        // Move the price to where it can be executed and execute
-        vm.warp(block.timestamp + 1 days);
-        vm.roll(block.number + 1);
-
         _setPrices(uint64(_limitPrice), 1);
 
         // Execute Stop Loss
         key = tradeStorage.getOrderAtIndex(0, true);
-        bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
+        bytes32 requestKey = keccak256(abi.encode("PRICE REQUEST"));
         vm.prank(OWNER);
-        positionManager.executePosition(market, key, requestId, OWNER);
+        positionManager.executePosition(market, key, requestKey, OWNER);
     }
 
     /**
      * ================================== Liquidations ==================================
      */
-    function testLiquidatingPositionsThatGoUnder(
+    function test_liquidating_positions_that_go_under(
         uint256 _sizeDelta,
         uint256 _leverage,
         uint256 _newPrice,
@@ -350,9 +354,9 @@ contract TestAltOrders is Test {
         // sign the new price
         _setPrices(uint64(_newPrice), 1);
         // liquidate the position
-        bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
+        bytes32 requestKey = keccak256(abi.encode("PRICE REQUEST"));
         vm.prank(OWNER);
-        positionManager.liquidatePosition(market, positionKey, requestId);
+        positionManager.liquidatePosition(market, positionKey, requestKey);
     }
 
     /**
@@ -361,154 +365,153 @@ contract TestAltOrders is Test {
 
     // Open positions, then move the price so that the PNL to pool ratio is > 0.45
     // Try to ADL any of the positions
-    // @audit broken
-    function testAdlingProfitablePositions(uint256 _newPrice, bool _isLong, bool _shouldWrap) public setUpMarkets {
-        // // Create Request
-        // Position.Input memory input;
-        // if (_isLong) {
-        //     input = Position.Input({
-        //         ticker: ethTicker,
-        //         collateralToken: weth,
-        //         collateralDelta: 333.333 ether,
-        //         sizeDelta: 10_000_000e30, // 10x leverage
-        //         limitPrice: 0,
-        //         maxSlippage: 0.3e30,
-        //         executionFee: 0.01 ether,
-        //         isLong: true,
-        //         isLimit: false,
-        //         isIncrease: true,
-        //         reverseWrap: _shouldWrap,
-        //         triggerAbove: false
-        //     });
-        //     if (_shouldWrap) {
-        //         vm.prank(OWNER);
-        //         router.createPositionRequest{value: 333.333 ether + 0.01 ether}(
-        //             market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //         );
-        //         vm.prank(USER);
-        //         router.createPositionRequest{value: 333.333 ether + 0.01 ether}(
-        //             market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //         );
-        //         vm.prank(USER1);
-        //         router.createPositionRequest{value: 333.333 ether + 0.01 ether}(
-        //             market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //         );
-        //         vm.prank(USER2);
-        //         router.createPositionRequest{value: 333.333 ether + 0.01 ether}(
-        //             market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //         );
-        //     } else {
-        //         vm.startPrank(OWNER);
-        //         WETH(weth).approve(address(router), type(uint256).max);
-        //         router.createPositionRequest{value: 0.01 ether}(
-        //             market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //         );
-        //         vm.stopPrank();
-        //         vm.startPrank(USER);
-        //         WETH(weth).approve(address(router), type(uint256).max);
-        //         router.createPositionRequest{value: 0.01 ether}(
-        //             market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //         );
-        //         vm.stopPrank();
-        //         vm.startPrank(USER1);
-        //         WETH(weth).approve(address(router), type(uint256).max);
-        //         router.createPositionRequest{value: 0.01 ether}(
-        //             market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //         );
-        //         vm.stopPrank();
-        //         vm.startPrank(USER2);
-        //         WETH(weth).approve(address(router), type(uint256).max);
-        //         router.createPositionRequest{value: 0.01 ether}(
-        //             market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //         );
-        //         vm.stopPrank();
-        //     }
-        // } else {
-        //     input = Position.Input({
-        //         ticker: ethTicker,
-        //         collateralToken: usdc,
-        //         collateralDelta: 1_000_000e6,
-        //         sizeDelta: 10_000_000e30, // 10x leverage
-        //         limitPrice: 0,
-        //         maxSlippage: 0.3e30,
-        //         executionFee: 0.01 ether,
-        //         isLong: false,
-        //         isLimit: false,
-        //         isIncrease: true,
-        //         reverseWrap: false,
-        //         triggerAbove: false
-        //     });
+    function test_adling_profitable_positions(uint256 _newPrice, bool _isLong, bool _shouldWrap) public setUpMarkets {
+        // Create Request
+        Position.Input memory input;
+        if (_isLong) {
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: weth,
+                collateralDelta: 333.333 ether,
+                sizeDelta: 10_000_000e30, // 10x leverage
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: _shouldWrap,
+                triggerAbove: false
+            });
+            if (_shouldWrap) {
+                vm.prank(OWNER);
+                router.createPositionRequest{value: 333.333 ether + 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.prank(USER);
+                router.createPositionRequest{value: 333.333 ether + 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.prank(USER1);
+                router.createPositionRequest{value: 333.333 ether + 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.prank(USER2);
+                router.createPositionRequest{value: 333.333 ether + 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+            } else {
+                vm.startPrank(OWNER);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+                vm.startPrank(USER);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+                vm.startPrank(USER1);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+                vm.startPrank(USER2);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+            }
+        } else {
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: usdc,
+                collateralDelta: 1_000_000e6,
+                sizeDelta: 10_000_000e30, // 10x leverage
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: false,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: false,
+                triggerAbove: false
+            });
 
-        //     // Create a Bunch of Position Requests
-        //     vm.startPrank(OWNER);
-        //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-        //     router.createPositionRequest{value: 0.01 ether}(
-        //         market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //     );
-        //     vm.stopPrank();
-        //     vm.startPrank(USER);
-        //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-        //     router.createPositionRequest{value: 0.01 ether}(
-        //         market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //     );
-        //     vm.stopPrank();
-        //     vm.startPrank(USER1);
-        //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-        //     router.createPositionRequest{value: 0.01 ether}(
-        //         market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //     );
-        //     vm.stopPrank();
-        //     vm.startPrank(USER2);
-        //     MockUSDC(usdc).approve(address(router), type(uint256).max);
-        //     router.createPositionRequest{value: 0.01 ether}(
-        //         market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
-        //     );
-        //     vm.stopPrank();
-        // }
+            // Create a Bunch of Position Requests
+            vm.startPrank(OWNER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+            vm.startPrank(USER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+            vm.startPrank(USER1);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+            vm.startPrank(USER2);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        }
 
-        // // Execute Request
-        // bytes32 key = tradeStorage.getOrderAtIndex(0, false);
-        // vm.startPrank(OWNER);
-        // positionManager.executePosition(market, key, bytes32(0), OWNER);
-        // key = tradeStorage.getOrderAtIndex(0, false);
-        // positionManager.executePosition(market, key, bytes32(0), OWNER);
-        // key = tradeStorage.getOrderAtIndex(0, false);
-        // positionManager.executePosition(market, key, bytes32(0), OWNER);
-        // key = tradeStorage.getOrderAtIndex(0, false);
-        // positionManager.executePosition(market, key, bytes32(0), OWNER);
-        // vm.stopPrank();
+        // Execute Request
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        vm.startPrank(OWNER);
+        positionManager.executePosition(market, key, bytes32(0), OWNER);
+        key = tradeStorage.getOrderAtIndex(0, false);
+        positionManager.executePosition(market, key, bytes32(0), OWNER);
+        key = tradeStorage.getOrderAtIndex(0, false);
+        positionManager.executePosition(market, key, bytes32(0), OWNER);
+        key = tradeStorage.getOrderAtIndex(0, false);
+        positionManager.executePosition(market, key, bytes32(0), OWNER);
+        vm.stopPrank();
 
-        // IMarket.PnlValues memory pnl = market.getPnlValues(ethTicker);
-        // if (_isLong) {
-        //     pnl.longAverageEntryPriceUsd = 1000e30;
-        //     _newPrice = bound(_newPrice, 5000e30, 100_000e30);
-        // } else {
-        //     pnl.shortAverageEntryPriceUsd = 10_000e30;
-        //     _newPrice = bound(_newPrice, 1e30, 2000e30);
-        // }
-        // vm.mockCall(
-        //     address(market),
-        //     abi.encodeWithSelector(market.getPnlValues.selector, market, ethTicker, _isLong),
-        //     abi.encode(pnl)
-        // );
+        Pool.Cumulatives memory cumulatives = market.getCumulatives(ethTicker);
+        if (_isLong) {
+            cumulatives.longAverageEntryPriceUsd = 1000e30;
+            _newPrice = bound(_newPrice, 5000, 100_000);
+        } else {
+            cumulatives.shortAverageEntryPriceUsd = 10_000e30;
+            _newPrice = bound(_newPrice, 1, 2000);
+        }
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(market.getCumulatives.selector, ethTicker), abi.encode(cumulatives)
+        );
 
-        // // sign the new price
-        // _setPrices(uint64(_newPrice), 1);
+        // sign the new price
+        _setPrices(uint64(_newPrice), 1);
 
-        // bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
-        // if (_isLong) {
-        //     vm.assume(MarketUtils.getPnlFactor(market, ethTicker, 3000e30, 1e18, 3000e30, 1e18, true) > 0.45e18);
-        //     // ADL any one of the positions
-        //     bytes32 positionKey = keccak256(abi.encode(ethTicker, OWNER, true));
-        //     vm.prank(OWNER);
-        //     positionManager.executeAdl(market, requestId, positionKey);
-        // } else {
-        //     vm.assume(MarketUtils.getPnlFactor(market, ethTicker, 3000e30, 1e18, 1e30, 1e6, false) > 0.45e18);
-        //     // ADL any one of the positions
-        //     bytes32 positionKey = keccak256(abi.encode(ethTicker, OWNER, false));
-        //     vm.prank(OWNER);
-        //     positionManager.executeAdl(market, requestId, positionKey);
-        // }
+        skip(30);
+
+        bytes32 requestKey = keccak256(abi.encode("PRICE REQUEST"));
+        if (_isLong) {
+            vm.assume(MarketUtils.getPnlFactor(market, vault, ethTicker, 3000e30, 1e18, 3000e30, 1e18, true) > 0.45e18);
+            // ADL any one of the positions
+            bytes32 positionKey = keccak256(abi.encode(ethTicker, OWNER, true));
+            vm.prank(OWNER);
+            positionManager.executeAdl(market, requestKey, positionKey);
+        } else {
+            vm.assume(MarketUtils.getPnlFactor(market, vault, ethTicker, 3000e30, 1e18, 1e30, 1e6, false) > 0.45e18);
+            // ADL any one of the positions
+            bytes32 positionKey = keccak256(abi.encode(ethTicker, OWNER, false));
+            vm.prank(OWNER);
+            positionManager.executeAdl(market, requestKey, positionKey);
+        }
     }
 
     function _setPrices(uint64 _ethPrice, uint64 _usdcPrice) private {
@@ -518,6 +521,7 @@ contract TestAltOrders is Test {
         meds[0] = _ethPrice;
         meds[1] = _usdcPrice;
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
+        vm.prank(OWNER);
         priceFeed.updatePrices(encodedPrices);
     }
 }

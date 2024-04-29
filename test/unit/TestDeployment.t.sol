@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test} from "forge-std/Test.sol";
+import "forge-std/Test.sol";
 import {Deploy} from "../../script/Deploy.s.sol";
 import {MarketFactory} from "../../src/markets/MarketFactory.sol";
 import {IPriceFeed} from "../../src/oracle/interfaces/IPriceFeed.sol";
@@ -29,7 +29,7 @@ contract TestDeployment is Test {
         owner = contracts.owner;
     }
 
-    function testDeployment() public {
+    function test_deployment() public {
         assertNotEq(address(marketFactory), address(0));
         assertNotEq(address(priceFeed), address(0));
         assertNotEq(address(referralStorage), address(0));

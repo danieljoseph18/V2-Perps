@@ -11,7 +11,6 @@ import {Casting} from "../libraries/Casting.sol";
 import {Units} from "../libraries/Units.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
-import {console2} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -189,8 +188,7 @@ library Position {
         view
     {
         uint8 maxLeverage = MarketUtils.getMaxLeverage(market, _ticker);
-        console2.log("Collateral: ", _collateralUsd);
-        console2.log("Size: ", _sizeUsd);
+
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = _sizeUsd / _collateralUsd;
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();

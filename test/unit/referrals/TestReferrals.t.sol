@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {Test, console, console2} from "forge-std/Test.sol";
+import "forge-std/Test.sol";
 import {Deploy} from "../../../script/Deploy.s.sol";
 import {IMarket} from "../../../src/markets/Market.sol";
 import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
@@ -113,8 +113,8 @@ contract TestReferrals is Test {
         // Set Prices
         precisions.push(0);
         precisions.push(0);
-        variances.push(100);
-        variances.push(100);
+        variances.push(0);
+        variances.push(0);
         timestamps.push(uint48(block.timestamp));
         timestamps.push(uint48(block.timestamp));
         meds.push(3000);
@@ -150,7 +150,7 @@ contract TestReferrals is Test {
      * - Positions accumulate affiliate rewards
      * - Affiliates can claim their rewards
      */
-    function testApplyingAReferralFeeDiscount(uint256 _tier, uint256 _fee) public setUpMarkets {
+    function test_applying_a_referral_fee_discount(uint256 _tier, uint256 _fee) public setUpMarkets {
         _tier = bound(_tier, 0, 2);
         // Set a random fee tier
         vm.startPrank(OWNER);
@@ -192,13 +192,13 @@ contract TestReferrals is Test {
         Position.Input input;
         address collateralToken;
         uint256 collateralDelta;
-        uint256 priceMultiplier;
-        uint256 priceDivider;
+        uint256 collateralPrice;
+        uint256 collateralBaseUnit;
         uint256 discountPercentage;
         uint256 affiliateRebate;
     }
 
-    function testWhetherPositionsAccumulateAffiliateRewards(uint256 _tier, bool _isLong) public setUpMarkets {
+    function test_whether_positions_accumulate_affiliate_rewards(uint256 _tier, bool _isLong) public setUpMarkets {
         vm.assume(_tier < 3);
         // Set a random fee tier
         vm.startPrank(OWNER);
@@ -213,8 +213,8 @@ contract TestReferrals is Test {
         if (_isLong) {
             cache.collateralToken = weth;
             cache.collateralDelta = 0.5 ether;
-            cache.priceMultiplier = 3000e30;
-            cache.priceDivider = 1e18;
+            cache.collateralPrice = 3000e30;
+            cache.collateralBaseUnit = 1e18;
             cache.input = Position.Input({
                 ticker: ethTicker,
                 collateralToken: cache.collateralToken,
@@ -236,8 +236,8 @@ contract TestReferrals is Test {
         } else {
             cache.collateralToken = usdc;
             cache.collateralDelta = 500e6;
-            cache.priceMultiplier = 1e30;
-            cache.priceDivider = 1e6;
+            cache.collateralPrice = 1e30;
+            cache.collateralBaseUnit = 1e6;
             cache.input = Position.Input({
                 ticker: ethTicker,
                 collateralToken: cache.collateralToken,
@@ -273,10 +273,12 @@ contract TestReferrals is Test {
             discountPercentage = 0.15e18;
         }
         (uint256 fee,) = Position.calculateFee(
-            tradeStorage, 5000e30, cache.collateralDelta, cache.priceMultiplier, cache.priceDivider
+            tradeStorage, 5000e30, cache.collateralDelta, cache.collateralPrice, cache.collateralBaseUnit
         );
-        uint256 affiliateRebate = (fee.percentage(discountPercentage)) - (fee.percentage(discountPercentage) / 2);
-
+        console2.log("Fee in Test: ", fee);
+        (uint256 discountedFee, uint256 affiliateRebate,) = Referral.applyFeeDiscount(referralStorage, USER, fee);
+        console2.log("Discounted Fee in Test: ", discountedFee);
+        console2.log("Affiliate Rebate in Test: ", affiliateRebate);
         assertEq(
             IERC20(cache.collateralToken).balanceOf(address(referralStorage)),
             affiliateRebate,

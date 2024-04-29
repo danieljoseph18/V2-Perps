@@ -12,11 +12,14 @@ library Funding {
     using Casting for *;
     using MathUtils for uint256;
     using MathUtils for int256;
+    using MathUtils for int64;
     using MathUtils for int16;
+    using MathUtils for uint48;
 
-    int256 constant PRICE_PRECISION = 1e30;
-    int64 constant SECONDS_IN_DAY = 86400;
-    int64 constant SIGNED_PRECISION = 1e18;
+    int128 constant PRICE_UNIT = 1e30;
+    int128 constant sPRICE_UNIT = 1e30;
+    int64 constant sUNIT = 1e18;
+    uint32 constant SECONDS_IN_DAY = 86400;
 
     function updateState(IMarket market, Pool.Storage storage pool, string calldata _ticker, uint256 _indexPrice)
         internal
@@ -26,10 +29,10 @@ library Funding {
 
         // Calculate the current funding velocity
         pool.fundingRateVelocity =
-            _getCurrentVelocity(market, skewUsd, pool.config.maxFundingVelocity, pool.config.skewScale).toInt64();
+            getCurrentVelocity(market, skewUsd, pool.config.maxFundingVelocity, pool.config.skewScale).toInt64();
 
         // Calculate the current funding rate
-        (pool.fundingRate, pool.fundingAccruedUsd) = _recompute(market, _ticker, _indexPrice);
+        (pool.fundingRate, pool.fundingAccruedUsd) = recompute(market, _ticker, _indexPrice);
     }
 
     function calculateNextFunding(IMarket market, string calldata _ticker, uint256 _indexPrice)
@@ -38,6 +41,7 @@ library Funding {
         returns (int64 nextRate, int256 nextFundingAccrued)
     {
         (int64 fundingRate, int256 unrecordedFunding) = _getUnrecordedFundingWithRate(market, _ticker, _indexPrice);
+
         nextRate = fundingRate;
         nextFundingAccrued = MarketUtils.getFundingAccrued(market, _ticker) + unrecordedFunding;
     }
@@ -59,25 +63,13 @@ library Funding {
         //                    = 0 + 0.0025 * 0.33564815
         //                    = 0.00083912
         (int64 fundingRate, int64 fundingRateVelocity) = MarketUtils.getFundingRates(market, _ticker);
-        return fundingRate
-            + (fundingRateVelocity * _getProportionalFundingElapsed(market, _ticker) / int64(SIGNED_PRECISION));
-    }
-
-    /**
-     * ============================== Private Functions ==============================
-     */
-    function _recompute(IMarket market, string calldata _ticker, uint256 _indexPrice)
-        private
-        view
-        returns (int64 nextFundingRate, int256 nextFundingAccruedUsd)
-    {
-        (nextFundingRate, nextFundingAccruedUsd) = calculateNextFunding(market, _ticker, _indexPrice);
+        return fundingRate + fundingRateVelocity.sMulWad(_getProportionalFundingElapsed(market, _ticker)).toInt64();
     }
 
     //  - proportionalSkew = skew / skewScale
     //  - velocity         = proportionalSkew * maxFundingVelocity
-    function _getCurrentVelocity(IMarket market, int256 _skew, int16 _maxVelocity, int48 _skewScale)
-        private
+    function getCurrentVelocity(IMarket market, int256 _skew, int16 _maxVelocity, int48 _skewScale)
+        public
         view
         returns (int256 velocity)
     {
@@ -88,15 +80,30 @@ library Funding {
         int256 proportionalSkew = _skew / _skewScale;
         // Check if the absolute value of proportionalSkew is less than the fundingVelocityClamp
         if (proportionalSkew.abs() < market.FUNDING_VELOCITY_CLAMP()) {
+            // If less, velocity is negligible
             return 0;
         }
-        // Bound between -1e18 and 1e18
-        int256 pSkewBounded = proportionalSkew.clamp(-SIGNED_PRECISION, SIGNED_PRECISION);
-        // Convert maxVelocity from a 2.Dp percentage to 18 Dp
-        int256 maxVelocity = _maxVelocity.expandDecimals(2, 18);
-        // Calculate the velocity
-        velocity = pSkewBounded.mulDivSigned(maxVelocity, SIGNED_PRECISION);
+        // Bound between -1e30 and 1e30
+        int256 pSkewBounded = proportionalSkew.clamp(-sPRICE_UNIT, sPRICE_UNIT);
+
+        // Convert maxVelocity from a 4.Dp percentage to 18 Dp
+        int256 maxVelocity = _maxVelocity.expandDecimals(4, 18);
+
+        // Calculate the velocity to 18dp (proportionalSkew * maxFundingVelocity)
+        velocity = pSkewBounded.mulDivSigned(maxVelocity, sPRICE_UNIT);
     }
+
+    function recompute(IMarket market, string calldata _ticker, uint256 _indexPrice)
+        public
+        view
+        returns (int64 nextFundingRate, int256 nextFundingAccruedUsd)
+    {
+        (nextFundingRate, nextFundingAccruedUsd) = calculateNextFunding(market, _ticker, _indexPrice);
+    }
+
+    /**
+     * ============================== Private Functions ==============================
+     */
 
     /**
      * @dev Returns the proportional time elapsed since last funding (proportional by 1 day).
@@ -104,7 +111,7 @@ library Funding {
      */
     function _getProportionalFundingElapsed(IMarket market, string calldata _ticker) private view returns (int64) {
         uint48 timeElapsed = _blockTimestamp() - MarketUtils.getLastUpdate(market, _ticker);
-        return int64(int48(timeElapsed)) * int64(SIGNED_PRECISION) / SECONDS_IN_DAY;
+        return timeElapsed.divWad(SECONDS_IN_DAY).toInt64();
     }
 
     /**
@@ -116,14 +123,15 @@ library Funding {
         returns (int64 fundingRate, int256 unrecordedFunding)
     {
         fundingRate = getCurrentFundingRate(market, _ticker);
+
         (int256 storedFundingRate,) = MarketUtils.getFundingRates(market, _ticker);
+
         // Minus sign is needed as funding flows in the opposite direction of the skew
         // Essentially taking an average, where Signed Precision == units
-        int256 avgFundingRate = -storedFundingRate.mulDivSigned(fundingRate, 2 * SIGNED_PRECISION);
+        int256 avgFundingRate = -storedFundingRate.mulDivSigned(fundingRate, 2 * sUNIT);
 
-        unrecordedFunding = avgFundingRate.mulDivSigned(
-            _getProportionalFundingElapsed(market, _ticker), SIGNED_PRECISION
-        ).mulDivSigned(_indexPrice.toInt256(), SIGNED_PRECISION);
+        unrecordedFunding = avgFundingRate.mulDivSigned(_getProportionalFundingElapsed(market, _ticker), sUNIT)
+            .mulDivSigned(_indexPrice.toInt256(), sUNIT);
     }
 
     function _calculateSkewUsd(IMarket market, string calldata _ticker) private view returns (int256 skewUsd) {

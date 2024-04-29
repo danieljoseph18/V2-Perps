@@ -231,15 +231,18 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
 
     /// @dev - Should only be callable from the TradeEngine associated with a valid market
     function transferTokensForIncrease(
+        IMarket market,
+        IVault vault,
         address _collateralToken,
         uint256 _collateralDelta,
         uint256 _affiliateRebate,
         uint256 _feeForExecutor,
         address _executor
     ) external {
-        // Check if the caller is a valid TradeEngine
-        address market = address(ITradeEngine(msg.sender).market());
-        if (!marketFactory.isMarket(market)) revert PositionManager_InvalidMarket();
+        // Market must be valid
+        if (!marketFactory.isMarket(address(market))) revert PositionManager_InvalidMarket();
+        // Caller must be the Trade Engine associated with that market
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_5) revert PositionManager_AccessDenied();
 
         uint256 transferAmount = _collateralDelta;
         // Transfer Fee to Executor
@@ -253,8 +256,8 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
             transferAmount -= _affiliateRebate;
             IERC20(_collateralToken).safeTransfer(address(referralStorage), _affiliateRebate);
         }
-        // Send Tokens + Fee to the Market (Will be Accounted for Separately)
+        // Send Tokens + Fee to the Vault (Will be Accounted for Separately)
         // Subtract Affiliate Rebate -> will go to Referral Storage
-        IERC20(_collateralToken).safeTransfer(address(market), transferAmount);
+        IERC20(_collateralToken).safeTransfer(address(vault), transferAmount);
     }
 }

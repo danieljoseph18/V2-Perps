@@ -27,7 +27,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     uint256 public constant PRICE_DECIMALS = 30;
     // Length of 1 Bytes32 Word
     uint8 private constant WORD = 32;
-    uint8 private constant MIN_EXPIRATION_TIME = 2 minutes;
+    uint8 private constant MIN_EXPIRATION_TIME = 3 minutes;
     uint40 private constant MSB1 = 0x8000000000;
     uint64 private constant LINK_BASE_UNIT = 1e18;
     uint16 private constant MAX_DATA_LENGTH = 3296;

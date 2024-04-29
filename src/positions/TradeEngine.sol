@@ -190,6 +190,8 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         tradeStorage.createPosition(position, positionKey);
         // Handle Token Transfers
         positionManager.transferTokensForIncrease(
+            market,
+            vault,
             _params.request.input.collateralToken,
             _params.request.input.collateralDelta,
             feeState.affiliateRebate,
@@ -232,6 +234,8 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         tradeStorage.updatePosition(position, positionKey);
         // Handle Token Transfers
         positionManager.transferTokensForIncrease(
+            market,
+            vault,
             _params.request.input.collateralToken,
             _params.request.input.collateralDelta,
             feeState.affiliateRebate,

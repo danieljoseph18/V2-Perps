@@ -15,6 +15,7 @@ import {Oracle} from "../src/oracle/Oracle.sol";
 import {FeeDistributor} from "../src/rewards/FeeDistributor.sol";
 import {TransferStakedTokens} from "../src/rewards/TransferStakedTokens.sol";
 import {Pool} from "../src/markets/Pool.sol";
+import {OwnableRoles} from "../src/auth/OwnableRoles.sol";
 
 contract Deploy is Script {
     IHelperConfig public helperConfig;
@@ -119,7 +120,7 @@ contract Deploy is Script {
             maintenanceMargin: 50, // 0.5%
             reserveFactor: 2000, // 20%
             // Skew Scale = Skew for Max Velocity
-            maxFundingVelocity: 90, // 9% per day
+            maxFundingVelocity: 900, // 9% per day
             skewScale: 1_000_000, // 1 Mil USD
             // Should never be 0
             // All are percentages between up to 100% (10000)
@@ -162,6 +163,13 @@ contract Deploy is Script {
         contracts.referralStorage.setTier(0, 0.05e18);
         contracts.referralStorage.setTier(1, 0.1e18);
         contracts.referralStorage.setTier(2, 0.15e18);
+
+        // Transfer ownership to caller --> for testing
+        contracts.marketFactory.transferOwnership(msg.sender);
+        if (!activeNetworkConfig.mockFeed) OwnableRoles(address(contracts.priceFeed)).transferOwnership(msg.sender);
+        contracts.referralStorage.transferOwnership(msg.sender);
+        contracts.positionManager.transferOwnership(msg.sender);
+        contracts.router.transferOwnership(msg.sender);
 
         vm.stopBroadcast();
 

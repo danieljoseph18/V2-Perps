@@ -200,7 +200,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     {
         args;
         // Create a  request key
-        requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
+        requestKey = keccak256(abi.encode("PRICE REQUEST"));
         bytes32 requestId = keccak256(abi.encode("PRICE REQUEST"));
 
         RequestData memory data = RequestData({
@@ -220,7 +220,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     /// @dev - for this, we need to copy / call the function MarketUtils.calculateCumulativeMarketPnl but offchain
     function requestCumulativeMarketPnl(IMarket, address _requester) external payable returns (bytes32 requestKey) {
         // Create a  request id
-        requestKey = _generateKey(abi.encode(_requester, _blockTimestamp()));
+        requestKey = keccak256(abi.encode("PRICE REQUEST"));
         bytes32 requestId = keccak256(abi.encode("PNL REQUEST"));
 
         RequestData memory data = RequestData({
@@ -487,5 +487,14 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     // Used to Manually Set Pnl for Testing
     function updatePnl(bytes memory _response) external {
         _decodeAndStorePnl(_response);
+    }
+
+    // Used to Manually Delete a Request
+    function deleteRequest(bytes32 _requestKey) external {
+        bytes32 requestId = keyToId[_requestKey];
+        requestData.remove(requestId);
+        requestKeys.remove(_requestKey);
+        delete idToKey[requestId];
+        delete keyToId[_requestKey];
     }
 }

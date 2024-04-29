@@ -132,7 +132,7 @@ library Pool {
          * Percentage of the position's size that must be maintained as margin.
          * Used to prevent liquidation threshold from being at the point
          * of insolvency.
-         * 2 d.p. precision. 1050 = 10.5%
+         * 4 d.p. precision. 1050 = 10.5%
          */
         uint16 maintenanceMargin;
         /**
@@ -144,7 +144,7 @@ library Pool {
         /**
          * Maximum Funding Velocity
          * Units: % Per Day
-         * 2 d.p precision. 1000 = 10%
+         * 4 d.p precision. 1000 = 10%
          */
         int16 maxFundingVelocity;
         /**
@@ -155,25 +155,25 @@ library Pool {
         int48 skewScale;
         /**
          * Dampening factor for the effect of skew in positive price impact.
-         * Value as a percentage, with 2 d.p of precision.
+         * Value as a percentage, with 4 d.p of precision.
          * Needs to be expanded to 30 dp for USD calculations.
          */
         int16 positiveSkewScalar;
         /**
          * Dampening factor for the effect of skew in negative price impact.
-         * Value as a percentage, with 2 d.p of precision.
+         * Value as a percentage, with 4 d.p of precision.
          * Needs to be expanded to 30 dp for USD calculations.
          */
         int16 negativeSkewScalar;
         /**
          * Dampening factor for the effect of liquidity in positive price impact.
-         * Value as a percentage, with 2 d.p of precision.
+         * Value as a percentage, with 4 d.p of precision.
          * Needs to be expanded to 30 dp for USD calculations.
          */
         int16 positiveLiquidityScalar;
         /**
          * Dampening factor for the effect of liquidity in negative price impact.
-         * Value as a percentage, with 2 d.p of precision.
+         * Value as a percentage, with 4 d.p of precision.
          * Needs to be expanded to 30 dp for USD calculations.
          */
         int16 negativeLiquidityScalar;
@@ -200,8 +200,10 @@ library Pool {
     ) external {
         // Market uses delegate call, so msg.sender in this context should be TradeEngine
         if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_5) revert Pool_InvalidUpdate();
+
         // 1. Depends on Open Interest Delta to determine Skew
         Funding.updateState(market, pool, _ticker, _indexPrice);
+
         if (_sizeDelta != 0) {
             // Use Impacted Price for Entry
             // 2. Relies on Open Interest Delta
@@ -213,6 +215,7 @@ library Pool {
                 _isIncrease ? int256(_sizeDelta) : -int256(_sizeDelta),
                 _isLong
             );
+
             // 3. Updated pre-borrowing rate if size delta > 0
             if (_isIncrease) {
                 if (_isLong) {
@@ -230,6 +233,7 @@ library Pool {
         }
         // 4. Relies on Updated Open interest
         Borrowing.updateState(market, market.VAULT(), pool, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+
         // 5. Update the last update time
         pool.lastUpdate = uint48(block.timestamp);
         // Fire Event

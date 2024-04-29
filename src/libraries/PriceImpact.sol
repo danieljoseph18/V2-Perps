@@ -9,7 +9,6 @@ import {Casting} from "./Casting.sol";
 import {Units} from "./Units.sol";
 import {Execution} from "../positions/Execution.sol";
 import {MathUtils} from "./MathUtils.sol";
-import {console2} from "forge-std/Test.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
@@ -277,12 +276,6 @@ library PriceImpact {
     function _checkSlippage(uint256 _impactedPrice, uint256 _signedPrice, uint256 _maxSlippage) private pure {
         uint256 impactDelta = _signedPrice.absDiff(_impactedPrice);
         uint256 slippage = PRICE_PRECISION.percentage(impactDelta, _signedPrice);
-
-        console2.log("Impact Delta: ", impactDelta);
-        console2.log("Slippage: ", slippage);
-        console2.log("Max Slippage: ", _maxSlippage);
-        console2.log("Impacted Price: ", _impactedPrice);
-        console2.log("Signed Price: ", _signedPrice);
 
         if (slippage > _maxSlippage) {
             revert PriceImpact_SlippageExceedsMax();

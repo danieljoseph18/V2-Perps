@@ -18,8 +18,7 @@ library Referral {
         uint256 totalReduction = _fee.percentage(discountPercentage);
 
         // 50% goes to user as extra collateral, 50% goes to code owner
-        uint256 discount = totalReduction / 2; // 0.000100020004000800.15 ether = 0.25 USD
-
+        uint256 discount = totalReduction / 2;
         affiliateRebate = totalReduction - discount; // Ensure full amount is accounted for in case of rounding down
 
         codeOwner = referralStorage.getAffiliateFromUser(_account);

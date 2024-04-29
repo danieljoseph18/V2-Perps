@@ -64,7 +64,7 @@ contract ReferralStorage is OwnableRoles, IReferralStorage, ReentrancyGuard {
         emit SetReferrerTier(_referrer, _tierId);
     }
 
-    function setTraderReferralCode(address _account, bytes32 _code) external override onlyOwner {
+    function setTraderReferralCode(address _account, bytes32 _code) external override onlyHandler {
         _setTraderReferralCode(_account, _code);
     }
 
