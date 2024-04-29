@@ -376,23 +376,19 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     }
 
     function getStorage(string calldata _ticker) external view returns (Pool.Storage memory) {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        return marketStorage[assetId];
+        return marketStorage[keccak256(abi.encode(_ticker))];
     }
 
     function getConfig(string calldata _ticker) external view returns (Pool.Config memory) {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        return marketStorage[assetId].config;
+        return marketStorage[keccak256(abi.encode(_ticker))].config;
     }
 
     function getCumulatives(string calldata _ticker) external view returns (Pool.Cumulatives memory) {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        return marketStorage[assetId].cumulatives;
+        return marketStorage[keccak256(abi.encode(_ticker))].cumulatives;
     }
 
     function getImpactPool(string calldata _ticker) external view returns (uint256) {
-        bytes32 assetId = keccak256(abi.encode(_ticker));
-        return marketStorage[assetId].impactPool;
+        return marketStorage[keccak256(abi.encode(_ticker))].impactPool;
     }
 
     function getRequest(bytes32 _key) external view returns (Pool.Input memory) {
@@ -415,5 +411,66 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
             marketStorage[assetId].config.positiveLiquidityScalar,
             marketStorage[assetId].config.negativeLiquidityScalar
         );
+    }
+
+    function getLastUpdate(string calldata _ticker) external view returns (uint48) {
+        return marketStorage[keccak256(abi.encode(_ticker))].lastUpdate;
+    }
+
+    function getFundingRates(string calldata _ticker) external view returns (int64, int64) {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return (marketStorage[assetId].fundingRate, marketStorage[assetId].fundingRateVelocity);
+    }
+
+    function getCumulativeBorrowFees(string memory _ticker)
+        external
+        view
+        returns (uint256 longCumulativeBorrowFees, uint256 shortCumulativeBorrowFees)
+    {
+        bytes32 assetId = keccak256(abi.encode(_ticker));
+        return (
+            marketStorage[assetId].cumulatives.longCumulativeBorrowFees,
+            marketStorage[assetId].cumulatives.shortCumulativeBorrowFees
+        );
+    }
+
+    function getCumulativeBorrowFee(string memory _ticker, bool _isLong) public view returns (uint256) {
+        return _isLong
+            ? marketStorage[keccak256(abi.encode(_ticker))].cumulatives.longCumulativeBorrowFees
+            : marketStorage[keccak256(abi.encode(_ticker))].cumulatives.shortCumulativeBorrowFees;
+    }
+
+    function getFundingAccrued(string memory _ticker) external view returns (int256) {
+        return marketStorage[keccak256(abi.encode(_ticker))].fundingAccruedUsd;
+    }
+
+    function getBorrowingRate(string memory _ticker, bool _isLong) external view returns (uint256) {
+        return _isLong
+            ? marketStorage[keccak256(abi.encode(_ticker))].longBorrowingRate
+            : marketStorage[keccak256(abi.encode(_ticker))].shortBorrowingRate;
+    }
+
+    function getMaintenanceMargin(string memory _ticker) external view returns (uint256) {
+        return marketStorage[keccak256(abi.encode(_ticker))].config.maintenanceMargin;
+    }
+
+    function getMaxLeverage(string memory _ticker) external view returns (uint8) {
+        return marketStorage[keccak256(abi.encode(_ticker))].config.maxLeverage;
+    }
+
+    function getAllocation(string memory _ticker) external view returns (uint8) {
+        return marketStorage[keccak256(abi.encode(_ticker))].allocationShare;
+    }
+
+    function getOpenInterest(string memory _ticker, bool _isLong) external view returns (uint256) {
+        return _isLong
+            ? marketStorage[keccak256(abi.encode(_ticker))].longOpenInterest
+            : marketStorage[keccak256(abi.encode(_ticker))].shortOpenInterest;
+    }
+
+    function getAverageCumulativeBorrowFee(string memory _ticker, bool _isLong) external view returns (uint256) {
+        return _isLong
+            ? marketStorage[keccak256(abi.encode(_ticker))].cumulatives.weightedAvgCumulativeLong
+            : marketStorage[keccak256(abi.encode(_ticker))].cumulatives.weightedAvgCumulativeShort;
     }
 }

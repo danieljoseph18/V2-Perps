@@ -72,12 +72,12 @@ library Borrowing {
         // Get the abs size delta
         uint256 absSizeDelta = _sizeDeltaUsd.abs();
         // Get the Open Interest
-        uint256 openInterestUsd = MarketUtils.getOpenInterest(market, _ticker, _isLong);
+        uint256 openInterestUsd = market.getOpenInterest(_ticker, _isLong);
         // Get the current cumulative fee on the market
-        uint256 currentCumulative = MarketUtils.getCumulativeBorrowFee(market, _ticker, _isLong)
-            + calculatePendingFees(market, _ticker, _isLong);
+        uint256 currentCumulative =
+            market.getCumulativeBorrowFee(_ticker, _isLong) + calculatePendingFees(market, _ticker, _isLong);
         // Get the last weighted average entry cumulative fee
-        uint256 lastCumulative = MarketUtils.getAverageCumulativeBorrowFee(market, _ticker, _isLong);
+        uint256 lastCumulative = market.getAverageCumulativeBorrowFee(_ticker, _isLong);
         // If OI before is 0, or last cumulative = 0, return current cumulative
         if (openInterestUsd == 0 || lastCumulative == 0) return currentCumulative;
         // If Position is Decrease
@@ -105,9 +105,9 @@ library Borrowing {
         view
         returns (uint256 pendingFees)
     {
-        uint256 borrowRate = MarketUtils.getBorrowingRate(market, _ticker, _isLong);
+        uint256 borrowRate = market.getBorrowingRate(_ticker, _isLong);
         if (borrowRate == 0) return 0;
-        uint256 timeElapsed = block.timestamp - MarketUtils.getLastUpdate(market, _ticker);
+        uint256 timeElapsed = block.timestamp - market.getLastUpdate(_ticker);
         if (timeElapsed == 0) return 0;
         pendingFees = borrowRate * timeElapsed;
     }
@@ -134,7 +134,7 @@ library Borrowing {
         bool _isLong
     ) public view returns (uint256 borrowRatePerDay) {
         // Factor = (open interest usd / max open interest usd)
-        uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
+        uint256 openInterest = market.getOpenInterest(_ticker, _isLong);
 
         uint256 maxOi =
             MarketUtils.getMaxOpenInterest(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
@@ -154,9 +154,9 @@ library Borrowing {
         view
         returns (uint256 totalFeesOwedUsd)
     {
-        uint256 accumulatedFees = MarketUtils.getCumulativeBorrowFee(market, _ticker, _isLong)
-            - MarketUtils.getAverageCumulativeBorrowFee(market, _ticker, _isLong);
-        uint256 openInterest = MarketUtils.getOpenInterest(market, _ticker, _isLong);
+        uint256 accumulatedFees =
+            market.getCumulativeBorrowFee(_ticker, _isLong) - market.getAverageCumulativeBorrowFee(_ticker, _isLong);
+        uint256 openInterest = market.getOpenInterest(_ticker, _isLong);
         // Total Fees Owed = cumulativeFeePercentage * openInterestUsd
         totalFeesOwedUsd = accumulatedFees.mulWad(openInterest);
     }

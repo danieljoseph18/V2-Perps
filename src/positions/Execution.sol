@@ -639,7 +639,7 @@ library Execution {
         _position.borrowingParams.feesOwed = 0;
         // Update the position's borrowing parameters
         (_position.borrowingParams.lastLongCumulativeBorrowFee, _position.borrowingParams.lastShortCumulativeBorrowFee)
-        = MarketUtils.getCumulativeBorrowFees(market, _position.ticker);
+        = market.getCumulativeBorrowFees(_position.ticker);
 
         return (_position, borrowFee);
     }
@@ -888,7 +888,7 @@ library Execution {
         returns (uint256 maintenanceCollateral)
     {
         // Expand to 18 decimals
-        uint256 maintenancePercentage = MarketUtils.getMaintenanceMargin(market, _position.ticker).expandDecimals(4, 18);
+        uint256 maintenancePercentage = market.getMaintenanceMargin(_position.ticker).expandDecimals(4, 18);
         maintenanceCollateral = _position.collateral.percentage(maintenancePercentage);
     }
 }

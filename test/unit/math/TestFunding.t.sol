@@ -2,31 +2,31 @@
 pragma solidity 0.8.23;
 
 import "forge-std/Test.sol";
-import {Deploy} from "../../../script/Deploy.s.sol";
-import {IMarket} from "../../../src/markets/Market.sol";
-import {Pool} from "../../../src/markets/Pool.sol";
-import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
-import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
-import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-import {PositionManager} from "../../../src/router/PositionManager.sol";
-import {Router} from "../../../src/router/Router.sol";
-import {WETH} from "../../../src/tokens/WETH.sol";
-import {Oracle} from "../../../src/oracle/Oracle.sol";
+import {Deploy} from "script/Deploy.s.sol";
+import {IMarket} from "src/markets/Market.sol";
+import {Pool} from "src/markets/Pool.sol";
+import {MarketFactory, IMarketFactory} from "src/markets/MarketFactory.sol";
+import {IPriceFeed} from "src/oracle/interfaces/IPriceFeed.sol";
+import {TradeStorage, ITradeStorage} from "src/positions/TradeStorage.sol";
+import {ReferralStorage} from "src/referrals/ReferralStorage.sol";
+import {PositionManager} from "src/router/PositionManager.sol";
+import {Router} from "src/router/Router.sol";
+import {WETH} from "src/tokens/WETH.sol";
+import {Oracle} from "src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
-import {Position} from "../../../src/positions/Position.sol";
-import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
-import {RewardTracker} from "../../../src/rewards/RewardTracker.sol";
-import {LiquidityLocker} from "../../../src/rewards/LiquidityLocker.sol";
-import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
-import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
+import {Position} from "src/positions/Position.sol";
+import {MarketUtils} from "src/markets/MarketUtils.sol";
+import {RewardTracker} from "src/rewards/RewardTracker.sol";
+import {LiquidityLocker} from "src/rewards/LiquidityLocker.sol";
+import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
+import {TransferStakedTokens} from "src/rewards/TransferStakedTokens.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
-import {MathUtils} from "../../../src/libraries/MathUtils.sol";
-import {Referral} from "../../../src/referrals/Referral.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
-import {Execution} from "../../../src/positions/Execution.sol";
-import {Funding} from "../../../src/libraries/Funding.sol";
+import {MathUtils} from "src/libraries/MathUtils.sol";
+import {Referral} from "src/referrals/Referral.sol";
+import {IERC20} from "src/tokens/interfaces/IERC20.sol";
+import {PriceImpact} from "src/libraries/PriceImpact.sol";
+import {Execution} from "src/positions/Execution.sol";
+import {Funding} from "src/libraries/Funding.sol";
 
 contract TestFunding is Test {
     using MathUtils for uint256;
@@ -204,13 +204,17 @@ contract TestFunding is Test {
     }
 
     function test_funding_rate_changes_over_time() public setUpMarkets {
-        // Get market storage
-        Pool.Storage memory store = market.getStorage(ethTicker);
-        store.fundingRate = 0;
-        store.fundingRateVelocity = 0.0025e18;
-        store.lastUpdate = uint48(block.timestamp);
         // Mock an existing rate and velocity
-        vm.mockCall(address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(store));
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getFundingRates.selector, ethTicker),
+            abi.encode(0, 0.0025e18)
+        );
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getLastUpdate.selector, ethTicker),
+            abi.encode(uint48(block.timestamp))
+        );
         // get current funding rate
         int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
         /**
@@ -266,14 +270,17 @@ contract TestFunding is Test {
     // Test funding trajectory with sign flip
 
     function test_funding_rate_remains_consistent_after_sign_flip() public setUpMarkets {
-        // Get market storage
-        Pool.Storage memory store = market.getStorage(ethTicker);
-        store.fundingRate = -0.0005e18;
-        store.fundingRateVelocity = 0.0025e18;
-        store.lastUpdate = uint48(block.timestamp);
-
         // Mock an existing negative rate and positive velocity
-        vm.mockCall(address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(store));
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getFundingRates.selector, ethTicker),
+            abi.encode(-0.0005e18, 0.0025e18)
+        );
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getLastUpdate.selector, ethTicker),
+            abi.encode(uint48(block.timestamp))
+        );
         // get current funding rate
 
         int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);

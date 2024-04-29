@@ -65,8 +65,8 @@ library PriceImpact {
         ) = market.getImpactValues(_request.input.ticker);
         state = _getImpactValues(market, _request.input.ticker);
         // Get long / short Oi -> used to calculate skew
-        state.longOi = MarketUtils.getOpenInterest(market, _request.input.ticker, true);
-        state.shortOi = MarketUtils.getOpenInterest(market, _request.input.ticker, false);
+        state.longOi = market.getOpenInterest(_request.input.ticker, true);
+        state.shortOi = market.getOpenInterest(_request.input.ticker, false);
         // Used to calculate the impact on available liquidity
         if (_request.input.isLong) {
             state.availableOi = MarketUtils.getAvailableOiUsd(

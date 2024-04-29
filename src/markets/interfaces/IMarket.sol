@@ -91,4 +91,18 @@ interface IMarket {
     function getCumulatives(string calldata _ticker) external view returns (Pool.Cumulatives memory);
     function getImpactPool(string calldata _ticker) external view returns (uint256);
     function getImpactValues(string calldata _ticker) external view returns (int16, int16, int16, int16);
+    function getLastUpdate(string calldata _ticker) external view returns (uint48);
+    function getFundingRates(string calldata _ticker) external view returns (int64, int64);
+    function getCumulativeBorrowFees(string memory _ticker)
+        external
+        view
+        returns (uint256 longCumulativeBorrowFees, uint256 shortCumulativeBorrowFees);
+    function getCumulativeBorrowFee(string memory _ticker, bool _isLong) external view returns (uint256);
+    function getFundingAccrued(string memory _ticker) external view returns (int256);
+    function getBorrowingRate(string memory _ticker, bool _isLong) external view returns (uint256);
+    function getMaintenanceMargin(string memory _ticker) external view returns (uint256);
+    function getMaxLeverage(string memory _ticker) external view returns (uint8);
+    function getAllocation(string memory _ticker) external view returns (uint8);
+    function getOpenInterest(string memory _ticker, bool _isLong) external view returns (uint256);
+    function getAverageCumulativeBorrowFee(string memory _ticker, bool _isLong) external view returns (uint256);
 }

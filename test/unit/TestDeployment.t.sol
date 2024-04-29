@@ -2,13 +2,13 @@
 pragma solidity 0.8.23;
 
 import "forge-std/Test.sol";
-import {Deploy} from "../../script/Deploy.s.sol";
-import {MarketFactory} from "../../src/markets/MarketFactory.sol";
-import {IPriceFeed} from "../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage} from "../../src/positions/TradeStorage.sol";
-import {ReferralStorage} from "../../src/referrals/ReferralStorage.sol";
-import {PositionManager} from "../../src/router/PositionManager.sol";
-import {Router} from "../../src/router/Router.sol";
+import {Deploy} from "script/Deploy.s.sol";
+import {MarketFactory} from "src/markets/MarketFactory.sol";
+import {IPriceFeed} from "src/oracle/interfaces/IPriceFeed.sol";
+import {TradeStorage} from "src/positions/TradeStorage.sol";
+import {ReferralStorage} from "src/referrals/ReferralStorage.sol";
+import {PositionManager} from "src/router/PositionManager.sol";
+import {Router} from "src/router/Router.sol";
 
 contract TestDeployment is Test {
     MarketFactory marketFactory;

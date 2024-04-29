@@ -187,7 +187,7 @@ library Position {
         internal
         view
     {
-        uint8 maxLeverage = MarketUtils.getMaxLeverage(market, _ticker);
+        uint8 maxLeverage = market.getMaxLeverage(_ticker);
 
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = _sizeUsd / _collateralUsd;
@@ -272,8 +272,7 @@ library Position {
         uint256 _collateralUsd
     ) internal view returns (Data memory position) {
         // Get Entry Funding & Borrowing Values
-        (uint256 longBorrowFee, uint256 shortBorrowFee) =
-            MarketUtils.getCumulativeBorrowFees(market, _request.input.ticker);
+        (uint256 longBorrowFee, uint256 shortBorrowFee) = market.getCumulativeBorrowFees(_request.input.ticker);
         // get Trade Value in USD
         position = Data({
             ticker: _request.input.ticker,
@@ -284,7 +283,7 @@ library Position {
             weightedAvgEntryPrice: _impactedPrice,
             lastUpdate: uint48(block.timestamp),
             isLong: _request.input.isLong,
-            fundingParams: FundingParams(MarketUtils.getFundingAccrued(market, _request.input.ticker), 0),
+            fundingParams: FundingParams(market.getFundingAccrued(_request.input.ticker), 0),
             borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
             stopLossKey: _request.stopLossKey,
             takeProfitKey: _request.takeProfitKey
@@ -423,9 +422,8 @@ library Position {
     /// @dev Units: Fees in USD (% of fees applied to position size)
     function getTotalBorrowFeesUsd(IMarket market, Data memory _position) public view returns (uint256) {
         uint256 borrowFee = _position.isLong
-            ? MarketUtils.getCumulativeBorrowFee(market, _position.ticker, true)
-                - _position.borrowingParams.lastLongCumulativeBorrowFee
-            : MarketUtils.getCumulativeBorrowFee(market, _position.ticker, false)
+            ? market.getCumulativeBorrowFee(_position.ticker, true) - _position.borrowingParams.lastLongCumulativeBorrowFee
+            : market.getCumulativeBorrowFee(_position.ticker, false)
                 - _position.borrowingParams.lastShortCumulativeBorrowFee;
         borrowFee += Borrowing.calculatePendingFees(market, _position.ticker, _position.isLong);
         uint256 feeSinceUpdate = borrowFee == 0 ? 0 : _position.size.percentage(borrowFee);

@@ -2,32 +2,32 @@
 pragma solidity 0.8.23;
 
 import "forge-std/Test.sol";
-import {Deploy} from "../../../script/Deploy.s.sol";
-import {IMarket} from "../../../src/markets/Market.sol";
-import {Pool} from "../../../src/markets/Pool.sol";
-import {IVault} from "../../../src/markets/Vault.sol";
-import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
-import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
-import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-import {PositionManager} from "../../../src/router/PositionManager.sol";
-import {Router} from "../../../src/router/Router.sol";
-import {WETH} from "../../../src/tokens/WETH.sol";
-import {Oracle} from "../../../src/oracle/Oracle.sol";
+import {Deploy} from "script/Deploy.s.sol";
+import {IMarket} from "src/markets/Market.sol";
+import {Pool} from "src/markets/Pool.sol";
+import {IVault} from "src/markets/Vault.sol";
+import {MarketFactory, IMarketFactory} from "src/markets/MarketFactory.sol";
+import {IPriceFeed} from "src/oracle/interfaces/IPriceFeed.sol";
+import {TradeStorage, ITradeStorage} from "src/positions/TradeStorage.sol";
+import {ReferralStorage} from "src/referrals/ReferralStorage.sol";
+import {PositionManager} from "src/router/PositionManager.sol";
+import {Router} from "src/router/Router.sol";
+import {WETH} from "src/tokens/WETH.sol";
+import {Oracle} from "src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
-import {Position} from "../../../src/positions/Position.sol";
-import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
-import {RewardTracker} from "../../../src/rewards/RewardTracker.sol";
-import {LiquidityLocker} from "../../../src/rewards/LiquidityLocker.sol";
-import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
-import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
+import {Position} from "src/positions/Position.sol";
+import {MarketUtils} from "src/markets/MarketUtils.sol";
+import {RewardTracker} from "src/rewards/RewardTracker.sol";
+import {LiquidityLocker} from "src/rewards/LiquidityLocker.sol";
+import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
+import {TransferStakedTokens} from "src/rewards/TransferStakedTokens.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
-import {MathUtils} from "../../../src/libraries/MathUtils.sol";
-import {Referral} from "../../../src/referrals/Referral.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {PriceImpact} from "../../../src/libraries/PriceImpact.sol";
-import {Execution} from "../../../src/positions/Execution.sol";
-import {Units} from "../../../src/libraries/Units.sol";
+import {MathUtils} from "src/libraries/MathUtils.sol";
+import {Referral} from "src/referrals/Referral.sol";
+import {IERC20} from "src/tokens/interfaces/IERC20.sol";
+import {PriceImpact} from "src/libraries/PriceImpact.sol";
+import {Execution} from "src/positions/Execution.sol";
+import {Units} from "src/libraries/Units.sol";
 
 contract TestPriceImpact is Test {
     using MathUtils for uint256;
@@ -220,7 +220,7 @@ contract TestPriceImpact is Test {
         bool isIncrease;
     }
 
-    function testPriceImpact(PriceImpactTest memory _test) public setUpNoLiquidity {
+    function test_price_impact(PriceImpactTest memory _test) public setUpNoLiquidity {
         // Bound Inputs
         _test.longAvailable = bound(_test.longAvailable, 1 ether, 100_000 ether);
         _test.shortAvailable = bound(_test.shortAvailable, 3000e6, 300_000_000e6);
@@ -255,11 +255,16 @@ contract TestPriceImpact is Test {
 
         vm.assume(_test.sizeDelta > 0);
 
-        // Mock Storage
-        Pool.Storage memory store = market.getStorage(ethTicker);
-        store.longOpenInterest = _test.longOi;
-        store.shortOpenInterest = _test.shortOi;
-        vm.mockCall(address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(store));
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getOpenInterest.selector, ethTicker, true),
+            abi.encode(_test.longOi)
+        );
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getOpenInterest.selector, ethTicker, false),
+            abi.encode(_test.shortOi)
+        );
         vm.mockCall(
             address(vault),
             abi.encodeWithSelector(vault.totalAvailableLiquidity.selector, true),

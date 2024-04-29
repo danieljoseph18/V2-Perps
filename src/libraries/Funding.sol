@@ -43,7 +43,7 @@ library Funding {
         (int64 fundingRate, int256 unrecordedFunding) = _getUnrecordedFundingWithRate(market, _ticker, _indexPrice);
 
         nextRate = fundingRate;
-        nextFundingAccrued = MarketUtils.getFundingAccrued(market, _ticker) + unrecordedFunding;
+        nextFundingAccrued = market.getFundingAccrued(_ticker) + unrecordedFunding;
     }
 
     /**
@@ -62,7 +62,7 @@ library Funding {
         // currentFundingRate = 0 + 0.0025 * (29,000 / 86,400)
         //                    = 0 + 0.0025 * 0.33564815
         //                    = 0.00083912
-        (int64 fundingRate, int64 fundingRateVelocity) = MarketUtils.getFundingRates(market, _ticker);
+        (int64 fundingRate, int64 fundingRateVelocity) = market.getFundingRates(_ticker);
         return fundingRate + fundingRateVelocity.sMulWad(_getProportionalFundingElapsed(market, _ticker)).toInt64();
     }
 
@@ -110,7 +110,7 @@ library Funding {
      * 18 D.P
      */
     function _getProportionalFundingElapsed(IMarket market, string calldata _ticker) private view returns (int64) {
-        uint48 timeElapsed = _blockTimestamp() - MarketUtils.getLastUpdate(market, _ticker);
+        uint48 timeElapsed = _blockTimestamp() - market.getLastUpdate(_ticker);
         return timeElapsed.divWad(SECONDS_IN_DAY).toInt64();
     }
 
@@ -124,7 +124,7 @@ library Funding {
     {
         fundingRate = getCurrentFundingRate(market, _ticker);
 
-        (int256 storedFundingRate,) = MarketUtils.getFundingRates(market, _ticker);
+        (int256 storedFundingRate,) = market.getFundingRates(_ticker);
 
         // Minus sign is needed as funding flows in the opposite direction of the skew
         // Essentially taking an average, where Signed Precision == units
@@ -135,8 +135,8 @@ library Funding {
     }
 
     function _calculateSkewUsd(IMarket market, string calldata _ticker) private view returns (int256 skewUsd) {
-        uint256 longOI = MarketUtils.getOpenInterest(market, _ticker, true);
-        uint256 shortOI = MarketUtils.getOpenInterest(market, _ticker, false);
+        uint256 longOI = market.getOpenInterest(_ticker, true);
+        uint256 shortOI = market.getOpenInterest(_ticker, false);
 
         skewUsd = longOI.diff(shortOI);
     }

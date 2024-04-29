@@ -2,24 +2,24 @@
 pragma solidity 0.8.23;
 
 import "forge-std/Test.sol";
-import {Deploy} from "../../../script/Deploy.s.sol";
-import {IMarket} from "../../../src/markets/Market.sol";
-import {MarketFactory, IMarketFactory} from "../../../src/markets/MarketFactory.sol";
-import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
-import {TradeStorage, ITradeStorage} from "../../../src/positions/TradeStorage.sol";
-import {ReferralStorage} from "../../../src/referrals/ReferralStorage.sol";
-import {PositionManager} from "../../../src/router/PositionManager.sol";
-import {Router} from "../../../src/router/Router.sol";
-import {WETH} from "../../../src/tokens/WETH.sol";
-import {Oracle} from "../../../src/oracle/Oracle.sol";
+import {Deploy} from "script/Deploy.s.sol";
+import {IMarket} from "src/markets/Market.sol";
+import {MarketFactory, IMarketFactory} from "src/markets/MarketFactory.sol";
+import {IPriceFeed} from "src/oracle/interfaces/IPriceFeed.sol";
+import {TradeStorage, ITradeStorage} from "src/positions/TradeStorage.sol";
+import {ReferralStorage} from "src/referrals/ReferralStorage.sol";
+import {PositionManager} from "src/router/PositionManager.sol";
+import {Router} from "src/router/Router.sol";
+import {WETH} from "src/tokens/WETH.sol";
+import {Oracle} from "src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
-import {Position} from "../../../src/positions/Position.sol";
-import {MarketUtils} from "../../../src/markets/MarketUtils.sol";
-import {RewardTracker} from "../../../src/rewards/RewardTracker.sol";
-import {LiquidityLocker} from "../../../src/rewards/LiquidityLocker.sol";
-import {FeeDistributor} from "../../../src/rewards/FeeDistributor.sol";
-import {TransferStakedTokens} from "../../../src/rewards/TransferStakedTokens.sol";
-import {MathUtils} from "../../../src/libraries/MathUtils.sol";
+import {Position} from "src/positions/Position.sol";
+import {MarketUtils} from "src/markets/MarketUtils.sol";
+import {RewardTracker} from "src/rewards/RewardTracker.sol";
+import {LiquidityLocker} from "src/rewards/LiquidityLocker.sol";
+import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
+import {TransferStakedTokens} from "src/rewards/TransferStakedTokens.sol";
+import {MathUtils} from "src/libraries/MathUtils.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 
 contract TestPositions is Test {
