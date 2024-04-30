@@ -2,7 +2,7 @@
 pragma solidity 0.8.23;
 
 import {IMarket} from "../../markets/interfaces/IMarket.sol";
-import {IMarketFactory} from "../../markets/interfaces/IMarketFactory.sol";
+import {IMarketFactory} from "../../factory/interfaces/IMarketFactory.sol";
 
 interface IPriceFeed {
     enum RequestType {

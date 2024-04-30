@@ -4,25 +4,25 @@ pragma solidity 0.8.23;
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
-import {Market} from "./Market.sol";
-import {IMarket} from "./interfaces/IMarket.sol";
+import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {FeedRegistryInterface} from "@chainlink/contracts/src/v0.8/interfaces/FeedRegistryInterface.sol";
 import {IUniswapV3Factory} from "../oracle/interfaces/IUniswapV3Factory.sol";
 import {IUniswapV2Factory} from "../oracle/interfaces/IUniswapV2Factory.sol";
-import {Vault} from "./Vault.sol";
-import {TradeStorage} from "../positions/TradeStorage.sol";
-import {RewardTracker} from "../rewards/RewardTracker.sol";
+import {IVault} from "../markets/interfaces/IVault.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IReferralStorage} from "../referrals/ReferralStorage.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
-import {LiquidityLocker} from "../rewards/LiquidityLocker.sol";
-import {TradeEngine} from "../positions/TradeEngine.sol";
+import {ILiquidityLocker} from "../rewards/interfaces/ILiquidityLocker.sol";
+import {ITradeEngine} from "../positions/interfaces/ITradeEngine.sol";
 import {TransferStakedTokens} from "../rewards/TransferStakedTokens.sol";
-import {Pool} from "./Pool.sol";
+import {Pool} from "../markets/Pool.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
+import {Deployer} from "./Deployer.sol";
 
 /// @dev Needs MarketFactory Role
 /**
@@ -55,7 +55,9 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     uint64 private constant FEE_FOR_EXECUTION = 0.1e18;
     uint128 private constant MIN_COLLATERAL_USD = 2e30;
     uint8 private constant MIN_TIME_TO_EXECUTE = 1 minutes;
+    uint8 private constant DECIMALS = 18;
 
+    // @audit - rename, misleading
     EnumerableMap.DeployParamsMap private requests;
     mapping(address market => bool isMarket) public isMarket;
     mapping(uint256 index => address market) public markets;
@@ -71,6 +73,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     address public feeReceiver;
     uint256 public marketCreationFee;
     uint256 public marketExecutionFee;
+    uint256 public priceSupportFee;
     /**
      * Stores the feed ids of all of the valid pyth price feeds.
      * This enables us to ensure that the pyth price feed a user inputs as
@@ -85,6 +88,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
      */
     bytes32 public stablecoinMerkleRoot;
     uint256 cumulativeMarketIndex;
+    // Used to ensure the uniqueness of each request for Market Creation
     uint256 requestNonce;
 
     constructor(address _weth, address _usdc) {
@@ -137,11 +141,17 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
-    function updateMarketFees(uint256 _marketCreationFee, uint256 _marketExecutionFee) external onlyOwner {
+    function updateMarketFees(uint256 _marketCreationFee, uint256 _marketExecutionFee, uint256 _priceSupportFee)
+        external
+        onlyOwner
+    {
         marketCreationFee = _marketCreationFee;
         marketExecutionFee = _marketExecutionFee;
+        priceSupportFee = _priceSupportFee;
     }
 
+    /// @dev - Merkle Trees used as whitelists for all valid Pyth Price Feed Ids and Stablecoin Addresses
+    /// These are used for feed validation w.r.t secondary strategies
     function updateMerkleRoots(bytes32 _pythMerkleRoot, bytes32 _stablecoinMerkleRoot) external onlyOwner {
         pythMerkleRoot = _pythMerkleRoot;
         stablecoinMerkleRoot = _stablecoinMerkleRoot;
@@ -169,21 +179,13 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
      * ========================= User Interaction Functions =========================
      */
     /// @dev Params unrelated to the request can be left blank --> merkle roots, pyth id etc.
+    /// @dev Decimals are hard-coded to 18. NFTs / non-ERC20s will be represented fractionally.
     function createNewMarket(DeployParams calldata _params) external payable nonReentrant {
-        /* Validate the Inputs */
         uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
-        if (msg.value != marketCreationFee + priceUpdateFee) revert MarketFactory_InvalidFee();
-        if (_params.owner != msg.sender) revert MarketFactory_InvalidOwner();
-        if (_params.tokenData.tokenDecimals == 0) revert MarketFactory_InvalidDecimals();
-        if (bytes(_params.indexTokenTicker).length > 15) revert MarketFactory_InvalidTicker();
-        if (_params.requestTimestamp != uint48(block.timestamp)) revert MarketFactory_InvalidTimestamp();
-        if (_params.tokenData.hasSecondaryFeed) _validateSecondaryStrategy(_params);
+        if (msg.value < marketCreationFee + priceUpdateFee) revert MarketFactory_InvalidFee();
 
-        /* Create a Price Request --> used to ensure the price feed returns a valid response */
-        string[] memory args = Oracle.constructPriceArguments(_params.indexTokenTicker);
-        priceFeed.requestPriceUpdate{value: priceUpdateFee}(args, _params.owner);
+        _initializeAsset(_params, priceUpdateFee);
 
-        /* Generate a differentiated Request Key based on the inputs */
         bytes32 requestKey = _getMarketRequestKey(msg.sender, _params.indexTokenTicker);
         ++requestNonce;
 
@@ -192,6 +194,52 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
 
         // Fire Event
         emit MarketRequested(requestKey, _params.indexTokenTicker);
+    }
+
+    /**
+     * A user calls this function to request a new asset. The user must pay a fee to request the asset.
+     * The fee is used to pay for the gas required to update the price feed.
+     * This function can be used by pool owners to price an asset before adding a new one to their pool.
+     * Returns if the asset is already supported
+     * Nonce is not used to prevent duplicate requests.
+     */
+    function requestAssetPricing(DeployParams calldata _params) external payable nonReentrant {
+        uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
+        if (msg.value < priceUpdateFee + priceSupportFee) revert MarketFactory_InvalidFee();
+
+        _initializeAsset(_params, priceUpdateFee);
+
+        bytes32 requestKey = _getPriceRequestKey(_params.indexTokenTicker);
+        if (requests.contains(requestKey)) revert MarketFactory_RequestExists();
+
+        if (!requests.set(requestKey, _params)) revert MarketFactory_FailedToAddRequest();
+
+        emit AssetRequested(_params.indexTokenTicker);
+    }
+
+    /**
+     * ========================= Keeper Functions =========================
+     */
+
+    /**
+     * This function is called by a keeper to fulfill the request for support of a new asset.
+     * 2 steps are required to fully validate the pricing strategy.
+     */
+    function supportAsset(bytes32 _assetRequestKey) external payable nonReentrant {
+        DeployParams memory request = requests.get(_assetRequestKey);
+
+        // Reverts if a price wasn't signed.
+        try Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp) {}
+        catch {
+            _deleteInvalidRequest(_assetRequestKey);
+            return;
+        }
+
+        // Add the asset to the price feed
+        priceFeed.supportAsset(request.indexTokenTicker, request.tokenData, request.pythData.id);
+
+        // Send the Execution Fee to the fulfiller
+        SafeTransferLib.safeTransferETH(payable(msg.sender), priceSupportFee);
     }
 
     /// @dev - This function is to be called by executors / keepers to execute a request.
@@ -236,39 +284,45 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     /**
      * ========================= Private Functions =========================
      */
+    function _initializeAsset(DeployParams calldata _params, uint256 _priceUpdateFee) private {
+        if (bytes(_params.indexTokenTicker).length > 15) revert MarketFactory_InvalidTicker();
+        if (_params.tokenData.tokenDecimals != DECIMALS) revert MarketFactory_InvalidDecimals();
+        if (_params.requestTimestamp != uint48(block.timestamp)) revert MarketFactory_InvalidTimestamp();
+
+        if (_params.tokenData.hasSecondaryFeed) {
+            _validateSecondaryStrategy(_params);
+        }
+
+        string[] memory args = Oracle.constructPriceArguments(_params.indexTokenTicker);
+        priceFeed.requestPriceUpdate{value: _priceUpdateFee}(args, _params.owner);
+    }
+
     function _initializeMarketContracts(DeployParams memory _params) private {
         // Set Up Price Oracle
         priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythData.id);
         // Create new Market Token
-        Vault vault = new Vault(_params.owner, WETH, USDC, _params.marketTokenName, _params.marketTokenSymbol);
+        address vault = Deployer.deployVault(_params, WETH, USDC);
         // Create new Market contract
-        Market market = new Market(
-            defaultConfig, _params.owner, WETH, USDC, address(vault), _params.indexTokenTicker, _params.isMultiAsset
-        );
-        address marketAddress = address(market);
+        address market = Deployer.deployMarket(defaultConfig, _params, vault, WETH, USDC);
 
         // Create new TradeStorage contract
-        TradeStorage tradeStorage = new TradeStorage(IMarket(marketAddress), vault, referralStorage, priceFeed);
+        address tradeStorage = Deployer.deployTradeStorage(IMarket(market), IVault(vault), referralStorage, priceFeed);
         // Create new Trade Engine contract
-        TradeEngine tradeEngine = new TradeEngine(tradeStorage, IMarket(marketAddress));
+        address tradeEngine = Deployer.deployTradeEngine(IMarket(market), ITradeStorage(tradeStorage));
         // Create new Reward Tracker contract
-        RewardTracker rewardTracker = new RewardTracker(
-            IMarket(marketAddress),
-            // Prepend Staked Prefix
-            string(abi.encodePacked("Staked ", _params.marketTokenName)),
-            string(abi.encodePacked("s", _params.marketTokenSymbol))
-        );
+        address rewardTracker =
+            Deployer.deployRewardTracker(IMarket(market), _params.marketTokenName, _params.marketTokenSymbol);
         // Deploy LiquidityLocker
-        LiquidityLocker liquidityLocker =
-            new LiquidityLocker(address(rewardTracker), address(transferStakedTokens), WETH, USDC);
+        address liquidityLocker =
+            Deployer.deployLiquidityLocker(rewardTracker, address(transferStakedTokens), WETH, USDC);
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
         address tradeStorageAddress = address(tradeStorage);
-        market.initialize(tradeStorageAddress, 0.003e18);
+        IMarket(market).initialize(tradeStorageAddress, 0.003e18);
         // Initialize Vault with Market
-        vault.initialize(marketAddress, address(feeDistributor), address(rewardTracker), feeReceiver);
+        IVault(vault).initialize(market, address(feeDistributor), address(rewardTracker), feeReceiver);
         // Initialize TradeStorage with Default values
-        tradeStorage.initialize(
-            tradeEngine,
+        ITradeStorage(tradeStorage).initialize(
+            ITradeEngine(tradeEngine),
             LIQUIDATION_FEE,
             POSITION_FEE,
             ADL_FEE,
@@ -278,21 +332,21 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         );
         // Initialize RewardTracker with Default values
         address vaultAddress = address(vault);
-        rewardTracker.initialize(vaultAddress, address(feeDistributor), address(liquidityLocker));
+        IRewardTracker(rewardTracker).initialize(vaultAddress, address(feeDistributor), address(liquidityLocker));
         // Add to Storage
-        isMarket[marketAddress] = true;
-        marketsByTicker[_params.indexTokenTicker].push(marketAddress);
-        markets[cumulativeMarketIndex] = marketAddress;
+        isMarket[market] = true;
+        marketsByTicker[_params.indexTokenTicker].push(market);
+        markets[cumulativeMarketIndex] = market;
         ++cumulativeMarketIndex;
 
         // Set Market's roles (1,2,3,4,5)
-        OwnableRoles(marketAddress).grantRoles(address(positionManager), _ROLE_1);
-        OwnableRoles(marketAddress).grantRoles(_params.owner, _ROLE_2);
-        OwnableRoles(marketAddress).grantRoles(router, _ROLE_3);
-        OwnableRoles(marketAddress).grantRoles(tradeStorageAddress, _ROLE_4);
-        OwnableRoles(marketAddress).grantRoles(address(tradeEngine), _ROLE_5);
+        OwnableRoles(market).grantRoles(address(positionManager), _ROLE_1);
+        OwnableRoles(market).grantRoles(_params.owner, _ROLE_2);
+        OwnableRoles(market).grantRoles(router, _ROLE_3);
+        OwnableRoles(market).grantRoles(tradeStorageAddress, _ROLE_4);
+        OwnableRoles(market).grantRoles(address(tradeEngine), _ROLE_5);
         // Transfer ownership to super admin
-        OwnableRoles(marketAddress).transferOwnership(owner());
+        OwnableRoles(market).transferOwnership(owner());
 
         // Set Vault's roles (2,4,5)
         OwnableRoles(vaultAddress).grantRoles(_params.owner, _ROLE_2);
@@ -314,7 +368,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         OwnableRoles(address(tradeEngine)).transferOwnership(owner());
 
         // Fire Event
-        emit MarketCreated(marketAddress, _params.indexTokenTicker);
+        emit MarketCreated(market, _params.indexTokenTicker);
     }
 
     function _validateSecondaryStrategy(DeployParams calldata _params) private view {
@@ -357,6 +411,10 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         returns (bytes32 requestKey)
     {
         return keccak256(abi.encodePacked(_user, _indexTokenTicker, block.timestamp, requestNonce));
+    }
+
+    function _getPriceRequestKey(string calldata _ticker) private pure returns (bytes32 requestKey) {
+        return keccak256(abi.encodePacked(_ticker));
     }
 
     // No refunds. Fee is kept by the contract to ensure requesters play by the rules.

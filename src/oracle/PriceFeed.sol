@@ -7,7 +7,7 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
-import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
+import {IMarketFactory} from "../factory/interfaces/IMarketFactory.sol";
 import {IPriceFeed} from "./interfaces/IPriceFeed.sol";
 import {ISwapRouter} from "./interfaces/ISwapRouter.sol";
 import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
@@ -187,6 +187,10 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
 
     function updateSequencerUptimeFeed(address _sequencerUptimeFeed) external onlyOwner {
         sequencerUptimeFeed = _sequencerUptimeFeed;
+    }
+
+    function updateTokenData(string memory _ticker, TokenData memory _tokenData) external onlyOwner {
+        tokenData[_ticker] = _tokenData;
     }
 
     function setTimeToExpiration(uint48 _timeToExpiration) external onlyOwner {

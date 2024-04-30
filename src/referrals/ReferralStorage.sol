@@ -3,7 +3,7 @@ pragma solidity 0.8.23;
 
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
-import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
+import {IMarketFactory} from "../factory/interfaces/IMarketFactory.sol";
 import {ITradeEngine} from "../positions/interfaces/ITradeEngine.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";

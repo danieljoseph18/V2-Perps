@@ -5,7 +5,7 @@
 pragma solidity 0.8.23;
 
 import {EnumerableSetLib} from "./EnumerableSetLib.sol";
-import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
+import {IMarketFactory} from "../factory/interfaces/IMarketFactory.sol";
 import {Pool} from "../markets/Pool.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 

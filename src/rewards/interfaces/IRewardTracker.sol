@@ -46,4 +46,5 @@ interface IRewardTracker {
         returns (uint256 wethAmount, uint256 usdcAmount);
     function claimable(address account) external view returns (uint256 wethAmount, uint256 usdcAmount);
     function liquidityLocker() external view returns (ILiquidityLocker);
+    function initialize(address _depositToken, address _distributor, address _liquidityLocker) external;
 }

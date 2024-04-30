@@ -133,6 +133,8 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         _accumulateFees(_amount, _isLong);
     }
 
+    // @audit - long fees go to long LPs, short to short LPs
+    // Or can we split them 50/50 to encourage arbitrage???
     function batchWithdrawFees() external onlyRoles(_ROLE_2) nonReentrant {
         uint256 longFees = longAccumulatedFees;
         uint256 shortFees = shortAccumulatedFees;

@@ -9,7 +9,7 @@ import {IRewardTracker} from "./interfaces/IRewardTracker.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
-import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
+import {IMarketFactory} from "../factory/interfaces/IMarketFactory.sol";
 
 contract FeeDistributor is ReentrancyGuard, OwnableRoles {
     using SafeTransferLib for IERC20;

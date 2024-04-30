@@ -101,6 +101,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
      * ========================= Admin Functions  =========================
      */
 
+    // @audit - are we checking price here?
     function addToken(
         IPriceFeed priceFeed,
         Pool.Config calldata _config,
@@ -155,9 +156,10 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         _reallocate(priceFeed, _newAllocations, _priceRequestKey);
     }
 
-    // @audit - need to update roles accordingly
     function transferPoolOwnership(address _newOwner) external {
         if (msg.sender != poolOwner || _newOwner == address(0)) revert Market_InvalidPoolOwner();
+        _removeRoles(msg.sender, _ROLE_2);
+        _grantRoles(_newOwner, _ROLE_2);
         poolOwner = _newOwner;
     }
 

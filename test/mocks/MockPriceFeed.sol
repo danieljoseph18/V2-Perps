@@ -6,7 +6,7 @@ import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/l
 import {IMarket} from "../../../src/markets/interfaces/IMarket.sol";
 import {EnumerableSetLib} from "../../src/libraries/EnumerableSetLib.sol";
 import {EnumerableMap} from "../../../src/libraries/EnumerableMap.sol";
-import {IMarketFactory} from "../../../src/markets/interfaces/IMarketFactory.sol";
+import {IMarketFactory} from "../../../src/factory/interfaces/IMarketFactory.sol";
 import {IPriceFeed} from "../../../src/oracle/interfaces/IPriceFeed.sol";
 import {ISwapRouter} from "../../src/oracle/interfaces/ISwapRouter.sol";
 import {IUniswapV3Factory} from "../../src/oracle/interfaces/IUniswapV3Factory.sol";

@@ -2,13 +2,15 @@
 pragma solidity 0.8.23;
 
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
-import {Pool} from "../Pool.sol";
+import {Pool} from "../../markets/Pool.sol";
 
 interface IMarketFactory {
     event MarketFactoryInitialized(address priceStorage);
     event MarketCreated(address market, string ticker);
     event DefaultConfigSet();
-    event MarketRequested(bytes32 requestKey, string indexTokenTicker);
+    event MarketRequested(bytes32 indexed requestKey, string indexed indexTokenTicker);
+    event AssetSupported(string indexed ticker);
+    event AssetRequested(string indexed ticker);
 
     error MarketFactory_AlreadyInitialized();
     error MarketFactory_FailedToAddMarket();
@@ -20,6 +22,8 @@ interface IMarketFactory {
     error MarketFactory_InvalidTicker();
     error MarketFactory_SelfExecution();
     error MarketFactory_InvalidTimestamp();
+    error MarketFactory_RequestExists();
+    error MarketFactory_FailedToAddRequest();
 
     struct DeployParams {
         bool isMultiAsset;

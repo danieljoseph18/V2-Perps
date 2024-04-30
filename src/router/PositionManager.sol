@@ -4,7 +4,7 @@ pragma solidity 0.8.23;
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {ITradeEngine} from "../positions/interfaces/ITradeEngine.sol";
-import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
+import {IMarketFactory} from "../factory/interfaces/IMarketFactory.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";

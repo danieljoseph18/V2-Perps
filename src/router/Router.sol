@@ -5,7 +5,7 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {IMarketFactory} from "../markets/interfaces/IMarketFactory.sol";
+import {IMarketFactory} from "../factory/interfaces/IMarketFactory.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {Position} from "../positions/Position.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
@@ -290,6 +290,12 @@ contract Router is ReentrancyGuard, OwnableRoles {
         if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();
         string[] memory args = Oracle.constructMultiPriceArgs(market);
         priceRequestKey = priceFeed.requestPriceUpdate{value: msg.value}(args, msg.sender);
+    }
+
+    function requestPricingForAsset(string calldata _ticker) external payable returns (bytes32 priceRequestKey) {
+        uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
+        if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();
+        priceRequestKey = _requestPriceUpdate(msg.value, _ticker);
     }
 
     /**

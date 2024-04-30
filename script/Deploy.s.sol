@@ -3,7 +3,7 @@ pragma solidity 0.8.23;
 
 import {Script} from "forge-std/Script.sol";
 import {HelperConfig, IHelperConfig} from "./HelperConfig.s.sol";
-import {MarketFactory} from "../src/markets/MarketFactory.sol";
+import {MarketFactory} from "../src/factory/MarketFactory.sol";
 import {PriceFeed, IPriceFeed} from "../src/oracle/PriceFeed.sol";
 import {MockPriceFeed} from "../test/mocks/MockPriceFeed.sol";
 import {TradeStorage} from "../src/positions/TradeStorage.sol";

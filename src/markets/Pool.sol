@@ -19,17 +19,18 @@ library Pool {
     error Pool_InvalidSkewScalar();
     error Pool_InvalidLiquidityScalar();
     error Pool_InvalidUpdate();
+    error Pool_InvalidMaintenanceMargin();
 
     uint8 private constant MAX_ASSETS = 100;
-    uint32 private constant MAX_LEVERAGE = 1000; // Max 1000x leverage
-    uint64 private constant MIN_MAINTENANCE_MARGIN = 50; // 0.5%
-    uint64 private constant MAX_MAINTENANCE_MARGIN = 1000; // 10%
-    uint64 private constant MIN_RESERVE_FACTOR = 1000; // 10% reserve factor
-    uint64 private constant MAX_RESERVE_FACTOR = 5000; // 50% reserve factor
-    int64 private constant MIN_VELOCITY = 10; // 0.1% per day
-    int64 private constant MAX_VELOCITY = 2000; // 20% per day
-    int256 private constant MIN_SKEW_SCALE = 1000; // $1000
-    int256 private constant MAX_SKEW_SCALE = 10_000_000_000; // $10 Bn
+    uint16 private constant MAX_LEVERAGE = 1000; // Max 1000x leverage
+    uint8 private constant MIN_MAINTENANCE_MARGIN = 50; // 0.5%
+    uint16 private constant MAX_MAINTENANCE_MARGIN = 1000; // 10%
+    uint16 private constant MIN_RESERVE_FACTOR = 1000; // 10% reserve factor
+    uint16 private constant MAX_RESERVE_FACTOR = 5000; // 50% reserve factor
+    int8 private constant MIN_VELOCITY = 10; // 0.1% per day
+    int16 private constant MAX_VELOCITY = 2000; // 20% per day
+    int16 private constant MIN_SKEW_SCALE = 1000; // $1000
+    int48 private constant MAX_SKEW_SCALE = 10_000_000_000; // $10 Bn
     int16 private constant MAX_SCALAR = 10000;
     uint256 private constant _ROLE_5 = 1 << 5;
 
@@ -276,7 +277,7 @@ library Pool {
         }
         // Check maintenance margin is within bounds
         if (_config.maintenanceMargin < MIN_MAINTENANCE_MARGIN || _config.maintenanceMargin > MAX_MAINTENANCE_MARGIN) {
-            revert Pool_InvalidLeverage();
+            revert Pool_InvalidMaintenanceMargin();
         }
         // Check the Reserve Factor is within bounds
         if (_config.reserveFactor < MIN_RESERVE_FACTOR || _config.reserveFactor > MAX_RESERVE_FACTOR) {

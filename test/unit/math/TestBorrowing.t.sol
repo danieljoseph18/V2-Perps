@@ -5,7 +5,7 @@ import "forge-std/Test.sol";
 import {Deploy} from "script/Deploy.s.sol";
 import {IMarket} from "src/markets/Market.sol";
 import {IVault} from "src/markets/Vault.sol";
-import {MarketFactory, IMarketFactory} from "src/markets/MarketFactory.sol";
+import {MarketFactory, IMarketFactory} from "src/factory/MarketFactory.sol";
 import {IPriceFeed} from "src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage, ITradeStorage} from "src/positions/TradeStorage.sol";
 import {ReferralStorage} from "src/referrals/ReferralStorage.sol";
