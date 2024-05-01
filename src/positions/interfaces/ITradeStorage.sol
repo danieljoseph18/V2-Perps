@@ -5,7 +5,6 @@ import {Position} from "../../positions/Position.sol";
 import {Execution} from "../Execution.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {IMarket} from "../../markets/interfaces/IMarket.sol";
-import {ITradeEngine} from "./ITradeEngine.sol";
 
 interface ITradeStorage {
     event TradeStorageInitialized(uint256 indexed _liquidationFee, uint256 indexed _tradingFee);
@@ -22,9 +21,9 @@ interface ITradeStorage {
     error TradeStorage_OrderRemovalFailed();
     error TradeStorage_PositionRemovalFailed();
     error TradeStorage_InvalidExecutionTime();
+    error TradeStorage_InvalidCallback();
 
     function initialize(
-        ITradeEngine _tradeEngine,
         uint64 _liquidationFee, // 0.05e18 = 5%
         uint64 _positionFee, // 0.001e18 = 0.1%
         uint64 _adlFee, // Percentage of the output amount that goes to the ADL executor, 18 D.P

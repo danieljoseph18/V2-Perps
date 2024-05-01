@@ -5,7 +5,6 @@ import {IMarket} from "./IMarket.sol";
 import {Oracle} from "../../oracle/Oracle.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {IVault} from "./IVault.sol";
-import {IRewardTracker} from "../../rewards/interfaces/IRewardTracker.sol";
 import {Pool} from "../Pool.sol";
 
 interface IMarket {

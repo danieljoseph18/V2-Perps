@@ -83,7 +83,7 @@ library Execution {
     uint64 private constant MAX_PNL_FACTOR = 0.45e18;
     uint64 private constant TARGET_PNL_FACTOR = 0.35e18;
     uint64 private constant MIN_PROFIT_PERCENTAGE = 0.05e18;
-    uint256 private constant _ROLE_4 = 1 << 4;
+    uint256 private constant _ROLE_1 = 1 << 1;
 
     /**
      * ========================= Construction Functions =========================
@@ -97,8 +97,8 @@ library Execution {
         bytes32 _requestKey,
         address _feeReceiver
     ) external view returns (Prices memory prices, Position.Request memory request) {
-        // TradeEngine uses delegate call, so msg.sender in this context should be TradeStorage
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert Execution_AccessDenied();
+        // TradeStorage uses delegate calls, so msg.sender in this context should be Position Manager
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_1) revert Execution_AccessDenied();
         // Fetch and validate request from key
         request = tradeStorage.getOrder(_orderKey);
         // Validate the request before continuing execution
@@ -145,8 +145,8 @@ library Execution {
         uint48 _requestTimestamp,
         address _feeReceiver
     ) external view returns (Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) {
-        // TradeEngine uses delegate call, so msg.sender in this context should be TradeStorage
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert Execution_AccessDenied();
+        // TradeStorage uses delegate calls, so msg.sender in this context should be Position Manager
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_1) revert Execution_AccessDenied();
         // Get current MarketUtils and token data
         prices = getTokenPrices(priceFeed, _position.ticker, _requestTimestamp, _position.isLong, false);
 

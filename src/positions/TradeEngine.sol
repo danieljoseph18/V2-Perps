@@ -2,7 +2,6 @@
 pragma solidity 0.8.23;
 
 import {ITradeStorage} from "./interfaces/ITradeStorage.sol";
-import {ITradeEngine} from "./interfaces/ITradeEngine.sol";
 import {Position} from "./Position.sol";
 import {Execution} from "./Execution.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -14,102 +13,116 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {Units} from "../libraries/Units.sol";
 import {Casting} from "../libraries/Casting.sol";
-import {OwnableRoles} from "../auth/OwnableRoles.sol";
 
-/// @notice Contract responsible for handling all execution logic associated with trades
-contract TradeEngine is ITradeEngine, OwnableRoles {
+/// @notice Library responsible for handling all execution logic associated with trades
+/// @dev Functions are external to avoid bytecode size issues.
+library TradeEngine {
     using MathUtils for uint256;
     using MathUtils for int256;
     using Units for uint256;
     using Casting for int256;
 
-    ITradeStorage public tradeStorage;
-    IMarket public market;
+    event AdlExecuted(address indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
+    event LiquidatePosition(bytes32 indexed positionKey, address indexed liquidator, bool isLong);
+    event CollateralEdited(bytes32 indexed positionKey, uint256 collateralDelta, bool isIncrease);
+    event PositionCreated(bytes32 indexed positionKey, address indexed owner, address indexed market, bool isLong);
+    event IncreasePosition(bytes32 indexed positionKey, uint256 collateralDelta, uint256 sizeDelta);
+    event DecreasePosition(bytes32 indexed positionKey, uint256 collateralDelta, uint256 sizeDelta);
 
-    constructor(ITradeStorage _tradeStorage, IMarket _market) {
-        _initializeOwner(msg.sender);
-        tradeStorage = _tradeStorage;
-        market = _market;
+    error TradeEngine_InvalidRequestType();
+    error TradeEngine_PositionDoesNotExist();
+    error TradeEngine_InvalidCaller();
+
+    modifier onlyTradeStorage(IMarket market) {
+        if (market.tradeStorage() != address(this)) revert TradeEngine_InvalidCaller();
+        _;
     }
 
+    // @audit - roles
     function executePositionRequest(
-        IVault vault,
+        IMarket market,
         IPriceFeed priceFeed,
         IPositionManager positionManager,
         IReferralStorage referralStorage,
-        bytes32 _orderKey,
-        bytes32 _requestKey,
-        address _feeReceiver
-    ) external onlyRoles(_ROLE_4) returns (Execution.FeeState memory, Position.Request memory) {
+        Position.Settlement memory _params
+    ) external onlyTradeStorage(market) returns (Execution.FeeState memory, Position.Request memory) {
+        ITradeStorage tradeStorage = ITradeStorage(address(this));
+        IVault vault = market.VAULT();
         // Initiate the execution
-        (Execution.Prices memory prices, Position.Request memory request) =
-            Execution.initiate(tradeStorage, market, vault, priceFeed, _orderKey, _requestKey, _feeReceiver);
+        Execution.Prices memory prices;
+        (prices, _params.request) = Execution.initiate(
+            tradeStorage, market, vault, priceFeed, _params.orderKey, _params.limitRequestKey, _params.feeReceiver
+        );
         // Delete the Order from Storage
-        tradeStorage.deleteOrder(_orderKey, request.input.isLimit);
+        tradeStorage.deleteOrder(_params.orderKey, _params.request.input.isLimit);
         // Update the Market State for the Request
         _updateMarketState(
-            prices, request.input.ticker, request.input.sizeDelta, request.input.isLong, request.input.isIncrease
+            market,
+            prices,
+            _params.request.input.ticker,
+            _params.request.input.sizeDelta,
+            _params.request.input.isLong,
+            _params.request.input.isIncrease
         );
         // Execute Trade
         Execution.FeeState memory feeState;
-        if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            feeState = _createNewPosition(
-                vault,
-                positionManager,
-                referralStorage,
-                Position.Settlement(request, _orderKey, _feeReceiver, false),
-                prices
-            );
-        } else if (request.requestType == Position.RequestType.POSITION_INCREASE) {
-            feeState = _increasePosition(
-                vault,
-                positionManager,
-                referralStorage,
-                Position.Settlement(request, _orderKey, _feeReceiver, false),
-                prices
-            );
+        if (_params.request.requestType == Position.RequestType.CREATE_POSITION) {
+            feeState =
+                _createNewPosition(tradeStorage, market, vault, positionManager, referralStorage, _params, prices);
+        } else if (_params.request.requestType == Position.RequestType.POSITION_INCREASE) {
+            feeState = _increasePosition(tradeStorage, market, vault, positionManager, referralStorage, _params, prices);
         } else {
             // Decrease, SL, TP
             feeState = _decreasePosition(
+                tradeStorage,
+                market,
                 vault,
                 referralStorage,
-                Position.Settlement(request, _orderKey, _feeReceiver, false),
+                _params,
                 prices,
                 tradeStorage.minCollateralUsd(),
                 tradeStorage.liquidationFee()
             );
         }
 
-        return (feeState, request);
+        return (feeState, _params.request);
     }
 
     function executeAdl(
-        IVault vault,
-        IReferralStorage referralStorage,
+        IMarket market,
         IPriceFeed priceFeed,
+        IReferralStorage referralStorage,
         bytes32 _positionKey,
         bytes32 _requestKey,
         address _feeReceiver
-    ) external onlyRoles(_ROLE_4) {
-        // Fetch the Position
-        Position.Data memory position = tradeStorage.getPosition(_positionKey);
-        // Check the Position Exists
-        if (position.user == address(0)) revert TradeEngine_PositionDoesNotExist();
-        // Check that the price update was requested by the ADLer, if not, require some time to pass before enabling them to execute
-        uint48 requestTimestamp = priceFeed.getRequestTimestamp(_requestKey);
-        Execution.validatePriceRequest(priceFeed, _feeReceiver, _requestKey);
+    ) external onlyTradeStorage(market) {
+        ITradeStorage tradeStorage = ITradeStorage(address(this));
+        IVault vault = market.VAULT();
+
         // Initiate the Adl order
         (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) =
-            Execution.initiateAdlOrder(market, vault, priceFeed, position, requestTimestamp, _feeReceiver);
+            _initiateAdl(tradeStorage, market, vault, priceFeed, _positionKey, _requestKey, _feeReceiver);
 
         // Update the Market State
         _updateMarketState(
-            prices, params.request.input.ticker, params.request.input.sizeDelta, params.request.input.isLong, false
+            market,
+            prices,
+            params.request.input.ticker,
+            params.request.input.sizeDelta,
+            params.request.input.isLong,
+            false
         );
 
         // Execute the order
         _decreasePosition(
-            vault, referralStorage, params, prices, tradeStorage.minCollateralUsd(), tradeStorage.liquidationFee()
+            tradeStorage,
+            market,
+            vault,
+            referralStorage,
+            params,
+            prices,
+            tradeStorage.minCollateralUsd(),
+            tradeStorage.liquidationFee()
         );
 
         // Validate the Adl
@@ -121,13 +134,15 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
     }
 
     function liquidatePosition(
-        IVault vault,
-        IReferralStorage referralStorage,
+        IMarket market,
         IPriceFeed priceFeed,
+        IReferralStorage referralStorage,
         bytes32 _positionKey,
         bytes32 _requestKey,
         address _liquidator
-    ) external onlyRoles(_ROLE_4) {
+    ) external onlyTradeStorage(market) {
+        ITradeStorage tradeStorage = ITradeStorage(address(this));
+        IVault vault = market.VAULT();
         // Fetch the Position
         Position.Data memory position = tradeStorage.getPosition(_positionKey);
         // Check the Position Exists
@@ -141,14 +156,21 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         // No price impact on Liquidations
         prices.impactedPrice = prices.indexPrice;
         // Update the Market State
-        _updateMarketState(prices, position.ticker, position.size, position.isLong, false);
+        _updateMarketState(market, prices, position.ticker, position.size, position.isLong, false);
         // Construct Liquidation Order
         Position.Settlement memory params =
             Position.createLiquidationOrder(position, prices.collateralPrice, prices.collateralBaseUnit, _liquidator);
 
         // Execute the Liquidation
         _decreasePosition(
-            vault, referralStorage, params, prices, tradeStorage.minCollateralUsd(), tradeStorage.liquidationFee()
+            tradeStorage,
+            market,
+            vault,
+            referralStorage,
+            params,
+            prices,
+            tradeStorage.minCollateralUsd(),
+            tradeStorage.liquidationFee()
         );
         // Fire Event
         emit LiquidatePosition(_positionKey, _liquidator, position.isLong);
@@ -158,6 +180,8 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
      * ========================= Core Function Implementations =========================
      */
     function _createNewPosition(
+        ITradeStorage tradeStorage,
+        IMarket market,
         IVault vault,
         IPositionManager positionManager,
         IReferralStorage referralStorage,
@@ -203,6 +227,8 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
     }
 
     function _increasePosition(
+        ITradeStorage tradeStorage,
+        IMarket market,
         IVault vault,
         IPositionManager positionManager,
         IReferralStorage referralStorage,
@@ -247,6 +273,8 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
     }
 
     function _decreasePosition(
+        ITradeStorage tradeStorage,
+        IMarket market,
         IVault vault,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
@@ -285,10 +313,11 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         if (feeState.isLiquidation) {
             // Liquidate the Position
             feeState = _handleLiquidation(
-                vault, referralStorage, position, feeState, _prices, positionKey, _params.request.user
+                tradeStorage, vault, referralStorage, position, feeState, _prices, positionKey, _params.request.user
             );
         } else if (isCollateralEdit) {
             _handleCollateralDecrease(
+                tradeStorage,
                 vault,
                 referralStorage,
                 position,
@@ -300,6 +329,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         } else {
             // Decrease the Position
             _handlePositionDecrease(
+                tradeStorage,
                 vault,
                 referralStorage,
                 position,
@@ -321,6 +351,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
      * - If any is remaining after paying all fees, add to pool.
      */
     function _handleLiquidation(
+        ITradeStorage tradeStorage,
         IVault vault,
         IReferralStorage referralStorage,
         Position.Data memory _position,
@@ -332,7 +363,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         // Delete the position from storage
         tradeStorage.deletePosition(_positionKey, _position.isLong);
         // Delete associated orders
-        _deleteAssociatedOrders(_position.stopLossKey, _position.takeProfitKey);
+        _deleteAssociatedOrders(tradeStorage, _position.stopLossKey, _position.takeProfitKey);
 
         // Adjust Fees to handle insolvent liquidation case
         _feeState = _adjustFeesForInsolvency(
@@ -366,6 +397,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
     }
 
     function _handleCollateralDecrease(
+        ITradeStorage tradeStorage,
         IVault vault,
         IReferralStorage referralStorage,
         Position.Data memory _position,
@@ -393,6 +425,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
     }
 
     function _handlePositionDecrease(
+        ITradeStorage tradeStorage,
         IVault vault,
         IReferralStorage referralStorage,
         Position.Data memory _position,
@@ -410,7 +443,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         // Delete the Position if Full Decrease
         if (_position.size == 0 || _position.collateral == 0) {
             tradeStorage.deletePosition(_positionKey, _position.isLong);
-            _deleteAssociatedOrders(_position.stopLossKey, _position.takeProfitKey);
+            _deleteAssociatedOrders(tradeStorage, _position.stopLossKey, _position.takeProfitKey);
         } else {
             // Update Final Storage if Partial Decrease
             tradeStorage.updatePosition(_position, _positionKey);
@@ -438,6 +471,30 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
     /**
      * ========================= Private Helper Functions =========================
      */
+    function _initiateAdl(
+        ITradeStorage tradeStorage,
+        IMarket market,
+        IVault vault,
+        IPriceFeed priceFeed,
+        bytes32 _positionKey,
+        bytes32 _requestKey,
+        address _feeReceiver
+    )
+        private
+        view
+        returns (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor)
+    {
+        // Fetch the Position
+        Position.Data memory position = tradeStorage.getPosition(_positionKey);
+        // Check the Position Exists
+        if (position.user == address(0)) revert TradeEngine_PositionDoesNotExist();
+        // Check that the price update was requested by the ADLer, if not, require some time to pass before enabling them to execute
+        uint48 requestTimestamp = priceFeed.getRequestTimestamp(_requestKey);
+        Execution.validatePriceRequest(priceFeed, _feeReceiver, _requestKey);
+        // Initiate the Adl order
+        (prices, params, startingPnlFactor) =
+            Execution.initiateAdlOrder(market, vault, priceFeed, position, requestTimestamp, _feeReceiver);
+    }
 
     /// @dev - Can fail on insolvency.
     function _transferTokensForDecrease(
@@ -472,6 +529,7 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
     }
 
     function _updateMarketState(
+        IMarket market,
         Execution.Prices memory _prices,
         string memory _ticker,
         uint256 _sizeDelta,
@@ -571,7 +629,9 @@ contract TradeEngine is ITradeEngine, OwnableRoles {
         return _feeState;
     }
 
-    function _deleteAssociatedOrders(bytes32 _stopLossKey, bytes32 _takeProfitKey) private {
+    function _deleteAssociatedOrders(ITradeStorage tradeStorage, bytes32 _stopLossKey, bytes32 _takeProfitKey)
+        private
+    {
         if (_stopLossKey != bytes32(0)) tradeStorage.deleteOrder(_stopLossKey, true);
         if (_takeProfitKey != bytes32(0)) tradeStorage.deleteOrder(_takeProfitKey, true);
     }

@@ -280,7 +280,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         uint256 _collateralBaseUnit,
         bool _isLong,
         bool _isIncrease
-    ) external nonReentrant onlyRoles(_ROLE_5) {
+    ) external nonReentrant onlyRoles(_ROLE_4) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (!assetIds.contains(assetId)) revert Market_TokenDoesNotExist();
         Pool.Storage storage self = marketStorage[assetId];
@@ -298,7 +298,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         );
     }
 
-    function updateImpactPool(string calldata _ticker, int256 _priceImpactUsd) external onlyRoles(_ROLE_5) {
+    function updateImpactPool(string calldata _ticker, int256 _priceImpactUsd) external onlyRoles(_ROLE_4) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         _priceImpactUsd > 0
             ? marketStorage[assetId].impactPool += _priceImpactUsd.abs()

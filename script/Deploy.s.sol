@@ -12,7 +12,9 @@ import {PositionManager} from "../src/router/PositionManager.sol";
 import {Router} from "../src/router/Router.sol";
 import {IMarket} from "../src/markets/interfaces/IMarket.sol";
 import {Oracle} from "../src/oracle/Oracle.sol";
-import {FeeDistributor} from "../src/rewards/FeeDistributor.sol";
+import {GlobalFeeDistributor} from "../src/rewards/GlobalFeeDistributor.sol";
+import {GlobalRewardTracker} from "../src/rewards/GlobalRewardTracker.sol";
+import {LiquidityLocker} from "../src/rewards/LiquidityLocker.sol";
 import {TransferStakedTokens} from "../src/rewards/TransferStakedTokens.sol";
 import {Pool} from "../src/markets/Pool.sol";
 import {OwnableRoles} from "../src/auth/OwnableRoles.sol";
@@ -26,12 +28,16 @@ contract Deploy is Script {
         ReferralStorage referralStorage;
         PositionManager positionManager;
         Router router;
-        FeeDistributor feeDistributor;
+        GlobalFeeDistributor feeDistributor;
+        GlobalRewardTracker rewardTracker;
+        LiquidityLocker liquidityLocker;
         TransferStakedTokens transferStakedTokens;
         address owner;
     }
 
     IHelperConfig.NetworkConfig public activeNetworkConfig;
+
+    uint256 internal constant _ROLE_0 = 1 << 0;
 
     function run() external returns (Contracts memory contracts) {
         helperConfig = new HelperConfig();
@@ -48,7 +54,9 @@ contract Deploy is Script {
             ReferralStorage(payable(address(0))),
             PositionManager(payable(address(0))),
             Router(payable(address(0))),
-            FeeDistributor(address(0)),
+            GlobalFeeDistributor(address(0)),
+            GlobalRewardTracker(address(0)),
+            LiquidityLocker(address(0)),
             TransferStakedTokens(address(0)),
             msg.sender
         );
@@ -107,11 +115,23 @@ contract Deploy is Script {
             address(contracts.positionManager)
         );
 
-        contracts.feeDistributor =
-            new FeeDistributor(address(contracts.marketFactory), activeNetworkConfig.weth, activeNetworkConfig.usdc);
+        contracts.rewardTracker = new GlobalRewardTracker("Staked BRRR", "sBRRR");
+
+        contracts.feeDistributor = new GlobalFeeDistributor(
+            address(contracts.marketFactory),
+            address(contracts.rewardTracker),
+            activeNetworkConfig.weth,
+            activeNetworkConfig.usdc
+        );
 
         contracts.transferStakedTokens = new TransferStakedTokens();
 
+        contracts.liquidityLocker = new LiquidityLocker(
+            address(contracts.rewardTracker),
+            address(contracts.transferStakedTokens),
+            activeNetworkConfig.weth,
+            activeNetworkConfig.usdc
+        );
         /**
          * ============ Set Up Contracts ============
          */
@@ -142,6 +162,8 @@ contract Deploy is Script {
             0.005 ether
         );
 
+        contracts.marketFactory.setRewardContracts(address(contracts.rewardTracker), address(contracts.liquidityLocker));
+
         /**
          * (
          *     uint256 _gasOverhead,
@@ -164,12 +186,17 @@ contract Deploy is Script {
         contracts.referralStorage.setTier(1, 0.1e18);
         contracts.referralStorage.setTier(2, 0.15e18);
 
+        contracts.rewardTracker.grantRoles(address(contracts.marketFactory), _ROLE_0);
+
         // Transfer ownership to caller --> for testing
         contracts.marketFactory.transferOwnership(msg.sender);
         if (!activeNetworkConfig.mockFeed) OwnableRoles(address(contracts.priceFeed)).transferOwnership(msg.sender);
         contracts.referralStorage.transferOwnership(msg.sender);
         contracts.positionManager.transferOwnership(msg.sender);
         contracts.router.transferOwnership(msg.sender);
+        contracts.feeDistributor.transferOwnership(msg.sender);
+        contracts.rewardTracker.transferOwnership(msg.sender);
+        contracts.liquidityLocker.transferOwnership(msg.sender);
 
         vm.stopBroadcast();
 

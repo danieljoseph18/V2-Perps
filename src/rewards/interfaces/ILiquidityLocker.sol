@@ -26,15 +26,4 @@ interface ILiquidityLocker {
         uint40 unlockDate;
         address owner;
     }
-
-    function setHandler(address _handler, bool _isActive) external;
-    function lockLiquidity(uint8 tier, uint256 amount) external;
-    function unlockLiquidity(uint256 index) external;
-    function unlockAllPositions() external;
-    function claimPendingRewards() external returns (uint256, uint256);
-    function claimRewardsForAccount(address _account) external returns (uint256, uint256);
-    function getClaimableTokenRewards(address user) external view returns (uint256 wethReward, uint256 usdcReward);
-    function getRemainingLockDuration(address user, uint256 index) external view returns (uint256);
-    function getUserPositionIds(address user) external view returns (uint256[] memory);
-    function getUserTotalStakedAmountForTier(uint8 _tier, address _user) external view returns (uint256);
 }

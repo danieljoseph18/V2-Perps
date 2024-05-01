@@ -14,14 +14,13 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
-import {ITradeEngine} from "./interfaces/ITradeEngine.sol";
+import {TradeEngine} from "./TradeEngine.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 
 /// @notice Contract responsible for storing the state of active trades / requests
 contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
 
-    ITradeEngine public tradeEngine;
     IMarket public market;
     IVault public vault;
     IReferralStorage public referralStorage;
@@ -57,7 +56,6 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
      * ===================================== Setter Functions =====================================
      */
     function initialize(
-        ITradeEngine _tradeEngine,
         uint64 _liquidationFee, // 0.05e18 = 5%
         uint64 _positionFee, // 0.001e18 = 0.1%
         uint64 _adlFee, // Percentage of the output amount that goes to the ADL executor, 18 D.P
@@ -66,7 +64,6 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
         uint64 _minCancellationTime // e.g 1 minutes
     ) external onlyOwner {
         if (isInitialized) revert TradeStorage_AlreadyInitialized();
-        tradeEngine = _tradeEngine;
         liquidationFee = _liquidationFee;
         tradingFee = _positionFee;
         minCollateralUsd = _minCollateralUsd;
@@ -132,28 +129,40 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
         orders[_requestKey].takeProfitKey = _takeProfitKey;
     }
 
-    function deletePosition(bytes32 _positionKey, bool _isLong) external onlyRoles(_ROLE_5) {
+    function createOrder(Position.Request memory _request) external onlyRoles(_ROLE_3) returns (bytes32 orderKey) {
+        orders[orderKey] = _request;
+    }
+
+    /**
+     * ===================================== Callback Functions =====================================
+     */
+
+    /// @dev - Should only be callable within the TradeEngine library
+    function deletePosition(bytes32 _positionKey, bool _isLong) external {
+        if (!_isCallback()) revert TradeStorage_InvalidCallback();
         delete openPositions[_positionKey];
         bool success = openPositionKeys[_isLong].remove(_positionKey);
         if (!success) revert TradeStorage_PositionRemovalFailed();
     }
 
-    function createPosition(Position.Data calldata _position, bytes32 _positionKey) external onlyRoles(_ROLE_5) {
+    /// @dev - Should only be callable within the TradeEngine library
+    function createPosition(Position.Data calldata _position, bytes32 _positionKey) external {
+        if (!_isCallback()) revert TradeStorage_InvalidCallback();
         openPositions[_positionKey] = _position;
         bool success = openPositionKeys[_position.isLong].add(_positionKey);
         if (!success) revert TradeStorage_PositionAdditionFailed();
     }
 
-    function deleteOrder(bytes32 _orderKey, bool _isLimit) external onlyRoles(_ROLE_5) {
+    /// @dev - Should only be callable within the TradeEngine library
+    function deleteOrder(bytes32 _orderKey, bool _isLimit) external {
+        if (!_isCallback()) revert TradeStorage_InvalidCallback();
         _deleteOrder(_orderKey, _isLimit);
     }
 
-    function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external onlyRoles(_ROLE_5) {
+    /// @dev - Should only be callable within the TradeEngine library
+    function updatePosition(Position.Data calldata _position, bytes32 _positionKey) external {
+        if (!_isCallback()) revert TradeStorage_InvalidCallback();
         openPositions[_positionKey] = _position;
-    }
-
-    function createOrder(Position.Request memory _request) external onlyRoles(_ROLE_3) returns (bytes32 orderKey) {
-        orders[orderKey] = _request;
     }
 
     /**
@@ -164,15 +173,18 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     /// the request id at request time won't be the same as the request id at execution time
     /// @notice Executes a Request for a Position
     /// Called by keepers --> Routes the execution down the correct path.
-    function executePositionRequest(bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
+    function executePositionRequest(bytes32 _orderKey, bytes32 _limitRequestKey, address _feeReceiver)
         external
         onlyRoles(_ROLE_1)
         nonReentrant
         returns (Execution.FeeState memory feeState, Position.Request memory request)
     {
-        return tradeEngine.executePositionRequest(
-            vault, priceFeed, IPositionManager(msg.sender), referralStorage, _orderKey, _requestKey, _feeReceiver
-        );
+        Position.Settlement memory params;
+        params.orderKey = _orderKey;
+        params.limitRequestKey = _limitRequestKey;
+        params.feeReceiver = _feeReceiver;
+        return
+            TradeEngine.executePositionRequest(market, priceFeed, IPositionManager(msg.sender), referralStorage, params);
     }
 
     function liquidatePosition(bytes32 _positionKey, bytes32 _requestKey, address _liquidator)
@@ -180,7 +192,7 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
         onlyRoles(_ROLE_1)
         nonReentrant
     {
-        tradeEngine.liquidatePosition(vault, referralStorage, priceFeed, _positionKey, _requestKey, _liquidator);
+        TradeEngine.liquidatePosition(market, priceFeed, referralStorage, _positionKey, _requestKey, _liquidator);
     }
 
     function executeAdl(bytes32 _positionKey, bytes32 _requestKey, address _feeReceiver)
@@ -188,7 +200,7 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
         onlyRoles(_ROLE_1)
         nonReentrant
     {
-        tradeEngine.executeAdl(vault, referralStorage, priceFeed, _positionKey, _requestKey, _feeReceiver);
+        TradeEngine.executeAdl(market, priceFeed, referralStorage, _positionKey, _requestKey, _feeReceiver);
     }
 
     /**
@@ -217,6 +229,10 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
             position.takeProfitKey = _orderKey;
             openPositions[positionKey] = position;
         }
+    }
+
+    function _isCallback() private view returns (bool) {
+        return msg.sender == address(this);
     }
 
     /**

@@ -4,10 +4,10 @@ pragma solidity 0.8.23;
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IReferralStorage} from "./interfaces/IReferralStorage.sol";
 import {IMarketFactory} from "../factory/interfaces/IMarketFactory.sol";
-import {ITradeEngine} from "../positions/interfaces/ITradeEngine.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
+import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 
 contract ReferralStorage is OwnableRoles, IReferralStorage, ReentrancyGuard {
@@ -82,7 +82,7 @@ contract ReferralStorage is OwnableRoles, IReferralStorage, ReentrancyGuard {
 
     function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount) external {
         // Get the market from the caller in Market Factory
-        address market = address(ITradeEngine(msg.sender).market());
+        address market = address(ITradeStorage(msg.sender).market());
         // If no market associated with caller, revert
         if (!factory.isMarket(market)) revert ReferralStorage_InvalidMarket();
         // accumulate affiliate rewards

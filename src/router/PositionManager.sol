@@ -3,7 +3,6 @@ pragma solidity 0.8.23;
 
 import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {ITradeEngine} from "../positions/interfaces/ITradeEngine.sol";
 import {IMarketFactory} from "../factory/interfaces/IMarketFactory.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
@@ -241,8 +240,8 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     ) external {
         // Market must be valid
         if (!marketFactory.isMarket(address(market))) revert PositionManager_InvalidMarket();
-        // Caller must be the Trade Engine associated with that market
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_5) revert PositionManager_AccessDenied();
+        // Caller must be the Trade Storage associated with that market
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert PositionManager_AccessDenied();
 
         uint256 transferAmount = _collateralDelta;
         // Transfer Fee to Executor

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {RewardTracker} from "./RewardTracker.sol";
+import {GlobalRewardTracker} from "./GlobalRewardTracker.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {TransferStakedTokens} from "./TransferStakedTokens.sol";
@@ -12,7 +12,7 @@ import {ILiquidityLocker} from "./interfaces/ILiquidityLocker.sol";
 /// @dev Contract that allows users to lock LP tokens for a set duration in exchange for XP at various multipliers.
 /// @notice Users can still claim rev-share from their reward tokens.
 contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
-    RewardTracker public rewardTracker;
+    GlobalRewardTracker public rewardTracker;
     TransferStakedTokens public stakeTransferrer;
 
     address public immutable WETH;
@@ -52,7 +52,7 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
     constructor(address _rewardTracker, address _transferStakedTokens, address _weth, address _usdc) {
         require(_rewardTracker != address(0));
         _initializeOwner(msg.sender);
-        rewardTracker = RewardTracker(_rewardTracker);
+        rewardTracker = GlobalRewardTracker(_rewardTracker);
         stakeTransferrer = TransferStakedTokens(_transferStakedTokens);
         WETH = _weth;
         USDC = _usdc;
@@ -70,15 +70,16 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
     /// @dev The user must approve the TransferStakedTokens contract to spend their tokens.
     /// @param tier The tier of the position.
     /// @param amount The amount of tokens to lock.
-    function lockLiquidity(uint8 tier, uint256 amount) external {
+    /// @param _depositToken The address of the deposit token.
+    function lockLiquidity(uint8 tier, uint256 amount, address _depositToken) external {
         if (uint256(tier) > 3) revert LiquidityLocker_InvalidTier();
         if (amount == 0) revert LiquidityLocker_InvalidAmount();
         if (rewardTracker.balanceOf(msg.sender) < amount) revert LiquidityLocker_InsufficientFunds();
         uint40 duration = _getDuration(tier);
 
-        stakeTransferrer.transferFrom(msg.sender, address(this), address(rewardTracker), amount);
+        stakeTransferrer.transferFrom(msg.sender, address(this), address(rewardTracker), _depositToken, amount);
 
-        _updateRewards(msg.sender);
+        _updateRewards(msg.sender, _depositToken);
 
         uint256 id = nextPositionId;
         nextPositionId = nextPositionId + 1;
@@ -95,7 +96,7 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
 
     /// @notice Used to unlock RewardTracker tokens after the set duration has passed.
     /// @param index The index of the position to unlock. Can use getter to find.
-    function unlockLiquidity(uint256 index) public {
+    function unlockLiquidity(uint256 index, address _depositToken) public {
         Position memory position = lockData[msg.sender].positions[index];
         if (position.depositAmount == 0) revert LiquidityLocker_EmptyPosition();
         if (position.unlockDate > block.timestamp) revert LiquidityLocker_DurationNotFinished();
@@ -104,7 +105,7 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
         }
         if (position.owner != msg.sender) revert LiquidityLocker_InvalidUser();
 
-        _updateRewards(msg.sender);
+        _updateRewards(msg.sender, _depositToken);
 
         lockData[msg.sender].lockedAmount = lockData[msg.sender].lockedAmount - position.depositAmount;
         wethBalance = wethBalance - position.depositAmount;
@@ -121,18 +122,18 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
             }
         }
 
-        stakeTransferrer.transfer(msg.sender, address(rewardTracker), position.depositAmount);
+        stakeTransferrer.transfer(msg.sender, address(rewardTracker), _depositToken, position.depositAmount);
 
         emit LiquidityLocker_LiquidityUnlocked(msg.sender, index, position.depositAmount, position.tier);
     }
 
     /// @notice Used to unlock all expired positions.
-    function unlockAllPositions() external {
+    function unlockAllPositions(address _depositToken) external {
         uint256[] memory userPositions = lockData[msg.sender].positionIds;
         if (userPositions.length == 0) revert LiquidityLocker_NoPositions();
         for (uint256 i = 0; i < userPositions.length;) {
             if (lockData[msg.sender].positions[userPositions[i]].unlockDate <= block.timestamp) {
-                unlockLiquidity(userPositions[i]);
+                unlockLiquidity(userPositions[i], _depositToken);
             }
             unchecked {
                 ++i;
@@ -141,14 +142,18 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
     }
 
     /// @notice Used to claim pending WETH/XP rewards accumulated. Callable at any time.
-    function claimPendingRewards() external nonReentrant returns (uint256, uint256) {
-        return _claimPendingRewards(msg.sender);
+    function claimPendingRewards(address _depositToken) external nonReentrant returns (uint256, uint256) {
+        return _claimPendingRewards(msg.sender, _depositToken);
     }
 
     /// @notice Used to claim WETH/XP for a user externally.
-    function claimRewardsForAccount(address _account) external nonReentrant returns (uint256, uint256) {
+    function claimRewardsForAccount(address _account, address _depositToken)
+        external
+        nonReentrant
+        returns (uint256, uint256)
+    {
         _validateHandler();
-        return _claimPendingRewards(_account);
+        return _claimPendingRewards(_account, _depositToken);
     }
 
     /**
@@ -157,14 +162,19 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
 
     /// @notice Returns the amount of claimable WETH rewards.
     /// @param _user The address of the user to check.
-    function getClaimableTokenRewards(address _user) external view returns (uint256 wethReward, uint256 usdcReward) {
+    /// @param _depositToken The address of the deposit token.
+    function getClaimableTokenRewards(address _user, address _depositToken)
+        external
+        view
+        returns (uint256 wethReward, uint256 usdcReward)
+    {
         uint256 totalLocked = lockData[_user].lockedAmount;
         if (totalLocked == 0) {
             return (lockData[_user].claimableWethReward, lockData[_user].claimableUsdcReward);
         }
         uint256 wethBal = wethBalance;
         uint256 usdcBal = usdcBalance;
-        (uint256 pendingWethRewards, uint256 pendingUsdcRewards) = rewardTracker.claimable(address(this));
+        (uint256 pendingWethRewards, uint256 pendingUsdcRewards) = rewardTracker.claimable(address(this), _depositToken);
         pendingWethRewards *= PRECISION;
         pendingUsdcRewards *= PRECISION;
         uint256 nextCumulativeWethRewardPerToken = cumulativeWethRewardPerToken + (pendingWethRewards / wethBal);
@@ -217,8 +227,8 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
     /// @notice Crucial function. Claims WETH from the RewardTracker and updates the contract state.
     /// @dev Adaptation of the RewardTracker's _updateReward function. Essentially collates rewards and divides them up by the same mechanism.
     /// @param _account The address of the user to update.
-    function _updateRewards(address _account) private {
-        (uint256 wethReward, uint256 usdcReward) = rewardTracker.claim(address(this));
+    function _updateRewards(address _account, address _depositToken) private {
+        (uint256 wethReward, uint256 usdcReward) = rewardTracker.claim(_depositToken, address(this));
 
         uint256 wethBal = wethBalance;
         uint256 usdcBal = usdcBalance;
@@ -284,8 +294,8 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
         }
     }
 
-    function _claimPendingRewards(address _user) private returns (uint256, uint256) {
-        _updateRewards(_user);
+    function _claimPendingRewards(address _user, address _depositToken) private returns (uint256, uint256) {
+        _updateRewards(_user, _depositToken);
 
         uint256 userWethReward = lockData[_user].claimableWethReward;
         lockData[_user].claimableWethReward = 0;

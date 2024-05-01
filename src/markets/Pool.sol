@@ -32,7 +32,7 @@ library Pool {
     int16 private constant MIN_SKEW_SCALE = 1000; // $1000
     int48 private constant MAX_SKEW_SCALE = 10_000_000_000; // $10 Bn
     int16 private constant MAX_SCALAR = 10000;
-    uint256 private constant _ROLE_5 = 1 << 5;
+    uint256 private constant _ROLE_4 = 1 << 4;
 
     struct Input {
         uint256 amountIn;
@@ -200,7 +200,7 @@ library Pool {
         bool _isIncrease
     ) external {
         // Market uses delegate call, so msg.sender in this context should be TradeEngine
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_5) revert Pool_InvalidUpdate();
+        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert Pool_InvalidUpdate();
 
         // 1. Depends on Open Interest Delta to determine Skew
         Funding.updateState(market, pool, _ticker, _indexPrice);

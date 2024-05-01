@@ -142,6 +142,7 @@ library Position {
     struct Settlement {
         Request request;
         bytes32 orderKey;
+        bytes32 limitRequestKey;
         address feeReceiver;
         bool isAdl;
     }
@@ -320,6 +321,7 @@ library Position {
                 takeProfitKey: bytes32(0)
             }),
             orderKey: bytes32(0),
+            limitRequestKey: bytes32(0),
             feeReceiver: _liquidator,
             isAdl: false
         });
@@ -354,6 +356,7 @@ library Position {
                 takeProfitKey: bytes32(0)
             }),
             orderKey: bytes32(0),
+            limitRequestKey: bytes32(0),
             feeReceiver: _feeReceiver,
             isAdl: true
         });

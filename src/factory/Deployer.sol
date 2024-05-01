@@ -9,7 +9,7 @@ import {TradeStorage, ITradeStorage} from "../positions/TradeStorage.sol";
 import {TradeEngine} from "../positions/TradeEngine.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {RewardTracker} from "../rewards/RewardTracker.sol";
+import {GlobalRewardTracker} from "../rewards/GlobalRewardTracker.sol";
 import {LiquidityLocker} from "../rewards/LiquidityLocker.sol";
 
 /// @dev - External library to deploy contracts
@@ -21,8 +21,10 @@ library Deployer {
         address _weth,
         address _usdc
     ) external returns (address) {
-        Market market =
-            new Market(_config, _params.owner, _weth, _usdc, _vault, _params.indexTokenTicker, _params.isMultiAsset);
+        bytes32 salt = keccak256(abi.encodePacked(_params.indexTokenTicker, _params.owner, _params.isMultiAsset));
+        Market market = new Market{salt: salt}(
+            _config, _params.owner, _weth, _usdc, _vault, _params.indexTokenTicker, _params.isMultiAsset
+        );
         return address(market);
     }
 
@@ -30,43 +32,18 @@ library Deployer {
         external
         returns (address)
     {
-        Vault vault = new Vault(_params.owner, _weth, _usdc, _params.marketTokenName, _params.marketTokenSymbol);
+        bytes32 salt = keccak256(abi.encodePacked(_params.owner, _params.marketTokenName, _params.marketTokenSymbol));
+        Vault vault =
+            new Vault{salt: salt}(_params.owner, _weth, _usdc, _params.marketTokenName, _params.marketTokenSymbol);
         return address(vault);
     }
 
-    function deployTradeStorage(
-        IMarket _market,
-        IVault _vault,
-        IReferralStorage _referralStorage,
-        IPriceFeed _priceFeed
-    ) external returns (address) {
-        TradeStorage tradeStorage = new TradeStorage(_market, _vault, _referralStorage, _priceFeed);
+    function deployTradeStorage(IMarket market, IVault vault, IReferralStorage referralStorage, IPriceFeed priceFeed)
+        external
+        returns (address)
+    {
+        bytes32 salt = keccak256(abi.encodePacked(market, vault));
+        TradeStorage tradeStorage = new TradeStorage{salt: salt}(market, vault, referralStorage, priceFeed);
         return address(tradeStorage);
-    }
-
-    function deployTradeEngine(IMarket market, ITradeStorage tradeStorage) external returns (address) {
-        TradeEngine tradeEngine = new TradeEngine(tradeStorage, market);
-        return address(tradeEngine);
-    }
-
-    function deployRewardTracker(IMarket market, string calldata _marketTokenName, string calldata _marketTokenSymbol)
-        external
-        returns (address)
-    {
-        RewardTracker rewardTracker = new RewardTracker(
-            market,
-            // Prepend Staked Prefix
-            string(abi.encodePacked("Staked ", _marketTokenName)),
-            string(abi.encodePacked("s", _marketTokenSymbol))
-        );
-        return address(rewardTracker);
-    }
-
-    function deployLiquidityLocker(address _rewardTracker, address _transferStakedTokens, address _weth, address _usdc)
-        external
-        returns (address)
-    {
-        LiquidityLocker liquidityLocker = new LiquidityLocker(_rewardTracker, _transferStakedTokens, _weth, _usdc);
-        return address(liquidityLocker);
     }
 }

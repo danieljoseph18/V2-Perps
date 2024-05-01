@@ -15,9 +15,9 @@ import {Oracle} from "src/oracle/Oracle.sol";
 import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
-import {RewardTracker} from "src/rewards/RewardTracker.sol";
+import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
 import {LiquidityLocker} from "src/rewards/LiquidityLocker.sol";
-import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
+import {GlobalFeeDistributor} from "src/rewards/GlobalFeeDistributor.sol";
 import {TransferStakedTokens} from "src/rewards/TransferStakedTokens.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 
@@ -30,9 +30,9 @@ contract TestDepositWithdrawals is Test {
     Router router;
     address OWNER;
     IMarket market;
-    FeeDistributor feeDistributor;
+    GlobalFeeDistributor feeDistributor;
     TransferStakedTokens transferStakedTokens;
-    RewardTracker rewardTracker;
+    GlobalRewardTracker rewardTracker;
     LiquidityLocker liquidityLocker;
 
     address weth;
@@ -120,7 +120,7 @@ contract TestDepositWithdrawals is Test {
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
-        rewardTracker = RewardTracker(address(market.VAULT().rewardTracker()));
+        rewardTracker = GlobalRewardTracker(address(market.VAULT().rewardTracker()));
         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);

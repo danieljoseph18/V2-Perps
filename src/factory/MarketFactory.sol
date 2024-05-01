@@ -10,15 +10,14 @@ import {IUniswapV3Factory} from "../oracle/interfaces/IUniswapV3Factory.sol";
 import {IUniswapV2Factory} from "../oracle/interfaces/IUniswapV2Factory.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
+import {IGlobalRewardTracker} from "../rewards/interfaces/IGlobalRewardTracker.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IReferralStorage} from "../referrals/ReferralStorage.sol";
-import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
+import {IGlobalFeeDistributor} from "../rewards/interfaces/IGlobalFeeDistributor.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {ILiquidityLocker} from "../rewards/interfaces/ILiquidityLocker.sol";
-import {ITradeEngine} from "../positions/interfaces/ITradeEngine.sol";
 import {TransferStakedTokens} from "../rewards/TransferStakedTokens.sol";
 import {Pool} from "../markets/Pool.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
@@ -37,7 +36,9 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
 
     IPriceFeed priceFeed;
     IReferralStorage referralStorage;
-    IFeeDistributor feeDistributor;
+    IGlobalFeeDistributor feeDistributor;
+    IGlobalRewardTracker rewardTracker;
+    ILiquidityLocker liquidityLocker;
     IPositionManager positionManager;
     TransferStakedTokens transferStakedTokens;
     address router;
@@ -111,7 +112,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         if (isInitialized) revert MarketFactory_AlreadyInitialized();
         priceFeed = IPriceFeed(_priceFeed);
         referralStorage = IReferralStorage(_referralStorage);
-        feeDistributor = IFeeDistributor(_feeDistributor);
+        feeDistributor = IGlobalFeeDistributor(_feeDistributor);
         positionManager = IPositionManager(_positionManager);
         transferStakedTokens = new TransferStakedTokens();
         router = _router;
@@ -121,6 +122,11 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         marketExecutionFee = _marketExecutionFee;
         isInitialized = true;
         emit MarketFactoryInitialized(_priceFeed);
+    }
+
+    function setRewardContracts(address _rewardTracker, address _liquidityLocker) external onlyOwner {
+        rewardTracker = IGlobalRewardTracker(_rewardTracker);
+        liquidityLocker = ILiquidityLocker(_liquidityLocker);
     }
 
     function setFeedValidators(address _chainlinkFeedRegistry, address _uniV2Factory, address _uniV3Factory)
@@ -158,7 +164,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     }
 
     function updateFeeDistributor(address _feeDistributor) external onlyOwner {
-        feeDistributor = IFeeDistributor(_feeDistributor);
+        feeDistributor = IGlobalFeeDistributor(_feeDistributor);
     }
 
     function updatePositionManager(address _positionManager) external onlyOwner {
@@ -304,17 +310,8 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         address vault = Deployer.deployVault(_params, WETH, USDC);
         // Create new Market contract
         address market = Deployer.deployMarket(defaultConfig, _params, vault, WETH, USDC);
-
         // Create new TradeStorage contract
         address tradeStorage = Deployer.deployTradeStorage(IMarket(market), IVault(vault), referralStorage, priceFeed);
-        // Create new Trade Engine contract
-        address tradeEngine = Deployer.deployTradeEngine(IMarket(market), ITradeStorage(tradeStorage));
-        // Create new Reward Tracker contract
-        address rewardTracker =
-            Deployer.deployRewardTracker(IMarket(market), _params.marketTokenName, _params.marketTokenSymbol);
-        // Deploy LiquidityLocker
-        address liquidityLocker =
-            Deployer.deployLiquidityLocker(rewardTracker, address(transferStakedTokens), WETH, USDC);
         // Initialize Market with TradeStorage and 0.3% Borrow Scale
         address tradeStorageAddress = address(tradeStorage);
         IMarket(market).initialize(tradeStorageAddress, 0.003e18);
@@ -322,17 +319,11 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         IVault(vault).initialize(market, address(feeDistributor), address(rewardTracker), feeReceiver);
         // Initialize TradeStorage with Default values
         ITradeStorage(tradeStorage).initialize(
-            ITradeEngine(tradeEngine),
-            LIQUIDATION_FEE,
-            POSITION_FEE,
-            ADL_FEE,
-            FEE_FOR_EXECUTION,
-            MIN_COLLATERAL_USD,
-            MIN_TIME_TO_EXECUTE
+            LIQUIDATION_FEE, POSITION_FEE, ADL_FEE, FEE_FOR_EXECUTION, MIN_COLLATERAL_USD, MIN_TIME_TO_EXECUTE
         );
         // Initialize RewardTracker with Default values
         address vaultAddress = address(vault);
-        IRewardTracker(rewardTracker).initialize(vaultAddress, address(feeDistributor), address(liquidityLocker));
+        rewardTracker.addDepositToken(vaultAddress);
         // Add to Storage
         isMarket[market] = true;
         marketsByTicker[_params.indexTokenTicker].push(market);
@@ -344,13 +335,12 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         OwnableRoles(market).grantRoles(_params.owner, _ROLE_2);
         OwnableRoles(market).grantRoles(router, _ROLE_3);
         OwnableRoles(market).grantRoles(tradeStorageAddress, _ROLE_4);
-        OwnableRoles(market).grantRoles(address(tradeEngine), _ROLE_5);
         // Transfer ownership to super admin
         OwnableRoles(market).transferOwnership(owner());
 
         // Set Vault's roles (2,4,5)
         OwnableRoles(vaultAddress).grantRoles(_params.owner, _ROLE_2);
-        OwnableRoles(vaultAddress).grantRoles(address(tradeEngine), _ROLE_5);
+        OwnableRoles(vaultAddress).grantRoles(tradeStorageAddress, _ROLE_4);
         // Transfer ownership to super admin
         OwnableRoles(vaultAddress).transferOwnership(owner());
 
@@ -358,14 +348,8 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         OwnableRoles(tradeStorageAddress).grantRoles(address(positionManager), _ROLE_1);
         OwnableRoles(tradeStorageAddress).grantRoles(_params.owner, _ROLE_2);
         OwnableRoles(tradeStorageAddress).grantRoles(router, _ROLE_3);
-        OwnableRoles(tradeStorageAddress).grantRoles(address(tradeEngine), _ROLE_5);
         // Transfer ownership to super admin
         OwnableRoles(tradeStorageAddress).transferOwnership(owner());
-
-        // Set TradeEngine's roles (4)
-        OwnableRoles(address(tradeEngine)).grantRoles(tradeStorageAddress, _ROLE_4);
-        // Transfer ownership to super admin
-        OwnableRoles(address(tradeEngine)).transferOwnership(owner());
 
         // Fire Event
         emit MarketCreated(market, _params.indexTokenTicker);

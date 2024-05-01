@@ -11,8 +11,8 @@ import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IMarket} from "./interfaces/IMarket.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
-import {IRewardTracker} from "../rewards/interfaces/IRewardTracker.sol";
-import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
+import {IGlobalRewardTracker} from "../rewards/interfaces/IGlobalRewardTracker.sol";
+import {IGlobalFeeDistributor} from "../rewards/interfaces/IGlobalFeeDistributor.sol";
 import {Units} from "../libraries/Units.sol";
 
 contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
@@ -26,8 +26,8 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     uint64 private constant FEES_TO_OWNERS = 0.1e18; // 10% to Owner and 10% to Protocol
 
     IMarket market;
-    IRewardTracker public rewardTracker;
-    IFeeDistributor public feeDistributor;
+    IGlobalRewardTracker public rewardTracker;
+    IGlobalFeeDistributor public feeDistributor;
 
     address public poolOwner;
     address public feeReceiver;
@@ -69,8 +69,8 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     {
         if (isInitialized) revert Vault_AlreadyInitialized();
         market = IMarket(_market);
-        feeDistributor = IFeeDistributor(_feeDistributor);
-        rewardTracker = IRewardTracker(_rewardTracker);
+        feeDistributor = IGlobalFeeDistributor(_feeDistributor);
+        rewardTracker = IGlobalRewardTracker(_rewardTracker);
         feeReceiver = _feeReceiver;
         isInitialized = true;
     }
@@ -78,7 +78,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     /**
      * =============================== Storage Functions ===============================
      */
-    function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_5) {
+    function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_4) {
         if (_isIncrease) {
             _isLong ? longTokensReserved += _amount : shortTokensReserved += _amount;
         } else {
@@ -92,13 +92,13 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         }
     }
 
-    function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_5) {
+    function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_4) {
         _updatePoolBalance(_amount, _isLong, _isIncrease);
     }
 
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external
-        onlyRoles(_ROLE_5)
+        onlyRoles(_ROLE_4)
     {
         if (_isIncrease) {
             // Case 1: Increase the collateral amount
@@ -129,7 +129,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         }
     }
 
-    function accumulateFees(uint256 _amount, bool _isLong) external onlyRoles(_ROLE_5) {
+    function accumulateFees(uint256 _amount, bool _isLong) external onlyRoles(_ROLE_4) {
         _accumulateFees(_amount, _isLong);
     }
 
@@ -152,7 +152,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
 
         IERC20(WETH).approve(distributor, longDistributorFee);
         IERC20(USDC).approve(distributor, shortDistributorFee);
-        IFeeDistributor(distributor).accumulateFees(longDistributorFee, shortDistributorFee);
+        IGlobalFeeDistributor(distributor).accumulateFees(longDistributorFee, shortDistributorFee);
         // Send Fees to Protocol
         IERC20(WETH).safeTransfer(feeReceiver, longOwnerFees);
         IERC20(USDC).safeTransfer(feeReceiver, shortOwnerFees);
@@ -236,7 +236,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
      */
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
-        onlyRoles(_ROLE_5)
+        onlyRoles(_ROLE_4)
     {
         _transferOutTokens(_isLongToken ? WETH : USDC, _to, _amount, _isLongToken, _shouldUnwrap);
     }
