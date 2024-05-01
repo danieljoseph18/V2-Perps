@@ -45,7 +45,7 @@ contract GlobalFeeDistributor is ReentrancyGuard, OwnableRoles {
     }
 
     /**
-     * =================================== Core Functions ===================================
+     * =========================================== Core Functions ===========================================
      */
     function accumulateFees(uint256 _wethAmount, uint256 _usdcAmount) external {
         if (!marketFactory.isMarket(msg.sender)) revert FeeDistributor_InvalidMarket();
@@ -95,7 +95,7 @@ contract GlobalFeeDistributor is ReentrancyGuard, OwnableRoles {
     }
 
     /**
-     * =================================== Getter Functions ===================================
+     * =========================================== Getter Functions ===========================================
      */
     function pendingRewards(address _vault) public view returns (uint256 wethAmount, uint256 usdcAmount) {
         FeeParams memory feeParams = accumulatedFees[_vault];

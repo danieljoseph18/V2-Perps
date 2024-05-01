@@ -61,7 +61,7 @@ library Oracle {
     uint64 private constant PREMIUM_FEE = 0.2e18; // 20%
 
     /**
-     * ====================================== Validation Functions ======================================
+     * =========================================== Validation Functions ===========================================
      */
     function isSequencerUp(IPriceFeed priceFeed) internal view {
         address sequencerUptimeFeed = priceFeed.sequencerUptimeFeed();
@@ -99,19 +99,21 @@ library Oracle {
         bytes32 _merkleRoot
     ) internal view {
         IUniswapV3Pool pool = IUniswapV3Pool(_poolAddress);
-        // Check if the pool address matches the one returned by the factory
+
         address token0 = pool.token0();
         address token1 = pool.token1();
+
         address expectedPoolAddress = factory.getPool(token0, token1, pool.fee());
+
         if (expectedPoolAddress != _poolAddress) revert Oracle_InvalidSecondaryStrategy();
+
+        // The pair must contain a stablecoin within the Merkle Tree whitelist
         if (_feedType == IPriceFeed.FeedType.UNI_V30) {
-            // If feed type is token0, check if the token1 (stablecoin) is stored in the Merkle Tree
             bytes32 leaf = keccak256(abi.encodePacked(token1));
             if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, leaf)) {
                 revert Oracle_InvalidSecondaryStrategy();
             }
         } else {
-            // If feed type is token1, check if the token0 (stablecoin) is stored in the Merkle Tree
             bytes32 leaf = keccak256(abi.encodePacked(token0));
             if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, leaf)) {
                 revert Oracle_InvalidSecondaryStrategy();
@@ -127,17 +129,18 @@ library Oracle {
         bytes32 _merkleRoot
     ) internal view {
         IUniswapV2Pair pair = IUniswapV2Pair(_poolAddress);
-        // Check if the pair address matches the one returned by the factory
+
         address expectedPoolAddress = factory.getPair(pair.token0(), pair.token1());
+
         if (expectedPoolAddress != _poolAddress) revert Oracle_InvalidSecondaryStrategy();
+
+        // The pair must contain a stablecoin within the Merkle Tree whitelist
         if (_feedType == IPriceFeed.FeedType.UNI_V20) {
-            // If feed type is token0, check if the token1 (stablecoin) is stored in the Merkle Tree
             bytes32 leaf = keccak256(abi.encodePacked(pair.token1()));
             if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, leaf)) {
                 revert Oracle_InvalidSecondaryStrategy();
             }
         } else {
-            // If feed type is token1, check if the token0 (stablecoin) is stored in the Merkle Tree
             bytes32 leaf = keccak256(abi.encodePacked(pair.token0()));
             if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, leaf)) {
                 revert Oracle_InvalidSecondaryStrategy();
@@ -147,34 +150,28 @@ library Oracle {
 
     function isValidPythFeed(bytes32[] calldata _merkleProof, bytes32 _merkleRoot, bytes32 _priceId) internal pure {
         // Check if the Pyth feed is stored within the Merkle Tree as a whitelisted feed.
-        // No need to check for bytes32(0) is this case will revert with this check.
+        // No need to check for bytes32(0) as this case will revert with this check.
         if (!MerkleProofLib.verify(_merkleProof, _merkleRoot, _priceId)) {
             revert Oracle_InvalidSecondaryStrategy();
         }
     }
 
     function validateFeedType(IPriceFeed.FeedType _feedType) internal pure {
-        // 6 strategies are supported
-        if (uint8(_feedType) > MAX_STRATEGY) {
-            revert Oracle_InvalidPoolType();
-        }
+        if (uint8(_feedType) > MAX_STRATEGY) revert Oracle_InvalidPoolType();
     }
 
     /**
-     * ====================================== Helper Functions ======================================
+     * =========================================== Helper Functions ===========================================
      */
     function estimateRequestCost(IPriceFeed priceFeed) external view returns (uint256 cost) {
-        // Get the current gas price
         uint256 gasPrice = tx.gasprice;
 
-        // Calculate the overestimated gas price (overestimated by 10%)
         uint256 overestimatedGasPrice = gasPrice + gasPrice.percentage(OVERESTIMATION_FACTOR);
 
-        // Calculate the total estimated gas cost for the functions call
         uint256 totalEstimatedGasCost = overestimatedGasPrice * (priceFeed.gasOverhead() + priceFeed.callbackGasLimit());
+
         uint256 premiumFee = totalEstimatedGasCost.percentage(PREMIUM_FEE);
 
-        // Calculate the total cost -> gas cost + premium fee
         cost = totalEstimatedGasCost + premiumFee;
     }
 
@@ -205,17 +202,21 @@ library Oracle {
     }
 
     function constructMultiPriceArgs(IMarket market) internal view returns (string[] memory args) {
-        // Get the stringified timestamp
         string memory timestamp = block.timestamp.toString();
-        // Return an array with the stringified timestamp appended before the tickers
+
         string[] memory tickers = market.getTickers();
+
         uint256 len = tickers.length;
+
         args = new string[](len + 3);
+
         args[0] = timestamp;
         args[1] = LONG_TICKER;
         args[2] = SHORT_TICKER;
+
         for (uint8 i = 0; i < len;) {
             args[i + 3] = tickers[i];
+
             unchecked {
                 ++i;
             }
@@ -225,16 +226,19 @@ library Oracle {
     /// @dev - Prepend the timestamp to the arguments before sending to the DON
     /// Use of loop not desirable, but the maximum possible loops is ~ 102
     function constructPnlArguments(IMarket market) internal view returns (string[] memory args) {
-        // Get the tickers
         string[] memory tickers = market.getTickers();
-        // Get the stringified timestamp
+
         string memory timestamp = block.timestamp.toString();
-        // Return an array with the stringified timestamp appended before the tickers
+
         uint256 len = tickers.length;
+
         args = new string[](tickers.length + 1);
+
         args[0] = timestamp;
+
         for (uint8 i = 0; i < len;) {
             args[i + 1] = tickers[i];
+
             unchecked {
                 ++i;
             }
@@ -242,7 +246,7 @@ library Oracle {
     }
 
     /**
-     * ====================================== Price Retrieval ======================================
+     * =========================================== Price Retrieval ===========================================
      */
     function getPrice(IPriceFeed priceFeed, string memory _ticker, uint48 _blockTimestamp)
         external
@@ -250,6 +254,7 @@ library Oracle {
         returns (uint256 medPrice)
     {
         IPriceFeed.Price memory price = priceFeed.getPrices(_ticker, _blockTimestamp);
+
         medPrice = price.med * (10 ** (PRICE_DECIMALS - price.precision));
     }
 
@@ -259,7 +264,9 @@ library Oracle {
         returns (uint256 maxPrice)
     {
         IPriceFeed.Price memory price = priceFeed.getPrices(_ticker, _blockTimestamp);
+
         uint256 medPrice = price.med * (10 ** (PRICE_DECIMALS - price.precision));
+
         maxPrice = medPrice + medPrice.mulDiv(price.variance, MAX_VARIANCE);
     }
 
@@ -269,7 +276,9 @@ library Oracle {
         returns (uint256 minPrice)
     {
         IPriceFeed.Price memory price = priceFeed.getPrices(_ticker, _blockTimestamp);
+
         uint256 medPrice = price.med * (10 ** (PRICE_DECIMALS - price.precision));
+
         minPrice = medPrice - medPrice.mulDiv(price.variance, MAX_VARIANCE);
     }
 
@@ -288,8 +297,11 @@ library Oracle {
         returns (Prices memory prices)
     {
         IPriceFeed.Price memory signedPrice = priceFeed.getPrices(_isLong ? LONG_TICKER : SHORT_TICKER, _blockTimestamp);
+
         prices.med = signedPrice.med * (10 ** (PRICE_DECIMALS - signedPrice.precision));
+
         prices.min = prices.med - prices.med.mulDiv(signedPrice.variance, MAX_VARIANCE);
+
         prices.max = prices.med + prices.med.mulDiv(signedPrice.variance, MAX_VARIANCE);
     }
 
@@ -312,7 +324,7 @@ library Oracle {
     }
 
     /**
-     * ====================================== Pnl ======================================
+     * =========================================== Pnl ===========================================
      */
     function getCumulativePnl(IPriceFeed priceFeed, address _market, uint48 _blockTimestamp)
         internal
@@ -320,12 +332,14 @@ library Oracle {
         returns (int256 cumulativePnl)
     {
         IPriceFeed.Pnl memory pnl = priceFeed.getCumulativePnl(_market, _blockTimestamp);
+
         uint256 multiplier = 10 ** (PRICE_DECIMALS - pnl.precision);
+
         cumulativePnl = pnl.cumulativePnl * multiplier.toInt256();
     }
 
     /**
-     * ====================================== Auxillary ======================================
+     * =========================================== Auxillary ===========================================
      */
     function getBaseUnit(IPriceFeed priceFeed, string memory _ticker) internal view returns (uint256 baseUnit) {
         baseUnit = 10 ** priceFeed.getTokenData(_ticker).tokenDecimals;
@@ -337,24 +351,24 @@ library Oracle {
         view
         returns (uint48 requestTimestamp)
     {
-        // Validate the Price Request
         requestTimestamp = priceFeed.getRequestTimestamp(_requestKey);
+
         if (block.timestamp > requestTimestamp + priceFeed.timeToExpiration()) revert Oracle_RequestExpired();
     }
 
     function validatePrice(IPriceFeed priceFeed, IPriceFeed.Price memory _priceData) internal view returns (bool) {
-        // Get the Ref Price
         uint256 referencePrice = _getReferencePrice(priceFeed, string(abi.encodePacked(_priceData.ticker)));
+
         // If no secondary price feed, return true by default
         if (referencePrice == 0) return true;
-        // Get the Med Price to 30 dp from the Price Data
+
         uint256 medPrice = _priceData.med * (10 ** (PRICE_DECIMALS - _priceData.precision));
-        // Check if the Price is within the acceptable range
+
         return medPrice.absDiff(referencePrice) <= referencePrice.percentage(MAX_PRICE_DEVIATION);
     }
 
     /**
-     * ====================================== Reference Prices ======================================
+     * =========================================== Reference Prices ===========================================
      */
 
     /* ONLY EVER USED FOR REFERENCE PRICES: PRICES RETURNED MAY BE HIGH-LATENCY, OR MANIPULATABLE.  */

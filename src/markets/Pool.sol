@@ -77,7 +77,7 @@ library Pool {
          * A market can contain multiple index tokens, each of which have
          * a percentage of liquidity allocated to them.
          * Units are in shares, where 100% = 100
-         * Cumulative allocations must total up to 100.
+         * Cumulative allocations must always total up to 100.
          */
         uint8 allocationShare;
         /**
@@ -187,6 +187,8 @@ library Pool {
     }
 
     /// @dev Needs to be external to keep bytecode size below threshold.
+    /// @dev Order of operations is important, as some functions rely on others.
+    /// For example, Funding relies on the open interest to calculate the skew.
     function updateState(
         IMarket market,
         Storage storage pool,
@@ -199,15 +201,12 @@ library Pool {
         bool _isLong,
         bool _isIncrease
     ) external {
-        // Market uses delegate call, so msg.sender in this context should be TradeEngine
+        // Market uses delegate call, so msg.sender in this context should be TradeStorage
         if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert Pool_InvalidUpdate();
 
-        // 1. Depends on Open Interest Delta to determine Skew
         Funding.updateState(market, pool, _ticker, _indexPrice);
 
         if (_sizeDelta != 0) {
-            // Use Impacted Price for Entry
-            // 2. Relies on Open Interest Delta
             _updateWeightedAverages(
                 pool,
                 market,
@@ -217,7 +216,6 @@ library Pool {
                 _isLong
             );
 
-            // 3. Updated pre-borrowing rate if size delta > 0
             if (_isIncrease) {
                 if (_isLong) {
                     pool.longOpenInterest += _sizeDelta;
@@ -232,17 +230,16 @@ library Pool {
                 }
             }
         }
-        // 4. Relies on Updated Open interest
+
         Borrowing.updateState(market, market.VAULT(), pool, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
 
-        // 5. Update the last update time
         pool.lastUpdate = uint48(block.timestamp);
-        // Fire Event
+
         emit MarketStateUpdated(_ticker, _isLong);
     }
 
     /**
-     * ============================= External Functions =============================
+     * =========================================== External Functions ===========================================
      */
     function createRequest(
         address _owner,
@@ -270,48 +267,44 @@ library Pool {
     }
 
     function validateConfig(Config calldata _config) external pure {
-        /* 1. Validate the initial inputs */
-        // Check Leverage is within bounds
         if (_config.maxLeverage == 0 || _config.maxLeverage > MAX_LEVERAGE) {
             revert Pool_InvalidLeverage();
         }
-        // Check maintenance margin is within bounds
+
         if (_config.maintenanceMargin < MIN_MAINTENANCE_MARGIN || _config.maintenanceMargin > MAX_MAINTENANCE_MARGIN) {
             revert Pool_InvalidMaintenanceMargin();
         }
-        // Check the Reserve Factor is within bounds
+
         if (_config.reserveFactor < MIN_RESERVE_FACTOR || _config.reserveFactor > MAX_RESERVE_FACTOR) {
             revert Pool_InvalidReserveFactor();
         }
-        /* 2. Validate the Funding Values */
-        // Check the Max Velocity is within bounds
+
         if (_config.maxFundingVelocity < MIN_VELOCITY || _config.maxFundingVelocity > MAX_VELOCITY) {
             revert Pool_InvalidMaxVelocity();
         }
-        // Check the Skew Scale is within bounds
+
         if (_config.skewScale < MIN_SKEW_SCALE || _config.skewScale > MAX_SKEW_SCALE) {
             revert Pool_InvalidSkewScale();
         }
-        /* 3. Validate Impact Values */
-        // Check Skew Scalars are > 0 and <= 100%
+
         if (_config.positiveSkewScalar <= 0 || _config.positiveSkewScalar > MAX_SCALAR) {
             revert Pool_InvalidSkewScalar();
         }
         if (_config.negativeSkewScalar <= 0 || _config.negativeSkewScalar > MAX_SCALAR) {
             revert Pool_InvalidSkewScalar();
         }
-        // Check negative skew scalar is >= positive skew scalar
+
         if (_config.negativeSkewScalar < _config.positiveSkewScalar) {
             revert Pool_InvalidSkewScalar();
         }
-        // Check Liquidity Scalars are > 0 and <= 100%
+
         if (_config.positiveLiquidityScalar <= 0 || _config.positiveLiquidityScalar > MAX_SCALAR) {
             revert Pool_InvalidLiquidityScalar();
         }
         if (_config.negativeLiquidityScalar <= 0 || _config.negativeLiquidityScalar > MAX_SCALAR) {
             revert Pool_InvalidLiquidityScalar();
         }
-        // Check negative liquidity scalar is >= positive liquidity scalar
+
         if (_config.negativeLiquidityScalar < _config.positiveLiquidityScalar) {
             revert Pool_InvalidLiquidityScalar();
         }
@@ -319,10 +312,6 @@ library Pool {
 
     /**
      * ========================= Private Functions =========================
-     */
-
-    /**
-     * Updates the weighted average values for the market. Both rely on the market condition pre-open interest update.
      */
     function _updateWeightedAverages(
         Pool.Storage storage _storage,
@@ -338,12 +327,14 @@ library Pool {
             _storage.cumulatives.longAverageEntryPriceUsd = MarketUtils.calculateWeightedAverageEntryPrice(
                 _storage.cumulatives.longAverageEntryPriceUsd, _storage.longOpenInterest, _sizeDeltaUsd, _priceUsd
             );
+
             _storage.cumulatives.weightedAvgCumulativeLong =
                 Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, true);
         } else {
             _storage.cumulatives.shortAverageEntryPriceUsd = MarketUtils.calculateWeightedAverageEntryPrice(
                 _storage.cumulatives.shortAverageEntryPriceUsd, _storage.shortOpenInterest, _sizeDeltaUsd, _priceUsd
             );
+
             _storage.cumulatives.weightedAvgCumulativeShort =
                 Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, false);
         }

@@ -75,27 +75,25 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     }
 
     function executeDeposit(IMarket market, bytes32 _key) external payable nonReentrant {
-        // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
-        // Fetch the request
+
         IVault.ExecuteDeposit memory params = MarketUtils.constructDepositParams(priceFeed, market, _key);
+
         address vault = address(market.VAULT());
-        // Approve the Market to spend the Collateral
+
         if (params.deposit.isLongToken) WETH.approve(address(vault), params.deposit.amountIn);
         else USDC.approve(address(vault), params.deposit.amountIn);
 
-        // Execute the Deposit
         market.executeDeposit(params);
 
-        // Gas Used + Fee Buffer
         uint256 feeForExecutor = ((initialGas - gasleft()) * tx.gasprice) + ((GAS_BUFFER + 21000) * tx.gasprice);
+
         uint256 feeToRefund;
         if (feeForExecutor > params.deposit.executionFee) feeToRefund = 0;
         else feeToRefund = params.deposit.executionFee - feeForExecutor;
 
-        // Send Execution Fee + Rebate
         SafeTransferLib.safeTransferETH(params.deposit.owner, feeForExecutor);
         if (feeToRefund > 0) {
             SafeTransferLib.safeTransferETH(msg.sender, feeToRefund);
@@ -103,13 +101,12 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     }
 
     function executeWithdrawal(IMarket market, bytes32 _key) external payable nonReentrant {
-        // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
-        // Fetch the request
+
         IVault.ExecuteWithdrawal memory params = MarketUtils.constructWithdrawalParams(priceFeed, market, _key);
-        // Calculate amountOut
+
         params.amountOut = MarketUtils.calculateWithdrawalAmount(
             params.vault,
             params.longPrices,
@@ -121,13 +118,10 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
             params.withdrawal.isLongToken
         );
 
-        // Approve the Market to spend deposit tokens
         IERC20(params.vault).approve(address(params.vault), params.withdrawal.amountIn);
 
-        // Execute the Withdrawal
         market.executeWithdrawal(params);
 
-        // Send Execution Fee + Rebate
         uint256 feeForExecutor = (initialGas - gasleft()) * tx.gasprice;
 
         uint256 feeToRefund = params.withdrawal.executionFee - feeForExecutor;
@@ -140,13 +134,11 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     }
 
     function cancelMarketRequest(IMarket market, bytes32 _requestKey) external nonReentrant {
-        // Check if the market exists /  is valid on the market maker
         if (!marketFactory.isMarket(address(market))) revert PositionManager_InvalidMarket();
-        // Cancel the Request
+
         (address tokenOut, uint256 amountOut, bool shouldUnwrap) = market.cancelRequest(_requestKey, msg.sender);
-        // Transfer out the Tokens from the Request
+
         if (shouldUnwrap) {
-            // If should unwrap, unwrap the WETH and transfer ETH to the user
             WETH.withdraw(amountOut);
             SafeTransferLib.safeTransferETH(msg.sender, amountOut);
         } else {
@@ -162,23 +154,21 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
         payable
         nonReentrant
     {
-        // Get the Starting Gas -> Used to track Gas Used
         uint256 initialGas = gasleft();
 
-        // Get the Trade Storage
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
-        // Execute the Request
+
         (Execution.FeeState memory feeState, Position.Request memory request) =
             tradeStorage.executePositionRequest(_orderKey, _requestKey, _feeReceiver);
 
-        // Emit Trade Executed Event
         emit ExecutePosition(_orderKey, feeState.positionFee, feeState.affiliateRebate);
 
-        // Send Execution Fee + Rebate
         uint256 executionCost = (initialGas - gasleft()) * tx.gasprice;
 
         uint256 feeToRefund = request.input.executionFee - executionCost;
+
         SafeTransferLib.safeTransferETH(msg.sender, executionCost);
+
         if (feeToRefund > 0) {
             SafeTransferLib.safeTransferETH(request.user, feeToRefund);
         }
@@ -193,27 +183,26 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
 
     function cancelOrderRequest(IMarket market, bytes32 _key, bool _isLimit) external payable nonReentrant {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
-        // Fetch the Request
+
         Position.Request memory request = tradeStorage.getOrder(_key);
-        // Check it exists
+
         if (request.user == address(0)) revert PositionManager_RequestDoesNotExist();
-        // Check the caller is the position owner
+
         if (msg.sender != request.user) {
-            // if caller is not the request owner --> the request must have an invalidated price to cancel it
             if (!priceFeed.isRequestValid(request.requestKey)) revert PositionManager_CancellationFailed();
         }
-        // Check sufficient time has passed
+
         if (block.timestamp < request.requestTimestamp + tradeStorage.minCancellationTime()) {
             revert PositionManager_InsufficientDelay();
         }
-        // Cancel the Request
+
         tradeStorage.cancelOrderRequest(_key, _isLimit);
-        // Refund the Collateral
+
         IERC20(request.input.collateralToken).safeTransfer(request.user, request.input.collateralDelta);
-        // Refund the Execution Fee
+
         (uint256 refundAmount, uint256 amountForExecutor) = Gas.getRefundForCancellation(request.input.executionFee);
+
         if (msg.sender == request.user) {
-            // If user executes their own cancellation, send in a single transaction
             SafeTransferLib.safeTransferETH(msg.sender, refundAmount + amountForExecutor);
         } else {
             SafeTransferLib.safeTransferETH(request.user, refundAmount);
@@ -238,25 +227,22 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
         uint256 _feeForExecutor,
         address _executor
     ) external {
-        // Market must be valid
         if (!marketFactory.isMarket(address(market))) revert PositionManager_InvalidMarket();
-        // Caller must be the Trade Storage associated with that market
+
         if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert PositionManager_AccessDenied();
 
         uint256 transferAmount = _collateralDelta;
-        // Transfer Fee to Executor
+
         if (_feeForExecutor > 0) {
             transferAmount -= _feeForExecutor;
             IERC20(_collateralToken).safeTransfer(_executor, _feeForExecutor);
         }
-        // Transfer Fee Discount to Referral Storage
+
         if (_affiliateRebate > 0) {
-            // Transfer Fee Discount to Referral Storage
             transferAmount -= _affiliateRebate;
             IERC20(_collateralToken).safeTransfer(address(referralStorage), _affiliateRebate);
         }
-        // Send Tokens + Fee to the Vault (Will be Accounted for Separately)
-        // Subtract Affiliate Rebate -> will go to Referral Storage
+
         IERC20(_collateralToken).safeTransfer(address(vault), transferAmount);
     }
 }

@@ -15,8 +15,6 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {Gas} from "../libraries/Gas.sol";
 import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
-import {LibString} from "../libraries/LibString.sol";
-import {MathUtils} from "../libraries/MathUtils.sol";
 import {Units} from "../libraries/Units.sol";
 
 /// @dev Needs Router role
@@ -25,8 +23,6 @@ contract Router is ReentrancyGuard, OwnableRoles {
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IWETH;
     using SafeTransferLib for IVault;
-    using LibString for uint256;
-    using MathUtils for uint256;
     using Units for uint256;
 
     IMarketFactory private marketFactory;
@@ -58,13 +54,11 @@ contract Router is ReentrancyGuard, OwnableRoles {
     error Router_InvalidPriceUpdateFee();
     error Router_InvalidStopLossPercentage();
     error Router_InvalidTakeProfitPercentage();
-    error Router_InvalidSlippage();
     error Router_InvalidAssetId();
     error Router_MarketDoesNotExist();
     error Router_InvalidLimitPrice();
     error Router_InvalidRequest();
     error Router_SizeExceedsPosition();
-    error Router_SizeIsZero();
     error Router_InvalidConditional();
 
     constructor(address _marketFactory, address _priceFeed, address _usdc, address _weth, address _positionManager) {
@@ -108,24 +102,31 @@ contract Router is ReentrancyGuard, OwnableRoles {
         _executionFee -= totalPriceUpdateFee;
 
         if (msg.sender != _owner) revert Router_InvalidOwner();
+
         if (_amountIn == 0) revert Router_InvalidAmountIn();
+
         if (_shouldWrap) {
             if (_amountIn > msg.value - _executionFee) revert Router_InvalidAmountIn();
             if (_tokenIn != address(WETH)) revert Router_CantWrapUSDC();
+
             WETH.deposit{value: _amountIn}();
             WETH.safeTransfer(address(positionManager), _amountIn);
         } else {
             if (_tokenIn != address(USDC) && _tokenIn != address(WETH)) revert Router_InvalidTokenIn();
+
             IERC20(_tokenIn).safeTransferFrom(msg.sender, address(positionManager), _amountIn);
         }
 
         uint256 priceFee = totalPriceUpdateFee / 2;
+
         bytes32 priceRequestKey = _requestPriceUpdate(priceFee, "");
+
         bytes32 pnlRequestKey = _requestPnlUpdate(market, priceFee);
 
         market.createRequest(
             _owner, _tokenIn, _amountIn, _executionFee, priceRequestKey, pnlRequestKey, _shouldWrap, true
         );
+
         _sendExecutionFee(_executionFee);
 
         emit DepositRequestCreated(market, _owner, _tokenIn, _amountIn);
@@ -146,7 +147,9 @@ contract Router is ReentrancyGuard, OwnableRoles {
         _executionFee -= totalPriceUpdateFee;
 
         if (msg.sender != _owner) revert Router_InvalidOwner();
+
         if (_marketTokenAmountIn == 0) revert Router_InvalidAmountIn();
+
         if (_shouldUnwrap) {
             if (_tokenOut != address(WETH)) revert Router_InvalidTokenOut();
         } else {
@@ -154,7 +157,9 @@ contract Router is ReentrancyGuard, OwnableRoles {
         }
 
         uint256 priceFee = totalPriceUpdateFee / 2;
+
         bytes32 priceRequestKey = _requestPriceUpdate(priceFee, "");
+
         bytes32 pnlRequestKey = _requestPnlUpdate(market, priceFee);
 
         IVault vault = market.VAULT();
@@ -163,6 +168,7 @@ contract Router is ReentrancyGuard, OwnableRoles {
         market.createRequest(
             _owner, _tokenOut, _marketTokenAmountIn, _executionFee, priceRequestKey, pnlRequestKey, _shouldUnwrap, false
         );
+
         _sendExecutionFee(_executionFee);
 
         emit WithdrawalRequestCreated(market, _owner, _tokenOut, _marketTokenAmountIn);
@@ -173,11 +179,14 @@ contract Router is ReentrancyGuard, OwnableRoles {
         Position.Input memory _trade,
         Position.Conditionals calldata _conditionals
     ) external payable nonReentrant {
-        // Validate the Inputs
         if (bytes(_trade.ticker).length == 0) revert Router_InvalidAssetId();
+
         if (address(market) == address(0)) revert Router_MarketDoesNotExist();
+
         if (_trade.isLimit && _trade.limitPrice == 0) revert Router_InvalidLimitPrice();
+
         Position.checkSlippage(_trade.maxSlippage);
+
         // If Long, Collateral must be (W)ETH, if Short, Colalteral must be USDC
         if (_trade.isLong) {
             if (_trade.collateralToken != address(WETH)) revert Router_InvalidTokenIn();
@@ -206,7 +215,6 @@ contract Router is ReentrancyGuard, OwnableRoles {
 
         _trade.executionFee -= uint64(priceUpdateFee);
 
-        // Handle Token Transfers
         if (_trade.isIncrease) _handleTokenTransfers(_trade);
 
         // Request Price Update for the Asset if Market Order
@@ -219,26 +227,22 @@ contract Router is ReentrancyGuard, OwnableRoles {
 
         Position.Data memory position = tradeStorage.getPosition(positionKey);
 
-        // Set the Request Type
         Position.RequestType requestType = Position.getRequestType(_trade, position);
         _validateRequestType(_trade, position, requestType);
 
-        // Construct the Request from the user input
         Position.Request memory request = Position.createRequest(_trade, msg.sender, requestType, priceRequestKey);
 
-        // Store the Order Request
         tradeStorage.createOrderRequest(request);
 
-        // Alter the request for conditionals and store here --> huge gas savings
+        // For each conditional, instead of greating a brand new request, we alter the original request in memory
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            // Cache the Request Key
             bytes32 requestKey = Position.generateOrderKey(request);
-            // SL / TP should only be generated for new positions
+
             if (_conditionals.stopLossSet) _createStopLoss(tradeStorage, request, _conditionals, requestKey);
+
             if (_conditionals.takeProfitSet) _createTakeProfit(tradeStorage, request, _conditionals, requestKey);
         }
 
-        // Send Full Execution Fee to positionManager to Distribute
         _sendExecutionFee(_trade.executionFee);
 
         emit PositionRequestCreated(
@@ -264,16 +268,16 @@ contract Router is ReentrancyGuard, OwnableRoles {
     {
         ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
         string memory ticker;
-        // Fetch the Ticker of the Asset
+
         if (_isPositionKey) ticker = tradeStorage.getPosition(_key).ticker;
         else ticker = tradeStorage.getOrder(_key).input.ticker;
-        // If ticker field was empty, revert
+
         if (bytes(ticker).length == 0) revert Router_InvalidAsset();
-        // Get the Price update fee
+
         uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
-        // Validate the Execution Fee
+
         if (msg.value < priceUpdateFee) revert Router_InvalidPriceUpdateFee();
-        // Request a Price Update
+
         priceRequestKey = _requestPriceUpdate(msg.value, ticker);
     }
 
@@ -301,18 +305,17 @@ contract Router is ReentrancyGuard, OwnableRoles {
     /**
      * ========================================= Internal Functions =========================================
      */
-    /// @dev - First argument of functions requests is always the block timestamp
     function _requestPriceUpdate(uint256 _fee, string memory _ticker) private returns (bytes32 requestKey) {
-        // Convert the string to an array of length 1
         string[] memory args = Oracle.constructPriceArguments(_ticker);
-        // Request a Price Update for the Asset
+
         requestKey = priceFeed.requestPriceUpdate{value: _fee}(args, msg.sender);
-        // Fire Event
+
         emit PriceUpdateRequested(requestKey, args, msg.sender);
     }
 
     function _requestPnlUpdate(IMarket market, uint256 _fee) private returns (bytes32 requestKey) {
         requestKey = priceFeed.requestCumulativeMarketPnl{value: _fee}(market, msg.sender);
+
         emit PnlRequested(requestKey, market, msg.sender);
     }
 
@@ -346,7 +349,7 @@ contract Router is ReentrancyGuard, OwnableRoles {
         if (_conditionals.stopLossPercentage == 0 || _conditionals.stopLossPercentage > MAX_PERCENTAGE) {
             revert Router_InvalidStopLossPercentage();
         }
-        // create and store stop loss
+
         _request.input.collateralDelta = _request.input.collateralDelta.percentage(_conditionals.stopLossPercentage);
         _request.input.sizeDelta = _request.input.sizeDelta.percentage(_conditionals.stopLossPercentage);
         _request.input.isLimit = true;
@@ -355,11 +358,9 @@ contract Router is ReentrancyGuard, OwnableRoles {
         _request.input.triggerAbove = _request.input.isLong ? false : true;
         _request.requestType = Position.RequestType.STOP_LOSS;
 
-        // tie stop loss to original order
         bytes32 stopLossKey = tradeStorage.createOrder(_request);
         tradeStorage.setStopLoss(stopLossKey, _requestKey);
 
-        // Store the Stop Loss Request
         tradeStorage.createOrderRequest(_request);
     }
 
@@ -372,7 +373,7 @@ contract Router is ReentrancyGuard, OwnableRoles {
         if (_conditionals.takeProfitPercentage == 0 || _conditionals.takeProfitPercentage > MAX_PERCENTAGE) {
             revert Router_InvalidTakeProfitPercentage();
         }
-        // create and store take profit
+
         _request.input.collateralDelta = _request.input.collateralDelta.percentage(_conditionals.takeProfitPercentage);
         _request.input.sizeDelta = _request.input.sizeDelta.percentage(_conditionals.takeProfitPercentage);
         _request.input.isLimit = true;
@@ -381,24 +382,22 @@ contract Router is ReentrancyGuard, OwnableRoles {
         _request.input.triggerAbove = _request.input.isLong ? true : false;
         _request.requestType = Position.RequestType.TAKE_PROFIT;
 
-        // tie take profit to original order
         bytes32 takeProfitKey = tradeStorage.createOrder(_request);
+
         tradeStorage.setTakeProfit(takeProfitKey, _requestKey);
 
-        // Store the Take Profit Request
         tradeStorage.createOrderRequest(_request);
     }
 
     function _handleTokenTransfers(Position.Input memory _trade) private {
         if (_trade.reverseWrap) {
             if (_trade.collateralToken != address(WETH)) revert Router_InvalidCollateralToken();
-            // Collateral Delta should always == msg.value - executionFee
+
             if (_trade.collateralDelta != msg.value - _trade.executionFee) revert Router_InvalidAmountInForWrap();
+
             WETH.deposit{value: _trade.collateralDelta}();
             WETH.safeTransfer(address(positionManager), _trade.collateralDelta);
         } else {
-            // Attemps to transfer full collateralDelta -> Should always Revert if Transfer Fails
-            // Router needs approval for Collateral Token, of amount >= Collateral Delta
             IERC20(_trade.collateralToken).safeTransferFrom(
                 msg.sender, address(positionManager), _trade.collateralDelta
             );

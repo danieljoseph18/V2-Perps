@@ -63,7 +63,7 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ========================= Core Functions =========================
+     * =========================================== Core Functions ===========================================
      */
 
     /// @notice Used to lock RewardTracker tokens for a set durations.
@@ -157,7 +157,7 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ========================= Getter Functions =========================
+     * =========================================== Getter Functions ===========================================
      */
 
     /// @notice Returns the amount of claimable WETH rewards.
@@ -221,7 +221,7 @@ contract LiquidityLocker is ILiquidityLocker, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ========================= Private Functions =========================
+     * =========================================== Private Functions ===========================================
      */
 
     /// @notice Crucial function. Claims WETH from the RewardTracker and updates the contract state.

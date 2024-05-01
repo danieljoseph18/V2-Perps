@@ -25,19 +25,19 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     using LibString for bytes15;
 
     uint256 public constant PRICE_DECIMALS = 30;
-    // Length of 1 Bytes32 Word
+
     uint8 private constant WORD = 32;
     uint8 private constant MIN_EXPIRATION_TIME = 3 minutes;
     uint40 private constant MSB1 = 0x8000000000;
     uint64 private constant LINK_BASE_UNIT = 1e18;
     uint16 private constant MAX_DATA_LENGTH = 3296;
-    // Uniswap V3 Router address on Network
+
     address public immutable UNISWAP_V3_ROUTER;
-    // Uniswap V3 Factory address on Network
+
     address public immutable UNISWAP_V3_FACTORY;
-    // WETH address on Network
+
     address public immutable WETH;
-    // LINK address on Network
+
     address public immutable LINK;
 
     IMarketFactory public marketFactory;
@@ -68,13 +68,9 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     uint32 public callbackGasLimit;
     uint48 public timeToExpiration;
 
-    // State variable to store the returned character information
     mapping(string ticker => mapping(uint48 blockTimestamp => Price priceResponse)) private prices;
     mapping(address market => mapping(uint48 blockTimestamp => Pnl cumulativePnl)) public cumulativePnl;
-    // store who requested the data and what type of data was requested
-    // only the keeper who requested can fill the order for non market orders
-    // all pricing should be cleared once the request is filled
-    // data should be tied only to the request as its specific to the request
+
     mapping(string ticker => TokenData) private tokenData;
     mapping(string ticker => bytes32 pythId) public pythIds;
 
@@ -84,16 +80,14 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     mapping(bytes32 requestKey => bytes32 requestId) private keyToId;
     /**
      * Used to count the number of failed price / pnl retrievals. If > MAX, the request is
-     * invalidated and removed from storage.
+     * permanently invalidated and removed from storage.
      */
     mapping(bytes32 requestKey => uint256 retries) numberOfRetries;
+
     EnumerableMap.PriceRequestMap private requestData;
     EnumerableSetLib.Bytes32Set private assetIds;
     EnumerableSetLib.Bytes32Set private requestKeys;
 
-    /**
-     * @notice Initializes the contract with the Chainlink router address and sets the contract owner
-     */
     constructor(
         address _marketFactory,
         address _weth,
@@ -213,14 +207,13 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
         payable
         onlyRoles(_ROLE_3)
         nonReentrant
-        returns (bytes32 requestKey)
+        returns (bytes32)
     {
         Oracle.isSequencerUp(this);
 
-        // Compute the key and check if the same request exists:
-        // if it does, return to prevent the consumer from running the same computation multiple times.
-        requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
-        if (requestKeys.contains(requestKey)) return bytes32(0);
+        bytes32 requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
+
+        if (requestKeys.contains(requestKey)) return requestKey;
 
         bytes32 requestId = _requestFulfillment(args, true);
 
@@ -231,31 +224,28 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
             args: args
         });
 
-        // Add the Request to Storage
         requestKeys.add(requestKey);
         idToKey[requestId] = requestKey;
         keyToId[requestKey] = requestId;
         requestData.set(requestId, data);
+
+        return requestKey;
     }
 
-    /// @dev - for this, we need to copy / call the function MarketUtils.calculateCumulativeMarketPnl but offchain
     function requestCumulativeMarketPnl(IMarket market, address _requester)
         external
         payable
         onlyRoles(_ROLE_3)
         nonReentrant
-        returns (bytes32 requestKey)
+        returns (bytes32)
     {
-        // Need to check the market is valid
-        // If the market is not valid, revert
         if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
 
         string[] memory args = Oracle.constructPnlArguments(market);
 
-        // Compute the key and check if the same request exists:
-        // if it does, return to prevent the consumer running multiple times for a given block.
-        requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
-        if (requestKeys.contains(requestKey)) return bytes32(0);
+        bytes32 requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
+
+        if (requestKeys.contains(requestKey)) return requestKey;
 
         bytes32 requestId = _requestFulfillment(args, false);
 
@@ -271,6 +261,8 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
         idToKey[requestId] = requestKey;
         keyToId[requestKey] = requestId;
         requestData.set(requestId, data);
+
+        return requestKey;
     }
 
     /**
@@ -284,19 +276,19 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     // Decode the response, according to the structure of the request
     // Try to avoid reverting, and instead return without storing the price response if invalid.
     function fulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) internal override {
-        // Return if invalid requestId
         if (!requestData.contains(requestId)) return;
-        // Return if an error is thrown
+
         if (err.length > 0) {
             _recreateRequest(requestId);
             return;
         }
-        // Remove the RequestId from storage and return if fail
+
         if (!requestData.remove(requestId)) return;
         requestKeys.remove(idToKey[requestId]);
         delete idToKey[requestId];
-        // Get the request type of the request
+
         RequestData memory data = requestData.get(requestId);
+
         if (data.requestType == RequestType.PRICE_UPDATE) {
             _decodeAndStorePrices(response);
         } else if (data.requestType == RequestType.CUMULATIVE_PNL) {
@@ -305,34 +297,30 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
             revert PriceFeed_InvalidRequestType();
         }
 
-        // Emit an event to log the response
         emit Response(requestId, data, response, err);
     }
 
     function settleEthForLink() external onlyOwner nonReentrant {
-        // Get the amount of Ether held within the contract
         uint256 ethBalance = address(this).balance;
+
         if (ethBalance == 0) revert PriceFeed_ZeroBalance();
-        // Calculate the fee to be paid to the arbitrageur based on the bonus fee paid by the requesters
+
+        // Bonus fee to the arbitrageur
         uint256 settlementReward = Oracle.calculateSettlementFee(ethBalance, settlementFee);
+
         uint256 conversionAmount = ethBalance - settlementReward;
-        // Convert the Ether to LINK using the Uniswap V3 Router
-        // Get the Uniswap V3 router instance
+
         ISwapRouter uniswapRouter = ISwapRouter(UNISWAP_V3_ROUTER);
 
-        // Approve the router to spend ETH
         IWETH(WETH).deposit{value: conversionAmount}();
         IWETH(WETH).approve(address(uniswapRouter), conversionAmount);
 
-        // Set the path for the swap (WETH -> LINK)
         address[] memory path = new address[](2);
         path[0] = WETH;
         path[1] = LINK;
 
-        // Set the fee tier for the pool (e.g., 0.3% fee tier)
         uint24 feeTier = 3000;
 
-        // Swap WETH for LINK
         uint256 amountOut = uniswapRouter.exactInput(
             ISwapRouter.ExactInputParams({
                 path: abi.encodePacked(path[0], feeTier, path[1]),
@@ -342,10 +330,11 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
                 amountOutMinimum: 0
             })
         );
+
         if (amountOut == 0) revert PriceFeed_SwapFailed();
-        // Send the settlement fee to the caller
+
         SafeTransferLib.safeTransferETH(payable(msg.sender), settlementReward);
-        // Emit an event to log the amount of LINK received
+
         emit LinkBalanceSettled(settlementReward);
     }
 
@@ -354,40 +343,38 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
      */
 
     /// @dev Needed to re-request any failed requests to ensure they're fulfilled
-    /// if a request fails > max retries, the request is cancelled and removed from storage.
     function _recreateRequest(bytes32 _oldRequestId) private {
-        // get the failed request
         RequestData memory failedRequestData = requestData.get(_oldRequestId);
-        // key will remain the same, so cache the key
+
         bytes32 requestKey = idToKey[_oldRequestId];
-        // increment the number of retries
+
         if (numberOfRetries[requestKey] > maxRetries) {
-            // delete the request to stop the loop
             requestData.remove(_oldRequestId);
             delete idToKey[_oldRequestId];
             requestKeys.remove(requestKey);
             delete keyToId[requestKey];
         } else {
             ++numberOfRetries[requestKey];
-            // create a new request
+
             bytes32 newRequestId =
                 _requestFulfillment(failedRequestData.args, failedRequestData.requestType == RequestType.PRICE_UPDATE);
-            // replace the old request with the new one
-            // Delete the old request
+
             requestData.remove(_oldRequestId);
             delete idToKey[_oldRequestId];
             idToKey[newRequestId] = requestKey;
             keyToId[requestKey] = newRequestId;
+
             requestData.set(newRequestId, failedRequestData);
         }
     }
 
     function _requestFulfillment(string[] memory _args, bool _isPrice) private returns (bytes32 requestId) {
         FunctionsRequest.Request memory req;
-        req.initializeRequestForInlineJavaScript(_isPrice ? priceUpdateSource : cumulativePnlSource); // Initialize the request with JS code
-        if (_args.length > 0) req.setArgs(_args); // Set the arguments for the request
 
-        // Send the request and store the request ID
+        req.initializeRequestForInlineJavaScript(_isPrice ? priceUpdateSource : cumulativePnlSource);
+
+        if (_args.length > 0) req.setArgs(_args);
+
         requestId = _sendRequest(req.encodeCBOR(), subscriptionId, callbackGasLimit, donId);
     }
 
@@ -420,9 +407,9 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
                 // Shift recorded values to the left and store the first 8 bytes (median price)
                 uint64(bytes8(encodedPrice << 192))
             );
-            // Validate the price range, and discard it if invalid
+
             if (!Oracle.validatePrice(this, price)) return;
-            // Store the constructed price struct in the mapping
+
             prices[price.ticker.fromSmallString()][price.timestamp] = price;
 
             unchecked {
@@ -432,7 +419,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     }
 
     function _decodeAndStorePnl(bytes memory _encodedPnl) private {
-        // Fulfill the cumulative PNL request
         uint256 len = _encodedPnl.length;
         if (len != WORD) revert PriceFeed_InvalidResponseLength();
 
@@ -463,7 +449,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
             pnl.cumulativePnl = int40(pnlValue);
         }
 
-        // Store the cumulative PNL in the mapping
         cumulativePnl[pnl.market][pnl.timestamp] = pnl;
     }
 
@@ -478,8 +463,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     /**
      * ================================== External / Getter Functions ==================================
      */
-
-    // Used to pack price data into a single bytes32 word for fulfillment
     function encodePrices(
         string[] calldata _tickers,
         uint8[] calldata _precisions,
@@ -488,22 +471,24 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
         uint64[] calldata _meds
     ) external pure returns (bytes memory) {
         uint16 len = uint16(_tickers.length);
+
         bytes32[] memory encodedPrices = new bytes32[](len);
-        // Loop through the prices and encode them into a single bytes32 word
+
         for (uint16 i = 0; i < len;) {
             bytes32 encodedPrice = bytes32(
                 abi.encodePacked(bytes15(bytes(_tickers[i])), _precisions[i], _variances[i], _timestamps[i], _meds[i])
             );
+
             encodedPrices[i] = encodedPrice;
+
             unchecked {
                 ++i;
             }
         }
-        // Concatenate the encoded prices into a single bytes string
+
         return abi.encodePacked(encodedPrices);
     }
 
-    // Used to pack cumulative PNL into a single bytes32 word for fulfillment
     function encodePnl(uint8 _precision, address _market, uint48 _timestamp, int40 _cumulativePnl)
         external
         pure

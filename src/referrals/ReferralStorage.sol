@@ -43,7 +43,6 @@ contract ReferralStorage is OwnableRoles, IReferralStorage, ReentrancyGuard {
         factory = IMarketFactory(_marketFactory);
     }
 
-    // Wrap any ETH sent to the contract into WETH
     receive() external payable {
         IWETH(weth).deposit{value: msg.value}();
     }
@@ -81,13 +80,12 @@ contract ReferralStorage is OwnableRoles, IReferralStorage, ReentrancyGuard {
     }
 
     function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount) external {
-        // Get the market from the caller in Market Factory
         address market = address(ITradeStorage(msg.sender).market());
-        // If no market associated with caller, revert
+
         if (!factory.isMarket(market)) revert ReferralStorage_InvalidMarket();
-        // accumulate affiliate rewards
+
         affiliateRewards[_account][_isLongToken] += _amount;
-        // fire event
+
         emit AffiliateRewardsAccumulated(_account, _isLongToken, _amount);
     }
 

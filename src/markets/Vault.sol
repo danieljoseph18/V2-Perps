@@ -40,7 +40,6 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     uint256 public shortTokensReserved;
     bool private isInitialized;
 
-    // Store the Collateral Amount for each User
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
     modifier onlyMarket() {
@@ -57,9 +56,8 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         USDC = _usdc;
     }
 
+    /// @dev Required to receive ETH when unwrapping WETH for transfers out.
     receive() external payable {
-        // Only accept ETH via fallback from the WETH contract when unwrapping WETH
-        // Ensure that the call depth is 1 (direct call from WETH contract)
         if (msg.sender != WETH || gasleft() <= 2300) revert Vault_InvalidETHTransfer();
     }
 
@@ -76,7 +74,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * =============================== Storage Functions ===============================
+     * =========================================== Storage Functions ===========================================
      */
     function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_4) {
         if (_isIncrease) {
@@ -96,31 +94,31 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         _updatePoolBalance(_amount, _isLong, _isIncrease);
     }
 
+    /// @dev Collateral can fluctuate in value, while position's collateral is denominated in a fixed USD value.
+    /// This can cause discrepancies in the collateral supplied, vs the collateral allocated to a user's position.
+    /// This function is required to keep the accounting consistent, and settle any excess / deficits.
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external
         onlyRoles(_ROLE_4)
     {
         if (_isIncrease) {
-            // Case 1: Increase the collateral amount
             collateralAmounts[_user][_isLong] += _amount;
         } else {
-            // Case 2: Decrease the collateral amount
             uint256 currentCollateral = collateralAmounts[_user][_isLong];
 
             if (_amount > currentCollateral) {
-                // Amount to decrease is greater than stored collateral
                 uint256 excess = _amount - currentCollateral;
+
                 collateralAmounts[_user][_isLong] = 0;
-                // Subtract the extra amount from the pool
+
                 _isLong ? longTokenBalance -= excess : shortTokenBalance -= excess;
             } else {
-                // Amount to decrease is less than or equal to stored collateral
                 collateralAmounts[_user][_isLong] -= _amount;
             }
 
             if (_isFullClose) {
-                // Transfer any remaining collateral to the pool
                 uint256 remaining = collateralAmounts[_user][_isLong];
+
                 if (remaining > 0) {
                     collateralAmounts[_user][_isLong] = 0;
                     _isLong ? longTokenBalance += remaining : shortTokenBalance += remaining;
@@ -138,12 +136,14 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     function batchWithdrawFees() external onlyRoles(_ROLE_2) nonReentrant {
         uint256 longFees = longAccumulatedFees;
         uint256 shortFees = shortAccumulatedFees;
+
         longAccumulatedFees = 0;
         shortAccumulatedFees = 0;
 
         // calculate percentages and distribute percentage to owner and feeDistributor
         uint256 longOwnerFees = longFees.percentage(FEES_TO_OWNERS);
         uint256 shortOwnerFees = shortFees.percentage(FEES_TO_OWNERS);
+
         uint256 longDistributorFee = longFees - (longOwnerFees * 2); // 2 because 10% to owner and 10% to protocol
         uint256 shortDistributorFee = shortFees - (shortOwnerFees * 2);
 
@@ -152,10 +152,13 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
 
         IERC20(WETH).approve(distributor, longDistributorFee);
         IERC20(USDC).approve(distributor, shortDistributorFee);
+
         IGlobalFeeDistributor(distributor).accumulateFees(longDistributorFee, shortDistributorFee);
+
         // Send Fees to Protocol
         IERC20(WETH).safeTransfer(feeReceiver, longOwnerFees);
         IERC20(USDC).safeTransfer(feeReceiver, shortOwnerFees);
+
         // Send Fees to Owner
         IERC20(WETH).safeTransfer(poolOwner, longOwnerFees);
         IERC20(USDC).safeTransfer(poolOwner, shortOwnerFees);
@@ -167,23 +170,20 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         external
         onlyMarket
     {
-        // Cache the initial state
         uint256 initialBalance =
             _params.deposit.isLongToken ? IERC20(WETH).balanceOf(address(this)) : IERC20(USDC).balanceOf(address(this));
-        // Transfer deposit tokens from position manager
+
         IERC20(_tokenIn).safeTransferFrom(_positionManager, address(this), _params.deposit.amountIn);
 
         (uint256 afterFeeAmount, uint256 fee, uint256 mintAmount) = MarketUtils.calculateDepositAmounts(_params);
 
-        // update storage -> keep
         _accumulateFees(fee, _params.deposit.isLongToken);
         _updatePoolBalance(afterFeeAmount, _params.deposit.isLongToken, true);
 
         emit DepositExecuted(_params.key, _params.deposit.owner, _tokenIn, _params.deposit.amountIn, mintAmount);
-        // mint tokens to user
+
         _mint(_params.deposit.owner, mintAmount);
 
-        // Validate the state change
         _validateDeposit(initialBalance, _params.deposit.amountIn, _params.deposit.isLongToken);
     }
 
@@ -191,34 +191,30 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         external
         onlyMarket
     {
-        // Cache the initial state
         uint256 initialBalance = _params.withdrawal.isLongToken
             ? IERC20(WETH).balanceOf(address(this))
             : IERC20(USDC).balanceOf(address(this));
 
-        // Transfer Market Tokens in
         this.safeTransferFrom(_positionManager, address(this), _params.withdrawal.amountIn);
 
-        // Calculate Amount Out after Fee
         uint256 transferAmountOut = MarketUtils.calculateWithdrawalAmounts(_params);
 
-        // Calculate amount out / aum before burning
         _burn(address(this), _params.withdrawal.amountIn);
 
-        // accumulate the fee
         _accumulateFees(_params.amountOut - transferAmountOut, _params.withdrawal.isLongToken);
-        // validate whether the pool has enough tokens
+
         uint256 availableTokens = _params.withdrawal.isLongToken
             ? longTokenBalance - longTokensReserved
             : shortTokenBalance - shortTokensReserved;
+
         if (transferAmountOut > availableTokens) revert Vault_InsufficientAvailableTokens();
-        // decrease the pool
+
         _updatePoolBalance(_params.amountOut, _params.withdrawal.isLongToken, false);
 
         emit WithdrawalExecuted(
             _params.key, _params.withdrawal.owner, _tokenOut, _params.withdrawal.amountIn, transferAmountOut
         );
-        // transfer tokens to user
+
         _transferOutTokens(
             _tokenOut,
             _params.withdrawal.owner,
@@ -227,12 +223,11 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
             _params.withdrawal.reverseWrap
         );
 
-        // Validate the state change
         _validateWithdrawal(initialBalance, transferAmountOut, _params.withdrawal.isLongToken);
     }
 
     /**
-     * =============================== Token Transfers ===============================
+     * =========================================== Token Transfers ===========================================
      */
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
@@ -242,7 +237,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * =============================== Private Functions ===============================
+     * =========================================== Private Functions ===========================================
      */
     function _transferOutTokens(address _tokenOut, address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         private
@@ -309,7 +304,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * =============================== Getter Functions ===============================
+     * =========================================== Getter Functions ===========================================
      */
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total) {
         total = _isLong ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;

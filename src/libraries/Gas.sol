@@ -39,9 +39,11 @@ library Gas {
         if (_msgValue < _executionFee) {
             revert Gas_InsufficientMsgValue(_msgValue, _executionFee);
         }
+
         uint256 estimatedFee;
         (estimatedFee, priceUpdateFee) =
             estimateExecutionFee(priceFeed, positionManager, _action, _hasPnlRequest, _isLimit);
+
         if (_executionFee < estimatedFee + priceUpdateFee) {
             revert Gas_InsufficientExecutionFee(_executionFee, estimatedFee);
         }
@@ -65,11 +67,13 @@ library Gas {
         bool _isLimit
     ) public view returns (uint256 estimatedCost, uint256 priceUpdateCost) {
         uint256 actionCost = _getActionCost(positionManager, _action);
+
         priceUpdateCost = _getPriceUpdateCost(priceFeed, _hasPnlRequest, _isLimit);
+
         estimatedCost = (actionCost + priceUpdateCost).percentage(BUFFER_PERCENTAGE);
     }
     /**
-     * ============================== Private Functions ==============================
+     * =========================================== Private Functions ===========================================
      */
 
     function _getActionCost(IPositionManager positionManager, Action _action) private view returns (uint256) {

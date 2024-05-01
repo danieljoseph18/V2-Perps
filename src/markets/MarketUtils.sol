@@ -35,12 +35,8 @@ library MarketUtils {
     uint256 constant LONG_CONVERSION_FACTOR = 1e30;
 
     error MarketUtils_MaxOiExceeded();
-    error MarketUtils_TokenBurnFailed();
-    error MarketUtils_DepositAmountIn();
-    error MarketUtils_WithdrawalAmountOut();
     error MarketUtils_AmountTooSmall();
     error MarketUtils_InvalidAmountOut(uint256 amountOut, uint256 expectedOut);
-    error MarketUtils_TokenMintFailed();
     error MarketUtils_InsufficientFreeLiquidity();
     error MarketUtils_AdlCantOccur();
 
@@ -60,24 +56,24 @@ library MarketUtils {
     }
 
     /**
-     * ======================= Constructor Functions =======================
+     * =========================================== Constructor Functions ===========================================
      */
     function constructDepositParams(IPriceFeed priceFeed, IMarket market, bytes32 _depositKey)
         external
         view
         returns (IVault.ExecuteDeposit memory params)
     {
-        // Fetch the request
         params.market = market;
         params.deposit = market.getRequest(_depositKey);
         params.key = _depositKey;
-        // Get the signed prices
+
         (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.deposit.requestTimestamp);
-        // Calculate cumulative borrow fees
+
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, false);
-        // Calculate Cumulative PNL
+
         params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.deposit.requestTimestamp);
+
         params.vault = market.VAULT();
     }
 
@@ -86,22 +82,23 @@ library MarketUtils {
         view
         returns (IVault.ExecuteWithdrawal memory params)
     {
-        // Fetch the request
         params.market = market;
         params.withdrawal = market.getRequest(_withdrawalKey);
         params.key = _withdrawalKey;
-        params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.withdrawal.requestTimestamp);
         params.shouldUnwrap = params.withdrawal.reverseWrap;
-        // Get the signed prices
+
         (params.longPrices, params.shortPrices) = Oracle.getVaultPrices(priceFeed, params.withdrawal.requestTimestamp);
-        // Calculate cumulative borrow fees
+
         params.longBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, true);
         params.shortBorrowFeesUsd = Borrowing.getTotalFeesOwedByMarket(market, false);
+
+        params.cumulativePnl = Oracle.getCumulativePnl(priceFeed, address(market), params.withdrawal.requestTimestamp);
+
         params.vault = market.VAULT();
     }
 
     /**
-     * ======================= Core Functions =======================
+     * =========================================== Core Functions ===========================================
      */
     function calculateDepositFee(
         Oracle.Prices memory _longPrices,
@@ -112,13 +109,17 @@ library MarketUtils {
         bool _isLongToken
     ) public pure returns (uint256) {
         uint256 baseFee = _tokenAmount.percentage(BASE_FEE);
-        // If long / short token balance = 0 return Base Fee
+
+        // If long or short token balance = 0 return Base Fee
         if (_longTokenBalance == 0 || _shortTokenBalance == 0) return baseFee;
+
         // Maximize to increase the impact on the skew
         uint256 amountUsd = _isLongToken
             ? _tokenAmount.toUsd(_longPrices.max, LONG_BASE_UNIT)
             : _tokenAmount.toUsd(_shortPrices.max, SHORT_BASE_UNIT);
+
         if (amountUsd == 0) revert MarketUtils_AmountTooSmall();
+
         // Minimize value of pool to maximise the effect on the skew
         uint256 longValue = _longTokenBalance.toUsd(_longPrices.min, LONG_BASE_UNIT);
         uint256 shortValue = _shortTokenBalance.toUsd(_shortPrices.min, SHORT_BASE_UNIT);
@@ -134,15 +135,18 @@ library MarketUtils {
         // Check for a Skew Flip
         bool skewFlip = initSkew ^ updatedSkew < 0;
 
-        // Skew Improve Same Side - Charge the Base fee
+        // If No Flip + Skew Improved - Charge the Base fee
         if (updatedSkew.abs() < initSkew.abs() && !skewFlip) return baseFee;
+
         // If Flip, charge full Skew After, else charge the delta
         uint256 negativeSkewAccrued = skewFlip ? updatedSkew.abs() : amountUsd;
+
         // Calculate the relative impact on Market Skew
         uint256 feeFactor = FEE_SCALE.percentage(negativeSkewAccrued, longValue + shortValue);
+
         // Calculate the additional fee
         uint256 feeAddition = _tokenAmount.percentage(feeFactor);
-        // Return base fee + fee addition
+
         return baseFee + feeAddition;
     }
 
@@ -161,7 +165,9 @@ library MarketUtils {
         uint256 amountUsd = _isLongToken
             ? _tokenAmount.toUsd(_longPrice, LONG_BASE_UNIT)
             : _tokenAmount.toUsd(_shortPrice, SHORT_BASE_UNIT);
+
         if (amountUsd == 0) revert MarketUtils_AmountTooSmall();
+
         // Minimize value of pool to maximise the effect on the skew
         uint256 longValue = _longTokenBalance.toUsd(_longPrice, LONG_BASE_UNIT);
         uint256 shortValue = _shortTokenBalance.toUsd(_shortPrice, SHORT_BASE_UNIT);
@@ -178,17 +184,19 @@ library MarketUtils {
         // Check for a Skew Flip
         bool skewFlip = initSkew ^ updatedSkew < 0;
 
-        // Skew Improve Same Side - Charge the Base fee
+        // If No Flip + Skew Improved - Charge the Base fee
         if (updatedSkew.abs() < initSkew.abs() && !skewFlip) return baseFee;
+
         // If Flip, charge full Skew After, else charge the delta
         uint256 negativeSkewAccrued = skewFlip ? updatedSkew.abs() : amountUsd;
+
         // Calculate the relative impact on Market Skew
         // Re-add amount to get the initial net pool value
         uint256 feeFactor = FEE_SCALE.percentage(negativeSkewAccrued, longValue + shortValue + amountUsd);
-        // Calculate the additional fee
 
+        // Calculate the additional fee
         uint256 feeAddition = _tokenAmount.percentage(feeFactor);
-        // Return base fee + fee addition
+
         return baseFee + feeAddition;
     }
 
@@ -206,11 +214,8 @@ library MarketUtils {
             _params.deposit.isLongToken
         );
 
-        // Calculate remaining after fee
         afterFeeAmount = _params.deposit.amountIn - fee;
 
-        // Calculate Mint amount with the remaining amount
-        // Minimize
         mintAmount = calculateMintAmount(
             _params.vault,
             _params.longPrices,
@@ -228,7 +233,6 @@ library MarketUtils {
         view
         returns (uint256 tokenAmountOut)
     {
-        // Validate the Amount Out vs Expected Amount out
         uint256 amountOut = calculateWithdrawalAmount(
             _params.vault,
             _params.longPrices,
@@ -242,7 +246,6 @@ library MarketUtils {
 
         if (_params.amountOut != amountOut) revert MarketUtils_InvalidAmountOut(_params.amountOut, amountOut);
 
-        // Calculate Fee on the Amount Out
         uint256 fee = calculateWithdrawalFee(
             _params.longPrices.med,
             _params.shortPrices.med,
@@ -252,7 +255,6 @@ library MarketUtils {
             _params.withdrawal.isLongToken
         );
 
-        // Calculate the Token Amount Out
         tokenAmountOut = amountOut - fee;
     }
 
@@ -267,10 +269,10 @@ library MarketUtils {
         int256 _cumulativePnl,
         bool _isLongToken
     ) public view returns (uint256 marketTokenAmount) {
-        // Maximize the AUM
         uint256 marketTokenPrice = getMarketTokenPrice(
             vault, _longPrices.max, _longBorrowFeesUsd, _shortPrices.max, _shortBorrowFeesUsd, _cumulativePnl
         );
+
         // Long divisor -> (18dp * 30dp / x dp) should = 18dp -> dp = 30
         // Short divisor -> (6dp * 30dp / x dp) should = 18dp -> dp = 18
         // Minimize the Value of the Amount In
@@ -282,6 +284,7 @@ library MarketUtils {
             uint256 valueUsd = _isLongToken
                 ? _amountIn.toUsd(_longPrices.min, LONG_BASE_UNIT)
                 : _amountIn.toUsd(_shortPrices.min, SHORT_BASE_UNIT);
+
             // (30dp * 18dp / 30dp) = 18dp
             marketTokenAmount = valueUsd.mulDiv(PRECISION, marketTokenPrice);
         }
@@ -301,21 +304,27 @@ library MarketUtils {
         uint256 marketTokenPrice = getMarketTokenPrice(
             vault, _longPrices.min, _longBorrowFeesUsd, _shortPrices.min, _shortBorrowFeesUsd, _cumulativePnl
         );
+
         uint256 valueUsd = _marketTokenAmountIn.toUsd(marketTokenPrice, PRECISION);
+
         // Minimize the Value of the Amount Out
         if (_isLongToken) {
             tokenAmount = valueUsd.fromUsd(_longPrices.max, LONG_BASE_UNIT);
+
             uint256 poolBalance = vault.longTokenBalance();
+
             if (tokenAmount > poolBalance) tokenAmount = poolBalance;
         } else {
             tokenAmount = valueUsd.fromUsd(_shortPrices.max, SHORT_BASE_UNIT);
+
             uint256 poolBalance = vault.shortTokenBalance();
+
             if (tokenAmount > poolBalance) tokenAmount = poolBalance;
         }
     }
 
     /**
-     * ======================= Utility Functions =======================
+     * =========================================== Utility Functions ===========================================
      */
     function getMarketTokenPrice(
         IVault vault,
@@ -326,12 +335,14 @@ library MarketUtils {
         int256 _cumulativePnl
     ) public view returns (uint256 lpTokenPrice) {
         uint256 totalSupply = vault.totalSupply();
+
         if (totalSupply == 0) {
             lpTokenPrice = 0;
         } else {
             uint256 aum = getAum(
                 vault, _longTokenPrice, _longBorrowFeesUsd, _shortTokenPrice, _shortBorrowFeesUsd, _cumulativePnl
             );
+
             lpTokenPrice = aum.divWad(totalSupply);
         }
     }
@@ -347,15 +358,16 @@ library MarketUtils {
         uint256 _shortBorrowFeesUsd,
         int256 _cumulativePnl
     ) public view returns (uint256 aum) {
-        // Get Values in USD -> Subtract reserved amounts from AUM
         aum += (vault.longTokenBalance() - vault.longTokensReserved()).toUsd(_longTokenPrice, LONG_BASE_UNIT);
+
         aum += (vault.shortTokenBalance() - vault.shortTokensReserved()).toUsd(_shortTokenPrice, SHORT_BASE_UNIT);
 
-        // Add Borrow Fees
         aum += _longBorrowFeesUsd;
+
         aum += _shortBorrowFeesUsd;
 
-        // Subtract any Negative Pnl -> Unrealized Positive Pnl not added to minimize AUM
+        // Subtract any Negative Pnl
+        // Unrealized Positive Pnl not added to minimize AUM
         if (_cumulativePnl < 0) aum -= _cumulativePnl.abs();
     }
 
@@ -385,7 +397,6 @@ library MarketUtils {
         return newAverageEntryPrice;
     }
 
-    /// @dev Positive for profit, negative for loss. Returns PNL in USD
     function getMarketPnl(
         IMarket market,
         string memory _ticker,
@@ -394,10 +405,15 @@ library MarketUtils {
         bool _isLong
     ) public view returns (int256 netPnl) {
         uint256 openInterest = market.getOpenInterest(_ticker, _isLong);
+
         uint256 averageEntryPrice = _getAverageEntryPrice(market, _ticker, _isLong);
+
         if (openInterest == 0 || averageEntryPrice == 0) return 0;
+
         int256 priceDelta = _indexPrice.diff(averageEntryPrice);
+
         uint256 entryIndexAmount = openInterest.fromUsd(averageEntryPrice, _indexBaseUnit);
+
         if (_isLong) {
             netPnl = priceDelta.mulDivSigned(entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
@@ -405,18 +421,15 @@ library MarketUtils {
         }
     }
 
-    // In Collateral Tokens
     function getPoolBalance(IMarket market, IVault vault, string memory _ticker, bool _isLong)
         public
         view
         returns (uint256 poolAmount)
     {
-        // get the allocation percentage
         uint256 allocationShare = market.getAllocation(_ticker);
-        // get the total liquidity available for that side
+
         uint256 totalAvailableLiquidity = vault.totalAvailableLiquidity(_isLong);
 
-        // calculate liquidity allocated to the market for that side
         poolAmount = totalAvailableLiquidity.percentage(allocationShare, MAX_ALLOCATION);
     }
 
@@ -441,15 +454,12 @@ library MarketUtils {
         uint256 _indexBaseUnit,
         bool _isLong
     ) internal view {
-        // Get Max OI for side
         uint256 availableUsd =
             getAvailableOiUsd(market, vault, _ticker, _indexPrice, _collateralTokenPrice, _indexBaseUnit, _isLong);
-        // Check SizeDelta USD won't push the OI over the max
 
         if (_sizeDeltaUsd > availableUsd) revert MarketUtils_MaxOiExceeded();
     }
 
-    /// @notice returns the available remaining open interest for a side in USD
     function getAvailableOiUsd(
         IMarket market,
         IVault vault,
@@ -460,18 +470,18 @@ library MarketUtils {
         bool _isLong
     ) public view returns (uint256 availableOi) {
         uint256 collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
-        // get the allocation and subtract by the markets reserveFactor
+
         uint256 remainingAllocationUsd =
             getPoolBalanceUsd(market, vault, _ticker, _collateralTokenPrice, collateralBaseUnit, _isLong);
 
         availableOi = remainingAllocationUsd - remainingAllocationUsd.percentage(_getReserveFactor(market, _ticker));
 
-        // get the pnl
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
 
         // if the pnl is positive, subtract it from the available oi
         if (pnl > 0) {
             uint256 absPnl = pnl.abs();
+
             // If PNL > Available OI, set OI to 0
             if (absPnl > availableOi) availableOi = 0;
             else availableOi -= absPnl;
@@ -479,6 +489,7 @@ library MarketUtils {
         // no negative case, as OI hasn't been freed / realised
     }
 
+    /// @dev Doesn't take into account current open interest, or Pnl.
     function getMaxOpenInterest(
         IMarket market,
         IVault vault,
@@ -487,17 +498,16 @@ library MarketUtils {
         uint256 _collateralBaseUnit,
         bool _isLong
     ) public view returns (uint256 maxOpenInterest) {
-        // get the total liquidity available for that side
         uint256 totalAvailableLiquidity = vault.totalAvailableLiquidity(_isLong);
-        // calculate liquidity allocated to the market for that side
+
         uint256 poolAmount = totalAvailableLiquidity.percentage(market.getAllocation(_ticker), MAX_ALLOCATION);
-        // subtract the reserve factor from the pool amount and convert to USD
+
         maxOpenInterest = (poolAmount - poolAmount.percentage(_getReserveFactor(market, _ticker))).toUsd(
             _collateralPrice, _collateralBaseUnit
         );
     }
 
-    // The pnl factor is the ratio of the pnl to the pool usd
+    /// @dev Pnl to Pool Ratio - e.g 0.45 = $45 profit to $100 pool.
     function getPnlFactor(
         IMarket market,
         IVault vault,
@@ -508,17 +518,14 @@ library MarketUtils {
         uint256 _collateralBaseUnit,
         bool _isLong
     ) internal view returns (int256 pnlFactor) {
-        // get pool usd (if 0 return 0)
         uint256 poolUsd = getPoolBalanceUsd(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
 
         if (poolUsd == 0) {
             return 0;
         }
 
-        // get pnl
         int256 pnl = getMarketPnl(market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
 
-        // (PNL / Pool USD)
         uint256 factor = pnl.abs().divWadUp(poolUsd);
 
         return pnl > 0 ? factor.toInt256() : factor.toInt256() * -1;
@@ -538,14 +545,12 @@ library MarketUtils {
         uint256 _collateralBaseUnit,
         bool _isLong
     ) internal view returns (uint256 adlPrice) {
-        // Get the current average entry price and open interest
         uint256 averageEntryPrice = _getAverageEntryPrice(market, _ticker, _isLong);
+
         uint256 openInterest = market.getOpenInterest(_ticker, _isLong);
 
-        // Get the pool balance in USD
         uint256 poolUsd = getPoolBalanceUsd(market, vault, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
 
-        // Calculate the maximum PNL allowed based on the pool balance and max PNL factor
         uint256 maxProfit = poolUsd.percentage(MAX_PNL_FACTOR);
 
         uint256 priceDelta = averageEntryPrice.mulDivUp(maxProfit, openInterest);
@@ -564,12 +569,10 @@ library MarketUtils {
     }
 
     /**
-     * ======================= External-Only Functions =======================
+     * =========================================== External-Only Functions ===========================================
      */
 
-    /**
-     * Only to be called externally. Very gas inefficient, as it loops through all positions.
-     */
+    /// @dev For external queries - very gas inefficient.
     function calculateCumulativeMarketPnl(
         IMarket market,
         IPriceFeed priceFeed,
@@ -577,24 +580,22 @@ library MarketUtils {
         bool _isLong,
         bool _maximise
     ) external view returns (int256 cumulativePnl) {
-        /**
-         * For each token in the market:
-         * 1. Get the current price of the token
-         * 2. Get the current open interest of the token
-         * 3. Get the average entry price of the token
-         * 4. Calculate the PNL of the token
-         * 5. Add the PNL to the cumulative PNL
-         */
         string[] memory tickers = market.getTickers();
+
         // Max 100 Loops, so uint8 sufficient
         for (uint8 i = 0; i < tickers.length;) {
             string memory ticker = tickers[i];
+
             uint256 indexPrice = _maximise
                 ? Oracle.getMaxPrice(priceFeed, ticker, _requestTimestamp)
                 : Oracle.getMinPrice(priceFeed, ticker, _requestTimestamp);
+
             uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, ticker);
+
             int256 pnl = getMarketPnl(market, ticker, indexPrice, indexBaseUnit, _isLong);
+
             cumulativePnl += pnl;
+
             unchecked {
                 ++i;
             }
@@ -612,7 +613,7 @@ library MarketUtils {
      * ADL Target Score = ( Position Size / Total Pool Size) * (Position PnL / Position Size)
      *
      * This function requires loops, so should *never* be used onchain. It is simply a queryable
-     * function from frontends to determine the next optimal position to be adl'd. Also,
+     * function from frontends to determine the next most optimal position to be adl'd. Also,
      * optimistically assumes accurate pricing data.
      *
      * Users are incentivized to target these positions as they'll generate them the
@@ -626,24 +627,30 @@ library MarketUtils {
         uint256 _totalPoolSizeUsd,
         bool _isLong
     ) external view returns (bytes32 positionKey) {
-        // Get all Position Keys
         bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(_isLong);
+
         uint256 len = positionKeys.length;
+
         uint256 highestAdlScore;
+
         for (uint256 i = 0; i < len;) {
             Position.Data memory position = tradeStorage.getPosition(positionKeys[i]);
+
             if (keccak256(abi.encode(position.ticker)) != keccak256(abi.encode(_ticker))) continue;
-            // Get the PNL for the position
+
             int256 pnl = Position.getPositionPnl(
                 position.size, position.weightedAvgEntryPrice, _indexPrice, _indexBaseUnit, _isLong
             );
+
             if (pnl < 0) continue;
-            // Calculate the ADL Target Score
+
             uint256 adlTargetScore = (position.size / _totalPoolSizeUsd) * (pnl.abs() / position.size);
+
             if (adlTargetScore > highestAdlScore) {
                 highestAdlScore = adlTargetScore;
                 positionKey = positionKeys[i];
             }
+
             unchecked {
                 ++i;
             }
@@ -651,7 +658,7 @@ library MarketUtils {
     }
 
     /**
-     * ======================= Getter Functions =======================
+     * =========================================== Getter Functions ===========================================
      */
     function generateAssetId(string memory _ticker) internal pure returns (bytes32) {
         return keccak256(abi.encode(_ticker));
@@ -664,11 +671,13 @@ library MarketUtils {
     }
 
     /// @dev - Allocations are in the same order as the tickers in the market array.
-    /// Only used to internally encode desired allocations to input into a function call.
+    /// Allocations are a % to 0 d.p. e.g 1 = 1%
     function encodeAllocations(uint8[] memory _allocs) public pure returns (bytes memory allocations) {
         allocations = new bytes(_allocs.length);
+
         for (uint256 i = 0; i < _allocs.length;) {
             allocations[i] = bytes1(_allocs[i]);
+
             unchecked {
                 ++i;
             }
@@ -676,7 +685,7 @@ library MarketUtils {
     }
 
     /**
-     * ======================= Private Functions =======================
+     * =========================================== Private Functions ===========================================
      */
     function _getAverageEntryPrice(IMarket market, string memory _ticker, bool _isLong)
         private

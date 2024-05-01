@@ -37,12 +37,15 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     mapping(bool _isLong => EnumerableSetLib.Bytes32Set _positionKeys) private openPositionKeys;
 
     bool private isInitialized;
-    uint64 public liquidationFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
-    uint64 public adlFee; // Stored as a percentage with 18 D.P (e.g 0.05e18 = 5%)
+
+    // Stored as percentages with 18 D.P (e.g 0.05e18 = 5%)
+    uint64 public liquidationFee;
+    uint64 public adlFee;
     uint64 public tradingFee;
-    uint64 public feeForExecution; // Percentage of the Trading Fee, 18 D.P
-    uint256 public minCollateralUsd;
+    uint64 public feeForExecution;
+
     uint64 public minCancellationTime;
+    uint256 public minCollateralUsd;
 
     constructor(IMarket _market, IVault _vault, IReferralStorage _referralStorage, IPriceFeed _priceFeed) {
         _initializeOwner(msg.sender);
@@ -53,15 +56,15 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ===================================== Setter Functions =====================================
+     * =========================================== Setter Functions ===========================================
      */
     function initialize(
-        uint64 _liquidationFee, // 0.05e18 = 5%
-        uint64 _positionFee, // 0.001e18 = 0.1%
-        uint64 _adlFee, // Percentage of the output amount that goes to the ADL executor, 18 D.P
-        uint64 _feeForExecution, // Percentage of the Trading Fee that goes to the keeper, 18 D.P
-        uint256 _minCollateralUsd, // 2e30 = 2 USD
-        uint64 _minCancellationTime // e.g 1 minutes
+        uint64 _liquidationFee,
+        uint64 _positionFee,
+        uint64 _adlFee,
+        uint64 _feeForExecution,
+        uint256 _minCollateralUsd,
+        uint64 _minCancellationTime
     ) external onlyOwner {
         if (isInitialized) revert TradeStorage_AlreadyInitialized();
         liquidationFee = _liquidationFee;
@@ -99,10 +102,8 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ===================================== Order Functions =====================================
+     * =========================================== Order Functions ===========================================
      */
-
-    /// @dev Adds Order to EnumerableSetLib
     function createOrderRequest(Position.Request calldata _request) external onlyRoles(_ROLE_3) {
         EnumerableSetLib.Bytes32Set storage orderSet = _request.input.isLimit ? limitOrderKeys : marketOrderKeys;
 
@@ -134,7 +135,7 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ===================================== Callback Functions =====================================
+     * =========================================== Callback Functions ===========================================
      */
 
     /// @dev - Should only be callable within the TradeEngine library
@@ -166,13 +167,12 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ===================================== Execution Functions =====================================
+     * =========================================== Execution Functions ===========================================
      */
 
     /// @dev needs to accept request id for limit order cases
-    /// the request id at request time won't be the same as the request id at execution time
-    /// @notice Executes a Request for a Position
-    /// Called by keepers --> Routes the execution down the correct path.
+    /// the request id at the time of request won't be the same as the request id at execution time
+    /// @notice the main function responsible for execution of position requests
     function executePositionRequest(bytes32 _orderKey, bytes32 _limitRequestKey, address _feeReceiver)
         external
         onlyRoles(_ROLE_1)
@@ -204,7 +204,7 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ===================================== Private Functions =====================================
+     * =========================================== Private Functions ===========================================
      */
     function _deleteOrder(bytes32 _orderKey, bool _isLimit) private {
         bool success = _isLimit ? limitOrderKeys.remove(_orderKey) : marketOrderKeys.remove(_orderKey);
@@ -213,18 +213,19 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
         emit OrderRequestCancelled(_orderKey);
     }
 
-    /// @dev - Attaches a Conditional Order to a live Position --> Let's us ensure SL / TP orders only affect the position they're assigned to.
+    /// @dev Attaches a Conditional Order to a live Position
     function _attachConditionalOrder(Position.Request calldata _request, bytes32 _orderKey) private {
         bytes32 positionKey = Position.generateKey(_request);
+
         Position.Data memory position = openPositions[positionKey];
+
         if (position.user == address(0)) revert TradeStorage_InactivePosition();
-        // If Request is a SL, tie to the Stop Loss Key for the Position
+
         if (_request.requestType == Position.RequestType.STOP_LOSS) {
             if (position.stopLossKey != bytes32(0)) revert TradeStorage_StopLossAlreadySet();
             position.stopLossKey = _orderKey;
             openPositions[positionKey] = position;
         } else if (_request.requestType == Position.RequestType.TAKE_PROFIT) {
-            // If Request is a TP, tie to the Take Profit Key for the Position
             if (position.takeProfitKey != bytes32(0)) revert TradeStorage_TakeProfitAlreadySet();
             position.takeProfitKey = _orderKey;
             openPositions[positionKey] = position;
@@ -236,7 +237,7 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ===================================== Getter Functions =====================================
+     * =========================================== Getter Functions ===========================================
      */
     function getOpenPositionKeys(bool _isLong) external view returns (bytes32[] memory) {
         return openPositionKeys[_isLong].values();

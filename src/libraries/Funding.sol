@@ -24,14 +24,11 @@ library Funding {
     function updateState(IMarket market, Pool.Storage storage pool, string calldata _ticker, uint256 _indexPrice)
         internal
     {
-        // Calculate the skew in USD
         int256 skewUsd = _calculateSkewUsd(market, _ticker);
 
-        // Calculate the current funding velocity
         pool.fundingRateVelocity =
             getCurrentVelocity(market, skewUsd, pool.config.maxFundingVelocity, pool.config.skewScale).toInt64();
 
-        // Calculate the current funding rate
         (pool.fundingRate, pool.fundingAccruedUsd) = recompute(market, _ticker, _indexPrice);
     }
 
@@ -73,20 +70,19 @@ library Funding {
         view
         returns (int256 velocity)
     {
-        // Get the proportionalSkew
         // As skewScale has 0 D.P, we can directly divide skew by skewScale to get a proportion to 30 D.P
         // e.g if skew = 300_000e30 ($300,000), and skewScale = 1_000_000 ($1,000,000)
         // proportionalSkew = 300_000e30 / 1_000_000 = 0.3e30 (0.3%)
         int256 proportionalSkew = _skew / _skewScale;
-        // Check if the absolute value of proportionalSkew is less than the fundingVelocityClamp
+
         if (proportionalSkew.abs() < market.FUNDING_VELOCITY_CLAMP()) {
-            // If less, velocity is negligible
+            // If the proportional skew is less than the clamp, velocity is negligible.
             return 0;
         }
-        // Bound between -1e30 and 1e30
+
+        // Bound skew between -1 and 1 (30 d.p)
         int256 pSkewBounded = proportionalSkew.clamp(-sPRICE_UNIT, sPRICE_UNIT);
 
-        // Convert maxVelocity from a 4.Dp percentage to 18 Dp
         int256 maxVelocity = _maxVelocity.expandDecimals(4, 18);
 
         // Calculate the velocity to 18dp (proportionalSkew * maxFundingVelocity)
@@ -102,7 +98,7 @@ library Funding {
     }
 
     /**
-     * ============================== Private Functions ==============================
+     * =========================================== Private Functions ===========================================
      */
 
     /**
@@ -111,6 +107,7 @@ library Funding {
      */
     function _getProportionalFundingElapsed(IMarket market, string calldata _ticker) private view returns (int64) {
         uint48 timeElapsed = _blockTimestamp() - market.getLastUpdate(_ticker);
+
         return timeElapsed.divWad(SECONDS_IN_DAY).toInt64();
     }
 

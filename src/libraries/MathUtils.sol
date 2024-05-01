@@ -17,7 +17,7 @@ library MathUtils {
     uint256 internal constant WAD = 1e18; // The scalar of ETH and most ERC20s.
 
     /**
-     * ========================== Multiplication ==========================
+     * =========================================== Multiplication ===========================================
      */
 
     /// @dev Equivalent to `(x * y) / WAD` rounded down.
@@ -48,7 +48,7 @@ library MathUtils {
     }
 
     /**
-     * ========================== Division ==========================
+     * =========================================== Division ===========================================
      */
 
     /// @dev Equivalent to `(x * WAD) / y` rounded down.
@@ -212,7 +212,7 @@ library MathUtils {
     }
 
     /**
-     * ========================== Exponentiation ==========================
+     * =========================================== Exponentiation ===========================================
      */
 
     /// @dev Exponentiate `x` to `y` by squaring, denominated in base `b`.
@@ -313,7 +313,7 @@ library MathUtils {
     }
 
     /**
-     * ========================== Utility / Rounding ==========================
+     * =========================================== Utility / Rounding ===========================================
      */
 
     /// @dev Returns the delta between x and y in integer form, so the final result can be negative.

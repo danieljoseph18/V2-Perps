@@ -45,9 +45,14 @@ library PriceImpact {
     }
 
     /**
-     * Price impact is calculated as a function of the following:
-     * 1. How the action affects the skew of the market. Positions should be punished for increasing, and rewarded for decreasing.
-     * 2. The liquidity of the market. The more illiquid, the higher the price impact will be.
+     * The formula for price impact is:
+     * sizeDeltaUsd * skewScalar((initialSkew/initialTotalOi) - (updatedSkew/updatedTotalOi)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
+     *
+     * Impact is calculated in USD, and is capped by the impact pool.
+     *
+     * Instead of adding / subtracting collateral, the price of the position is manipulated accordingly, by the same percentage as the impact.
+     *
+     * If the impact percentage exceeds the maximum slippage specified by the user, the transaction is reverted.
      */
     function execute(IMarket market, IVault vault, Position.Request memory _request, Execution.Prices memory _prices)
         external
@@ -64,10 +69,10 @@ library PriceImpact {
             state.negativeLiquidityScalar
         ) = market.getImpactValues(_request.input.ticker);
         state = _getImpactValues(market, _request.input.ticker);
-        // Get long / short Oi -> used to calculate skew
+
         state.longOi = market.getOpenInterest(_request.input.ticker, true);
         state.shortOi = market.getOpenInterest(_request.input.ticker, false);
-        // Used to calculate the impact on available liquidity
+
         if (_request.input.isLong) {
             state.availableOi = MarketUtils.getAvailableOiUsd(
                 market,
@@ -110,11 +115,10 @@ library PriceImpact {
         if ((state.initialSkew ^ state.updatedSkew) < 0) {
             /**
              * If Skew has flipped, the market initially goes to perfect harmony, then skews in the opposite direction.
-             * As a result, the size delta that takes the market to skew = 0, is coutned as positive impact, and
+             * As a result, the size delta that takes the market to skew = 0, is counted as positive impact, and
              * the size delta that skews the market in the opposite direction is counted as negative impact.
              * The total price impact is calculated as the positive impact - the negative impact.
              */
-            // Calculate positive impact before the sign flips
             int256 positiveImpact = _calculateImpact(
                 state.sizeDeltaUsd,
                 0,
@@ -126,7 +130,7 @@ library PriceImpact {
                 state.availableOi,
                 _request.input.isIncrease
             );
-            // Calculate negative impact after the sign flips
+
             int256 negativeImpact = _calculateImpact(
                 state.sizeDeltaUsd,
                 state.updatedSkew,
@@ -138,10 +142,9 @@ library PriceImpact {
                 state.availableOi,
                 _request.input.isIncrease
             );
-            // priceImpactUsd = positive expression - the negative expression
+
             priceImpactUsd = positiveImpact - negativeImpact;
         } else {
-            // Get the skew scalar and liquidity scalar, depending on direction of price impact
             int256 skewScalar;
             int256 liquidityScalar;
             if (state.updatedSkew.abs() < state.initialSkew.abs()) {
@@ -151,7 +154,8 @@ library PriceImpact {
                 skewScalar = state.negativeSkewScalar;
                 liquidityScalar = state.negativeLiquidityScalar;
             }
-            // Calculate the impact within bounds
+
+            // Calculate the impact within bounds (no skew flip has occurred)
             priceImpactUsd = _calculateImpact(
                 state.sizeDeltaUsd,
                 state.updatedSkew,
@@ -165,26 +169,20 @@ library PriceImpact {
             );
         }
 
-        // validate the impact delta on pool
         if (priceImpactUsd > 0) {
             priceImpactUsd = _validateImpactDelta(market, _request.input.ticker, priceImpactUsd);
         }
-        // calculate the impacted price
+
         impactedPrice =
             _calculateImpactedPrice(_request.input.sizeDelta, _prices.indexPrice, priceImpactUsd, _request.input.isLong);
-        // check the slippage if negative
+
         if (priceImpactUsd < 0) {
             _checkSlippage(impactedPrice, _prices.indexPrice, _request.input.maxSlippage);
         }
     }
 
     /**
-     * ========================= Private Functions =========================
-     */
-
-    /**
-     * PriceImpact = sizeDeltaUsd * skewScalar((initialSkew/initialTotalOi) - (updatedSkew/updatedTotalOi)) * liquidityScalar(sizeDeltaUsd / totalAvailableLiquidity)
-     * @dev - Only calculates impact within bounds. Does not handle skew flip case.
+     * =========================================== Private Functions ===========================================
      */
     function _calculateImpact(
         int256 _sizeDeltaUsd,
@@ -197,11 +195,9 @@ library PriceImpact {
         int256 _availableOi,
         bool _isIncrease
     ) private pure returns (int256 priceImpactUsd) {
-        /**
-         * Fully reducing the open interest technically brings the market to perfect harmony.
-         * To avoid incentivizing this case with positive impact, the price impact is set to 0.
-         */
+        // Avoid incentivizing full decreases (market technically goes to perfect harmony.)
         if (_updatedTotalOi == 0) return 0;
+
         /**
          * If initialTotalOi is 0, the (initialSkew/initialTotalOi) term is cancelled out.
          * Price impact will always be negative when total oi before is 0.
@@ -223,7 +219,6 @@ library PriceImpact {
             // Calculates the cumulative impact on both skew, and liquidity as a percentage.
             int256 cumulativeImpact = skewFactor.mulDivSigned(liquidityFactor, SIGNED_PRICE_PRECISION);
 
-            // Calculate the Price Impact
             priceImpactUsd = _sizeDeltaUsd.mulDivSigned(cumulativeImpact, SIGNED_PRICE_PRECISION);
         } else {
             priceImpactUsd = _sizeDeltaUsd.mulDivSigned(skewFactor, SIGNED_PRICE_PRECISION);

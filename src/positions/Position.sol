@@ -21,34 +21,10 @@ library Position {
     using MathUtils for uint256;
     using MathUtils for int256;
 
-    error Position_InvalidDecrease();
-    error Position_SizeDelta();
     error Position_CollateralExceedsSize();
     error Position_BelowMinLeverage();
     error Position_OverMaxLeverage();
     error Position_InvalidSlippage();
-    error Position_MarketDoesNotExist();
-    error Position_InvalidLimitPrice();
-    error Position_InvalidAssetId();
-    error Position_InvalidConditionalPercentage();
-    error Position_InvalidSizeDelta();
-    error Position_CollateralDelta();
-    error Position_NewPosition();
-    error Position_IncreasePositionCollateral();
-    error Position_IncreasePositionSize();
-    error Position_InvalidIncreasePosition();
-    error Position_DecreasePositionCollateral();
-    error Position_DecreasePositionSize();
-    error Position_FundingTimestamp();
-    error Position_FundingRate();
-    error Position_FundingAccrual();
-    error Position_BorrowingTimestamp();
-    error Position_BorrowRateDelta();
-    error Position_CumulativeBorrowDelta();
-    error Position_OpenInterestDelta();
-    error Position_InvalidFeeUpdate();
-    error Position_InvalidPoolUpdate();
-    error Position_InvalidVaultUpdate();
     error Position_InvalidLiquidationFee();
     error Position_InvalidTradingFee();
     error Position_InvalidAdlFee();
@@ -57,7 +33,6 @@ library Position {
     uint8 private constant MIN_LEVERAGE = 1; // 1x
     uint64 private constant PRECISION = 1e18;
     uint64 private constant TARGET_PNL_RATIO = 0.35e18;
-    // Max and Min Price Slippage
     uint128 private constant MIN_SLIPPAGE = 0.0001e30; // 0.01%
     uint128 private constant MAX_SLIPPAGE = 0.9999e30; // 99.99%
     uint256 private constant MAX_ADL_PERCENTAGE = 0.66e18; // 66%
@@ -70,7 +45,6 @@ library Position {
     uint64 private constant MAX_FEE_FOR_EXECUTION = 0.3e18; // 30%
     uint64 private constant MIN_FEE_FOR_EXECUTION = 0.05e18; // 5%
 
-    // Data for an Open Position
     struct Data {
         string ticker;
         address user;
@@ -111,14 +85,13 @@ library Position {
         uint256 takeProfitPrice;
     }
 
-    // Trade Request -> Sent by user
     struct Input {
         string ticker; // Asset ticker, e.g "ETH"
         address collateralToken;
         uint256 collateralDelta;
         uint256 sizeDelta; // USD
         uint256 limitPrice;
-        uint128 maxSlippage; // % with 30 D.P
+        uint128 maxSlippage; // 30 D.P Ratio
         uint64 executionFee;
         bool isLong;
         bool isLimit;
@@ -127,7 +100,6 @@ library Position {
         bool triggerAbove; // For Limits -> Execute above the limit price, or below it
     }
 
-    // Request -> Constructed by Router based on User Input
     struct Request {
         Input input;
         address user;
@@ -138,7 +110,6 @@ library Position {
         bytes32 takeProfitKey;
     }
 
-    // Bundled Request for Execution
     struct Settlement {
         Request request;
         bytes32 orderKey;
@@ -147,7 +118,6 @@ library Position {
         bool isAdl;
     }
 
-    // Request Type Classification
     enum RequestType {
         POSITION_INCREASE,
         POSITION_DECREASE,
@@ -157,7 +127,7 @@ library Position {
     }
 
     /**
-     * =========================== Validation Functions ============================
+     * =========================================== Validation Functions ============================================
      */
     function checkSlippage(uint256 _slippage) internal pure {
         if (!(_slippage >= MIN_SLIPPAGE && _slippage <= MAX_SLIPPAGE)) {
@@ -172,24 +142,25 @@ library Position {
         if (_liquidationFee > MAX_LIQUIDATION_FEE || _liquidationFee < MIN_LIQUIDATION_FEE) {
             revert Position_InvalidLiquidationFee();
         }
+
         if (_positionFee > MAX_TRADING_FEE || _positionFee < MIN_TRADING_FEE) {
             revert Position_InvalidTradingFee();
         }
+
         if (_adlFee > MAX_ADL_FEE || _adlFee < MIN_ADL_FEE) {
             revert Position_InvalidAdlFee();
         }
+
         if (_feeForExecution > MAX_FEE_FOR_EXECUTION || _feeForExecution < MIN_FEE_FOR_EXECUTION) {
             revert Position_InvalidFeeForExecution();
         }
     }
 
-    // 1x = 100
     function checkLeverage(IMarket market, string memory _ticker, uint256 _sizeUsd, uint256 _collateralUsd)
         internal
         view
     {
         uint8 maxLeverage = market.getMaxLeverage(_ticker);
-
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = _sizeUsd / _collateralUsd;
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
@@ -224,7 +195,7 @@ library Position {
     }
 
     /**
-     * =========================== Constructor Functions ============================
+     * =========================================== Constructor Functions ============================================
      */
     function generateKey(Request memory _request) internal pure returns (bytes32 positionKey) {
         positionKey = keccak256(abi.encode(_request.input.ticker, _request.user, _request.input.isLong));
@@ -238,14 +209,14 @@ library Position {
         positionKey = keccak256(abi.encode(_ticker, _user, _isLong));
     }
 
-    function generateOrderKey(Request memory _request) public pure returns (bytes32 orderKey) {
+    function generateOrderKey(Request memory _request) internal pure returns (bytes32 orderKey) {
         orderKey = keccak256(
             abi.encode(
                 _request.input.ticker,
                 _request.user,
                 _request.input.isLong,
-                _request.input.isIncrease, // Enables separate SL / TP Orders
-                _request.input.limitPrice // Enables multiple limit orders
+                _request.input.isIncrease,
+                _request.input.limitPrice
             )
         );
     }
@@ -272,9 +243,8 @@ library Position {
         uint256 _impactedPrice,
         uint256 _collateralUsd
     ) internal view returns (Data memory position) {
-        // Get Entry Funding & Borrowing Values
         (uint256 longBorrowFee, uint256 shortBorrowFee) = market.getCumulativeBorrowFees(_request.input.ticker);
-        // get Trade Value in USD
+
         position = Data({
             ticker: _request.input.ticker,
             collateralToken: _request.input.collateralToken,
@@ -363,7 +333,7 @@ library Position {
     }
 
     /**
-     * =========================== Getter Functions ============================
+     * =========================================== Getter Functions ============================================
      */
     function calculateFee(
         ITradeStorage tradeStorage,
@@ -374,10 +344,10 @@ library Position {
     ) internal view returns (uint256 positionFee, uint256 feeForExecutor) {
         uint256 feePercentage = tradeStorage.tradingFee();
         uint256 executorPercentage = tradeStorage.feeForExecution();
-        // Units usd to collateral amount
+
         if (_sizeDelta != 0) {
             uint256 sizeInCollateral = _sizeDelta.fromUsd(_collateralPrice, _collateralBaseUnit);
-            // calculate fee
+
             positionFee = sizeInCollateral.percentage(feePercentage);
             feeForExecutor = positionFee.percentage(executorPercentage);
             positionFee -= feeForExecutor;
@@ -388,6 +358,7 @@ library Position {
         }
     }
 
+    /// @dev Calculates the funding fee proportional to the size delta in USD
     function getFundingFeeDelta(
         IMarket market,
         string memory _ticker,
@@ -396,17 +367,18 @@ library Position {
         int256 _entryFundingAccrued
     ) internal view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
         (, nextFundingAccrued) = Funding.calculateNextFunding(market, _ticker, _indexPrice);
-        // Funding Fee Usd = Size Delta * Percentage Funding Accrued
+
         fundingFeeUsd = _sizeDelta.toInt256().percentageUsd(nextFundingAccrued - _entryFundingAccrued);
     }
 
+    /// @dev Calculates the total funding owed by a position in USD
     function getTotalFundingFees(IMarket market, Data memory _position, uint256 _indexPrice)
         internal
         view
         returns (int256)
     {
         (, int256 nextFundingAccrued) = Funding.calculateNextFunding(market, _position.ticker, _indexPrice);
-        // Total Fees Owed Usd = Position Size * Percentage Funding Accrued
+
         return _position.size.toInt256().percentageInt(nextFundingAccrued - _position.fundingParams.lastFundingAccrued);
     }
 
@@ -416,25 +388,24 @@ library Position {
         returns (uint256)
     {
         uint256 feesUsd = getTotalBorrowFeesUsd(market, _position);
-        // Convert fees from USD to Collateral Tokens
+
         return feesUsd.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
     }
 
-    /// @dev Gets Total Fees Owed By a Position in Tokens
-    /// @dev Gets Fees Owed Since the Last Time a Position Was Updated
-    /// @dev Units: Fees in USD (% of fees applied to position size)
     function getTotalBorrowFeesUsd(IMarket market, Data memory _position) public view returns (uint256) {
         uint256 borrowFee = _position.isLong
             ? market.getCumulativeBorrowFee(_position.ticker, true) - _position.borrowingParams.lastLongCumulativeBorrowFee
             : market.getCumulativeBorrowFee(_position.ticker, false)
                 - _position.borrowingParams.lastShortCumulativeBorrowFee;
+
         borrowFee += Borrowing.calculatePendingFees(market, _position.ticker, _position.isLong);
+
         uint256 feeSinceUpdate = borrowFee == 0 ? 0 : _position.size.percentage(borrowFee);
+
         return feeSinceUpdate + _position.borrowingParams.feesOwed;
     }
 
-    /// @dev returns PNL in USD
-    // PNL = (Current Price - Average Entry Price) * (Position Value / Average Entry Price)
+    /// @dev PNL = (Current Price - Average Entry Price) * (Position Value / Average Entry Price)
     function getPositionPnl(
         uint256 _positionSizeUsd,
         uint256 _weightedAvgEntryPrice,
@@ -443,7 +414,9 @@ library Position {
         bool _isLong
     ) public pure returns (int256) {
         int256 priceDelta = _indexPrice.diff(_weightedAvgEntryPrice);
+
         uint256 entryIndexAmount = _positionSizeUsd.fromUsd(_weightedAvgEntryPrice, _indexBaseUnit);
+
         if (_isLong) {
             return priceDelta.mulDivSigned(entryIndexAmount.toInt256(), _indexBaseUnit.toInt256());
         } else {
@@ -462,18 +435,16 @@ library Position {
         uint256 _collateralBaseUnit,
         bool _isLong
     ) internal pure returns (int256) {
-        // Calculate whole position Pnl
         int256 positionPnl =
             getPositionPnl(_positionSizeUsd, _weightedAvgEntryPrice, _impactedPrice, _indexBaseUnit, _isLong);
 
-        // Get (% realised) * pnl
         int256 realizedPnlUsd = positionPnl.percentageSigned(_sizeDeltaUsd, _positionSizeUsd);
 
-        // Return PNL in Collateral Tokens
         return realizedPnlUsd.fromUsdToSigned(_collateralTokenPrice, _collateralBaseUnit);
     }
 
-    function getLiquidationPrice(Data memory _position) public pure returns (uint256) {
+    /// @dev Only used for external queries.
+    function getLiquidationPrice(Data memory _position) external pure returns (uint256) {
         if (_position.isLong) {
             // For long positions, liquidation price is when:
             // collateral + PNL = 0
@@ -510,18 +481,16 @@ library Position {
         pure
         returns (uint256 adlPercentage)
     {
-        /**
-         * Excess ratio = ((pnlToPoolRatio / targetPnlRatio) - 1) ** 2
-         */
+
+        // Excess ratio = ((pnlToPoolRatio / targetPnlRatio) - 1) ** 2
         uint256 excessRatio = (_pnlToPoolRatio.divWadUp(TARGET_PNL_RATIO) - PRECISION).rpow(2, PRECISION);
-        /**
-         * Exponent = -excessRatio * positionProfit / positionSize
-         */
+        
+        // Exponent = -excessRatio * positionProfit / positionSize
         int256 exponent = (-excessRatio.toInt256()).mulDivSigned(_positionProfit, _positionSize.toInt256());
-        /**
-         * adlPercentage = 1 - e ** exponent
-         */
+
+        // adlPercentage = 1 - e ** exponent
         adlPercentage = PRECISION - exponent.wadExp().toUint256();
+        
         if (adlPercentage > MAX_ADL_PERCENTAGE) adlPercentage = MAX_ADL_PERCENTAGE;
     }
 }

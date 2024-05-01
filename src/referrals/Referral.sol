@@ -19,7 +19,8 @@ library Referral {
 
         // 50% goes to user as extra collateral, 50% goes to code owner
         uint256 discount = totalReduction / 2;
-        affiliateRebate = totalReduction - discount; // Ensure full amount is accounted for in case of rounding down
+
+        affiliateRebate = totalReduction - discount;
 
         codeOwner = referralStorage.getAffiliateFromUser(_account);
 

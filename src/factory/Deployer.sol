@@ -5,12 +5,9 @@ import {Pool} from "../markets/Pool.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {Market, IMarket} from "../markets/Market.sol";
 import {Vault, IVault} from "../markets/Vault.sol";
-import {TradeStorage, ITradeStorage} from "../positions/TradeStorage.sol";
-import {TradeEngine} from "../positions/TradeEngine.sol";
+import {TradeStorage} from "../positions/TradeStorage.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
-import {GlobalRewardTracker} from "../rewards/GlobalRewardTracker.sol";
-import {LiquidityLocker} from "../rewards/LiquidityLocker.sol";
 
 /// @dev - External library to deploy contracts
 library Deployer {

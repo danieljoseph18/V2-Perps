@@ -59,7 +59,7 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
     }
 
     /**
-     * =============================== Setter Functions ===============================
+     * =========================================== Setter Functions ===========================================
      */
     function initialize(address _distributor, address _liquidityLocker) external onlyOwner {
         if (isInitialized) revert RewardTracker_AlreadyInitialized();
@@ -89,7 +89,7 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
     }
 
     /**
-     * =============================== Core Functions ===============================
+     * =========================================== Core Functions ===========================================
      */
     function stake(address _depositToken, uint256 _amount) external nonReentrant {
         if (inPrivateStakingMode) revert RewardTracker_ActionDisbaled();
@@ -170,7 +170,7 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
     }
 
     /**
-     * =============================== Getter Functions ===============================
+     * =========================================== Getter Functions ===========================================
      */
     function allowance(address _owner, address _spender) external view override(IERC20) returns (uint256) {
         return allowances[_owner][_spender];
@@ -229,7 +229,7 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
     }
 
     /**
-     * =============================== Internal Functions ===============================
+     * =========================================== Internal Functions ===========================================
      */
     function _claim(address _account, address _depositToken, address _receiver)
         private

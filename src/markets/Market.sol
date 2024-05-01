@@ -25,11 +25,13 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     uint8 private constant MAX_ASSETS = 100;
     uint8 private constant TOTAL_ALLOCATION = 100;
     uint48 private constant TIME_TO_EXPIRATION = 1 minutes;
+
     /**
-     * Level of pSkew beyond which funding rate starts to change
+     * Level of proportional skew beyond which funding rate starts to change
      * Units: % Per Day
      */
     uint64 public constant FUNDING_VELOCITY_CLAMP = 0.00001e18; // 0.001% per day
+
     string private constant LONG_TICKER = "ETH";
     string private constant SHORT_TICKER = "USDC";
 
@@ -43,7 +45,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     address poolOwner;
 
     /**
-     * 11. Maximum borrowing fee per day as a percentage.
+     * Maximum borrowing fee per day as a percentage.
      * The current borrowing fee will fluctuate along this scale,
      * based on the open interest to max open interest ratio.
      */
@@ -63,7 +65,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     *  ========================= Constructor  =========================
+     *  =========================================== Constructor  ===========================================
      */
     constructor(
         Pool.Config memory _config,
@@ -83,9 +85,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         bytes32 assetId = MarketUtils.generateAssetId(_ticker);
         if (assetIds.contains(assetId)) revert Market_TokenAlreadyExists();
         if (!assetIds.add(assetId)) revert Market_FailedToAddAssetId();
-        // Add Ticker
         tickers.push(_ticker);
-        // Initialize Storage
         Pool.initialize(marketStorage[assetId], _config);
         emit TokenAdded(assetId);
     }
@@ -98,7 +98,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         emit Market_Initialized();
     }
     /**
-     * ========================= Admin Functions  =========================
+     * =========================================== Admin Functions  ===========================================
      */
 
     // @audit - are we checking price here?
@@ -136,8 +136,8 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         uint16 len = uint16(assetIds.length());
         if (len == 1) revert Market_MinimumAssetsReached();
 
-        // Remove Asset
         if (!assetIds.remove(assetId)) revert Market_FailedToRemoveAssetId();
+
         // Remove ticker by swap / pop method
         for (uint16 i = 0; i < len;) {
             if (keccak256(abi.encode(tickers[i])) == assetId) {
@@ -149,10 +149,9 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
                 ++i;
             }
         }
-        // Remove storage
+
         delete marketStorage[assetId];
 
-        // Reallocate
         _reallocate(priceFeed, _newAllocations, _priceRequestKey);
     }
 
@@ -176,7 +175,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ========================= User Interaction Functions  =========================
+     * =========================================== User Interaction Functions  ===========================================
      */
     function createRequest(
         address _owner,
@@ -208,32 +207,31 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         onlyRoles(_ROLE_1)
         returns (address tokenOut, uint256 amountOut, bool shouldUnwrap)
     {
-        // Check the Request Exists
         if (!requests.contains(_key)) revert Market_InvalidKey();
-        // Check the caller owns the request
+
         Pool.Input memory request = requests.get(_key);
         if (request.owner != _caller) revert Market_NotRequestOwner();
-        // Ensure the request has passed the expiration time
+
         if (request.requestTimestamp + TIME_TO_EXPIRATION > block.timestamp) revert Market_RequestNotExpired();
-        // Delete the request
+
         if (!requests.remove(_key)) revert Market_FailedToRemoveRequest();
-        // Set Token Out and Should Unwrap
+
         if (request.isDeposit) {
-            // If is deposit, token out is the token in
+            // If deposit, token out is the token in
             tokenOut = request.isLongToken ? WETH : USDC;
             shouldUnwrap = request.reverseWrap;
         } else {
-            // If is withdrawal, token out is market tokens
+            // If withdrawal, token out is market tokens
             tokenOut = address(VAULT);
             shouldUnwrap = false;
         }
         amountOut = request.amountIn;
-        // Fire event
+
         emit RequestCanceled(_key, _caller);
     }
 
     /**
-     * ========================= Vault Actions =========================
+     * =========================================== Vault Actions ===========================================
      */
     function executeDeposit(IVault.ExecuteDeposit calldata _params)
         external
@@ -241,9 +239,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         orderExists(_params.key)
         nonReentrant
     {
-        // Delete Deposit Request
         if (!requests.remove(_params.key)) revert Market_FailedToRemoveRequest();
-        // Execute the Deposit
         VAULT.executeDeposit(_params, _params.deposit.isLongToken ? WETH : USDC, msg.sender);
     }
 
@@ -253,14 +249,12 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         orderExists(_params.key)
         nonReentrant
     {
-        // Delete the Withdrawal from Storage
         if (!requests.remove(_params.key)) revert Market_FailedToRemoveRequest();
-        // Execute the withdrawal
         VAULT.executeWithdrawal(_params, _params.withdrawal.isLongToken ? WETH : USDC, msg.sender);
     }
 
     /**
-     * ========================= External State Functions  =========================
+     * =========================================== External State Functions  ===========================================
      */
     /// @dev - Caller must've requested a price before calling this function
     function reallocate(bytes calldata _allocations, bytes32 _priceRequestKey)
@@ -283,7 +277,9 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     ) external nonReentrant onlyRoles(_ROLE_4) {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (!assetIds.contains(assetId)) revert Market_TokenDoesNotExist();
+
         Pool.Storage storage self = marketStorage[assetId];
+
         Pool.updateState(
             this,
             self,
@@ -306,20 +302,17 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ========================= Private Functions  =========================
+     * =========================================== Private Functions  ===========================================
      */
-    /// @dev - Caller must've requested a price before calling this function
+
     /// @dev - Price request needs to contain all tickers in the market + long / short tokens, or will revert
     function _reallocate(IPriceFeed priceFeed, bytes calldata _allocations, bytes32 _priceRequestKey) private {
         if (!IS_MULTI_ASSET) revert Market_SingleAssetMarket();
-        // Validate the Price Request
         uint48 requestTimestamp = Oracle.getRequestTimestamp(priceFeed, _priceRequestKey);
 
-        // Fetch token prices
         uint256 longTokenPrice = Oracle.getPrice(priceFeed, LONG_TICKER, requestTimestamp);
         uint256 shortTokenPrice = Oracle.getPrice(priceFeed, SHORT_TICKER, requestTimestamp);
 
-        // Copy tickers to memory
         string[] memory assetTickers = tickers;
         if (_allocations.length != assetTickers.length) revert Market_AllocationLength();
 
@@ -328,13 +321,15 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         // Iterate over each byte in allocations calldata
         for (uint16 i = 0; i < _allocations.length;) {
             uint8 allocationValue = uint8(_allocations[i]);
-            // Update Storage
+
             bytes32 assetId = keccak256(abi.encode(assetTickers[i]));
             marketStorage[assetId].allocationShare = allocationValue;
-            // Check the allocation value -> new max open interest must be > current open interest
+
+            // Check the updated allocation value: new max open interest must be > current open interest
             _validateOpenInterest(priceFeed, assetTickers[i], requestTimestamp, longTokenPrice, shortTokenPrice);
-            // Increment total
+
             total += allocationValue;
+
             unchecked {
                 ++i;
             }
@@ -350,19 +345,19 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         uint256 _longSignedPrice,
         uint256 _shortSignedPrice
     ) private view {
-        // Get the index price and the index base unit
         uint256 indexPrice = Oracle.getPrice(priceFeed, _ticker, _requestTimestamp);
         uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _ticker);
-        // Get the Long Max Oi
+
         uint256 longMaxOi =
             MarketUtils.getAvailableOiUsd(this, VAULT, _ticker, indexPrice, _longSignedPrice, indexBaseUnit, true);
+
         bytes32 assetId = keccak256(abi.encode(_ticker));
-        // Get the Current oi
+
         if (longMaxOi < marketStorage[assetId].longOpenInterest) revert Market_InvalidAllocation();
-        // Get the Short Max Oi
+
         uint256 shortMaxOi =
             MarketUtils.getAvailableOiUsd(this, VAULT, _ticker, indexPrice, _shortSignedPrice, indexBaseUnit, false);
-        // Get the Current oi
+
         if (shortMaxOi < marketStorage[assetId].shortOpenInterest) revert Market_InvalidAllocation();
     }
 
@@ -371,7 +366,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     }
 
     /**
-     * ========================= Getter Functions  =========================
+     * =========================================== Getter Functions  ===========================================
      */
     function getAssetIds() external view returns (bytes32[] memory) {
         return assetIds.values();
