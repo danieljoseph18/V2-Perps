@@ -18,7 +18,7 @@ import {LibString} from "../../src/libraries/LibString.sol";
 contract MockPriceFeed is FunctionsClient, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
-    using EnumerableMap for EnumerableMap.PriceRequestMap;
+    using EnumerableMap for EnumerableMap.PriceMap;
     using LibString for bytes15;
 
     uint256 public constant PRICE_DECIMALS = 30;
@@ -84,7 +84,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
      * invalidated and removed from storage.
      */
     mapping(bytes32 requestKey => uint256 retries) numberOfRetries;
-    EnumerableMap.PriceRequestMap private requestData;
+    EnumerableMap.PriceMap private requestData;
     EnumerableSetLib.Bytes32Set private assetIds;
     EnumerableSetLib.Bytes32Set private requestKeys;
 
@@ -257,12 +257,12 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
             _recreateRequest(requestId);
             return;
         }
+        RequestData memory data = requestData.get(requestId);
         // Remove the RequestId from storage and return if fail
         if (!requestData.remove(requestId)) return;
         requestKeys.remove(idToKey[requestId]);
         delete idToKey[requestId];
         // Get the request type of the request
-        RequestData memory data = requestData.get(requestId);
         if (data.requestType == RequestType.PRICE_UPDATE) {
             _decodeAndStorePrices(response);
         } else if (data.requestType == RequestType.CUMULATIVE_PNL) {

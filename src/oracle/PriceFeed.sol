@@ -21,7 +21,7 @@ import {LibString} from "../../src/libraries/LibString.sol";
 contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
     using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
-    using EnumerableMap for EnumerableMap.PriceRequestMap;
+    using EnumerableMap for EnumerableMap.PriceMap;
     using LibString for bytes15;
 
     uint256 public constant PRICE_DECIMALS = 30;
@@ -84,7 +84,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
      */
     mapping(bytes32 requestKey => uint256 retries) numberOfRetries;
 
-    EnumerableMap.PriceRequestMap private requestData;
+    EnumerableMap.PriceMap private requestData;
     EnumerableSetLib.Bytes32Set private assetIds;
     EnumerableSetLib.Bytes32Set private requestKeys;
 
@@ -283,11 +283,11 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
             return;
         }
 
+        RequestData memory data = requestData.get(requestId);
+
         if (!requestData.remove(requestId)) return;
         requestKeys.remove(idToKey[requestId]);
         delete idToKey[requestId];
-
-        RequestData memory data = requestData.get(requestId);
 
         if (data.requestType == RequestType.PRICE_UPDATE) {
             _decodeAndStorePrices(response);

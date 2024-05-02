@@ -17,7 +17,7 @@ import {Oracle} from "../oracle/Oracle.sol";
 /// @dev - Vault can support the trading of multiple assets under the same liquidity.
 contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
-    using EnumerableMap for EnumerableMap.MarketRequestMap;
+    using EnumerableMap for EnumerableMap.MarketMap;
     using Casting for int256;
 
     uint64 private constant MIN_BORROW_SCALE = 0.0001e18; // 0.01% per day
@@ -54,7 +54,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     string[] private tickers;
 
     EnumerableSetLib.Bytes32Set private assetIds;
-    EnumerableMap.MarketRequestMap private requests;
+    EnumerableMap.MarketMap private requests;
 
     // Each Asset's storage is tracked through this mapping
     mapping(bytes32 assetId => Pool.Storage assetStorage) private marketStorage;
@@ -101,14 +101,13 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
      * =========================================== Admin Functions  ===========================================
      */
 
-    // @audit - are we checking price here?
     function addToken(
         IPriceFeed priceFeed,
         Pool.Config calldata _config,
         string memory _ticker,
         bytes calldata _newAllocations,
         bytes32 _priceRequestKey
-    ) external onlyRoles(_ROLE_2) nonReentrant {
+    ) external onlyRoles(_ROLE_2) {
         if (!IS_MULTI_ASSET) revert Market_SingleAssetMarket();
         if (assetIds.length() >= MAX_ASSETS) revert Market_MaxAssetsReached();
         bytes32 assetId = keccak256(abi.encode(_ticker));
@@ -129,7 +128,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         string memory _ticker,
         bytes calldata _newAllocations,
         bytes32 _priceRequestKey
-    ) external onlyRoles(_ROLE_2) nonReentrant {
+    ) external onlyRoles(_ROLE_2) {
         if (!IS_MULTI_ASSET) revert Market_SingleAssetMarket();
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (!assetIds.contains(assetId)) revert Market_TokenDoesNotExist();
@@ -257,11 +256,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
      * =========================================== External State Functions  ===========================================
      */
     /// @dev - Caller must've requested a price before calling this function
-    function reallocate(bytes calldata _allocations, bytes32 _priceRequestKey)
-        external
-        onlyRoles(_ROLE_2)
-        nonReentrant
-    {
+    function reallocate(bytes calldata _allocations, bytes32 _priceRequestKey) external onlyRoles(_ROLE_2) {
         _reallocate(ITradeStorage(tradeStorage).priceFeed(), _allocations, _priceRequestKey);
     }
 
@@ -294,7 +289,11 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         );
     }
 
-    function updateImpactPool(string calldata _ticker, int256 _priceImpactUsd) external onlyRoles(_ROLE_4) {
+    function updateImpactPool(string calldata _ticker, int256 _priceImpactUsd)
+        external
+        nonReentrant
+        onlyRoles(_ROLE_4)
+    {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         _priceImpactUsd > 0
             ? marketStorage[assetId].impactPool += _priceImpactUsd.abs()
@@ -326,7 +325,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
             marketStorage[assetId].allocationShare = allocationValue;
 
             // Check the updated allocation value: new max open interest must be > current open interest
-            _validateOpenInterest(priceFeed, assetTickers[i], requestTimestamp, longTokenPrice, shortTokenPrice);
+            _validateOpenInterest(priceFeed, assetTickers[i], longTokenPrice, shortTokenPrice);
 
             total += allocationValue;
 
@@ -341,22 +340,19 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
     function _validateOpenInterest(
         IPriceFeed priceFeed,
         string memory _ticker,
-        uint48 _requestTimestamp,
         uint256 _longSignedPrice,
         uint256 _shortSignedPrice
     ) private view {
-        uint256 indexPrice = Oracle.getPrice(priceFeed, _ticker, _requestTimestamp);
         uint256 indexBaseUnit = Oracle.getBaseUnit(priceFeed, _ticker);
 
-        uint256 longMaxOi =
-            MarketUtils.getAvailableOiUsd(this, VAULT, _ticker, indexPrice, _longSignedPrice, indexBaseUnit, true);
+        uint256 longMaxOi = MarketUtils.getMaxOpenInterest(this, VAULT, _ticker, _longSignedPrice, indexBaseUnit, true);
 
         bytes32 assetId = keccak256(abi.encode(_ticker));
 
         if (longMaxOi < marketStorage[assetId].longOpenInterest) revert Market_InvalidAllocation();
 
         uint256 shortMaxOi =
-            MarketUtils.getAvailableOiUsd(this, VAULT, _ticker, indexPrice, _shortSignedPrice, indexBaseUnit, false);
+            MarketUtils.getMaxOpenInterest(this, VAULT, _ticker, _shortSignedPrice, indexBaseUnit, false);
 
         if (shortMaxOi < marketStorage[assetId].shortOpenInterest) revert Market_InvalidAllocation();
     }

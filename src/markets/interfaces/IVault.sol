@@ -49,7 +49,6 @@ interface IVault is IERC20 {
     event FeesWithdrawn(uint256 longFees, uint256 shortFees);
 
     error Vault_AlreadyInitialized();
-    error Vault_InvalidETHTransfer();
     error Vault_InsufficientAvailableTokens();
     error Vault_InvalidDeposit();
     error Vault_InvalidWithdrawal();

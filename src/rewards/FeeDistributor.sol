@@ -9,10 +9,10 @@ import {IMarket} from "../markets/interfaces/IMarket.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 import {IMarketFactory} from "../factory/interfaces/IMarketFactory.sol";
 
-contract GlobalFeeDistributor is ReentrancyGuard, OwnableRoles {
+contract FeeDistributor is ReentrancyGuard, OwnableRoles {
     using SafeTransferLib for IERC20;
 
-    error FeeDistributor_InvalidMarket();
+    error FeeDistributor_InvalidVault();
     error FeeDistributor_InvalidRewardTracker();
 
     event FeesAccumulated(address indexed vault, uint256 wethAmount, uint256 usdcAmount);
@@ -35,6 +35,7 @@ contract GlobalFeeDistributor is ReentrancyGuard, OwnableRoles {
     address public usdc;
 
     mapping(address vault => FeeParams) public accumulatedFees;
+    mapping(address vault => bool) public isVault;
 
     constructor(address _marketFactory, address _rewardTracker, address _weth, address _usdc) {
         _initializeOwner(msg.sender);
@@ -44,12 +45,16 @@ contract GlobalFeeDistributor is ReentrancyGuard, OwnableRoles {
         usdc = _usdc;
     }
 
+    function addVault(address _vault) external onlyRoles(_ROLE_0) {
+        isVault[_vault] = true;
+    }
+
     /**
      * =========================================== Core Functions ===========================================
      */
     function accumulateFees(uint256 _wethAmount, uint256 _usdcAmount) external {
-        if (!marketFactory.isMarket(msg.sender)) revert FeeDistributor_InvalidMarket();
-        address vault = address(IMarket(msg.sender).VAULT());
+        address vault = msg.sender;
+        if (!isVault[vault]) revert FeeDistributor_InvalidVault();
 
         // Transfer in the WETH and USDC
         IERC20(weth).safeTransferFrom(msg.sender, address(this), _wethAmount);

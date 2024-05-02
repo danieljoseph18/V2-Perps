@@ -19,10 +19,10 @@ import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
-
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
 // Contract picks up and executes all requests, as well as holds intermediary funds.
+
 contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IWETH;
@@ -90,13 +90,12 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
 
         uint256 feeForExecutor = ((initialGas - gasleft()) * tx.gasprice) + ((GAS_BUFFER + 21000) * tx.gasprice);
 
-        uint256 feeToRefund;
-        if (feeForExecutor > params.deposit.executionFee) feeToRefund = 0;
-        else feeToRefund = params.deposit.executionFee - feeForExecutor;
+        uint256 feeToRefund =
+            feeForExecutor < params.deposit.executionFee ? params.deposit.executionFee - feeForExecutor : 0;
 
-        SafeTransferLib.safeTransferETH(params.deposit.owner, feeForExecutor);
+        SafeTransferLib.safeTransferETH(msg.sender, feeForExecutor);
         if (feeToRefund > 0) {
-            SafeTransferLib.safeTransferETH(msg.sender, feeToRefund);
+            SafeTransferLib.safeTransferETH(params.deposit.owner, feeToRefund);
         }
     }
 
@@ -124,7 +123,8 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
 
         uint256 feeForExecutor = (initialGas - gasleft()) * tx.gasprice;
 
-        uint256 feeToRefund = params.withdrawal.executionFee - feeForExecutor;
+        uint256 feeToRefund =
+            feeForExecutor < params.withdrawal.executionFee ? params.withdrawal.executionFee - feeForExecutor : 0;
 
         SafeTransferLib.safeTransferETH(msg.sender, feeForExecutor);
 

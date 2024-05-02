@@ -12,7 +12,7 @@ import {IMarket} from "./interfaces/IMarket.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IGlobalRewardTracker} from "../rewards/interfaces/IGlobalRewardTracker.sol";
-import {IGlobalFeeDistributor} from "../rewards/interfaces/IGlobalFeeDistributor.sol";
+import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {Units} from "../libraries/Units.sol";
 
 contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
@@ -23,11 +23,11 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     address private immutable WETH;
     address private immutable USDC;
 
-    uint64 private constant FEES_TO_OWNERS = 0.1e18; // 10% to Owner and 10% to Protocol
+    uint64 private constant FEE_TO_LPS = 0.8e18; // 80%
 
     IMarket market;
     IGlobalRewardTracker public rewardTracker;
-    IGlobalFeeDistributor public feeDistributor;
+    IFeeDistributor public feeDistributor;
 
     address public poolOwner;
     address public feeReceiver;
@@ -57,9 +57,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     }
 
     /// @dev Required to receive ETH when unwrapping WETH for transfers out.
-    receive() external payable {
-        if (msg.sender != WETH || gasleft() <= 2300) revert Vault_InvalidETHTransfer();
-    }
+    receive() external payable {}
 
     function initialize(address _market, address _feeDistributor, address _rewardTracker, address _feeReceiver)
         external
@@ -67,7 +65,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     {
         if (isInitialized) revert Vault_AlreadyInitialized();
         market = IMarket(_market);
-        feeDistributor = IGlobalFeeDistributor(_feeDistributor);
+        feeDistributor = IFeeDistributor(_feeDistributor);
         rewardTracker = IGlobalRewardTracker(_rewardTracker);
         feeReceiver = _feeReceiver;
         isInitialized = true;
@@ -141,27 +139,27 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         shortAccumulatedFees = 0;
 
         // calculate percentages and distribute percentage to owner and feeDistributor
-        uint256 longOwnerFees = longFees.percentage(FEES_TO_OWNERS);
-        uint256 shortOwnerFees = shortFees.percentage(FEES_TO_OWNERS);
+        uint256 longLpFees = longFees.percentage(FEE_TO_LPS);
+        uint256 shortLpFees = shortFees.percentage(FEE_TO_LPS);
 
-        uint256 longDistributorFee = longFees - (longOwnerFees * 2); // 2 because 10% to owner and 10% to protocol
-        uint256 shortDistributorFee = shortFees - (shortOwnerFees * 2);
+        uint256 longConfiguratorFee = (longFees - longLpFees) / 2;
+        uint256 shortConfiguratorFee = (shortFees - shortLpFees) / 2;
 
         // Send Fees to Distribute to LPs
         address distributor = address(feeDistributor);
 
-        IERC20(WETH).approve(distributor, longDistributorFee);
-        IERC20(USDC).approve(distributor, shortDistributorFee);
+        IERC20(WETH).approve(distributor, longLpFees);
+        IERC20(USDC).approve(distributor, shortLpFees);
 
-        IGlobalFeeDistributor(distributor).accumulateFees(longDistributorFee, shortDistributorFee);
-
-        // Send Fees to Protocol
-        IERC20(WETH).safeTransfer(feeReceiver, longOwnerFees);
-        IERC20(USDC).safeTransfer(feeReceiver, shortOwnerFees);
+        IFeeDistributor(distributor).accumulateFees(longLpFees, shortLpFees);
 
         // Send Fees to Owner
-        IERC20(WETH).safeTransfer(poolOwner, longOwnerFees);
-        IERC20(USDC).safeTransfer(poolOwner, shortOwnerFees);
+        IERC20(WETH).safeTransfer(poolOwner, longConfiguratorFee);
+        IERC20(USDC).safeTransfer(poolOwner, shortConfiguratorFee);
+
+        // Send Remaining Fees to Protocol
+        IERC20(WETH).safeTransfer(feeReceiver, longFees - longLpFees - longConfiguratorFee);
+        IERC20(USDC).safeTransfer(feeReceiver, shortFees - shortLpFees - shortConfiguratorFee);
 
         emit FeesWithdrawn(longFees, shortFees);
     }

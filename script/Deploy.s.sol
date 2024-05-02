@@ -12,7 +12,7 @@ import {PositionManager} from "../src/router/PositionManager.sol";
 import {Router} from "../src/router/Router.sol";
 import {IMarket} from "../src/markets/interfaces/IMarket.sol";
 import {Oracle} from "../src/oracle/Oracle.sol";
-import {GlobalFeeDistributor} from "../src/rewards/GlobalFeeDistributor.sol";
+import {FeeDistributor} from "../src/rewards/FeeDistributor.sol";
 import {GlobalRewardTracker} from "../src/rewards/GlobalRewardTracker.sol";
 import {LiquidityLocker} from "../src/rewards/LiquidityLocker.sol";
 import {TransferStakedTokens} from "../src/rewards/TransferStakedTokens.sol";
@@ -28,7 +28,7 @@ contract Deploy is Script {
         ReferralStorage referralStorage;
         PositionManager positionManager;
         Router router;
-        GlobalFeeDistributor feeDistributor;
+        FeeDistributor feeDistributor;
         GlobalRewardTracker rewardTracker;
         LiquidityLocker liquidityLocker;
         TransferStakedTokens transferStakedTokens;
@@ -54,7 +54,7 @@ contract Deploy is Script {
             ReferralStorage(payable(address(0))),
             PositionManager(payable(address(0))),
             Router(payable(address(0))),
-            GlobalFeeDistributor(address(0)),
+            FeeDistributor(address(0)),
             GlobalRewardTracker(address(0)),
             LiquidityLocker(address(0)),
             TransferStakedTokens(address(0)),
@@ -117,7 +117,7 @@ contract Deploy is Script {
 
         contracts.rewardTracker = new GlobalRewardTracker("Staked BRRR", "sBRRR");
 
-        contracts.feeDistributor = new GlobalFeeDistributor(
+        contracts.feeDistributor = new FeeDistributor(
             address(contracts.marketFactory),
             address(contracts.rewardTracker),
             activeNetworkConfig.weth,
@@ -187,6 +187,8 @@ contract Deploy is Script {
         contracts.referralStorage.setTier(2, 0.15e18);
 
         contracts.rewardTracker.grantRoles(address(contracts.marketFactory), _ROLE_0);
+
+        contracts.feeDistributor.grantRoles(address(contracts.marketFactory), _ROLE_0);
 
         // Transfer ownership to caller --> for testing
         contracts.marketFactory.transferOwnership(msg.sender);

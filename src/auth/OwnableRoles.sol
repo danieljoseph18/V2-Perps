@@ -276,9 +276,9 @@ abstract contract OwnableRoles is Ownable {
     uint256 internal constant _ROLE_2 = 1 << 2; // Configurator
     uint256 internal constant _ROLE_3 = 1 << 3; // Router
     uint256 internal constant _ROLE_4 = 1 << 4; // TradeStorage
-    uint256 internal constant _ROLE_5 = 1 << 5; // TradeEngine
-    uint256 internal constant _ROLE_6 = 1 << 6; // Market
-    uint256 internal constant _ROLE_7 = 1 << 7; // Vault
+    uint256 internal constant _ROLE_5 = 1 << 5;
+    uint256 internal constant _ROLE_6 = 1 << 6;
+    uint256 internal constant _ROLE_7 = 1 << 7;
     uint256 internal constant _ROLE_8 = 1 << 8;
     uint256 internal constant _ROLE_9 = 1 << 9;
     uint256 internal constant _ROLE_10 = 1 << 10;

@@ -5,7 +5,7 @@ pragma solidity 0.8.23;
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
-import {IGlobalFeeDistributor} from "./interfaces/IGlobalFeeDistributor.sol";
+import {IFeeDistributor} from "./interfaces/IFeeDistributor.sol";
 import {IGlobalRewardTracker} from "./interfaces/IGlobalRewardTracker.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
@@ -185,8 +185,7 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
         view
         returns (uint256 wethTokensPerInterval, uint256 usdcTokensPerInterval)
     {
-        (wethTokensPerInterval, usdcTokensPerInterval) =
-            IGlobalFeeDistributor(distributor).tokensPerInterval(_depositToken);
+        (wethTokensPerInterval, usdcTokensPerInterval) = IFeeDistributor(distributor).tokensPerInterval(_depositToken);
     }
 
     function claimable(address _account, address _depositToken)
@@ -202,7 +201,7 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
             );
         }
         uint256 supply = totalSupply;
-        (uint256 pendingWeth, uint256 pendingUsdc) = IGlobalFeeDistributor(distributor).pendingRewards(_depositToken);
+        (uint256 pendingWeth, uint256 pendingUsdc) = IFeeDistributor(distributor).pendingRewards(_depositToken);
         pendingWeth *= PRECISION;
         pendingUsdc *= PRECISION;
         uint256 nextCumulativeWethRewardPerToken = cumulativeWethRewardPerToken + (pendingWeth / supply);
@@ -340,7 +339,7 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
     }
 
     function _updateRewards(address _account, address _depositToken) private {
-        (uint256 wethReward, uint256 usdcReward) = IGlobalFeeDistributor(distributor).distribute(_depositToken);
+        (uint256 wethReward, uint256 usdcReward) = IFeeDistributor(distributor).distribute(_depositToken);
 
         uint256 supply = totalSupply;
         uint256 _cumulativeWethRewardPerToken = cumulativeWethRewardPerToken;

@@ -468,7 +468,7 @@ library MarketUtils {
         uint256 _collateralTokenPrice,
         uint256 _indexBaseUnit,
         bool _isLong
-    ) public view returns (uint256 availableOi) {
+    ) internal view returns (uint256 availableOi) {
         uint256 collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
 
         uint256 remainingAllocationUsd =
@@ -497,7 +497,7 @@ library MarketUtils {
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit,
         bool _isLong
-    ) public view returns (uint256 maxOpenInterest) {
+    ) internal view returns (uint256 maxOpenInterest) {
         uint256 totalAvailableLiquidity = vault.totalAvailableLiquidity(_isLong);
 
         uint256 poolAmount = totalAvailableLiquidity.percentage(market.getAllocation(_ticker), MAX_ALLOCATION);

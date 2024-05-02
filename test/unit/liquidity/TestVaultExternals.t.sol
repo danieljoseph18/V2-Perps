@@ -3,7 +3,9 @@ pragma solidity 0.8.23;
 
 import "forge-std/Test.sol";
 import {Deploy} from "script/Deploy.s.sol";
-import {IMarket, IVault} from "src/markets/Market.sol";
+import {IMarket, Market} from "src/markets/Market.sol";
+import {Vault, IVault} from "src/markets/Vault.sol";
+import {Pool} from "src/markets/Pool.sol";
 import {MarketFactory, IMarketFactory} from "src/factory/MarketFactory.sol";
 import {IPriceFeed} from "src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage, ITradeStorage} from "src/positions/TradeStorage.sol";
@@ -20,8 +22,19 @@ import {LiquidityLocker} from "src/rewards/LiquidityLocker.sol";
 import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
 import {TransferStakedTokens} from "src/rewards/TransferStakedTokens.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
+import {MathUtils} from "src/libraries/MathUtils.sol";
+import {Units} from "src/libraries/Units.sol";
+import {Referral} from "src/referrals/Referral.sol";
+import {IERC20} from "src/tokens/interfaces/IERC20.sol";
+import {PriceImpact} from "src/libraries/PriceImpact.sol";
+import {Execution} from "src/positions/Execution.sol";
+import {Funding} from "src/libraries/Funding.sol";
+import {Borrowing} from "src/libraries/Borrowing.sol";
 
-contract TestDepositWithdrawals is Test {
+contract TestVaultExternals is Test {
+    using MathUtils for uint256;
+    using Units for uint256;
+
     MarketFactory marketFactory;
     MockPriceFeed priceFeed; // Deployed in Helper Config
     ITradeStorage tradeStorage;
@@ -30,6 +43,7 @@ contract TestDepositWithdrawals is Test {
     Router router;
     address OWNER;
     IMarket market;
+    IVault vault;
     FeeDistributor feeDistributor;
     TransferStakedTokens transferStakedTokens;
     GlobalRewardTracker rewardTracker;
@@ -92,7 +106,7 @@ contract TestDepositWithdrawals is Test {
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
         IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
-            isMultiAsset: false,
+            isMultiAsset: true,
             owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
@@ -119,8 +133,9 @@ contract TestDepositWithdrawals is Test {
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
+        vault = market.VAULT();
         tradeStorage = ITradeStorage(market.tradeStorage());
-        rewardTracker = GlobalRewardTracker(address(market.VAULT().rewardTracker()));
+        rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
@@ -136,77 +151,75 @@ contract TestDepositWithdrawals is Test {
         _;
     }
 
-    function test_executing_deposit_requests(uint256 _amountIn, bool _isLongToken, bool _shouldWrap)
+    function test_updating_liquidity_is_only_valid_from_trade_storage(uint256 _amountToUpdate, bool _isLong)
         public
         setUpMarkets
     {
-        if (_isLongToken) {
-            _amountIn = bound(_amountIn, 1, 500_000 ether);
-            if (_shouldWrap) {
-                vm.prank(OWNER);
-                router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, weth, _amountIn, 0.01 ether, true);
-            } else {
-                vm.startPrank(OWNER);
-                WETH(weth).approve(address(router), type(uint256).max);
-                router.createDeposit{value: 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, false);
-                vm.stopPrank();
-            }
-        } else {
-            _amountIn = bound(_amountIn, 1, 500_000_000e6);
-            vm.startPrank(OWNER);
-            MockUSDC(usdc).approve(address(router), type(uint256).max);
-            router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, usdc, _amountIn, 0.01 ether, false);
-            vm.stopPrank();
-        }
+        vm.expectRevert();
+        vault.updateLiquidityReservation(_amountToUpdate, _isLong, true);
 
-        // Execute the Deposit
-        bytes32 depositKey = market.getRequestAtIndex(0).key;
-        vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey);
+        uint256 liquidityResBefore = _isLong ? vault.longTokensReserved() : vault.shortTokensReserved();
+
+        vm.prank(address(tradeStorage));
+        vault.updateLiquidityReservation(_amountToUpdate, _isLong, true);
+
+        uint256 liquidityResAfter = _isLong ? vault.longTokensReserved() : vault.shortTokensReserved();
+
+        assertEq(liquidityResBefore + _amountToUpdate, liquidityResAfter, "Update failed");
     }
 
-    function test_executing_withdrawal_requests(
-        uint256 _amountIn,
-        uint256 _amountOut,
-        bool _isLongToken,
-        bool _shouldWrap
-    ) public setUpMarkets {
-        if (_isLongToken) {
-            _amountIn = bound(_amountIn, 1 ether, 500_000 ether);
-            if (_shouldWrap) {
-                vm.prank(OWNER);
-                router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, weth, _amountIn, 0.01 ether, true);
-            } else {
-                vm.startPrank(OWNER);
-                WETH(weth).approve(address(router), type(uint256).max);
-                router.createDeposit{value: 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, false);
-                vm.stopPrank();
-            }
-        } else {
-            _amountIn = bound(_amountIn, 10_000e6, 500_000_000e6);
-            _shouldWrap = false;
-            vm.startPrank(OWNER);
-            MockUSDC(usdc).approve(address(router), type(uint256).max);
-            router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, usdc, _amountIn, 0.01 ether, false);
-            vm.stopPrank();
-        }
+    function test_updating_pool_balance_is_only_valid_from_trade_storage(uint256 _amountToUpdate, bool _isLong)
+        public
+        setUpMarkets
+    {
+        _amountToUpdate = bound(_amountToUpdate, 0, type(uint192).max);
+        vm.expectRevert();
+        vault.updatePoolBalance(_amountToUpdate, _isLong, true);
 
-        // Execute the Deposit
-        bytes32 depositKey = market.getRequestAtIndex(0).key;
-        vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey);
+        uint256 poolBalanceBefore = _isLong ? vault.longTokenBalance() : vault.shortTokenBalance();
 
-        // Create Withdrawal request
-        IVault marketToken = market.VAULT();
-        _amountOut = bound(_amountOut, 0.1e18, marketToken.balanceOf(OWNER));
+        vm.prank(address(tradeStorage));
+        vault.updatePoolBalance(_amountToUpdate, _isLong, true);
 
-        vm.startPrank(OWNER);
-        marketToken.approve(address(router), type(uint256).max);
-        router.createWithdrawal{value: 0.01 ether}(
-            market, OWNER, _isLongToken ? weth : usdc, _amountOut, 0.01 ether, _shouldWrap
-        );
-        bytes32 withdrawalKey = market.getRequestAtIndex(0).key;
-        positionManager.executeWithdrawal{value: 0.01 ether}(market, withdrawalKey);
+        uint256 poolBalanceAfter = _isLong ? vault.longTokenBalance() : vault.shortTokenBalance();
+
+        assertEq(poolBalanceBefore + _amountToUpdate, poolBalanceAfter, "Update failed");
+    }
+
+    function test_batch_withdrawing_fees(uint256 _wethIn, uint256 _usdcIn) public setUpMarkets {
+        _wethIn = bound(_wethIn, 0, 1_000_000 ether);
+        _usdcIn = bound(_usdcIn, 0, 100_000_000_000e6);
+
+        // Transfer Weth and Usdc to the vault
+        vm.startPrank(USER);
+        deal(weth, USER, _wethIn);
+        deal(usdc, USER, _usdcIn);
+        WETH(weth).transfer(address(vault), _wethIn);
+        IERC20(usdc).transfer(address(vault), _usdcIn);
         vm.stopPrank();
+
+        uint256 wethBalanceBefore = WETH(weth).balanceOf(OWNER);
+        uint256 usdcBalanceBefore = IERC20(usdc).balanceOf(OWNER);
+
+        // Accumulate fees
+        vm.startPrank(address(tradeStorage));
+        vault.accumulateFees(_wethIn, true);
+        vault.accumulateFees(_usdcIn, false);
+        vm.stopPrank();
+
+        uint256 totalWethFees = Vault(payable(address(vault))).longAccumulatedFees();
+        uint256 totalUsdcFees = Vault(payable(address(vault))).shortAccumulatedFees();
+
+        uint256 wethToLps = MathUtils.mulDiv(totalWethFees, 0.8e18, 1e18);
+        uint256 usdcToLps = MathUtils.mulDiv(totalUsdcFees, 0.8e18, 1e18);
+
+        vm.prank(OWNER);
+        Vault(payable(address(vault))).batchWithdrawFees();
+
+        uint256 wethBalanceAfter = WETH(weth).balanceOf(OWNER);
+        uint256 usdcBalanceAfter = IERC20(usdc).balanceOf(OWNER);
+
+        assertEq(wethBalanceBefore + totalWethFees - wethToLps, wethBalanceAfter, "Weth withdrawal failed");
+        assertEq(usdcBalanceBefore + totalUsdcFees - usdcToLps, usdcBalanceAfter, "Usdc withdrawal failed");
     }
 }

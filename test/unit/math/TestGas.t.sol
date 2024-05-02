@@ -3,9 +3,8 @@ pragma solidity 0.8.23;
 
 import "forge-std/Test.sol";
 import {Deploy} from "script/Deploy.s.sol";
-import {IMarket, Market} from "src/markets/Market.sol";
+import {IMarket} from "src/markets/Market.sol";
 import {IVault} from "src/markets/Vault.sol";
-import {Pool} from "src/markets/Pool.sol";
 import {MarketFactory, IMarketFactory} from "src/factory/MarketFactory.sol";
 import {IPriceFeed} from "src/oracle/interfaces/IPriceFeed.sol";
 import {TradeStorage, ITradeStorage} from "src/positions/TradeStorage.sol";
@@ -19,21 +18,24 @@ import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
 import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
 import {LiquidityLocker} from "src/rewards/LiquidityLocker.sol";
-import {GlobalFeeDistributor} from "src/rewards/GlobalFeeDistributor.sol";
+import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
 import {TransferStakedTokens} from "src/rewards/TransferStakedTokens.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 import {MathUtils} from "src/libraries/MathUtils.sol";
-import {Units} from "src/libraries/Units.sol";
 import {Referral} from "src/referrals/Referral.sol";
 import {IERC20} from "src/tokens/interfaces/IERC20.sol";
 import {PriceImpact} from "src/libraries/PriceImpact.sol";
 import {Execution} from "src/positions/Execution.sol";
 import {Funding} from "src/libraries/Funding.sol";
 import {Borrowing} from "src/libraries/Borrowing.sol";
+import {Pool} from "src/markets/Pool.sol";
+import {Units} from "src/libraries/Units.sol";
+import {Casting} from "src/libraries/Casting.sol";
 
-contract TestMarket is Test {
+contract TestGas is Test {
     using MathUtils for uint256;
     using Units for uint256;
+    using Casting for int256;
 
     MarketFactory marketFactory;
     MockPriceFeed priceFeed; // Deployed in Helper Config
@@ -44,7 +46,7 @@ contract TestMarket is Test {
     address OWNER;
     IMarket market;
     IVault vault;
-    GlobalFeeDistributor feeDistributor;
+    FeeDistributor feeDistributor;
     TransferStakedTokens transferStakedTokens;
     GlobalRewardTracker rewardTracker;
     LiquidityLocker liquidityLocker;
@@ -106,7 +108,7 @@ contract TestMarket is Test {
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
         IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
-            isMultiAsset: true,
+            isMultiAsset: false,
             owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
@@ -133,8 +135,8 @@ contract TestMarket is Test {
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
-        vault = market.VAULT();
         tradeStorage = ITradeStorage(market.tradeStorage());
+        vault = market.VAULT();
         rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
         liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
         // Call the deposit function with sufficient gas
@@ -151,65 +153,126 @@ contract TestMarket is Test {
         _;
     }
 
-    /**
-     * Tests required:
-     * 1. Adding a New Token to a Market
-     * 2. Removing a Token from a Market
-     * 3. Transferring Pool Ownership
-     * 4. Cancelling Requests
-     * 5. Reallocation
-     * 6. Updating Market State
-     */
-    function test_adding_a_new_token_to_a_market() public setUpMarkets {
-        // 1. Call request asset pricing
-        IMarketFactory.DeployParams memory params = IMarketFactory.DeployParams({
-            isMultiAsset: true,
-            owner: OWNER,
-            indexTokenTicker: "SOL",
-            marketTokenName: "SOL-BRRR",
-            marketTokenSymbol: "SOL-BRRR",
-            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-            stablecoinMerkleProof: new bytes32[](0),
-            requestTimestamp: uint48(block.timestamp)
-        });
-        vm.prank(OWNER);
-        marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(params);
-        // 2. Call support asset
-        bytes32 requestKey = keccak256(abi.encodePacked("SOL"));
-        vm.prank(OWNER);
-        marketFactory.supportAsset(requestKey);
-        // 3. Add token to market
-        Pool.Config memory config = Pool.Config({
-            maxLeverage: 100,
-            maintenanceMargin: 500,
-            reserveFactor: 2500,
-            maxFundingVelocity: 900,
-            skewScale: 1_000_000,
-            positiveSkewScalar: 1_0000,
-            negativeSkewScalar: 1_0000,
-            positiveLiquidityScalar: 1_0000,
-            negativeLiquidityScalar: 1_0000
-        });
-        uint8[] memory allocations = new uint8[](2);
-        allocations[0] = 50;
-        allocations[1] = 50;
-        bytes memory newAllocations = MarketUtils.encodeAllocations(allocations);
+    function test_users_are_refunded_excess_execution_fees_for_deposits(uint256 _depositAmount, uint256 _executionFee)
+        public
+        setUpMarkets
+    {
+        vm.txGasPrice(1 gwei);
+        // bound the execution fee to an excess
+        _depositAmount = bound(_depositAmount, 0.1 ether, 10_000 ether);
+        _executionFee = bound(_executionFee, 0.1 ether, 10 ether);
+        // create a request
+
+        vm.prank(USER);
+        router.createDeposit{value: _depositAmount + _executionFee}(
+            market, USER, weth, _depositAmount, _executionFee, true
+        );
+        // store ether balance
+        uint256 etherBalance = address(USER).balance;
+        // execute the request
+        positionManager.executeDeposit(market, market.getRequestAtIndex(0).key);
+        // check the ether balance has increased
+        assertGt(address(USER).balance, etherBalance);
+    }
+
+    function test_users_are_refunded_excess_execution_fees_for_withdrawals(
+        uint256 _withdrawalPercentage,
+        uint256 _executionFee,
+        bool _isLongToken
+    ) public setUpMarkets {
+        vm.txGasPrice(1 gwei);
+        _withdrawalPercentage = bound(_withdrawalPercentage, 0.01e18, 1e18);
+        _executionFee = bound(_executionFee, 0.1 ether, 10 ether);
+
+        uint256 vaultBalance = IVault(vault).balanceOf(OWNER);
+
+        uint256 percentageToWithdraw = vaultBalance.percentage(_withdrawalPercentage);
+
+        // Leave wrapped so withdrawals don't affect ether balance
         vm.startPrank(OWNER);
-        // Request a price
-        bytes32 priceRequestKey = keccak256(abi.encode("PRICE REQUEST"));
-        // Call updatePrices and set a price for SOL
-        tickers.push("SOL");
-        precisions.push(0);
-        variances.push(0);
-        timestamps[0] = uint48(block.timestamp);
-        timestamps[1] = uint48(block.timestamp);
-        timestamps.push(uint48(block.timestamp));
-        meds.push(100);
-        bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
-        priceFeed.updatePrices(encodedPrices);
-        // Add the Token to the Market
-        Market(address(market)).addToken(priceFeed, config, "SOL", newAllocations, priceRequestKey);
+        IVault(vault).approve(address(router), type(uint256).max);
+        router.createWithdrawal{value: _executionFee}(
+            market, OWNER, _isLongToken ? weth : usdc, percentageToWithdraw, _executionFee, false
+        );
         vm.stopPrank();
+
+        uint256 etherBalance = address(OWNER).balance;
+
+        positionManager.executeWithdrawal(market, market.getRequestAtIndex(0).key);
+
+        assertGt(address(OWNER).balance, etherBalance);
+    }
+
+    function test_users_are_refunded_excess_execution_fees_for_positions(
+        uint256 _sizeDelta,
+        uint256 _leverage,
+        uint256 _executionFee,
+        bool _isLong
+    ) public setUpMarkets {
+        vm.txGasPrice(1 gwei);
+        // bound the execution fee to an excess
+        _executionFee = bound(_executionFee, 0.1 ether, type(uint64).max);
+
+        // Create Request
+        Position.Input memory input;
+        _leverage = bound(_leverage, 2, 90);
+        if (_isLong) {
+            _sizeDelta = bound(_sizeDelta, 210e30, 1_000_000e30);
+            uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta / _leverage, 1e18, 3000e30);
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: weth,
+                collateralDelta: collateralDelta,
+                sizeDelta: _sizeDelta,
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: uint64(_executionFee),
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: false,
+                triggerAbove: false
+            });
+
+            vm.startPrank(OWNER);
+            WETH(weth).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: _executionFee}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        } else {
+            _sizeDelta = bound(_sizeDelta, 210e30, 1_000_000e30);
+            uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta / _leverage, 1e6, 1e30);
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: usdc,
+                collateralDelta: collateralDelta,
+                sizeDelta: _sizeDelta, // 10x leverage
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: uint64(_executionFee),
+                isLong: false,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: false,
+                triggerAbove: false
+            });
+
+            vm.startPrank(OWNER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: _executionFee}(
+                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        }
+        // Execute Request
+        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+
+        uint256 etherBalance = address(OWNER).balance;
+
+        vm.prank(OWNER);
+        positionManager.executePosition(market, key, bytes32(0), OWNER);
+
+        assertGt(address(OWNER).balance, etherBalance);
     }
 }

@@ -18,7 +18,7 @@ import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
 import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
 import {LiquidityLocker} from "src/rewards/LiquidityLocker.sol";
-import {GlobalFeeDistributor} from "src/rewards/GlobalFeeDistributor.sol";
+import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
 import {TransferStakedTokens} from "src/rewards/TransferStakedTokens.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 import {MathUtils} from "src/libraries/MathUtils.sol";
@@ -43,7 +43,7 @@ contract TestVaultAccounting is Test {
     address OWNER;
     IMarket market;
     IVault vault;
-    GlobalFeeDistributor feeDistributor;
+    FeeDistributor feeDistributor;
     TransferStakedTokens transferStakedTokens;
     GlobalRewardTracker rewardTracker;
     LiquidityLocker liquidityLocker;

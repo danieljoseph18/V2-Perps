@@ -15,7 +15,7 @@ import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IReferralStorage} from "../referrals/ReferralStorage.sol";
-import {IGlobalFeeDistributor} from "../rewards/interfaces/IGlobalFeeDistributor.sol";
+import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {ILiquidityLocker} from "../rewards/interfaces/ILiquidityLocker.sol";
 import {TransferStakedTokens} from "../rewards/TransferStakedTokens.sol";
@@ -32,11 +32,11 @@ import {Deployer} from "./Deployer.sol";
  * supporting illiquid assets, with price sources without references for verification are the highest risk.
  */
 contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
-    using EnumerableMap for EnumerableMap.DeployParamsMap;
+    using EnumerableMap for EnumerableMap.DeployMap;
 
     IPriceFeed priceFeed;
     IReferralStorage referralStorage;
-    IGlobalFeeDistributor feeDistributor;
+    IFeeDistributor feeDistributor;
     IGlobalRewardTracker rewardTracker;
     ILiquidityLocker liquidityLocker;
     IPositionManager positionManager;
@@ -59,8 +59,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     uint8 private constant DECIMALS = 18;
     uint8 private constant MAX_TICKER_LENGTH = 15;
 
-    // @audit - rename, misleading
-    EnumerableMap.DeployParamsMap private requests;
+    EnumerableMap.DeployMap private requests;
     mapping(address market => bool isMarket) public isMarket;
     mapping(uint256 index => address market) public markets;
 
@@ -105,7 +104,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         if (isInitialized) revert MarketFactory_AlreadyInitialized();
         priceFeed = IPriceFeed(_priceFeed);
         referralStorage = IReferralStorage(_referralStorage);
-        feeDistributor = IGlobalFeeDistributor(_feeDistributor);
+        feeDistributor = IFeeDistributor(_feeDistributor);
         positionManager = IPositionManager(_positionManager);
         transferStakedTokens = new TransferStakedTokens();
         router = _router;
@@ -157,7 +156,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     }
 
     function updateFeeDistributor(address _feeDistributor) external onlyOwner {
-        feeDistributor = IGlobalFeeDistributor(_feeDistributor);
+        feeDistributor = IFeeDistributor(_feeDistributor);
     }
 
     function updatePositionManager(address _positionManager) external onlyOwner {
@@ -282,6 +281,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         );
 
         rewardTracker.addDepositToken(vault);
+        feeDistributor.addVault(vault);
 
         isMarket[market] = true;
         marketsByTicker[_params.indexTokenTicker].push(market);
