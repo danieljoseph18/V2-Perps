@@ -22,11 +22,6 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
     address private immutable WETH;
     address private immutable USDC;
 
-    uint16 public constant TIER1_DURATION = 1 hours;
-    uint32 public constant TIER2_DURATION = 30 days;
-    uint32 public constant TIER3_DURATION = 90 days;
-    uint32 public constant TIER4_DURATION = 180 days;
-    uint32 public constant TIER5_DURATION = 365 days;
     uint128 public constant PRECISION = 1e30;
 
     bool public isInitialized;
@@ -48,11 +43,9 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
     mapping(bytes32 key => LockData) public lockData;
     mapping(address account => uint256 amount) public lockedAmounts;
 
-    // @audit - need to override transfer to enable this, or remove
-    bool public inPrivateTransferMode;
-
     bool public inPrivateStakingMode;
     bool public inPrivateClaimingMode;
+    mapping(address => bool) public isHandler;
 
     constructor(address _weth, address _usdc, string memory _name, string memory _symbol) ERC20(_name, _symbol, 18) {
         _initializeOwner(msg.sender);
@@ -75,16 +68,16 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
         isDepositToken[_depositToken] = true;
     }
 
-    function setInPrivateTransferMode(bool _inPrivateTransferMode) external onlyOwner {
-        inPrivateTransferMode = _inPrivateTransferMode;
-    }
-
     function setInPrivateStakingMode(bool _inPrivateStakingMode) external onlyOwner {
         inPrivateStakingMode = _inPrivateStakingMode;
     }
 
     function setInPrivateClaimingMode(bool _inPrivateClaimingMode) external onlyOwner {
         inPrivateClaimingMode = _inPrivateClaimingMode;
+    }
+
+    function setHandler(address _handler, bool _isActive) external onlyOwner {
+        isHandler[_handler] = _isActive;
     }
 
     /**
@@ -134,12 +127,27 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
     /**
      * =========================================== Core Functions ===========================================
      */
-    function stake(address _depositToken, uint256 _amount, uint8 _lockTier) external nonReentrant {
+    function stake(address _depositToken, uint256 _amount, uint40 _stakeDuration) external nonReentrant {
         if (inPrivateStakingMode) revert RewardTracker_ActionDisbaled();
         _validateDepositToken(_depositToken);
         _stake(msg.sender, msg.sender, _depositToken, _amount);
-        if (_lockTier > 0) {
-            _lock(msg.sender, _depositToken, _amount, _lockTier);
+        if (_stakeDuration > 0) {
+            _lock(msg.sender, _depositToken, _amount, _stakeDuration);
+        }
+    }
+
+    function stakeForAccount(
+        address _fundingAccount,
+        address _account,
+        address _depositToken,
+        uint256 _amount,
+        uint40 _stakeDuration
+    ) external nonReentrant {
+        _validateHandler();
+        _validateDepositToken(_depositToken);
+        _stake(_fundingAccount, _account, _depositToken, _amount);
+        if (_stakeDuration > 0) {
+            _lock(_account, _depositToken, _amount, _stakeDuration);
         }
     }
 
@@ -152,8 +160,28 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
         _unstake(msg.sender, _depositToken, _amount, msg.sender);
     }
 
+    /// @dev No optional unlock for unstaking for another account.
+    function unstakeForAccount(address _account, address _depositToken, uint256 _amount, address _receiver)
+        external
+        nonReentrant
+    {
+        _validateHandler();
+        _validateDepositToken(_depositToken);
+        _unstake(_account, _depositToken, _amount, _receiver);
+    }
+
     function updateRewards(address _depositToken) external nonReentrant {
         _updateRewards(address(0), _depositToken);
+    }
+
+    function extendLockDuration(bytes32 _lockKey, uint40 _timeToExtend) external nonReentrant {
+        LockData storage position = lockData[_lockKey];
+        if (position.owner != msg.sender) revert RewardTracker_Forbidden();
+        position.unlockDate += _timeToExtend;
+    }
+
+    function unlock(bytes32[] calldata _lockKeys) external nonReentrant {
+        _unlock(msg.sender, _lockKeys);
     }
 
     function claim(address _depositToken, address _receiver)
@@ -269,6 +297,10 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
         if (!isDepositToken[_depositToken]) revert RewardTracker_InvalidDepositToken();
     }
 
+    function _validateHandler() private view {
+        if (!isHandler[msg.sender]) revert RewardTracker_Forbidden();
+    }
+
     function _stake(address _fundingAccount, address _account, address _depositToken, uint256 _amount) private {
         if (_amount == 0) revert RewardTracker_InvalidAmount();
 
@@ -291,12 +323,11 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
 
     /// @notice While locked, tokens become non-transferrable, and users can't unstake.
     /// A user can still claim rewards while their tokens are locked.
-    function _lock(address _account, address _depositToken, uint256 _amount, uint8 _tier) private {
+    function _lock(address _account, address _depositToken, uint256 _amount, uint40 _lockDuration) private {
         LockData memory position = LockData({
             depositAmount: _amount,
-            tier: _tier,
             lockedAt: _blockTimestamp(),
-            unlockDate: _blockTimestamp() + _getLockDuration(_tier),
+            unlockDate: _blockTimestamp() + _lockDuration,
             owner: _account
         });
 
@@ -435,24 +466,6 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
 
     function _blockTimestamp() private view returns (uint40) {
         return uint40(block.timestamp);
-    }
-
-    /// @notice Returns the duration of a locked position by tier.
-    /// @param tier The tier of the position.
-    function _getLockDuration(uint8 tier) private pure returns (uint40) {
-        if (tier == 1) {
-            return TIER1_DURATION; // 1hr cooldown
-        } else if (tier == 2) {
-            return TIER2_DURATION; // 30 days
-        } else if (tier == 3) {
-            return TIER3_DURATION; // 90 days
-        } else if (tier == 4) {
-            return TIER4_DURATION; // 180 days
-        } else if (tier == 5) {
-            return TIER5_DURATION; // 365 days
-        } else {
-            revert RewardTracker_InvalidTier();
-        }
     }
 
     function _getAvailableBalance(address _account) private view returns (uint256) {

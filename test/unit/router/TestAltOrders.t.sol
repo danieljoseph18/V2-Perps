@@ -123,6 +123,7 @@ contract TestAltOrders is Test {
         priceFeed.updatePrices(encodedPrices);
         marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         market = IMarket(payable(marketFactory.markets(0)));
+        vault = IVault(market.VAULT());
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
@@ -131,15 +132,13 @@ contract TestAltOrders is Test {
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
-        vault = market.VAULT();
-
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
         vm.stopPrank();
         _;

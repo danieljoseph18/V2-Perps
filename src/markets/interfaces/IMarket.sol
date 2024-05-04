@@ -49,6 +49,7 @@ interface IMarket {
         uint256 _executionFee,
         bytes32 _priceRequestKey,
         bytes32 _pnlRequestKey,
+        uint40 _stakeDuration,
         bool _reverseWrap,
         bool _isDeposit
     ) external payable;
@@ -56,7 +57,7 @@ interface IMarket {
     function cancelRequest(bytes32 _key, address _caller)
         external
         returns (address tokenOut, uint256 amountOut, bool shouldUnwrap);
-    function executeDeposit(IVault.ExecuteDeposit calldata _params) external;
+    function executeDeposit(IVault.ExecuteDeposit calldata _params) external returns (uint256);
     function executeWithdrawal(IVault.ExecuteWithdrawal calldata _params) external;
 
     // Getter

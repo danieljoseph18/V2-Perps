@@ -183,6 +183,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         uint256 _executionFee,
         bytes32 _priceRequestKey,
         bytes32 _pnlRequestKey,
+        uint40 _stakeDuration,
         bool _reverseWrap,
         bool _isDeposit
     ) external payable onlyRoles(_ROLE_3) {
@@ -194,6 +195,7 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
             _priceRequestKey,
             _pnlRequestKey,
             WETH,
+            _stakeDuration,
             _reverseWrap,
             _isDeposit
         );
@@ -237,9 +239,10 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         onlyRoles(_ROLE_1)
         orderExists(_params.key)
         nonReentrant
+        returns (uint256)
     {
         if (!requests.remove(_params.key)) revert Market_FailedToRemoveRequest();
-        VAULT.executeDeposit(_params, _params.deposit.isLongToken ? WETH : USDC, msg.sender);
+        return VAULT.executeDeposit(_params, _params.deposit.isLongToken ? WETH : USDC, msg.sender);
     }
 
     function executeWithdrawal(IVault.ExecuteWithdrawal calldata _params)

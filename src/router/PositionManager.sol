@@ -19,6 +19,7 @@ import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
+import {IGlobalRewardTracker} from "../rewards/interfaces/IGlobalRewardTracker.sol";
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
 // Contract picks up and executes all requests, as well as holds intermediary funds.
@@ -31,6 +32,8 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
 
     IWETH immutable WETH;
     IERC20 immutable USDC;
+
+    IGlobalRewardTracker public rewardTracker;
 
     uint256 private constant LONG_BASE_UNIT = 1e18;
     uint256 private constant SHORT_BASE_UNIT = 1e6;
@@ -49,10 +52,18 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     uint256 public averageWithdrawalCost;
     uint256 public averagePositionCost;
 
-    constructor(address _marketFactory, address _referralStorage, address _priceFeed, address _weth, address _usdc) {
+    constructor(
+        address _marketFactory,
+        address _rewardTracker,
+        address _referralStorage,
+        address _priceFeed,
+        address _weth,
+        address _usdc
+    ) {
         _initializeOwner(msg.sender);
         marketFactory = IMarketFactory(_marketFactory);
         referralStorage = IReferralStorage(_referralStorage);
+        rewardTracker = IGlobalRewardTracker(_rewardTracker);
         priceFeed = IPriceFeed(_priceFeed);
         WETH = IWETH(_weth);
         USDC = IERC20(_usdc);
@@ -75,6 +86,18 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
         priceFeed = _priceFeed;
     }
 
+    function updateMarketFactory(IMarketFactory _marketFactory) external onlyOwner {
+        marketFactory = _marketFactory;
+    }
+
+    function updateReferralStorage(IReferralStorage _referralStorage) external onlyOwner {
+        referralStorage = _referralStorage;
+    }
+
+    function updateRewardTracker(IGlobalRewardTracker _rewardTracker) external onlyOwner {
+        rewardTracker = _rewardTracker;
+    }
+
     function executeDeposit(IMarket market, bytes32 _key) external payable nonReentrant {
         uint256 initialGas = gasleft();
 
@@ -87,7 +110,13 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
         if (params.deposit.isLongToken) WETH.approve(address(vault), params.deposit.amountIn);
         else USDC.approve(address(vault), params.deposit.amountIn);
 
-        market.executeDeposit(params);
+        uint256 mintAmount = market.executeDeposit(params);
+
+        IVault(vault).approve(address(rewardTracker), mintAmount);
+
+        rewardTracker.stakeForAccount(
+            address(this), params.deposit.owner, vault, mintAmount, params.deposit.stakeDuration
+        );
 
         uint256 feeForExecutor = ((initialGas - gasleft()) * tx.gasprice) + ((GAS_BUFFER + 21000) * tx.gasprice);
 

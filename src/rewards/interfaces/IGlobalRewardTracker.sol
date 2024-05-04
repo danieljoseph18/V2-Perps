@@ -30,7 +30,6 @@ interface IGlobalRewardTracker {
 
     struct LockData {
         uint256 depositAmount;
-        uint8 tier;
         uint40 lockedAt;
         uint40 unlockDate;
         address owner;
@@ -46,4 +45,12 @@ interface IGlobalRewardTracker {
     function getStakeData(address _account, address _depositToken) external view returns (StakeData memory);
     function initialize(address _distributor) external;
     function addDepositToken(address _depositToken) external;
+    function stakeForAccount(
+        address _fundingAccount,
+        address _account,
+        address _depositToken,
+        uint256 _amount,
+        uint40 _stakeDuration
+    ) external;
+    function unstakeForAccount(address _account, address _depositToken, uint256 _amount, address _receiver) external;
 }

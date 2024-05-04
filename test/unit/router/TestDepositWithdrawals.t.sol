@@ -34,7 +34,6 @@ contract TestDepositWithdrawals is Test {
 
     GlobalRewardTracker rewardTracker;
 
-
     address weth;
     address usdc;
     address link;
@@ -124,13 +123,13 @@ contract TestDepositWithdrawals is Test {
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
         vm.stopPrank();
         _;
@@ -144,18 +143,18 @@ contract TestDepositWithdrawals is Test {
             _amountIn = bound(_amountIn, 1, 500_000 ether);
             if (_shouldWrap) {
                 vm.prank(OWNER);
-                router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, weth, _amountIn, 0.01 ether, true);
+                router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, weth, _amountIn, 0.01 ether, 0, true);
             } else {
                 vm.startPrank(OWNER);
                 WETH(weth).approve(address(router), type(uint256).max);
-                router.createDeposit{value: 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, false);
+                router.createDeposit{value: 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, 0, false);
                 vm.stopPrank();
             }
         } else {
             _amountIn = bound(_amountIn, 1, 500_000_000e6);
             vm.startPrank(OWNER);
             MockUSDC(usdc).approve(address(router), type(uint256).max);
-            router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, usdc, _amountIn, 0.01 ether, false);
+            router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, usdc, _amountIn, 0.01 ether, 0, false);
             vm.stopPrank();
         }
 
@@ -175,11 +174,11 @@ contract TestDepositWithdrawals is Test {
             _amountIn = bound(_amountIn, 1 ether, 500_000 ether);
             if (_shouldWrap) {
                 vm.prank(OWNER);
-                router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, weth, _amountIn, 0.01 ether, true);
+                router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, weth, _amountIn, 0.01 ether, 0, true);
             } else {
                 vm.startPrank(OWNER);
                 WETH(weth).approve(address(router), type(uint256).max);
-                router.createDeposit{value: 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, false);
+                router.createDeposit{value: 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, 0, false);
                 vm.stopPrank();
             }
         } else {
@@ -187,7 +186,7 @@ contract TestDepositWithdrawals is Test {
             _shouldWrap = false;
             vm.startPrank(OWNER);
             MockUSDC(usdc).approve(address(router), type(uint256).max);
-            router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, usdc, _amountIn, 0.01 ether, false);
+            router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, usdc, _amountIn, 0.01 ether, 0, false);
             vm.stopPrank();
         }
 
@@ -197,11 +196,10 @@ contract TestDepositWithdrawals is Test {
         positionManager.executeDeposit{value: 0.01 ether}(market, depositKey);
 
         // Create Withdrawal request
-        IVault marketToken = market.VAULT();
-        _amountOut = bound(_amountOut, 0.1e18, marketToken.balanceOf(OWNER));
+        _amountOut = bound(_amountOut, 0.1e18, rewardTracker.balanceOf(OWNER));
 
         vm.startPrank(OWNER);
-        marketToken.approve(address(router), type(uint256).max);
+        rewardTracker.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: 0.01 ether}(
             market, OWNER, _isLongToken ? weth : usdc, _amountOut, 0.01 ether, _shouldWrap
         );

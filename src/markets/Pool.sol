@@ -39,6 +39,7 @@ library Pool {
         uint256 executionFee;
         address owner;
         uint48 requestTimestamp;
+        uint40 stakeDuration;
         bool isLongToken;
         bool reverseWrap;
         bool isDeposit;
@@ -249,6 +250,7 @@ library Pool {
         bytes32 _priceRequestKey,
         bytes32 _pnlRequestKey,
         address _weth,
+        uint40 _stakeDuration,
         bool _reverseWrap,
         bool _isDeposit
     ) external view returns (Pool.Input memory) {
@@ -257,6 +259,7 @@ library Pool {
             executionFee: _executionFee,
             owner: _owner,
             requestTimestamp: uint48(block.timestamp),
+            stakeDuration: _stakeDuration,
             isLongToken: _transferToken == _weth,
             reverseWrap: _reverseWrap,
             isDeposit: _isDeposit,

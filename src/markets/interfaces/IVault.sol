@@ -56,7 +56,9 @@ interface IVault is IERC20 {
 
     function initialize(address _market, address _feeDistributor, address _rewardTracker, address _feeReceiver)
         external;
-    function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager) external;
+    function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager)
+        external
+        returns (uint256 mintAmount);
     function executeWithdrawal(ExecuteWithdrawal calldata _params, address _tokenOut, address _positionManager)
         external;
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)

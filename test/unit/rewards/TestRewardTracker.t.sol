@@ -138,13 +138,13 @@ contract TestRewardTracker is Test {
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
         vm.stopPrank();
         _;
@@ -227,7 +227,7 @@ contract TestRewardTracker is Test {
         distributeFees
     {
         // bound input
-        _amountToStake = bound(_amountToStake, 1, 1_000_000_000 ether);
+        _amountToStake = bound(_amountToStake, 1000 ether, 1_000_000_000 ether);
         // deal user some vault tokens
         deal(address(vault), USER, _amountToStake);
         // stake them
@@ -288,20 +288,20 @@ contract TestRewardTracker is Test {
         assertEq(IERC20(usdc).balanceOf(USER), usdcBalance + usdcClaimed, "Invalid Claim");
     }
 
-    function test_users_can_lock_staked_tokens(uint256 _amountToStake, uint256 _tier)
+    function test_users_can_lock_staked_tokens(uint256 _amountToStake, uint256 _duration)
         public
         setUpMarkets
         distributeFees
     {
         // bound input
         _amountToStake = bound(_amountToStake, 1, 1_000_000_000 ether);
-        _tier = bound(_tier, 1, 5);
+        _duration = bound(_duration, 1, type(uint32).max);
         // deal user some vault tokens
         deal(address(vault), USER, _amountToStake);
         // stake them
         vm.startPrank(USER);
         vault.approve(address(rewardTracker), _amountToStake);
-        rewardTracker.stake(address(vault), _amountToStake, uint8(_tier));
+        rewardTracker.stake(address(vault), _amountToStake, uint40(_duration));
         vm.stopPrank();
         // ensure the staked balance == staked amount
         assertEq(rewardTracker.balanceOf(USER), _amountToStake);
@@ -309,40 +309,26 @@ contract TestRewardTracker is Test {
 
         GlobalRewardTracker.LockData memory lock = rewardTracker.getLockAtIndex(USER, 0);
         assertEq(lock.depositAmount, _amountToStake, "Lock Amount");
-        assertEq(lock.tier, _tier, "Lock Tier");
         assertEq(lock.owner, USER, "Lock Owner");
         assertEq(lock.lockedAt, block.timestamp, "Locked At Date");
 
-        uint256 timeToUnlock;
-        if (_tier == 1) {
-            timeToUnlock = 1 hours;
-        } else if (_tier == 2) {
-            timeToUnlock = 30 days;
-        } else if (_tier == 3) {
-            timeToUnlock = 90 days;
-        } else if (_tier == 4) {
-            timeToUnlock = 180 days;
-        } else if (_tier == 5) {
-            timeToUnlock = 365 days;
-        }
-
-        assertEq(lock.unlockDate, block.timestamp + timeToUnlock, "Unlock Date");
+        assertEq(lock.unlockDate, block.timestamp + _duration, "Unlock Date");
     }
 
-    function test_users_cant_unlock_staked_tokens_before_the_lock_ends(uint256 _amountToStake, uint256 _tier)
+    function test_users_cant_unlock_staked_tokens_before_the_lock_ends(uint256 _amountToStake, uint256 _duration)
         public
         setUpMarkets
         distributeFees
     {
         // bound input
         _amountToStake = bound(_amountToStake, 1, 1_000_000_000 ether);
-        _tier = bound(_tier, 1, 5);
+        _duration = bound(_duration, 1, type(uint32).max);
         // deal user some vault tokens
         deal(address(vault), USER, _amountToStake);
         // stake them
         vm.startPrank(USER);
         vault.approve(address(rewardTracker), _amountToStake);
-        rewardTracker.stake(address(vault), _amountToStake, uint8(_tier));
+        rewardTracker.stake(address(vault), _amountToStake, uint40(_duration));
         vm.stopPrank();
 
         bytes32 lockKey = rewardTracker.getLockKeyAtIndex(USER, 0);
@@ -356,18 +342,18 @@ contract TestRewardTracker is Test {
 
     function test_users_cant_transfer_locked_tokens_before_the_lock_ends(
         uint256 _amountToStake,
-        uint256 _tier,
+        uint256 _duration,
         uint256 _amountToTransfer
     ) public setUpMarkets {
         // bound input
         _amountToStake = bound(_amountToStake, 1, 1_000_000_000 ether);
-        _tier = bound(_tier, 1, 5);
+        _duration = bound(_duration, 1, type(uint32).max);
         // deal user some vault tokens
         deal(address(vault), USER, _amountToStake);
         // stake them
         vm.startPrank(USER);
         vault.approve(address(rewardTracker), _amountToStake);
-        rewardTracker.stake(address(vault), _amountToStake, uint8(_tier));
+        rewardTracker.stake(address(vault), _amountToStake, uint40(_duration));
         vm.stopPrank();
 
         _amountToTransfer = bound(_amountToTransfer, 1, rewardTracker.balanceOf(USER));
@@ -381,40 +367,27 @@ contract TestRewardTracker is Test {
         rewardTracker.transfer(OWNER, _amountToTransfer);
     }
 
-    function test_users_can_unstake_after_locks_end(uint256 _amountToStake, uint256 _tier)
+    function test_users_can_unstake_after_locks_end(uint256 _amountToStake, uint256 _duration)
         public
         setUpMarkets
         distributeFees
     {
         // bound input
         _amountToStake = bound(_amountToStake, 1, 1_000_000_000 ether);
-        _tier = bound(_tier, 1, 5);
+        _duration = bound(_duration, 1, type(uint32).max);
         // deal user some vault tokens
         deal(address(vault), USER, _amountToStake);
         // stake them
         vm.startPrank(USER);
         vault.approve(address(rewardTracker), _amountToStake);
-        rewardTracker.stake(address(vault), _amountToStake, uint8(_tier));
+        rewardTracker.stake(address(vault), _amountToStake, uint40(_duration));
         vm.stopPrank();
 
         bytes32 lockKey = rewardTracker.getLockKeyAtIndex(USER, 0);
         bytes32[] memory keys = new bytes32[](1);
         keys[0] = lockKey;
 
-        uint256 timeToUnlock;
-        if (_tier == 1) {
-            timeToUnlock = 1 hours;
-        } else if (_tier == 2) {
-            timeToUnlock = 30 days;
-        } else if (_tier == 3) {
-            timeToUnlock = 90 days;
-        } else if (_tier == 4) {
-            timeToUnlock = 180 days;
-        } else if (_tier == 5) {
-            timeToUnlock = 365 days;
-        }
-
-        skip(timeToUnlock);
+        skip(_duration);
 
         // Try and unlock
         vm.prank(USER);
@@ -427,31 +400,28 @@ contract TestRewardTracker is Test {
         GlobalRewardTracker.LockData memory lock = rewardTracker.getLockData(lockKey);
 
         assertEq(lock.depositAmount, 0, "Lock Amount");
-        assertEq(lock.tier, 0, "Lock Tier");
         assertEq(lock.owner, address(0), "Lock Owner");
         assertEq(lock.lockedAt, 0, "Locked At Date");
         assertEq(lock.unlockDate, 0, "Unlock Date");
     }
 
-    function test_users_can_still_claim_rewards_from_locked_tokens(
-        uint256 _amountToStake,
-        uint256 _tier,
-        uint256 _timeToPass
-    ) public setUpMarkets distributeFees {
+    function test_users_can_still_claim_rewards_from_locked_tokens(uint256 _amountToStake, uint256 _duration)
+        public
+        setUpMarkets
+        distributeFees
+    {
         // bound input
-        _amountToStake = bound(_amountToStake, 1, 1_000_000_000 ether);
-        _tier = bound(_tier, 1, 5);
+        _amountToStake = bound(_amountToStake, 1000 ether, 1_000_000_000 ether);
+        _duration = bound(_duration, 1, type(uint32).max);
         // deal user some vault tokens
         deal(address(vault), USER, _amountToStake);
         // stake them
         vm.startPrank(USER);
         vault.approve(address(rewardTracker), _amountToStake);
-        rewardTracker.stake(address(vault), _amountToStake, uint8(_tier));
+        rewardTracker.stake(address(vault), _amountToStake, uint40(_duration));
         vm.stopPrank();
 
-        _timeToPass = bound(_timeToPass, 1 minutes, 3650 days);
-
-        skip(_timeToPass);
+        skip(_duration);
 
         uint256 ethBalance = IERC20(weth).balanceOf(USER);
         uint256 usdcBalance = IERC20(usdc).balanceOf(USER);

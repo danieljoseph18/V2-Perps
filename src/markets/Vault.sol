@@ -167,6 +167,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager)
         external
         onlyMarket
+        returns (uint256)
     {
         uint256 initialBalance =
             _params.deposit.isLongToken ? IERC20(WETH).balanceOf(address(this)) : IERC20(USDC).balanceOf(address(this));
@@ -180,9 +181,11 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
 
         emit DepositExecuted(_params.key, _params.deposit.owner, _tokenIn, _params.deposit.amountIn, mintAmount);
 
-        _mint(_params.deposit.owner, mintAmount);
+        _mint(address(_positionManager), mintAmount);
 
         _validateDeposit(initialBalance, _params.deposit.amountIn, _params.deposit.isLongToken);
+
+        return mintAmount;
     }
 
     function executeWithdrawal(ExecuteWithdrawal calldata _params, address _tokenOut, address _positionManager)

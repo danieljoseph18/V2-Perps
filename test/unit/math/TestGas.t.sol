@@ -50,7 +50,6 @@ contract TestGas is Test {
 
     GlobalRewardTracker rewardTracker;
 
-
     address weth;
     address usdc;
     address link;
@@ -141,13 +140,13 @@ contract TestGas is Test {
 
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, false);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
         positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
         vm.stopPrank();
         _;
@@ -165,7 +164,7 @@ contract TestGas is Test {
 
         vm.prank(USER);
         router.createDeposit{value: _depositAmount + _executionFee}(
-            market, USER, weth, _depositAmount, _executionFee, true
+            market, USER, weth, _depositAmount, _executionFee, 0, true
         );
         // store ether balance
         uint256 etherBalance = address(USER).balance;
@@ -184,13 +183,13 @@ contract TestGas is Test {
         _withdrawalPercentage = bound(_withdrawalPercentage, 0.01e18, 1e18);
         _executionFee = bound(_executionFee, 0.1 ether, 10 ether);
 
-        uint256 vaultBalance = IVault(vault).balanceOf(OWNER);
+        uint256 vaultBalance = rewardTracker.balanceOf(OWNER);
 
         uint256 percentageToWithdraw = vaultBalance.percentage(_withdrawalPercentage);
 
         // Leave wrapped so withdrawals don't affect ether balance
         vm.startPrank(OWNER);
-        IVault(vault).approve(address(router), type(uint256).max);
+        rewardTracker.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: _executionFee}(
             market, OWNER, _isLongToken ? weth : usdc, percentageToWithdraw, _executionFee, false
         );

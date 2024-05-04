@@ -93,8 +93,12 @@ contract Deploy is Script {
             address(contracts.marketFactory)
         );
 
+        contracts.rewardTracker =
+            new GlobalRewardTracker(activeNetworkConfig.weth, activeNetworkConfig.usdc, "Staked BRRR", "sBRRR");
+
         contracts.positionManager = new PositionManager(
             address(contracts.marketFactory),
+            address(contracts.rewardTracker),
             address(contracts.referralStorage),
             address(contracts.priceFeed),
             activeNetworkConfig.weth,
@@ -106,11 +110,9 @@ contract Deploy is Script {
             address(contracts.priceFeed),
             activeNetworkConfig.usdc,
             activeNetworkConfig.weth,
-            address(contracts.positionManager)
+            address(contracts.positionManager),
+            address(contracts.rewardTracker)
         );
-
-        contracts.rewardTracker =
-            new GlobalRewardTracker(activeNetworkConfig.weth, activeNetworkConfig.usdc, "Staked BRRR", "sBRRR");
 
         contracts.feeDistributor = new FeeDistributor(
             address(contracts.marketFactory),
@@ -175,6 +177,8 @@ contract Deploy is Script {
 
         contracts.rewardTracker.grantRoles(address(contracts.marketFactory), _ROLE_0);
         contracts.rewardTracker.initialize(address(contracts.feeDistributor));
+        contracts.rewardTracker.setHandler(address(contracts.positionManager), true);
+        contracts.rewardTracker.setHandler(address(contracts.router), true);
 
         contracts.feeDistributor.grantRoles(address(contracts.marketFactory), _ROLE_0);
 

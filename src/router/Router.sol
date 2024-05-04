@@ -16,6 +16,7 @@ import {Gas} from "../libraries/Gas.sol";
 import {IPositionManager} from "./interfaces/IPositionManager.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 import {Units} from "../libraries/Units.sol";
+import {IGlobalRewardTracker} from "../rewards/interfaces/IGlobalRewardTracker.sol";
 
 /// @dev Needs Router role
 // All user interactions should come through this contract
@@ -30,6 +31,7 @@ contract Router is ReentrancyGuard, OwnableRoles {
     IERC20 private immutable USDC;
     IWETH private immutable WETH;
     IPositionManager private positionManager;
+    IGlobalRewardTracker private rewardTracker;
 
     string private constant LONG_TICKER = "ETH";
     string private constant SHORT_TICKER = "USDC";
@@ -61,13 +63,21 @@ contract Router is ReentrancyGuard, OwnableRoles {
     error Router_SizeExceedsPosition();
     error Router_InvalidConditional();
 
-    constructor(address _marketFactory, address _priceFeed, address _usdc, address _weth, address _positionManager) {
+    constructor(
+        address _marketFactory,
+        address _priceFeed,
+        address _usdc,
+        address _weth,
+        address _positionManager,
+        address _rewardTracker
+    ) {
         _initializeOwner(msg.sender);
         marketFactory = IMarketFactory(_marketFactory);
         priceFeed = IPriceFeed(_priceFeed);
         USDC = IERC20(_usdc);
         WETH = IWETH(_weth);
         positionManager = IPositionManager(_positionManager);
+        rewardTracker = IGlobalRewardTracker(_rewardTracker);
     }
 
     receive() external payable {}
@@ -93,6 +103,7 @@ contract Router is ReentrancyGuard, OwnableRoles {
         address _tokenIn,
         uint256 _amountIn,
         uint256 _executionFee,
+        uint40 _stakeDuration,
         bool _shouldWrap
     ) external payable nonReentrant {
         uint256 totalPriceUpdateFee = Gas.validateExecutionFee(
@@ -124,7 +135,15 @@ contract Router is ReentrancyGuard, OwnableRoles {
         bytes32 pnlRequestKey = _requestPnlUpdate(market, priceFee);
 
         market.createRequest(
-            _owner, _tokenIn, _amountIn, _executionFee, priceRequestKey, pnlRequestKey, _shouldWrap, true
+            _owner,
+            _tokenIn,
+            _amountIn,
+            _executionFee,
+            priceRequestKey,
+            pnlRequestKey,
+            _stakeDuration,
+            _shouldWrap,
+            true
         );
 
         _sendExecutionFee(_executionFee);
@@ -163,10 +182,21 @@ contract Router is ReentrancyGuard, OwnableRoles {
         bytes32 pnlRequestKey = _requestPnlUpdate(market, priceFee);
 
         IVault vault = market.VAULT();
-        vault.safeTransferFrom(msg.sender, address(positionManager), _marketTokenAmountIn);
+
+        rewardTracker.unstakeForAccount(msg.sender, address(vault), _marketTokenAmountIn, address(this));
+
+        vault.safeTransfer(address(positionManager), _marketTokenAmountIn);
 
         market.createRequest(
-            _owner, _tokenOut, _marketTokenAmountIn, _executionFee, priceRequestKey, pnlRequestKey, _shouldUnwrap, false
+            _owner,
+            _tokenOut,
+            _marketTokenAmountIn,
+            _executionFee,
+            priceRequestKey,
+            pnlRequestKey,
+            0,
+            _shouldUnwrap,
+            false
         );
 
         _sendExecutionFee(_executionFee);
