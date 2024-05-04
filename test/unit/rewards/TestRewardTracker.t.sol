@@ -435,4 +435,128 @@ contract TestRewardTracker is Test {
         assertEq(IERC20(weth).balanceOf(USER), ethBalance + ethClaimed, "Invalid Claim");
         assertEq(IERC20(usdc).balanceOf(USER), usdcBalance + usdcClaimed, "Invalid Claim");
     }
+
+    function test_auto_staking_through_position_manager_still_lets_users_claim_rewards(
+        uint256 _timeToSkip,
+        bool _isLongToken
+    ) public setUpMarkets distributeFees {
+        _timeToSkip = bound(_timeToSkip, 1 days, 3650 days);
+
+        vm.startPrank(USER);
+        if (_isLongToken) {
+            WETH(weth).approve(address(router), type(uint256).max);
+            deal(weth, USER, 20_000 ether);
+            router.createDeposit{value: 0.01 ether + 1 gwei}(market, USER, weth, 20_000 ether, 0.01 ether, 0, false);
+            positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        } else {
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            deal(usdc, USER, 50_000_000e6);
+            router.createDeposit{value: 0.01 ether + 1 gwei}(market, USER, usdc, 50_000_000e6, 0.01 ether, 0, false);
+            positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        }
+        vm.stopPrank();
+
+        assertNotEq(rewardTracker.balanceOf(USER), 0);
+
+        skip(_timeToSkip);
+
+        vm.prank(USER);
+        (uint256 ethClaimed, uint256 usdcClaimed) = rewardTracker.claim(address(vault), USER);
+
+        assertNotEq(ethClaimed, 0, "Amount is Zero");
+        assertNotEq(usdcClaimed, 0, "Amount is Zero");
+    }
+
+    function test_users_can_unstake_auto_staked_tokens(bool _isLongToken) public setUpMarkets {
+        vm.startPrank(USER);
+        if (_isLongToken) {
+            WETH(weth).approve(address(router), type(uint256).max);
+            deal(weth, USER, 20_000 ether);
+            router.createDeposit{value: 0.01 ether + 1 gwei}(market, USER, weth, 20_000 ether, 0.01 ether, 0, false);
+            positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        } else {
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            deal(usdc, USER, 50_000_000e6);
+            router.createDeposit{value: 0.01 ether + 1 gwei}(market, USER, usdc, 50_000_000e6, 0.01 ether, 0, false);
+            positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        }
+        vm.stopPrank();
+
+        // Unstake
+        vm.startPrank(USER);
+        rewardTracker.unstake(address(vault), rewardTracker.balanceOf(USER), new bytes32[](0));
+        vm.stopPrank();
+
+        assertEq(rewardTracker.balanceOf(USER), 0);
+    }
+
+    function test_users_can_extend_lock_duration(uint256 _amountToStake, uint256 _duration, uint256 _extension)
+        public
+        setUpMarkets
+    {
+        // bound input
+        _amountToStake = bound(_amountToStake, 1, 1_000_000_000 ether);
+        _duration = bound(_duration, 1, type(uint32).max);
+        _extension = bound(_extension, 1, type(uint32).max);
+        // deal user some vault tokens
+        deal(address(vault), USER, _amountToStake);
+        // stake them
+        vm.startPrank(USER);
+        vault.approve(address(rewardTracker), _amountToStake);
+        rewardTracker.stake(address(vault), _amountToStake, uint40(_duration));
+        vm.stopPrank();
+
+        // get the lock position
+        bytes32 lockKey = rewardTracker.getLockKeyAtIndex(USER, 0);
+
+        // extend the lock
+        vm.startPrank(USER);
+        rewardTracker.extendLockDuration(lockKey, uint40(_extension));
+        vm.stopPrank();
+
+        // get the lock data
+        GlobalRewardTracker.LockData memory lock = rewardTracker.getLockData(lockKey);
+
+        assertEq(lock.unlockDate, block.timestamp + _duration + _extension, "Unlock Date");
+    }
+
+    function test_locking_directly_from_the_lock_function(
+        uint256 _amountToStake,
+        uint256 _amountToLock,
+        uint256 _duration
+    ) public setUpMarkets {
+        // bound input
+        _amountToStake = bound(_amountToStake, 2, 1_000_000_000 ether);
+        _amountToLock = bound(_amountToLock, 1, _amountToStake - 1);
+        _duration = bound(_duration, 1, type(uint32).max);
+        // deal user some vault tokens
+        deal(address(vault), USER, _amountToStake);
+        // stake them
+        vm.startPrank(USER);
+        vault.approve(address(rewardTracker), _amountToStake);
+        rewardTracker.stake(address(vault), _amountToStake, 0);
+        rewardTracker.lock(address(vault), _amountToLock, uint40(_duration));
+        vm.stopPrank();
+
+        // get the lock position
+        GlobalRewardTracker.LockData memory lock = rewardTracker.getLockAtIndex(USER, 0);
+        assertEq(lock.depositAmount, _amountToLock, "Lock Amount");
+
+        // Try and unlock, and expect revert
+        bytes32 lockKey = rewardTracker.getLockKeyAtIndex(USER, 0);
+        bytes32[] memory keys = new bytes32[](1);
+        keys[0] = lockKey;
+        vm.prank(USER);
+        vm.expectRevert();
+        rewardTracker.unstake(address(vault), _amountToStake, keys);
+
+        skip(_duration);
+
+        // Unlock the unlocked amount and it should pass
+        vm.prank(USER);
+        rewardTracker.unstake(address(vault), _amountToStake - _amountToLock, keys);
+
+        // Balance should only remain as _amountToLock
+        assertEq(rewardTracker.balanceOf(USER), _amountToLock);
+    }
 }

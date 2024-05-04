@@ -154,6 +154,7 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
     function unstake(address _depositToken, uint256 _amount, bytes32[] calldata _lockKeys) external nonReentrant {
         if (inPrivateStakingMode) revert RewardTracker_ActionDisbaled();
         _validateDepositToken(_depositToken);
+
         if (_lockKeys.length > 0) {
             _unlock(msg.sender, _lockKeys);
         }
@@ -178,6 +179,13 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
         LockData storage position = lockData[_lockKey];
         if (position.owner != msg.sender) revert RewardTracker_Forbidden();
         position.unlockDate += _timeToExtend;
+    }
+
+    function lock(address _depositToken, uint256 _amount, uint40 _lockDuration) external nonReentrant {
+        _validateDepositToken(_depositToken);
+        if (_amount > _getAvailableBalance(msg.sender)) revert RewardTracker_AmountExceedsBalance();
+        if (_lockDuration == 0) revert RewardTracker_InvalidAmount();
+        _lock(msg.sender, _depositToken, _amount, _lockDuration);
     }
 
     function unlock(bytes32[] calldata _lockKeys) external nonReentrant {
@@ -366,12 +374,14 @@ contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, Ow
         totalDepositSupply[_depositToken] -= _amount;
 
         _burn(_account, _amount);
+
         IERC20(_depositToken).safeTransfer(_receiver, _amount);
     }
 
     function _unlock(address _account, bytes32[] calldata _lockKeys) private {
         uint256 totalAmount;
-        for (uint256 i = 0; i < _lockKeys.length;) {
+        uint256 len = _lockKeys.length;
+        for (uint256 i = 0; i < len;) {
             LockData storage position = lockData[_lockKeys[i]];
             if (position.unlockDate > _blockTimestamp()) revert RewardTracker_Forbidden();
             if (position.owner != _account) revert RewardTracker_Forbidden();
