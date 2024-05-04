@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {ILiquidityLocker} from "./ILiquidityLocker.sol";
-
 interface IGlobalRewardTracker {
     error RewardTracker_ActionDisbaled();
     error RewardTracker_InvalidAmount();
@@ -13,6 +11,8 @@ interface IGlobalRewardTracker {
     error RewardTracker_AmountExceedsStake();
     error RewardTracker_AmountExceedsBalance();
     error RewardTracker_FailedToRemoveDepositToken();
+    error RewardTracker_PositionAlreadyExists();
+    error RewardTracker_InvalidTier();
 
     event Claim(address receiver, uint256 wethAmount, uint256 usdcAmount);
 
@@ -28,7 +28,14 @@ interface IGlobalRewardTracker {
         uint256 cumulativeUsdcRewards;
     }
 
-    function balanceOf(address account) external view returns (uint256);
+    struct LockData {
+        uint256 depositAmount;
+        uint8 tier;
+        uint40 lockedAt;
+        uint40 unlockDate;
+        address owner;
+    }
+
     function claim(address _depositToken, address _receiver)
         external
         returns (uint256 wethAmount, uint256 usdcAmount);
@@ -36,11 +43,7 @@ interface IGlobalRewardTracker {
         external
         view
         returns (uint256 wethAmount, uint256 usdcAmount);
-    function liquidityLocker() external view returns (ILiquidityLocker);
     function getStakeData(address _account, address _depositToken) external view returns (StakeData memory);
-    function unstakeForAccount(address _account, address _depositToken, uint256 _amount, address _receiver) external;
-    function stakeForAccount(address _fundingAccount, address _account, address _depositToken, uint256 _amount)
-        external;
-    function initialize(address _distributor, address _liquidityLocker) external;
+    function initialize(address _distributor) external;
     function addDepositToken(address _depositToken) external;
 }

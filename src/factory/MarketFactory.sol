@@ -17,8 +17,6 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {IReferralStorage} from "../referrals/ReferralStorage.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
-import {ILiquidityLocker} from "../rewards/interfaces/ILiquidityLocker.sol";
-import {TransferStakedTokens} from "../rewards/TransferStakedTokens.sol";
 import {Pool} from "../markets/Pool.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {Deployer} from "./Deployer.sol";
@@ -38,9 +36,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     IReferralStorage referralStorage;
     IFeeDistributor feeDistributor;
     IGlobalRewardTracker rewardTracker;
-    ILiquidityLocker liquidityLocker;
     IPositionManager positionManager;
-    TransferStakedTokens transferStakedTokens;
     address router;
 
     FeedRegistryInterface private feedRegistry;
@@ -106,7 +102,6 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         referralStorage = IReferralStorage(_referralStorage);
         feeDistributor = IFeeDistributor(_feeDistributor);
         positionManager = IPositionManager(_positionManager);
-        transferStakedTokens = new TransferStakedTokens();
         router = _router;
         defaultConfig = _defaultConfig;
         feeReceiver = _feeReceiver;
@@ -116,9 +111,8 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         emit MarketFactoryInitialized(_priceFeed);
     }
 
-    function setRewardContracts(address _rewardTracker, address _liquidityLocker) external onlyOwner {
+    function setRewardTracker(address _rewardTracker) external onlyOwner {
         rewardTracker = IGlobalRewardTracker(_rewardTracker);
-        liquidityLocker = ILiquidityLocker(_liquidityLocker);
     }
 
     function setFeedValidators(address _chainlinkFeedRegistry, address _uniV2Factory, address _uniV3Factory)
@@ -297,6 +291,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
 
         OwnableRoles(vault).grantRoles(_params.owner, _ROLE_2);
         OwnableRoles(vault).grantRoles(tradeStorage, _ROLE_4);
+        OwnableRoles(vault).grantRoles(address(rewardTracker), _ROLE_5);
 
         OwnableRoles(tradeStorage).grantRoles(address(positionManager), _ROLE_1);
         OwnableRoles(tradeStorage).grantRoles(_params.owner, _ROLE_2);

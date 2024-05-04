@@ -28,7 +28,7 @@ contract FeeDistributor is ReentrancyGuard, OwnableRoles {
 
     IMarketFactory public marketFactory;
 
-    uint256 private constant SECONDS_PER_WEEK = 1 weeks;
+    uint32 private constant SECONDS_PER_WEEK = 1 weeks;
 
     address public rewardTracker;
     address public weth;
@@ -45,6 +45,7 @@ contract FeeDistributor is ReentrancyGuard, OwnableRoles {
         usdc = _usdc;
     }
 
+    /// @dev Used by MarketFactory to enable Vaults to accumulate fees
     function addVault(address _vault) external onlyRoles(_ROLE_0) {
         isVault[_vault] = true;
     }

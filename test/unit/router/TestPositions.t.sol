@@ -16,9 +16,9 @@ import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
 import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
-import {LiquidityLocker} from "src/rewards/LiquidityLocker.sol";
+
 import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
-import {TransferStakedTokens} from "src/rewards/TransferStakedTokens.sol";
+
 import {MathUtils} from "src/libraries/MathUtils.sol";
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 
@@ -32,9 +32,8 @@ contract TestPositions is Test {
     address OWNER;
     IMarket market;
     FeeDistributor feeDistributor;
-    TransferStakedTokens transferStakedTokens;
+
     GlobalRewardTracker rewardTracker;
-    LiquidityLocker liquidityLocker;
 
     address weth;
     address usdc;
@@ -63,7 +62,7 @@ contract TestPositions is Test {
         positionManager = contracts.positionManager;
         router = contracts.router;
         feeDistributor = contracts.feeDistributor;
-        transferStakedTokens = contracts.transferStakedTokens;
+
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
         tickers.push(ethTicker);
@@ -122,7 +121,7 @@ contract TestPositions is Test {
         vm.stopPrank();
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = GlobalRewardTracker(address(market.VAULT().rewardTracker()));
-        liquidityLocker = LiquidityLocker(address(rewardTracker.liquidityLocker()));
+
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, true);

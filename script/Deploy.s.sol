@@ -14,8 +14,6 @@ import {IMarket} from "../src/markets/interfaces/IMarket.sol";
 import {Oracle} from "../src/oracle/Oracle.sol";
 import {FeeDistributor} from "../src/rewards/FeeDistributor.sol";
 import {GlobalRewardTracker} from "../src/rewards/GlobalRewardTracker.sol";
-import {LiquidityLocker} from "../src/rewards/LiquidityLocker.sol";
-import {TransferStakedTokens} from "../src/rewards/TransferStakedTokens.sol";
 import {Pool} from "../src/markets/Pool.sol";
 import {OwnableRoles} from "../src/auth/OwnableRoles.sol";
 
@@ -30,8 +28,6 @@ contract Deploy is Script {
         Router router;
         FeeDistributor feeDistributor;
         GlobalRewardTracker rewardTracker;
-        LiquidityLocker liquidityLocker;
-        TransferStakedTokens transferStakedTokens;
         address owner;
     }
 
@@ -56,8 +52,6 @@ contract Deploy is Script {
             Router(payable(address(0))),
             FeeDistributor(address(0)),
             GlobalRewardTracker(address(0)),
-            LiquidityLocker(address(0)),
-            TransferStakedTokens(address(0)),
             msg.sender
         );
 
@@ -115,7 +109,8 @@ contract Deploy is Script {
             address(contracts.positionManager)
         );
 
-        contracts.rewardTracker = new GlobalRewardTracker("Staked BRRR", "sBRRR");
+        contracts.rewardTracker =
+            new GlobalRewardTracker(activeNetworkConfig.weth, activeNetworkConfig.usdc, "Staked BRRR", "sBRRR");
 
         contracts.feeDistributor = new FeeDistributor(
             address(contracts.marketFactory),
@@ -124,14 +119,6 @@ contract Deploy is Script {
             activeNetworkConfig.usdc
         );
 
-        contracts.transferStakedTokens = new TransferStakedTokens();
-
-        contracts.liquidityLocker = new LiquidityLocker(
-            address(contracts.rewardTracker),
-            address(contracts.transferStakedTokens),
-            activeNetworkConfig.weth,
-            activeNetworkConfig.usdc
-        );
         /**
          * ============ Set Up Contracts ============
          */
@@ -162,7 +149,7 @@ contract Deploy is Script {
             0.005 ether
         );
 
-        contracts.marketFactory.setRewardContracts(address(contracts.rewardTracker), address(contracts.liquidityLocker));
+        contracts.marketFactory.setRewardTracker(address(contracts.rewardTracker));
 
         /**
          * (
@@ -187,6 +174,7 @@ contract Deploy is Script {
         contracts.referralStorage.setTier(2, 0.15e18);
 
         contracts.rewardTracker.grantRoles(address(contracts.marketFactory), _ROLE_0);
+        contracts.rewardTracker.initialize(address(contracts.feeDistributor));
 
         contracts.feeDistributor.grantRoles(address(contracts.marketFactory), _ROLE_0);
 
@@ -198,7 +186,6 @@ contract Deploy is Script {
         contracts.router.transferOwnership(msg.sender);
         contracts.feeDistributor.transferOwnership(msg.sender);
         contracts.rewardTracker.transferOwnership(msg.sender);
-        contracts.liquidityLocker.transferOwnership(msg.sender);
 
         vm.stopBroadcast();
 

@@ -3,9 +3,7 @@ src = "src"
 out = "out"
 libs = ["lib"]
 remappings = [
-    '@openzeppelin/contracts=lib/openzeppelin-contracts/contracts',
     '@prb/math/=lib/prb-math/src/',
-    '@solmate/=lib/solmate/src/',
     "@chainlink/contracts/src/v0.8/=lib/chainlink/contracts/src/v0.8",
     "@pyth/contracts/=lib/pyth-sdk-solidity/",
 ]

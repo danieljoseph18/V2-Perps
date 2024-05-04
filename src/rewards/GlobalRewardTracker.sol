@@ -2,6 +2,7 @@
 
 pragma solidity 0.8.23;
 
+import {ERC20} from "../tokens/ERC20.sol";
 import {IERC20} from "../tokens/interfaces/IERC20.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
@@ -9,26 +10,26 @@ import {IFeeDistributor} from "./interfaces/IFeeDistributor.sol";
 import {IGlobalRewardTracker} from "./interfaces/IGlobalRewardTracker.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {IMarket} from "../markets/interfaces/IMarket.sol";
-import {ILiquidityLocker} from "./interfaces/ILiquidityLocker.sol";
 import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
+import {MathUtils} from "../libraries/MathUtils.sol";
 
-contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, OwnableRoles {
+contract GlobalRewardTracker is ERC20, ReentrancyGuard, IGlobalRewardTracker, OwnableRoles {
     using SafeTransferLib for IERC20;
     using EnumerableSetLib for EnumerableSetLib.AddressSet;
+    using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
+    using MathUtils for uint256;
 
-    uint256 public constant BASIS_POINTS_DIVISOR = 10000;
-    uint256 public constant PRECISION = 1e30;
+    address private immutable WETH;
+    address private immutable USDC;
 
-    uint8 public constant decimals = 18;
+    uint16 public constant TIER1_DURATION = 1 hours;
+    uint32 public constant TIER2_DURATION = 30 days;
+    uint32 public constant TIER3_DURATION = 90 days;
+    uint32 public constant TIER4_DURATION = 180 days;
+    uint32 public constant TIER5_DURATION = 365 days;
+    uint128 public constant PRECISION = 1e30;
 
     bool public isInitialized;
-
-    ILiquidityLocker public liquidityLocker;
-
-    string public name;
-    string public symbol;
-    address private weth;
-    address private usdc;
 
     address public distributor;
     /**
@@ -38,22 +39,25 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
     mapping(address depositToken => uint256) public totalDepositSupply;
     mapping(address user => EnumerableSetLib.AddressSet) private userDepositTokens;
 
-    uint256 public override(IERC20) totalSupply;
-    mapping(address => uint256) public balances;
-    mapping(address => mapping(address => uint256)) public allowances;
-
     uint256 public cumulativeWethRewardPerToken;
     uint256 public cumulativeUsdcRewardPerToken;
 
     mapping(address account => mapping(address depositToken => StakeData)) private stakeData;
 
+    mapping(address account => EnumerableSetLib.Bytes32Set) private lockKeys;
+    mapping(bytes32 key => LockData) public lockData;
+    mapping(address account => uint256 amount) public lockedAmounts;
+
+    // @audit - need to override transfer to enable this, or remove
     bool public inPrivateTransferMode;
+
     bool public inPrivateStakingMode;
     bool public inPrivateClaimingMode;
-    mapping(address => bool) public isHandler;
 
-    constructor(string memory _name, string memory _symbol) {
+    constructor(address _weth, address _usdc, string memory _name, string memory _symbol) ERC20(_name, _symbol, 18) {
         _initializeOwner(msg.sender);
+        WETH = _weth;
+        USDC = _usdc;
         name = _name;
         symbol = _symbol;
     }
@@ -61,11 +65,10 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
     /**
      * =========================================== Setter Functions ===========================================
      */
-    function initialize(address _distributor, address _liquidityLocker) external onlyOwner {
+    function initialize(address _distributor) external onlyOwner {
         if (isInitialized) revert RewardTracker_AlreadyInitialized();
         isInitialized = true;
         distributor = _distributor;
-        liquidityLocker = ILiquidityLocker(_liquidityLocker);
     }
 
     function addDepositToken(address _depositToken) external onlyRoles(_ROLE_0) {
@@ -84,67 +87,69 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
         inPrivateClaimingMode = _inPrivateClaimingMode;
     }
 
-    function setHandler(address _handler, bool _isActive) external onlyOwner {
-        isHandler[_handler] = _isActive;
+    /**
+     * =========================================== Token Functions ===========================================
+     */
+    /// @dev Transfers don't transfer stake data. The original user will still earn the rewards.
+    function transfer(address to, uint256 amount) public override returns (bool) {
+        // Get the transferrable amount and ensure they have enough
+        uint256 transferrableAmount = _getAvailableBalance(msg.sender);
+        if (transferrableAmount < amount) revert RewardTracker_AmountExceedsBalance();
+
+        balanceOf[msg.sender] -= amount;
+
+        // Cannot overflow because the sum of all user
+        // balances can't exceed the max uint256 value.
+        unchecked {
+            balanceOf[to] += amount;
+        }
+
+        emit Transfer(msg.sender, to, amount);
+
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
+        // Get the transferrable amount and ensure they have enough
+        uint256 transferrableAmount = _getAvailableBalance(from);
+        if (transferrableAmount < amount) revert RewardTracker_AmountExceedsBalance();
+
+        uint256 allowed = allowance[from][msg.sender]; // Saves gas for limited approvals.
+
+        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - amount;
+
+        balanceOf[from] -= amount;
+
+        // Cannot overflow because the sum of all user
+        // balances can't exceed the max uint256 value.
+        unchecked {
+            balanceOf[to] += amount;
+        }
+
+        emit Transfer(from, to, amount);
+
+        return true;
     }
 
     /**
      * =========================================== Core Functions ===========================================
      */
-    function stake(address _depositToken, uint256 _amount) external nonReentrant {
+    function stake(address _depositToken, uint256 _amount, uint8 _lockTier) external nonReentrant {
         if (inPrivateStakingMode) revert RewardTracker_ActionDisbaled();
         _validateDepositToken(_depositToken);
         _stake(msg.sender, msg.sender, _depositToken, _amount);
+        if (_lockTier > 0) {
+            _lock(msg.sender, _depositToken, _amount, _lockTier);
+        }
     }
 
-    function stakeForAccount(address _fundingAccount, address _account, address _depositToken, uint256 _amount)
-        external
-        nonReentrant
-    {
-        _validateHandler();
-        _validateDepositToken(_depositToken);
-        _stake(_fundingAccount, _account, _depositToken, _amount);
-    }
-
-    function unstake(address _depositToken, uint256 _amount) external nonReentrant {
+    function unstake(address _depositToken, uint256 _amount, bytes32[] calldata _lockKeys) external nonReentrant {
         if (inPrivateStakingMode) revert RewardTracker_ActionDisbaled();
         _validateDepositToken(_depositToken);
-        _unstake(msg.sender, _depositToken, _amount, msg.sender);
-    }
-
-    function unstakeForAccount(address _account, address _depositToken, uint256 _amount, address _receiver)
-        external
-        nonReentrant
-    {
-        _validateHandler();
-        _validateDepositToken(_depositToken);
-        _unstake(_account, _depositToken, _amount, _receiver);
-    }
-
-    function transfer(address _recipient, uint256 _amount) external override(IERC20) returns (bool) {
-        _transfer(msg.sender, _recipient, _amount);
-        return true;
-    }
-
-    function approve(address _spender, uint256 _amount) external override(IERC20) returns (bool) {
-        _approve(msg.sender, _spender, _amount);
-        return true;
-    }
-
-    function transferFrom(address _sender, address _recipient, uint256 _amount)
-        external
-        override(IERC20)
-        returns (bool)
-    {
-        if (isHandler[msg.sender]) {
-            _transfer(_sender, _recipient, _amount);
-            return true;
+        if (_lockKeys.length > 0) {
+            _unlock(msg.sender, _lockKeys);
         }
-
-        uint256 nextAllowance = allowances[_sender][msg.sender] - _amount;
-        _approve(_sender, msg.sender, nextAllowance);
-        _transfer(_sender, _recipient, _amount);
-        return true;
+        _unstake(msg.sender, _depositToken, _amount, msg.sender);
     }
 
     function updateRewards(address _depositToken) external nonReentrant {
@@ -160,26 +165,9 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
         return _claim(msg.sender, _depositToken, _receiver);
     }
 
-    function claimForAccount(address _account, address _depositToken, address _receiver)
-        external
-        nonReentrant
-        returns (uint256 wethAmount, uint256 usdcAmount)
-    {
-        _validateHandler();
-        return _claim(_account, _depositToken, _receiver);
-    }
-
     /**
      * =========================================== Getter Functions ===========================================
      */
-    function allowance(address _owner, address _spender) external view override(IERC20) returns (uint256) {
-        return allowances[_owner][_spender];
-    }
-
-    function balanceOf(address _account) external view override(IERC20, IGlobalRewardTracker) returns (uint256) {
-        return balances[_account];
-    }
-
     function tokensPerInterval(address _depositToken)
         external
         view
@@ -189,42 +177,69 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
     }
 
     function claimable(address _account, address _depositToken)
-        public
+        external
         view
         returns (uint256 wethAmount, uint256 usdcAmount)
     {
-        uint256 stakedAmount = stakeData[_account][_depositToken].stakedAmount;
+        StakeData storage userStake = stakeData[_account][_depositToken];
+
+        uint256 stakedAmount = userStake.stakedAmount;
+
         if (stakedAmount == 0) {
-            return (
-                stakeData[_account][_depositToken].claimableWethReward,
-                stakeData[_account][_depositToken].claimableUsdcReward
-            );
+            return (userStake.claimableWethReward, userStake.claimableUsdcReward);
         }
+
         uint256 supply = totalSupply;
         (uint256 pendingWeth, uint256 pendingUsdc) = IFeeDistributor(distributor).pendingRewards(_depositToken);
-        pendingWeth *= PRECISION;
-        pendingUsdc *= PRECISION;
-        uint256 nextCumulativeWethRewardPerToken = cumulativeWethRewardPerToken + (pendingWeth / supply);
-        uint256 nextCumulativeUsdcRewardPerToken = cumulativeUsdcRewardPerToken + (pendingUsdc / supply);
-        wethAmount = stakeData[_account][_depositToken].claimableWethReward
-            + (
-                stakedAmount
-                    * (nextCumulativeWethRewardPerToken - stakeData[_account][_depositToken].prevCumulativeWethPerToken)
-            ) / PRECISION;
 
-        usdcAmount = stakeData[_account][_depositToken].claimableUsdcReward
-            + (
-                stakedAmount
-                    * (nextCumulativeUsdcRewardPerToken - stakeData[_account][_depositToken].prevCumulativeUsdcPerToken)
-            ) / PRECISION;
+        uint256 nextCumulativeWethPerToken = cumulativeWethRewardPerToken + pendingWeth.mulDiv(PRECISION, supply);
+        uint256 nextCumulativeUsdcPerToken = cumulativeUsdcRewardPerToken + pendingUsdc.mulDiv(PRECISION, supply);
+
+        wethAmount = userStake.claimableWethReward
+            + stakedAmount.mulDiv(nextCumulativeWethPerToken - userStake.prevCumulativeWethPerToken, PRECISION);
+
+        usdcAmount = userStake.claimableUsdcReward
+            + stakedAmount.mulDiv(nextCumulativeUsdcPerToken - userStake.prevCumulativeUsdcPerToken, PRECISION);
     }
 
     function getStakeData(address _account, address _depositToken) external view returns (StakeData memory) {
         return stakeData[_account][_depositToken];
     }
 
+    function getLockData(bytes32 _lockKey) external view returns (LockData memory) {
+        return lockData[_lockKey];
+    }
+
     function getUserDepositTokens(address _user) external view returns (address[] memory) {
         return userDepositTokens[_user].values();
+    }
+
+    function getRemainingLockTime(bytes32 _lockKey) external view returns (uint256) {
+        LockData storage position = lockData[_lockKey];
+        if (position.unlockDate > _blockTimestamp()) {
+            return position.unlockDate - _blockTimestamp();
+        }
+        return 0;
+    }
+
+    function getActiveLocks(address _account) external view returns (LockData[] memory) {
+        uint256 length = lockKeys[_account].length();
+        LockData[] memory positions = new LockData[](length);
+        for (uint256 i = 0; i < length;) {
+            positions[i] = lockData[lockKeys[_account].at(i)];
+            unchecked {
+                ++i;
+            }
+        }
+        return positions;
+    }
+
+    function getLockAtIndex(address _account, uint256 _index) external view returns (LockData memory) {
+        return lockData[lockKeys[_account].at(_index)];
+    }
+
+    function getLockKeyAtIndex(address _account, uint256 _index) external view returns (bytes32) {
+        return lockKeys[_account].at(_index);
     }
 
     /**
@@ -236,58 +251,18 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
     {
         _updateRewards(_account, _depositToken);
 
-        wethAmount = stakeData[_account][_depositToken].claimableWethReward;
-        stakeData[_account][_depositToken].claimableWethReward = 0;
-        usdcAmount = stakeData[_account][_depositToken].claimableUsdcReward;
-        stakeData[_account][_depositToken].claimableUsdcReward = 0;
+        StakeData storage userStake = stakeData[_account][_depositToken];
 
-        if (wethAmount > 0) IERC20(weth).safeTransfer(_receiver, wethAmount);
-        if (usdcAmount > 0) IERC20(usdc).safeTransfer(_receiver, usdcAmount);
+        wethAmount = userStake.claimableWethReward;
+        usdcAmount = userStake.claimableUsdcReward;
+
+        userStake.claimableWethReward = 0;
+        userStake.claimableUsdcReward = 0;
+
+        if (wethAmount > 0) IERC20(WETH).safeTransfer(_receiver, wethAmount);
+        if (usdcAmount > 0) IERC20(USDC).safeTransfer(_receiver, usdcAmount);
 
         emit Claim(_receiver, wethAmount, usdcAmount);
-    }
-
-    function _mint(address _account, uint256 _amount) internal {
-        if (_account == address(0)) revert RewardTracker_ZeroAddress();
-
-        totalSupply = totalSupply + _amount;
-        balances[_account] = balances[_account] + _amount;
-
-        emit Transfer(address(0), _account, _amount);
-    }
-
-    function _burn(address _account, uint256 _amount) internal {
-        if (_account == address(0)) revert RewardTracker_ZeroAddress();
-
-        balances[_account] = balances[_account] - _amount;
-        totalSupply = totalSupply - _amount;
-
-        emit Transfer(_account, address(0), _amount);
-    }
-
-    function _transfer(address _sender, address _recipient, uint256 _amount) private {
-        if (_sender == address(0)) revert RewardTracker_ZeroAddress();
-        if (_recipient == address(0)) revert RewardTracker_ZeroAddress();
-
-        if (inPrivateTransferMode) _validateHandler();
-
-        balances[_sender] = balances[_sender] - _amount;
-        balances[_recipient] = balances[_recipient] + _amount;
-
-        emit Transfer(_sender, _recipient, _amount);
-    }
-
-    function _approve(address _owner, address _spender, uint256 _amount) private {
-        if (_owner == address(0)) revert RewardTracker_ZeroAddress();
-        if (_spender == address(0)) revert RewardTracker_ZeroAddress();
-
-        allowances[_owner][_spender] = _amount;
-
-        emit Approval(_owner, _spender, _amount);
-    }
-
-    function _validateHandler() private view {
-        if (!isHandler[msg.sender]) revert RewardTracker_Forbidden();
     }
 
     function _validateDepositToken(address _depositToken) private view {
@@ -305,11 +280,32 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
 
         _updateRewards(_account, _depositToken);
 
-        stakeData[_account][_depositToken].stakedAmount = stakeData[_account][_depositToken].stakedAmount + _amount;
-        stakeData[_account][_depositToken].depositBalance = stakeData[_account][_depositToken].depositBalance + _amount;
+        StakeData storage userStake = stakeData[_account][_depositToken];
+
+        userStake.stakedAmount += _amount;
+        userStake.depositBalance += _amount;
         totalDepositSupply[_depositToken] += _amount;
 
         _mint(_account, _amount);
+    }
+
+    /// @notice While locked, tokens become non-transferrable, and users can't unstake.
+    /// A user can still claim rewards while their tokens are locked.
+    function _lock(address _account, address _depositToken, uint256 _amount, uint8 _tier) private {
+        LockData memory position = LockData({
+            depositAmount: _amount,
+            tier: _tier,
+            lockedAt: _blockTimestamp(),
+            unlockDate: _blockTimestamp() + _getLockDuration(_tier),
+            owner: _account
+        });
+
+        bytes32 key = _generateLockKey(_account, _depositToken, position.unlockDate);
+        if (lockKeys[_account].contains(key)) revert RewardTracker_PositionAlreadyExists();
+
+        lockKeys[_account].add(key);
+        lockData[key] = position;
+        lockedAmounts[_account] += _amount;
     }
 
     function _unstake(address _account, address _depositToken, uint256 _amount, address _receiver) private {
@@ -319,38 +315,60 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
             revert RewardTracker_InvalidDepositToken();
         }
 
+        if (_getAvailableBalance(_account) < _amount) revert RewardTracker_AmountExceedsBalance();
+
         _updateRewards(_account, _depositToken);
 
-        uint256 stakedAmount = stakeData[_account][_depositToken].stakedAmount;
-        if (stakeData[_account][_depositToken].stakedAmount < _amount) revert RewardTracker_AmountExceedsStake();
+        StakeData storage userStake = stakeData[_account][_depositToken];
 
-        stakeData[_account][_depositToken].stakedAmount = stakedAmount - _amount;
+        uint256 stakedAmount = userStake.stakedAmount;
+        if (stakedAmount < _amount) revert RewardTracker_AmountExceedsStake();
 
-        uint256 depositBalance = stakeData[_account][_depositToken].depositBalance;
+        userStake.stakedAmount = stakedAmount - _amount;
+
+        uint256 depositBalance = userStake.depositBalance;
         if (depositBalance < _amount) revert RewardTracker_AmountExceedsBalance();
         if (_amount == depositBalance) {
             if (!userDepositTokens[_account].remove(_depositToken)) revert RewardTracker_FailedToRemoveDepositToken();
         }
-        stakeData[_account][_depositToken].depositBalance = depositBalance - _amount;
+        userStake.depositBalance = depositBalance - _amount;
         totalDepositSupply[_depositToken] -= _amount;
 
         _burn(_account, _amount);
         IERC20(_depositToken).safeTransfer(_receiver, _amount);
     }
 
+    function _unlock(address _account, bytes32[] calldata _lockKeys) private {
+        uint256 totalAmount;
+        for (uint256 i = 0; i < _lockKeys.length;) {
+            LockData storage position = lockData[_lockKeys[i]];
+            if (position.unlockDate > _blockTimestamp()) revert RewardTracker_Forbidden();
+            if (position.owner != _account) revert RewardTracker_Forbidden();
+            totalAmount += position.depositAmount;
+            delete lockData[_lockKeys[i]];
+            lockKeys[_account].remove(_lockKeys[i]);
+            unchecked {
+                ++i;
+            }
+        }
+        lockedAmounts[_account] -= totalAmount;
+    }
+
     function _updateRewards(address _account, address _depositToken) private {
         (uint256 wethReward, uint256 usdcReward) = IFeeDistributor(distributor).distribute(_depositToken);
 
         uint256 supply = totalSupply;
+
         uint256 _cumulativeWethRewardPerToken = cumulativeWethRewardPerToken;
         uint256 _cumulativeUsdcRewardPerToken = cumulativeUsdcRewardPerToken;
+
         if (supply > 0) {
             if (wethReward > 0) {
-                _cumulativeWethRewardPerToken = _cumulativeWethRewardPerToken + ((wethReward * PRECISION) / supply);
+                _cumulativeWethRewardPerToken = _cumulativeWethRewardPerToken + wethReward.mulDiv(PRECISION, supply);
                 cumulativeWethRewardPerToken = _cumulativeWethRewardPerToken;
             }
             if (usdcReward > 0) {
-                _cumulativeUsdcRewardPerToken = _cumulativeUsdcRewardPerToken + ((usdcReward * PRECISION) / supply);
+                _cumulativeUsdcRewardPerToken = _cumulativeUsdcRewardPerToken + usdcReward.mulDiv(PRECISION, supply);
                 cumulativeUsdcRewardPerToken = _cumulativeUsdcRewardPerToken;
             }
         }
@@ -368,57 +386,84 @@ contract GlobalRewardTracker is IERC20, ReentrancyGuard, IGlobalRewardTracker, O
         }
     }
 
-    /// @dev internal function to prevent STD Err
+    /// @dev private function to prevent STD Err
     function _updateRewardsForAccount(
         address _account,
         address _depositToken,
         uint256 _cumulativeWethRewardPerToken,
         uint256 _cumulativeUsdcRewardPerToken
     ) private {
-        uint256 stakedAmount = stakeData[_account][_depositToken].stakedAmount;
-        uint256 accountWethReward = (
-            stakedAmount
-                * (_cumulativeWethRewardPerToken - stakeData[_account][_depositToken].prevCumulativeWethPerToken)
-        ) / PRECISION;
-        uint256 _claimableWethReward = stakeData[_account][_depositToken].claimableWethReward + accountWethReward;
-        uint256 accountUsdcReward = (
-            stakedAmount
-                * (_cumulativeUsdcRewardPerToken - stakeData[_account][_depositToken].prevCumulativeUsdcPerToken)
-        ) / PRECISION;
-        uint256 _claimableUsdcReward = stakeData[_account][_depositToken].claimableUsdcReward + accountUsdcReward;
+        StakeData storage userStake = stakeData[_account][_depositToken];
 
-        stakeData[_account][_depositToken].claimableWethReward = _claimableWethReward;
-        stakeData[_account][_depositToken].prevCumulativeWethPerToken = _cumulativeWethRewardPerToken;
-        stakeData[_account][_depositToken].claimableUsdcReward = _claimableUsdcReward;
-        stakeData[_account][_depositToken].prevCumulativeUsdcPerToken = _cumulativeUsdcRewardPerToken;
+        uint256 stakedAmount = userStake.stakedAmount;
 
-        if (stakeData[_account][_depositToken].stakedAmount > 0) {
+        uint256 userWethReward =
+            stakedAmount.mulDiv(_cumulativeWethRewardPerToken - userStake.prevCumulativeWethPerToken, PRECISION);
+        uint256 _claimableWethReward = userStake.claimableWethReward + userWethReward;
+
+        uint256 userUsdcReward =
+            stakedAmount.mulDiv(_cumulativeUsdcRewardPerToken - userStake.prevCumulativeUsdcPerToken, PRECISION);
+        uint256 _claimableUsdcReward = userStake.claimableUsdcReward + userUsdcReward;
+
+        userStake.claimableWethReward = _claimableWethReward;
+        userStake.prevCumulativeWethPerToken = _cumulativeWethRewardPerToken;
+
+        userStake.claimableUsdcReward = _claimableUsdcReward;
+        userStake.prevCumulativeUsdcPerToken = _cumulativeUsdcRewardPerToken;
+
+        if (userStake.stakedAmount > 0) {
             if (_claimableWethReward > 0) {
-                uint256 nextCumulativeReward =
-                    stakeData[_account][_depositToken].cumulativeWethRewards + accountWethReward;
+                uint256 nextCumulativeReward = userStake.cumulativeWethRewards + userWethReward;
 
-                stakeData[_account][_depositToken].averageStakedAmount = (
-                    (
-                        stakeData[_account][_depositToken].averageStakedAmount
-                            * stakeData[_account][_depositToken].cumulativeWethRewards
-                    ) / nextCumulativeReward
-                ) + (stakedAmount * accountWethReward) / nextCumulativeReward;
+                userStake.averageStakedAmount = userStake.averageStakedAmount.mulDiv(
+                    userStake.cumulativeWethRewards, nextCumulativeReward
+                ) + stakedAmount.mulDiv(userWethReward, nextCumulativeReward);
 
-                stakeData[_account][_depositToken].cumulativeWethRewards = nextCumulativeReward;
+                userStake.cumulativeWethRewards = nextCumulativeReward;
             }
             if (_claimableUsdcReward > 0) {
-                uint256 nextCumulativeReward =
-                    stakeData[_account][_depositToken].cumulativeUsdcRewards + accountUsdcReward;
+                uint256 nextCumulativeReward = userStake.cumulativeUsdcRewards + userUsdcReward;
 
-                stakeData[_account][_depositToken].averageStakedAmount = (
-                    (
-                        stakeData[_account][_depositToken].averageStakedAmount
-                            * stakeData[_account][_depositToken].cumulativeUsdcRewards
-                    ) / nextCumulativeReward
-                ) + (stakedAmount * accountUsdcReward) / nextCumulativeReward;
+                userStake.averageStakedAmount = userStake.averageStakedAmount.mulDiv(
+                    userStake.cumulativeUsdcRewards, nextCumulativeReward
+                ) + stakedAmount.mulDiv(userUsdcReward, nextCumulativeReward);
 
-                stakeData[_account][_depositToken].cumulativeUsdcRewards = nextCumulativeReward;
+                userStake.cumulativeUsdcRewards = nextCumulativeReward;
             }
         }
+    }
+
+    function _blockTimestamp() private view returns (uint40) {
+        return uint40(block.timestamp);
+    }
+
+    /// @notice Returns the duration of a locked position by tier.
+    /// @param tier The tier of the position.
+    function _getLockDuration(uint8 tier) private pure returns (uint40) {
+        if (tier == 1) {
+            return TIER1_DURATION; // 1hr cooldown
+        } else if (tier == 2) {
+            return TIER2_DURATION; // 30 days
+        } else if (tier == 3) {
+            return TIER3_DURATION; // 90 days
+        } else if (tier == 4) {
+            return TIER4_DURATION; // 180 days
+        } else if (tier == 5) {
+            return TIER5_DURATION; // 365 days
+        } else {
+            revert RewardTracker_InvalidTier();
+        }
+    }
+
+    function _getAvailableBalance(address _account) private view returns (uint256) {
+        return balanceOf[_account] - lockedAmounts[_account];
+    }
+
+    function _generateLockKey(address _account, address _depositToken, uint40 _unlockDate)
+        private
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encodePacked(_account, _depositToken, _unlockDate));
     }
 }
