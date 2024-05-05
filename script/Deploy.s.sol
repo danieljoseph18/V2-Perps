@@ -86,12 +86,8 @@ contract Deploy is Script {
             );
         }
 
-        contracts.referralStorage = new ReferralStorage(
-            activeNetworkConfig.weth,
-            activeNetworkConfig.usdc,
-            activeNetworkConfig.weth,
-            address(contracts.marketFactory)
-        );
+        contracts.referralStorage =
+            new ReferralStorage(activeNetworkConfig.weth, activeNetworkConfig.usdc, address(contracts.marketFactory));
 
         contracts.rewardTracker =
             new GlobalRewardTracker(activeNetworkConfig.weth, activeNetworkConfig.usdc, "Staked BRRR", "sBRRR");

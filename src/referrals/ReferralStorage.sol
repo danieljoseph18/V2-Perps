@@ -35,9 +35,9 @@ contract ReferralStorage is OwnableRoles, IReferralStorage, ReentrancyGuard {
         _;
     }
 
-    constructor(address _longToken, address _shortToken, address _weth, address _marketFactory) {
+    constructor(address _weth, address _shortToken, address _marketFactory) {
         _initializeOwner(msg.sender);
-        longToken = _longToken;
+        longToken = _weth;
         shortToken = _shortToken;
         weth = IWETH(_weth);
         factory = IMarketFactory(_marketFactory);

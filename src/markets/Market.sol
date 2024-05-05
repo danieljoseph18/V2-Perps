@@ -135,6 +135,10 @@ contract Market is IMarket, OwnableRoles, ReentrancyGuard {
         uint16 len = uint16(assetIds.length());
         if (len == 1) revert Market_MinimumAssetsReached();
 
+        if (marketStorage[assetId].longOpenInterest + marketStorage[assetId].shortOpenInterest > 0) {
+            revert Market_FailedToRemoveAssetId();
+        }
+
         if (!assetIds.remove(assetId)) revert Market_FailedToRemoveAssetId();
 
         // Remove ticker by swap / pop method

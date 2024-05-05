@@ -25,16 +25,18 @@ interface IMarketFactory {
     error MarketFactory_RequestExists();
     error MarketFactory_FailedToAddRequest();
 
-    struct DeployParams {
+    struct Request {
+        Input input;
+        uint48 requestTimestamp;
+        address requester;
+    }
+
+    struct Input {
         bool isMultiAsset;
-        address owner;
         string indexTokenTicker;
         string marketTokenName;
         string marketTokenSymbol;
-        IPriceFeed.TokenData tokenData;
-        PythData pythData;
-        bytes32[] stablecoinMerkleProof;
-        uint48 requestTimestamp;
+        IPriceFeed.SecondaryStrategy strategy;
     }
 
     struct PythData {
@@ -55,9 +57,9 @@ interface IMarketFactory {
     ) external;
     function setDefaultConfig(Pool.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
-    function createNewMarket(DeployParams calldata _params) external payable;
+    function createNewMarket(Input calldata _input) external payable;
     function executeMarketRequest(bytes32 _requestKey) external;
-    function getRequest(bytes32 _requestKey) external view returns (DeployParams memory);
+    function getRequest(bytes32 _requestKey) external view returns (Request memory);
     function marketCreationFee() external view returns (uint256);
     function markets(uint256 index) external view returns (address);
     function isMarket(address _market) external view returns (bool);

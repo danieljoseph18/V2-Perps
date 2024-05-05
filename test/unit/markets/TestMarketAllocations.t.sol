@@ -104,18 +104,20 @@ contract TestMarketAllocations is Test {
         WETH(weth).deposit{value: 1_000_000 ether}();
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
-        IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
+        IMarketFactory.Input memory input = IMarketFactory.Input({
             isMultiAsset: true,
-            owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
-            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-            stablecoinMerkleProof: new bytes32[](0),
-            requestTimestamp: uint48(block.timestamp)
+            strategy: IPriceFeed.SecondaryStrategy({
+                exists: false,
+                feedType: IPriceFeed.FeedType.CHAINLINK,
+                feedAddress: address(0),
+                feedId: bytes32(0),
+                merkleProof: new bytes32[](0)
+            })
         });
-        marketFactory.createNewMarket{value: 0.01 ether}(request);
+        marketFactory.createNewMarket{value: 0.01 ether}(input);
         // Set Prices
         precisions.push(0);
         precisions.push(0);
@@ -152,19 +154,21 @@ contract TestMarketAllocations is Test {
 
     modifier addTokenToMarket() {
         // 1. Call request asset pricing
-        IMarketFactory.DeployParams memory params = IMarketFactory.DeployParams({
+        IMarketFactory.Input memory input = IMarketFactory.Input({
             isMultiAsset: true,
-            owner: OWNER,
             indexTokenTicker: "SOL",
             marketTokenName: "SOL-BRRR",
             marketTokenSymbol: "SOL-BRRR",
-            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-            stablecoinMerkleProof: new bytes32[](0),
-            requestTimestamp: uint48(block.timestamp)
+            strategy: IPriceFeed.SecondaryStrategy({
+                exists: false,
+                feedType: IPriceFeed.FeedType.CHAINLINK,
+                feedAddress: address(0),
+                feedId: bytes32(0),
+                merkleProof: new bytes32[](0)
+            })
         });
         vm.prank(OWNER);
-        marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(params);
+        marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(input);
         // 2. Call support asset
         bytes32 requestKey = keccak256(abi.encodePacked("SOL"));
         vm.prank(OWNER);
@@ -206,19 +210,21 @@ contract TestMarketAllocations is Test {
 
     function test_adding_a_new_token_to_a_market() public setUpMarkets {
         // 1. Call request asset pricing
-        IMarketFactory.DeployParams memory params = IMarketFactory.DeployParams({
+        IMarketFactory.Input memory input = IMarketFactory.Input({
             isMultiAsset: true,
-            owner: OWNER,
             indexTokenTicker: "SOL",
             marketTokenName: "SOL-BRRR",
             marketTokenSymbol: "SOL-BRRR",
-            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-            stablecoinMerkleProof: new bytes32[](0),
-            requestTimestamp: uint48(block.timestamp)
+            strategy: IPriceFeed.SecondaryStrategy({
+                exists: false,
+                feedType: IPriceFeed.FeedType.CHAINLINK,
+                feedAddress: address(0),
+                feedId: bytes32(0),
+                merkleProof: new bytes32[](0)
+            })
         });
         vm.prank(OWNER);
-        marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(params);
+        marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(input);
         // 2. Call support asset
         bytes32 requestKey = keccak256(abi.encodePacked("SOL"));
         vm.prank(OWNER);
@@ -321,19 +327,21 @@ contract TestMarketAllocations is Test {
     function test_users_cant_add_the_same_asset_twice(string memory _ticker) public setUpMarkets {
         vm.assume(bytes(_ticker).length < 15);
         // 1. Call request asset pricing
-        IMarketFactory.DeployParams memory params = IMarketFactory.DeployParams({
+        IMarketFactory.Input memory input = IMarketFactory.Input({
             isMultiAsset: true,
-            owner: OWNER,
             indexTokenTicker: _ticker,
             marketTokenName: string(abi.encodePacked(_ticker, "-BRRR")),
             marketTokenSymbol: string(abi.encodePacked(_ticker, "-BRRR")),
-            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-            stablecoinMerkleProof: new bytes32[](0),
-            requestTimestamp: uint48(block.timestamp)
+            strategy: IPriceFeed.SecondaryStrategy({
+                exists: false,
+                feedType: IPriceFeed.FeedType.CHAINLINK,
+                feedAddress: address(0),
+                feedId: bytes32(0),
+                merkleProof: new bytes32[](0)
+            })
         });
         vm.prank(OWNER);
-        marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(params);
+        marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(input);
         // 2. Call support asset
         bytes32 requestKey = keccak256(abi.encodePacked(_ticker));
         vm.prank(OWNER);
@@ -377,19 +385,21 @@ contract TestMarketAllocations is Test {
     function test_users_cant_use_expired_price_data(uint256 _timeToSkip) public setUpMarkets {
         _timeToSkip = bound(_timeToSkip, 3 minutes, type(uint40).max);
         // 1. Call request asset pricing
-        IMarketFactory.DeployParams memory params = IMarketFactory.DeployParams({
+        IMarketFactory.Input memory input = IMarketFactory.Input({
             isMultiAsset: true,
-            owner: OWNER,
             indexTokenTicker: "SOL",
             marketTokenName: "SOL-BRRR",
             marketTokenSymbol: "SOL-BRRR",
-            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-            stablecoinMerkleProof: new bytes32[](0),
-            requestTimestamp: uint48(block.timestamp)
+            strategy: IPriceFeed.SecondaryStrategy({
+                exists: false,
+                feedType: IPriceFeed.FeedType.CHAINLINK,
+                feedAddress: address(0),
+                feedId: bytes32(0),
+                merkleProof: new bytes32[](0)
+            })
         });
         vm.prank(OWNER);
-        marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(params);
+        marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(input);
         // 2. Call support asset
         bytes32 requestKey = keccak256(abi.encodePacked("SOL"));
         vm.prank(OWNER);
@@ -433,16 +443,18 @@ contract TestMarketAllocations is Test {
     }
 
     function test_adding_up_to_100_tokens_to_a_market() public setUpMarkets {
-        IMarketFactory.DeployParams memory params = IMarketFactory.DeployParams({
+        IMarketFactory.Input memory input = IMarketFactory.Input({
             isMultiAsset: true,
-            owner: OWNER,
             indexTokenTicker: "SOL",
             marketTokenName: "SOL-BRRR",
             marketTokenSymbol: "SOL-BRRR",
-            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-            stablecoinMerkleProof: new bytes32[](0),
-            requestTimestamp: uint48(block.timestamp)
+            strategy: IPriceFeed.SecondaryStrategy({
+                exists: false,
+                feedType: IPriceFeed.FeedType.CHAINLINK,
+                feedAddress: address(0),
+                feedId: bytes32(0),
+                merkleProof: new bytes32[](0)
+            })
         });
         Pool.Config memory config = Pool.Config({
             maxLeverage: 100,
@@ -458,9 +470,9 @@ contract TestMarketAllocations is Test {
 
         for (uint256 i = 0; i < 99; i++) {
             string memory ticker = vm.toString(i);
-            params.indexTokenTicker = ticker;
+            input.indexTokenTicker = ticker;
             vm.startPrank(OWNER);
-            marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(params);
+            marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(input);
             bytes32 priceRequestKey = keccak256(abi.encode("PRICE REQUEST"));
             tickers.push(ticker);
             precisions.push(0);

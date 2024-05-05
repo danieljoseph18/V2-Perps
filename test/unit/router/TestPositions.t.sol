@@ -91,18 +91,20 @@ contract TestPositions is Test {
         WETH(weth).deposit{value: 1_000_000 ether}();
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
-        IMarketFactory.DeployParams memory request = IMarketFactory.DeployParams({
+        IMarketFactory.Input memory input = IMarketFactory.Input({
             isMultiAsset: false,
-            owner: OWNER,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
-            tokenData: IPriceFeed.TokenData(address(0), 18, IPriceFeed.FeedType.CHAINLINK, false),
-            pythData: IMarketFactory.PythData({id: bytes32(0), merkleProof: new bytes32[](0)}),
-            stablecoinMerkleProof: new bytes32[](0),
-            requestTimestamp: uint48(block.timestamp)
+            strategy: IPriceFeed.SecondaryStrategy({
+                exists: false,
+                feedType: IPriceFeed.FeedType.CHAINLINK,
+                feedAddress: address(0),
+                feedId: bytes32(0),
+                merkleProof: new bytes32[](0)
+            })
         });
-        marketFactory.createNewMarket{value: 0.01 ether}(request);
+        marketFactory.createNewMarket{value: 0.01 ether}(input);
         // Set Prices
         precisions.push(0);
         precisions.push(0);

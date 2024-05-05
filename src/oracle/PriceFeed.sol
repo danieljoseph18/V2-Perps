@@ -71,8 +71,8 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     mapping(string ticker => mapping(uint48 blockTimestamp => Price priceResponse)) private prices;
     mapping(address market => mapping(uint48 blockTimestamp => Pnl cumulativePnl)) public cumulativePnl;
 
-    mapping(string ticker => TokenData) private tokenData;
-    mapping(string ticker => bytes32 pythId) public pythIds;
+    mapping(string ticker => SecondaryStrategy) private strategies;
+    mapping(string ticker => uint8) public tokenDecimals;
 
     // Dictionary to enable clearing of the RequestKey
     // Bi-directional to handle the case of invalidated requests
@@ -154,28 +154,25 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
         cumulativePnlSource = _cumulativePnlSource;
     }
 
-    function supportAsset(string memory _ticker, TokenData memory _tokenData, bytes32 _pythId)
+    function supportAsset(string memory _ticker, SecondaryStrategy calldata _strategy, uint8 _tokenDecimals)
         external
         onlyRoles(_ROLE_0)
     {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (assetIds.contains(assetId)) return; // Return if already supported
-        if (_tokenData.feedType == FeedType.PYTH) {
-            pythIds[_ticker] = _pythId;
-        }
         bool success = assetIds.add(assetId);
         if (!success) revert PriceFeed_AssetSupportFailed();
-        tokenData[_ticker] = _tokenData;
-        emit AssetSupported(_ticker, _tokenData.tokenDecimals);
+        strategies[_ticker] = _strategy;
+        emit AssetSupported(_ticker, _tokenDecimals);
     }
 
-    /// @dev - No need to unsupport Pyth Ids --> save gas if asset is re-supported
     function unsupportAsset(string memory _ticker) external onlyOwner {
         bytes32 assetId = keccak256(abi.encode(_ticker));
         if (!assetIds.contains(assetId)) return; // Return if not supported
         bool success = assetIds.remove(assetId);
         if (!success) revert PriceFeed_AssetRemovalFailed();
-        delete tokenData[_ticker];
+        delete strategies[_ticker];
+        delete tokenDecimals[_ticker];
         emit SupportRemoved(_ticker);
     }
 
@@ -183,8 +180,8 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
         sequencerUptimeFeed = _sequencerUptimeFeed;
     }
 
-    function updateTokenData(string memory _ticker, TokenData memory _tokenData) external onlyOwner {
-        tokenData[_ticker] = _tokenData;
+    function updateSecondaryStrategy(string memory _ticker, SecondaryStrategy memory _strategy) external onlyOwner {
+        strategies[_ticker] = _strategy;
     }
 
     function setTimeToExpiration(uint48 _timeToExpiration) external onlyOwner {
@@ -513,8 +510,8 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
         if (pnl.market == address(0)) revert PriceFeed_PnlNotSigned();
     }
 
-    function getTokenData(string memory _ticker) external view returns (TokenData memory) {
-        return tokenData[_ticker];
+    function getSecondaryStrategy(string memory _ticker) external view returns (SecondaryStrategy memory) {
+        return strategies[_ticker];
     }
 
     function priceUpdateRequested(bytes32 _requestId) external view returns (bool) {
@@ -528,6 +525,10 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     function getRequestData(bytes32 _requestKey) external view returns (RequestData memory) {
         bytes32 requestId = keyToId[_requestKey];
         return requestData.get(requestId);
+    }
+
+    function getPythId(string memory _ticker) external view returns (bytes32) {
+        return strategies[_ticker].feedId;
     }
 
     function isRequestValid(bytes32 _requestKey) external view returns (bool) {

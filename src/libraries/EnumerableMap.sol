@@ -59,7 +59,7 @@ library EnumerableMap {
      */
     struct DeployMap {
         EnumerableSetLib.Bytes32Set _keys;
-        mapping(bytes32 => IMarketFactory.DeployParams) _values;
+        mapping(bytes32 => IMarketFactory.Request) _values;
     }
 
     /**
@@ -69,10 +69,7 @@ library EnumerableMap {
      * Returns true if the key was added to the map, that is if it was not
      * already present.
      */
-    function set(DeployMap storage map, bytes32 key, IMarketFactory.DeployParams calldata value)
-        internal
-        returns (bool)
-    {
+    function set(DeployMap storage map, bytes32 key, IMarketFactory.Request memory value) internal returns (bool) {
         map._values[key] = value;
         return map._keys.add(key);
     }
@@ -111,11 +108,7 @@ library EnumerableMap {
      *
      * - `index` must be strictly less than {length}.
      */
-    function at(DeployMap storage map, uint256 index)
-        internal
-        view
-        returns (bytes32, IMarketFactory.DeployParams memory)
-    {
+    function at(DeployMap storage map, uint256 index) internal view returns (bytes32, IMarketFactory.Request memory) {
         bytes32 key = map._keys.at(index);
         return (key, map._values[key]);
     }
@@ -124,13 +117,9 @@ library EnumerableMap {
      * @dev Tries to returns the value associated with `key`. O(1).
      * Does not revert if `key` is not in the map.
      */
-    function tryGet(DeployMap storage map, bytes32 key)
-        internal
-        view
-        returns (bool, IMarketFactory.DeployParams memory)
-    {
-        IMarketFactory.DeployParams memory value = map._values[key];
-        if (value.owner == address(0)) {
+    function tryGet(DeployMap storage map, bytes32 key) internal view returns (bool, IMarketFactory.Request memory) {
+        IMarketFactory.Request memory value = map._values[key];
+        if (value.requester == address(0)) {
             return (contains(map, key), value);
         } else {
             return (true, value);
@@ -144,9 +133,9 @@ library EnumerableMap {
      *
      * - `key` must be in the map.
      */
-    function get(DeployMap storage map, bytes32 key) internal view returns (IMarketFactory.DeployParams memory) {
-        IMarketFactory.DeployParams memory value = map._values[key];
-        if (value.owner == address(0) && !contains(map, key)) {
+    function get(DeployMap storage map, bytes32 key) internal view returns (IMarketFactory.Request memory) {
+        IMarketFactory.Request memory value = map._values[key];
+        if (value.requester == address(0) && !contains(map, key)) {
             revert EnumerableMapNonexistentKey(key);
         }
         return value;

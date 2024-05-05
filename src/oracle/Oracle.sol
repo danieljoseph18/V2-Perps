@@ -342,7 +342,7 @@ library Oracle {
      * =========================================== Auxillary ===========================================
      */
     function getBaseUnit(IPriceFeed priceFeed, string memory _ticker) internal view returns (uint256 baseUnit) {
-        baseUnit = 10 ** priceFeed.getTokenData(_ticker).tokenDecimals;
+        baseUnit = 10 ** priceFeed.tokenDecimals(_ticker);
     }
 
     /// @dev - Wrapper around `getRequestTimestamp` with an additional validation step
@@ -381,36 +381,34 @@ library Oracle {
      * - Uniswap V2
      */
     function _getReferencePrice(IPriceFeed priceFeed, string memory _ticker) private view returns (uint256 price) {
-        IPriceFeed.TokenData memory tokenData = priceFeed.getTokenData(_ticker);
-        if (!tokenData.hasSecondaryFeed) return 0;
-        if (tokenData.feedType == IPriceFeed.FeedType.CHAINLINK) {
-            price = _getChainlinkPrice(tokenData);
-        } else if (tokenData.feedType == IPriceFeed.FeedType.PYTH) {
-            price = _getPythPrice(priceFeed, tokenData, _ticker);
-        } else if (
-            tokenData.feedType == IPriceFeed.FeedType.UNI_V30 || tokenData.feedType == IPriceFeed.FeedType.UNI_V31
-        ) {
-            price = _getUniswapV3Price(tokenData);
-        } else if (
-            tokenData.feedType == IPriceFeed.FeedType.UNI_V20 || tokenData.feedType == IPriceFeed.FeedType.UNI_V21
-        ) {
-            price = _getUniswapV2Price(tokenData);
+        IPriceFeed.SecondaryStrategy memory strategy = priceFeed.getSecondaryStrategy(_ticker);
+        if (!strategy.exists) return 0;
+        if (strategy.feedType == IPriceFeed.FeedType.CHAINLINK) {
+            price = _getChainlinkPrice(strategy);
+        } else if (strategy.feedType == IPriceFeed.FeedType.PYTH) {
+            price = _getPythPrice(priceFeed, strategy, _ticker);
+        } else if (strategy.feedType == IPriceFeed.FeedType.UNI_V30 || strategy.feedType == IPriceFeed.FeedType.UNI_V31)
+        {
+            price = _getUniswapV3Price(strategy);
+        } else if (strategy.feedType == IPriceFeed.FeedType.UNI_V20 || strategy.feedType == IPriceFeed.FeedType.UNI_V21)
+        {
+            price = _getUniswapV2Price(strategy);
         } else {
             revert Oracle_InvalidReferenceQuery();
         }
         if (price == 0) revert Oracle_InvalidReferenceQuery();
     }
 
-    function _getUniswapV3Price(IPriceFeed.TokenData memory _tokenData) private view returns (uint256 price) {
-        if (_tokenData.feedType != IPriceFeed.FeedType.UNI_V30 && _tokenData.feedType != IPriceFeed.FeedType.UNI_V31) {
+    function _getUniswapV3Price(IPriceFeed.SecondaryStrategy memory _strategy) private view returns (uint256 price) {
+        if (_strategy.feedType != IPriceFeed.FeedType.UNI_V30 && _strategy.feedType != IPriceFeed.FeedType.UNI_V31) {
             revert Oracle_InvalidReferenceQuery();
         }
-        IUniswapV3Pool pool = IUniswapV3Pool(_tokenData.secondaryFeed);
+        IUniswapV3Pool pool = IUniswapV3Pool(_strategy.feedAddress);
         (uint160 sqrtPriceX96,,,,,,) = pool.slot0();
 
         address indexToken;
         address stableToken;
-        if (_tokenData.feedType == IPriceFeed.FeedType.UNI_V30) {
+        if (_strategy.feedType == IPriceFeed.FeedType.UNI_V30) {
             indexToken = pool.token0();
             stableToken = pool.token1();
         } else {
@@ -429,16 +427,16 @@ library Oracle {
         price = unwrap(numerator.div(denominator)) * (10 ** (PRICE_DECIMALS - stablecoinDecimals));
     }
 
-    function _getUniswapV2Price(IPriceFeed.TokenData memory _tokenData) private view returns (uint256 price) {
-        IUniswapV2Pair pair = IUniswapV2Pair(_tokenData.secondaryFeed);
+    function _getUniswapV2Price(IPriceFeed.SecondaryStrategy memory _strategy) private view returns (uint256 price) {
+        IUniswapV2Pair pair = IUniswapV2Pair(_strategy.feedAddress);
         (uint112 reserve0, uint112 reserve1,) = pair.getReserves();
 
         address volatileToken;
         address stablecoinToken;
-        if (_tokenData.feedType == IPriceFeed.FeedType.UNI_V20) {
+        if (_strategy.feedType == IPriceFeed.FeedType.UNI_V20) {
             volatileToken = pair.token0();
             stablecoinToken = pair.token1();
-        } else if (_tokenData.feedType == IPriceFeed.FeedType.UNI_V21) {
+        } else if (_strategy.feedType == IPriceFeed.FeedType.UNI_V21) {
             volatileToken = pair.token1();
             stablecoinToken = pair.token0();
         } else {
@@ -449,7 +447,7 @@ library Oracle {
         (bool successStable, uint256 stablecoinDecimals) = _tryGetAssetDecimals(IERC20(stablecoinToken));
         if (!successVolatile || !successStable) revert Oracle_InvalidAmmDecimals();
 
-        if (_tokenData.feedType == IPriceFeed.FeedType.UNI_V20) {
+        if (_strategy.feedType == IPriceFeed.FeedType.UNI_V20) {
             price = uint256(reserve1).mulDiv(
                 10 ** (PRICE_DECIMALS + volatileDecimals - stablecoinDecimals), uint256(reserve0)
             );
@@ -460,10 +458,10 @@ library Oracle {
         }
     }
 
-    function _getChainlinkPrice(IPriceFeed.TokenData memory _tokenData) private view returns (uint256 price) {
-        if (_tokenData.feedType != IPriceFeed.FeedType.CHAINLINK) revert Oracle_InvalidReferenceQuery();
+    function _getChainlinkPrice(IPriceFeed.SecondaryStrategy memory _strategy) private view returns (uint256 price) {
+        if (_strategy.feedType != IPriceFeed.FeedType.CHAINLINK) revert Oracle_InvalidReferenceQuery();
         // Get the price feed address from the ticker
-        AggregatorV2V3Interface chainlinkFeed = AggregatorV2V3Interface(_tokenData.secondaryFeed);
+        AggregatorV2V3Interface chainlinkFeed = AggregatorV2V3Interface(_strategy.feedAddress);
         // Query the feed for the price
         int256 signedPrice = chainlinkFeed.latestAnswer();
         // Convert the price from int256 to uint256 and expand decimals to 30 d.p
@@ -471,15 +469,15 @@ library Oracle {
     }
 
     // Need the Pyth address and the bytes32 id for the ticker
-    function _getPythPrice(IPriceFeed priceFeed, IPriceFeed.TokenData memory _tokenData, string memory _ticker)
+    function _getPythPrice(IPriceFeed priceFeed, IPriceFeed.SecondaryStrategy memory _strategy, string memory _ticker)
         private
         view
         returns (uint256 price)
     {
-        if (_tokenData.feedType != IPriceFeed.FeedType.PYTH) revert Oracle_InvalidReferenceQuery();
+        if (_strategy.feedType != IPriceFeed.FeedType.PYTH) revert Oracle_InvalidReferenceQuery();
         // Query the Pyth feed for the price
-        IPyth pythFeed = IPyth(_tokenData.secondaryFeed);
-        PythStructs.Price memory pythData = pythFeed.getEmaPriceUnsafe(priceFeed.pythIds(_ticker));
+        IPyth pythFeed = IPyth(_strategy.feedAddress);
+        PythStructs.Price memory pythData = pythFeed.getEmaPriceUnsafe(priceFeed.getPythId(_ticker));
         // Expand the price to 30 d.p
         uint256 exponent = PRICE_DECIMALS - pythData.expo.abs();
         price = pythData.price.abs() * (10 ** exponent);

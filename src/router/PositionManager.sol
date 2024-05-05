@@ -24,7 +24,6 @@ import {IGlobalRewardTracker} from "../rewards/interfaces/IGlobalRewardTracker.s
 // All keeper interactions should come through this contract
 // Contract picks up and executes all requests, as well as holds intermediary funds.
 
-// @audit - what if there aren't any keepers?
 contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
     using SafeTransferLib for IWETH;

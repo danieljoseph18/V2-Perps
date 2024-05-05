@@ -32,6 +32,7 @@ library Pool {
     int16 private constant MIN_SKEW_SCALE = 1000; // $1000
     int48 private constant MAX_SKEW_SCALE = 10_000_000_000; // $10 Bn
     int16 private constant MAX_SCALAR = 10000;
+    int16 private constant MIN_SCALAR = 1000;
     uint256 private constant _ROLE_4 = 1 << 4;
 
     struct Input {
@@ -181,7 +182,7 @@ library Pool {
         int16 negativeLiquidityScalar;
     }
 
-    function initialize(Storage storage pool, Config memory _config) internal {
+    function initialize(Storage storage pool, Config memory _config) external {
         pool.allocationShare = 100;
         pool.config = _config;
         pool.lastUpdate = uint48(block.timestamp);
@@ -290,10 +291,10 @@ library Pool {
             revert Pool_InvalidSkewScale();
         }
 
-        if (_config.positiveSkewScalar <= 0 || _config.positiveSkewScalar > MAX_SCALAR) {
+        if (_config.positiveSkewScalar <= MIN_SCALAR || _config.positiveSkewScalar > MAX_SCALAR) {
             revert Pool_InvalidSkewScalar();
         }
-        if (_config.negativeSkewScalar <= 0 || _config.negativeSkewScalar > MAX_SCALAR) {
+        if (_config.negativeSkewScalar <= MIN_SCALAR || _config.negativeSkewScalar > MAX_SCALAR) {
             revert Pool_InvalidSkewScalar();
         }
 
@@ -301,10 +302,10 @@ library Pool {
             revert Pool_InvalidSkewScalar();
         }
 
-        if (_config.positiveLiquidityScalar <= 0 || _config.positiveLiquidityScalar > MAX_SCALAR) {
+        if (_config.positiveLiquidityScalar <= MIN_SCALAR || _config.positiveLiquidityScalar > MAX_SCALAR) {
             revert Pool_InvalidLiquidityScalar();
         }
-        if (_config.negativeLiquidityScalar <= 0 || _config.negativeLiquidityScalar > MAX_SCALAR) {
+        if (_config.negativeLiquidityScalar <= MIN_SCALAR || _config.negativeLiquidityScalar > MAX_SCALAR) {
             revert Pool_InvalidLiquidityScalar();
         }
 

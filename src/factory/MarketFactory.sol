@@ -19,7 +19,9 @@ import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {Pool} from "../markets/Pool.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
-import {Deployer} from "./Deployer.sol";
+import {DeployMarket} from "./DeployMarket.sol";
+import {DeployVault} from "./DeployVault.sol";
+import {DeployTradeStorage} from "./DeployTradeStorage.sol";
 
 /// @dev Needs MarketFactory Role
 /**
@@ -167,33 +169,38 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     /**
      * =========================================== User Interaction Functions ===========================================
      */
-    function createNewMarket(DeployParams calldata _params) external payable nonReentrant {
+    // // isMultiAsset, ticker, name, symbol, secondary strategy
+    function createNewMarket(Input calldata _input) external payable nonReentrant {
         uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
         if (msg.value < marketCreationFee + priceUpdateFee) revert MarketFactory_InvalidFee();
 
-        _initializeAsset(_params, priceUpdateFee);
+        _initializeAsset(_input, priceUpdateFee);
 
-        bytes32 requestKey = _getMarketRequestKey(msg.sender, _params.indexTokenTicker);
+        bytes32 requestKey = _getMarketRequestKey(msg.sender, _input.indexTokenTicker);
         ++requestNonce;
 
-        if (!requests.set(requestKey, _params)) revert MarketFactory_FailedToAddMarket();
+        Request memory request = _createRequest(_input);
 
-        emit MarketRequested(requestKey, _params.indexTokenTicker);
+        if (!requests.set(requestKey, request)) revert MarketFactory_FailedToAddMarket();
+
+        emit MarketRequested(requestKey, _input.indexTokenTicker);
     }
 
     /// @dev Request price feed pricing for a new asset. Used before adding new tokens to M.A.Ms
-    function requestAssetPricing(DeployParams calldata _params) external payable nonReentrant {
+    function requestAssetPricing(Input calldata _input) external payable nonReentrant {
         uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
         if (msg.value < priceUpdateFee + priceSupportFee) revert MarketFactory_InvalidFee();
 
-        _initializeAsset(_params, priceUpdateFee);
+        _initializeAsset(_input, priceUpdateFee);
 
-        bytes32 requestKey = _getPriceRequestKey(_params.indexTokenTicker);
+        bytes32 requestKey = _getPriceRequestKey(_input.indexTokenTicker);
         if (requests.contains(requestKey)) revert MarketFactory_RequestExists();
 
-        if (!requests.set(requestKey, _params)) revert MarketFactory_FailedToAddRequest();
+        Request memory request = _createRequest(_input);
 
-        emit AssetRequested(_params.indexTokenTicker);
+        if (!requests.set(requestKey, request)) revert MarketFactory_FailedToAddRequest();
+
+        emit AssetRequested(_input.indexTokenTicker);
     }
 
     /**
@@ -202,24 +209,24 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
 
     /// @dev Fulfills requests from `requestAssetPricing`
     function supportAsset(bytes32 _assetRequestKey) external payable nonReentrant {
-        DeployParams memory request = requests.get(_assetRequestKey);
+        Request memory request = requests.get(_assetRequestKey);
 
-        try Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp) {}
+        try Oracle.getPrice(priceFeed, request.input.indexTokenTicker, request.requestTimestamp) {}
         catch {
             _deleteInvalidRequest(_assetRequestKey);
             return;
         }
 
-        priceFeed.supportAsset(request.indexTokenTicker, request.tokenData, request.pythData.id);
+        priceFeed.supportAsset(request.input.indexTokenTicker, request.input.strategy, DECIMALS);
 
         SafeTransferLib.safeTransferETH(payable(msg.sender), priceSupportFee);
     }
 
     /// @dev Fulfill requests from `createNewMarket`
     function executeMarketRequest(bytes32 _requestKey) external nonReentrant {
-        DeployParams memory request = requests.get(_requestKey);
+        Request memory request = requests.get(_requestKey);
 
-        try Oracle.getPrice(priceFeed, request.indexTokenTicker, request.requestTimestamp) {}
+        try Oracle.getPrice(priceFeed, request.input.indexTokenTicker, request.requestTimestamp) {}
         catch {
             _deleteInvalidRequest(_requestKey);
             return;
@@ -233,7 +240,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     /**
      * =========================================== Getter Functions ===========================================
      */
-    function getRequest(bytes32 _requestKey) external view returns (DeployParams memory) {
+    function getRequest(bytes32 _requestKey) external view returns (Request memory) {
         return requests.get(_requestKey);
     }
 
@@ -244,27 +251,27 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     /**
      * =========================================== Private Functions ===========================================
      */
-    function _initializeAsset(DeployParams calldata _params, uint256 _priceUpdateFee) private {
-        if (bytes(_params.indexTokenTicker).length > MAX_TICKER_LENGTH) revert MarketFactory_InvalidTicker();
-        if (_params.tokenData.tokenDecimals != DECIMALS) revert MarketFactory_InvalidDecimals();
-        if (_params.requestTimestamp != uint48(block.timestamp)) revert MarketFactory_InvalidTimestamp();
+    function _initializeAsset(Input calldata _input, uint256 _priceUpdateFee) private {
+        if (bytes(_input.indexTokenTicker).length > MAX_TICKER_LENGTH) revert MarketFactory_InvalidTicker();
 
-        if (_params.tokenData.hasSecondaryFeed) {
-            _validateSecondaryStrategy(_params);
+        if (_input.strategy.exists) {
+            _validateSecondaryStrategy(_input);
         }
 
-        string[] memory args = Oracle.constructPriceArguments(_params.indexTokenTicker);
-        priceFeed.requestPriceUpdate{value: _priceUpdateFee}(args, _params.owner);
+        string[] memory args = Oracle.constructPriceArguments(_input.indexTokenTicker);
+        priceFeed.requestPriceUpdate{value: _priceUpdateFee}(args, msg.sender);
     }
 
-    function _initializeMarketContracts(DeployParams memory _params) private {
-        priceFeed.supportAsset(_params.indexTokenTicker, _params.tokenData, _params.pythData.id);
+    // @audit - If token decimals are fetched from uniswap and differ from 18, it will cause issues.
+    // If someone attempts to use a different asset, other than an ERC20 it might cause issues.
+    function _initializeMarketContracts(Request memory _params) private {
+        priceFeed.supportAsset(_params.input.indexTokenTicker, _params.input.strategy, DECIMALS);
 
-        address vault = Deployer.deployVault(_params, WETH, USDC);
+        address vault = DeployVault.run(_params, WETH, USDC);
 
-        address market = Deployer.deployMarket(defaultConfig, _params, vault, WETH, USDC);
+        address market = DeployMarket.run(defaultConfig, _params, vault, WETH, USDC);
 
-        address tradeStorage = Deployer.deployTradeStorage(IMarket(market), IVault(vault), referralStorage, priceFeed);
+        address tradeStorage = DeployTradeStorage.run(IMarket(market), IVault(vault), referralStorage, priceFeed);
 
         IMarket(market).initialize(tradeStorage, 0.003e18);
 
@@ -278,23 +285,23 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         feeDistributor.addVault(vault);
 
         isMarket[market] = true;
-        marketsByTicker[_params.indexTokenTicker].push(market);
+        marketsByTicker[_params.input.indexTokenTicker].push(market);
         markets[cumulativeMarketIndex] = market;
         ++cumulativeMarketIndex;
 
         // Here we only set the necessary roles, as required by each contract.
 
         OwnableRoles(market).grantRoles(address(positionManager), _ROLE_1);
-        OwnableRoles(market).grantRoles(_params.owner, _ROLE_2);
+        OwnableRoles(market).grantRoles(_params.requester, _ROLE_2);
         OwnableRoles(market).grantRoles(router, _ROLE_3);
         OwnableRoles(market).grantRoles(tradeStorage, _ROLE_4);
 
-        OwnableRoles(vault).grantRoles(_params.owner, _ROLE_2);
+        OwnableRoles(vault).grantRoles(_params.requester, _ROLE_2);
         OwnableRoles(vault).grantRoles(tradeStorage, _ROLE_4);
         OwnableRoles(vault).grantRoles(address(rewardTracker), _ROLE_5);
 
         OwnableRoles(tradeStorage).grantRoles(address(positionManager), _ROLE_1);
-        OwnableRoles(tradeStorage).grantRoles(_params.owner, _ROLE_2);
+        OwnableRoles(tradeStorage).grantRoles(_params.requester, _ROLE_2);
         OwnableRoles(tradeStorage).grantRoles(router, _ROLE_3);
 
         // Transfer ownership of all contracts to the super-user
@@ -303,37 +310,36 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         OwnableRoles(vault).transferOwnership(owner());
         OwnableRoles(tradeStorage).transferOwnership(owner());
 
-        // Fire Event
-        emit MarketCreated(market, _params.indexTokenTicker);
+        emit MarketCreated(market, _params.input.indexTokenTicker);
     }
 
-    function _validateSecondaryStrategy(DeployParams calldata _params) private view {
-        Oracle.validateFeedType(_params.tokenData.feedType);
+    function _validateSecondaryStrategy(Input calldata _params) private view {
+        Oracle.validateFeedType(_params.strategy.feedType);
 
-        if (_params.tokenData.feedType == IPriceFeed.FeedType.CHAINLINK) {
-            Oracle.isValidChainlinkFeed(feedRegistry, _params.tokenData.secondaryFeed);
-        } else if (_params.tokenData.feedType == IPriceFeed.FeedType.PYTH) {
-            Oracle.isValidPythFeed(_params.pythData.merkleProof, pythMerkleRoot, _params.pythData.id);
+        if (_params.strategy.feedType == IPriceFeed.FeedType.CHAINLINK) {
+            Oracle.isValidChainlinkFeed(feedRegistry, _params.strategy.feedAddress);
+        } else if (_params.strategy.feedType == IPriceFeed.FeedType.PYTH) {
+            Oracle.isValidPythFeed(_params.strategy.merkleProof, pythMerkleRoot, _params.strategy.feedId);
         } else if (
-            _params.tokenData.feedType == IPriceFeed.FeedType.UNI_V30
-                || _params.tokenData.feedType == IPriceFeed.FeedType.UNI_V31
+            _params.strategy.feedType == IPriceFeed.FeedType.UNI_V30
+                || _params.strategy.feedType == IPriceFeed.FeedType.UNI_V31
         ) {
             Oracle.isValidUniswapV3Pool(
                 uniV3Factory,
-                _params.tokenData.secondaryFeed,
-                _params.tokenData.feedType,
-                _params.stablecoinMerkleProof,
+                _params.strategy.feedAddress,
+                _params.strategy.feedType,
+                _params.strategy.merkleProof,
                 stablecoinMerkleRoot
             );
         } else if (
-            _params.tokenData.feedType == IPriceFeed.FeedType.UNI_V20
-                || _params.tokenData.feedType == IPriceFeed.FeedType.UNI_V21
+            _params.strategy.feedType == IPriceFeed.FeedType.UNI_V20
+                || _params.strategy.feedType == IPriceFeed.FeedType.UNI_V21
         ) {
             Oracle.isValidUniswapV2Pool(
                 uniV2Factory,
-                _params.tokenData.secondaryFeed,
-                _params.tokenData.feedType,
-                _params.stablecoinMerkleProof,
+                _params.strategy.feedAddress,
+                _params.strategy.feedType,
+                _params.strategy.merkleProof,
                 stablecoinMerkleRoot
             );
         }
@@ -357,5 +363,10 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     function _deleteInvalidRequest(bytes32 _requestKey) private {
         if (!requests.contains(_requestKey)) revert MarketFactory_RequestDoesNotExist();
         if (!requests.remove(_requestKey)) revert MarketFactory_FailedToRemoveRequest();
+    }
+
+    // Construct a Request struct from the Input
+    function _createRequest(Input calldata _params) private view returns (Request memory) {
+        return Request({input: _params, requestTimestamp: uint48(block.timestamp), requester: msg.sender});
     }
 }

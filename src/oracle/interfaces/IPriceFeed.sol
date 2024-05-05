@@ -17,11 +17,12 @@ interface IPriceFeed {
         string[] args;
     }
 
-    struct TokenData {
-        address secondaryFeed;
-        uint8 tokenDecimals;
-        FeedType feedType;
-        bool hasSecondaryFeed;
+    struct SecondaryStrategy {
+        bool exists;
+        IPriceFeed.FeedType feedType;
+        address feedAddress;
+        bytes32 feedId;
+        bytes32[] merkleProof;
     }
 
     enum FeedType {
@@ -108,7 +109,7 @@ interface IPriceFeed {
         uint64 _settlementFee,
         address _nativeLinkPriceFeed
     ) external;
-    function supportAsset(string memory _ticker, TokenData memory _tokenData, bytes32 _pythId) external;
+    function supportAsset(string memory _ticker, SecondaryStrategy calldata _strategy, uint8 _tokenDecimals) external;
     function unsupportAsset(string memory _ticker) external;
     function requestPriceUpdate(string[] calldata args, address _requester)
         external
@@ -118,15 +119,16 @@ interface IPriceFeed {
         external
         payable
         returns (bytes32 requestId);
-    function getTokenData(string memory _ticker) external view returns (TokenData memory);
+    function getSecondaryStrategy(string memory _ticker) external view returns (SecondaryStrategy memory);
     function priceUpdateRequested(bytes32 _requestId) external view returns (bool);
     function getRequestData(bytes32 _requestId) external view returns (RequestData memory);
     function getRequester(bytes32 _requestId) external view returns (address);
-    function pythIds(string memory _ticker) external view returns (bytes32);
     function nativeLinkPriceFeed() external view returns (address);
     function callbackGasLimit() external view returns (uint32);
     function gasOverhead() external view returns (uint256);
     function getRequestTimestamp(bytes32 _requestKey) external view returns (uint48);
     function timeToExpiration() external view returns (uint48);
     function isRequestValid(bytes32 _requestKey) external view returns (bool);
+    function tokenDecimals(string memory _ticker) external view returns (uint8);
+    function getPythId(string memory _ticker) external view returns (bytes32);
 }
