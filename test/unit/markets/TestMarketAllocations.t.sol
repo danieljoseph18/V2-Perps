@@ -18,9 +18,7 @@ import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
 import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
-
 import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
-
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 import {MathUtils} from "src/libraries/MathUtils.sol";
 import {Units} from "src/libraries/Units.sol";
@@ -30,6 +28,8 @@ import {PriceImpact} from "src/libraries/PriceImpact.sol";
 import {Execution} from "src/positions/Execution.sol";
 import {Funding} from "src/libraries/Funding.sol";
 import {Borrowing} from "src/libraries/Borrowing.sol";
+import {TradeEngine} from "src/positions/TradeEngine.sol";
+import {MarketId} from "src/types/MarketId.sol";
 
 contract TestMarketAllocations is Test {
     using MathUtils for uint256;
@@ -40,17 +40,19 @@ contract TestMarketAllocations is Test {
     ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
+    TradeEngine tradeEngine;
     Router router;
     address OWNER;
     IMarket market;
     IVault vault;
     FeeDistributor feeDistributor;
-
     GlobalRewardTracker rewardTracker;
 
     address weth;
     address usdc;
     address link;
+
+    MarketId marketId;
 
     string ethTicker = "ETH";
     string usdcTicker = "USDC";
@@ -74,8 +76,10 @@ contract TestMarketAllocations is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        market = contracts.market;
+        tradeStorage = contracts.tradeStorage;
+        tradeEngine = contracts.tradeEngine;
         feeDistributor = contracts.feeDistributor;
-
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
         tickers.push(ethTicker);
@@ -129,25 +133,23 @@ contract TestMarketAllocations is Test {
         meds.push(1);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
-        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-        market = IMarket(payable(marketFactory.markets(0)));
+        marketId = marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
-        vault = market.VAULT();
+        vault = market.getVault(marketId);
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
-
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(marketId, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(marketId, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
         vm.stopPrank();
         _;
     }
@@ -171,24 +173,6 @@ contract TestMarketAllocations is Test {
         marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(input);
         // 2. Call support asset
         bytes32 requestKey = keccak256(abi.encodePacked("SOL"));
-        vm.prank(OWNER);
-        marketFactory.supportAsset(requestKey);
-        // 3. Add token to market
-        Pool.Config memory config = Pool.Config({
-            maxLeverage: 100,
-            maintenanceMargin: 500,
-            reserveFactor: 2500,
-            maxFundingVelocity: 900,
-            skewScale: 1_000_000,
-            positiveSkewScalar: 1_0000,
-            negativeSkewScalar: 1_0000,
-            positiveLiquidityScalar: 1_0000,
-            negativeLiquidityScalar: 1_0000
-        });
-        uint8[] memory allocations = new uint8[](2);
-        allocations[0] = 50;
-        allocations[1] = 50;
-        bytes memory newAllocations = MarketUtils.encodeAllocations(allocations);
         vm.startPrank(OWNER);
         // Request a price
         bytes32 priceRequestKey = keccak256(abi.encode("PRICE REQUEST"));
@@ -202,8 +186,24 @@ contract TestMarketAllocations is Test {
         meds.push(100);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
+        marketFactory.supportAsset(requestKey);
+        // 3. Add token to market
+        Pool.Config memory config = Pool.Config({
+            maxLeverage: 100,
+            maintenanceMargin: 500,
+            reserveFactor: 2500,
+            maxFundingVelocity: 900,
+            skewScale: 1_000_000,
+            positiveLiquidityScalar: 1_0000,
+            negativeLiquidityScalar: 1_0000
+        });
+        uint8[] memory allocations = new uint8[](2);
+        allocations[0] = 50;
+        allocations[1] = 50;
+        bytes memory newAllocations = MarketUtils.encodeAllocations(allocations);
+
         // Add the Token to the Market
-        Market(address(market)).addToken(priceFeed, config, "SOL", newAllocations, priceRequestKey);
+        Market(address(market)).addToken(marketId, config, "SOL", newAllocations, priceRequestKey);
         vm.stopPrank();
         _;
     }
@@ -227,20 +227,6 @@ contract TestMarketAllocations is Test {
         marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(input);
         // 2. Call support asset
         bytes32 requestKey = keccak256(abi.encodePacked("SOL"));
-        vm.prank(OWNER);
-        marketFactory.supportAsset(requestKey);
-        // 3. Add token to market
-        Pool.Config memory config = Pool.Config({
-            maxLeverage: 100,
-            maintenanceMargin: 500,
-            reserveFactor: 2500,
-            maxFundingVelocity: 900,
-            skewScale: 1_000_000,
-            positiveSkewScalar: 1_0000,
-            negativeSkewScalar: 1_0000,
-            positiveLiquidityScalar: 1_0000,
-            negativeLiquidityScalar: 1_0000
-        });
         uint8[] memory allocations = new uint8[](2);
         allocations[0] = 50;
         allocations[1] = 50;
@@ -258,8 +244,20 @@ contract TestMarketAllocations is Test {
         meds.push(100);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
+
+        marketFactory.supportAsset(requestKey);
+        // 3. Add token to market
+        Pool.Config memory config = Pool.Config({
+            maxLeverage: 100,
+            maintenanceMargin: 500,
+            reserveFactor: 2500,
+            maxFundingVelocity: 900,
+            skewScale: 1_000_000,
+            positiveLiquidityScalar: 1_0000,
+            negativeLiquidityScalar: 1_0000
+        });
         // Add the Token to the Market
-        Market(address(market)).addToken(priceFeed, config, "SOL", newAllocations, priceRequestKey);
+        Market(address(market)).addToken(marketId, config, "SOL", newAllocations, priceRequestKey);
         vm.stopPrank();
     }
 
@@ -268,10 +266,10 @@ contract TestMarketAllocations is Test {
         allocations2[0] = 100;
         bytes memory newAllocations2 = MarketUtils.encodeAllocations(allocations2);
         vm.prank(OWNER);
-        Market(address(market)).removeToken(priceFeed, "ETH", newAllocations2, keccak256(abi.encode("PRICE REQUEST")));
+        Market(address(market)).removeToken(marketId, "ETH", newAllocations2, keccak256(abi.encode("PRICE REQUEST")));
 
         // Fetch the tickers and ensure the token has been removed
-        string[] memory fetchedTickers = market.getTickers();
+        string[] memory fetchedTickers = market.getTickers(marketId);
         assertEq(fetchedTickers.length, 1);
         assertEq(fetchedTickers[0], "SOL");
     }
@@ -281,10 +279,10 @@ contract TestMarketAllocations is Test {
         allocations2[0] = 100;
         bytes memory newAllocations2 = MarketUtils.encodeAllocations(allocations2);
         vm.startPrank(OWNER);
-        Market(address(market)).removeToken(priceFeed, "ETH", newAllocations2, keccak256(abi.encode("PRICE REQUEST")));
+        Market(address(market)).removeToken(marketId, "ETH", newAllocations2, keccak256(abi.encode("PRICE REQUEST")));
 
         vm.expectRevert();
-        Market(address(market)).removeToken(priceFeed, "SOL", newAllocations2, keccak256(abi.encode("PRICE REQUEST")));
+        Market(address(market)).removeToken(marketId, "SOL", newAllocations2, keccak256(abi.encode("PRICE REQUEST")));
         vm.stopPrank();
     }
 
@@ -299,7 +297,7 @@ contract TestMarketAllocations is Test {
         bytes memory newAllocations = MarketUtils.encodeAllocations(allocations);
 
         vm.startPrank(OWNER);
-        Market(address(market)).reallocate(newAllocations, keccak256(abi.encode("PRICE REQUEST")));
+        Market(address(market)).reallocate(marketId, newAllocations, keccak256(abi.encode("PRICE REQUEST")));
     }
 
     function test_invalid_allocations_always_revert(uint256 _solAllocation, uint256 _ethAllocation)
@@ -320,7 +318,7 @@ contract TestMarketAllocations is Test {
 
         vm.prank(OWNER);
         vm.expectRevert();
-        Market(address(market)).reallocate(newAllocations, keccak256(abi.encode("PRICE REQUEST")));
+        Market(address(market)).reallocate(marketId, newAllocations, keccak256(abi.encode("PRICE REQUEST")));
     }
 
     // Test a user can't add the same asset multiple times
@@ -345,19 +343,6 @@ contract TestMarketAllocations is Test {
         // 2. Call support asset
         bytes32 requestKey = keccak256(abi.encodePacked(_ticker));
         vm.prank(OWNER);
-        marketFactory.supportAsset(requestKey);
-        // 3. Add token to market
-        Pool.Config memory config = Pool.Config({
-            maxLeverage: 100,
-            maintenanceMargin: 500,
-            reserveFactor: 2500,
-            maxFundingVelocity: 900,
-            skewScale: 1_000_000,
-            positiveSkewScalar: 1_0000,
-            negativeSkewScalar: 1_0000,
-            positiveLiquidityScalar: 1_0000,
-            negativeLiquidityScalar: 1_0000
-        });
         uint8[] memory allocations = new uint8[](2);
         allocations[0] = 50;
         allocations[1] = 50;
@@ -375,10 +360,22 @@ contract TestMarketAllocations is Test {
         meds.push(100);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
+        marketFactory.supportAsset(requestKey);
+        // 3. Add token to market
+        Pool.Config memory config = Pool.Config({
+            maxLeverage: 100,
+            maintenanceMargin: 500,
+            reserveFactor: 2500,
+            maxFundingVelocity: 900,
+            skewScale: 1_000_000,
+            positiveLiquidityScalar: 1_0000,
+            negativeLiquidityScalar: 1_0000
+        });
+
         // Add the Token to the Market
-        Market(address(market)).addToken(priceFeed, config, _ticker, newAllocations, priceRequestKey);
+        Market(address(market)).addToken(marketId, config, _ticker, newAllocations, priceRequestKey);
         vm.expectRevert();
-        Market(address(market)).addToken(priceFeed, config, _ticker, newAllocations, priceRequestKey);
+        Market(address(market)).addToken(marketId, config, _ticker, newAllocations, priceRequestKey);
         vm.stopPrank();
     }
 
@@ -402,24 +399,6 @@ contract TestMarketAllocations is Test {
         marketFactory.requestAssetPricing{value: marketFactory.priceSupportFee()}(input);
         // 2. Call support asset
         bytes32 requestKey = keccak256(abi.encodePacked("SOL"));
-        vm.prank(OWNER);
-        marketFactory.supportAsset(requestKey);
-        // 3. Add token to market
-        Pool.Config memory config = Pool.Config({
-            maxLeverage: 100,
-            maintenanceMargin: 500,
-            reserveFactor: 2500,
-            maxFundingVelocity: 900,
-            skewScale: 1_000_000,
-            positiveSkewScalar: 1_0000,
-            negativeSkewScalar: 1_0000,
-            positiveLiquidityScalar: 1_0000,
-            negativeLiquidityScalar: 1_0000
-        });
-        uint8[] memory allocations = new uint8[](2);
-        allocations[0] = 50;
-        allocations[1] = 50;
-        bytes memory newAllocations = MarketUtils.encodeAllocations(allocations);
         vm.startPrank(OWNER);
         // Request a price
         bytes32 priceRequestKey = keccak256(abi.encode("PRICE REQUEST"));
@@ -433,12 +412,27 @@ contract TestMarketAllocations is Test {
         meds.push(100);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
+        marketFactory.supportAsset(requestKey);
+        // 3. Add token to market
+        Pool.Config memory config = Pool.Config({
+            maxLeverage: 100,
+            maintenanceMargin: 500,
+            reserveFactor: 2500,
+            maxFundingVelocity: 900,
+            skewScale: 1_000_000,
+            positiveLiquidityScalar: 1_0000,
+            negativeLiquidityScalar: 1_0000
+        });
+        uint8[] memory allocations = new uint8[](2);
+        allocations[0] = 50;
+        allocations[1] = 50;
+        bytes memory newAllocations = MarketUtils.encodeAllocations(allocations);
 
         skip(_timeToSkip);
 
         // Add the Token to the Market
         vm.expectRevert();
-        Market(address(market)).addToken(priceFeed, config, "SOL", newAllocations, priceRequestKey);
+        Market(address(market)).addToken(marketId, config, "SOL", newAllocations, priceRequestKey);
         vm.stopPrank();
     }
 
@@ -462,8 +456,6 @@ contract TestMarketAllocations is Test {
             reserveFactor: 2500,
             maxFundingVelocity: 900,
             skewScale: 1_000_000,
-            positiveSkewScalar: 1_0000,
-            negativeSkewScalar: 1_0000,
             positiveLiquidityScalar: 1_0000,
             negativeLiquidityScalar: 1_0000
         });
@@ -494,7 +486,7 @@ contract TestMarketAllocations is Test {
                 }
             }
             bytes memory newAllocations = MarketUtils.encodeAllocations(allocations);
-            Market(address(market)).addToken(priceFeed, config, ticker, newAllocations, priceRequestKey);
+            Market(address(market)).addToken(marketId, config, ticker, newAllocations, priceRequestKey);
             vm.stopPrank();
         }
     }

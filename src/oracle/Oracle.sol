@@ -20,6 +20,7 @@ import {Casting} from "../libraries/Casting.sol";
 import {Units} from "../libraries/Units.sol";
 import {LibString} from "../libraries/LibString.sol";
 import {ud, UD60x18, unwrap} from "@prb/math/UD60x18.sol";
+import {MarketId, MarketIdLibrary} from "../types/MarketId.sol";
 
 library Oracle {
     using MathUtils for uint256;
@@ -163,7 +164,7 @@ library Oracle {
     /**
      * =========================================== Helper Functions ===========================================
      */
-    function estimateRequestCost(IPriceFeed priceFeed) external view returns (uint256 cost) {
+    function estimateRequestCost(IPriceFeed priceFeed) internal view returns (uint256 cost) {
         uint256 gasPrice = tx.gasprice;
 
         uint256 overestimatedGasPrice = gasPrice + gasPrice.percentage(OVERESTIMATION_FACTOR);
@@ -201,10 +202,10 @@ library Oracle {
         }
     }
 
-    function constructMultiPriceArgs(IMarket market) internal view returns (string[] memory args) {
+    function constructMultiPriceArgs(MarketId _id, IMarket market) internal view returns (string[] memory args) {
         string memory timestamp = block.timestamp.toString();
 
-        string[] memory tickers = market.getTickers();
+        string[] memory tickers = market.getTickers(_id);
 
         uint256 len = tickers.length;
 
@@ -225,8 +226,8 @@ library Oracle {
 
     /// @dev - Prepend the timestamp to the arguments before sending to the DON
     /// Use of loop not desirable, but the maximum possible loops is ~ 102
-    function constructPnlArguments(IMarket market) internal view returns (string[] memory args) {
-        string[] memory tickers = market.getTickers();
+    function constructPnlArguments(MarketId _id, IMarket market) internal view returns (string[] memory args) {
+        string[] memory tickers = market.getTickers(_id);
 
         string memory timestamp = block.timestamp.toString();
 

@@ -18,9 +18,7 @@ import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
 import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
-
 import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
-
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 import {MathUtils} from "src/libraries/MathUtils.sol";
 import {Units} from "src/libraries/Units.sol";
@@ -30,6 +28,8 @@ import {PriceImpact} from "src/libraries/PriceImpact.sol";
 import {Execution} from "src/positions/Execution.sol";
 import {Funding} from "src/libraries/Funding.sol";
 import {Borrowing} from "src/libraries/Borrowing.sol";
+import {TradeEngine} from "src/positions/TradeEngine.sol";
+import {MarketId} from "src/types/MarketId.sol";
 
 contract TestVaultExternals is Test {
     using MathUtils for uint256;
@@ -40,17 +40,19 @@ contract TestVaultExternals is Test {
     ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
+    TradeEngine tradeEngine;
     Router router;
     address OWNER;
     IMarket market;
     IVault vault;
     FeeDistributor feeDistributor;
-
     GlobalRewardTracker rewardTracker;
 
     address weth;
     address usdc;
     address link;
+
+    MarketId marketId;
 
     string ethTicker = "ETH";
     string usdcTicker = "USDC";
@@ -74,8 +76,10 @@ contract TestVaultExternals is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        market = contracts.market;
+        tradeStorage = contracts.tradeStorage;
+        tradeEngine = contracts.tradeEngine;
         feeDistributor = contracts.feeDistributor;
-
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
         tickers.push(ethTicker);
@@ -129,30 +133,28 @@ contract TestVaultExternals is Test {
         meds.push(1);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
-        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-        market = IMarket(payable(marketFactory.markets(0)));
+        marketId = marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
-        vault = market.VAULT();
+        vault = market.getVault(marketId);
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
-
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(marketId, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(marketId, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
         vm.stopPrank();
         _;
     }
 
-    function test_updating_liquidity_is_only_valid_from_trade_storage(uint256 _amountToUpdate, bool _isLong)
+    function test_updating_liquidity_is_only_valid_from_trade_engine(uint256 _amountToUpdate, bool _isLong)
         public
         setUpMarkets
     {
@@ -161,7 +163,7 @@ contract TestVaultExternals is Test {
 
         uint256 liquidityResBefore = _isLong ? vault.longTokensReserved() : vault.shortTokensReserved();
 
-        vm.prank(address(tradeStorage));
+        vm.prank(address(tradeEngine));
         vault.updateLiquidityReservation(_amountToUpdate, _isLong, true);
 
         uint256 liquidityResAfter = _isLong ? vault.longTokensReserved() : vault.shortTokensReserved();
@@ -169,7 +171,7 @@ contract TestVaultExternals is Test {
         assertEq(liquidityResBefore + _amountToUpdate, liquidityResAfter, "Update failed");
     }
 
-    function test_updating_pool_balance_is_only_valid_from_trade_storage(uint256 _amountToUpdate, bool _isLong)
+    function test_updating_pool_balance_is_only_valid_from_trade_engine(uint256 _amountToUpdate, bool _isLong)
         public
         setUpMarkets
     {
@@ -179,7 +181,7 @@ contract TestVaultExternals is Test {
 
         uint256 poolBalanceBefore = _isLong ? vault.longTokenBalance() : vault.shortTokenBalance();
 
-        vm.prank(address(tradeStorage));
+        vm.prank(address(tradeEngine));
         vault.updatePoolBalance(_amountToUpdate, _isLong, true);
 
         uint256 poolBalanceAfter = _isLong ? vault.longTokenBalance() : vault.shortTokenBalance();
@@ -203,7 +205,7 @@ contract TestVaultExternals is Test {
         uint256 usdcBalanceBefore = IERC20(usdc).balanceOf(OWNER);
 
         // Accumulate fees
-        vm.startPrank(address(tradeStorage));
+        vm.startPrank(address(tradeEngine));
         vault.accumulateFees(_wethIn, true);
         vault.accumulateFees(_usdcIn, false);
         vm.stopPrank();

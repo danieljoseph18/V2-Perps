@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.23;
 
-import {IMarket} from "../../markets/interfaces/IMarket.sol";
 import {IMarketFactory} from "../../factory/interfaces/IMarketFactory.sol";
+import {MarketId} from "../../types/MarketId.sol";
 
 interface IPriceFeed {
     enum RequestType {
@@ -115,7 +115,7 @@ interface IPriceFeed {
         external
         payable
         returns (bytes32 requestId);
-    function requestCumulativeMarketPnl(IMarket market, address _requester)
+    function requestCumulativeMarketPnl(MarketId _id, address _requester)
         external
         payable
         returns (bytes32 requestId);

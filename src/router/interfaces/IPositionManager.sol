@@ -2,17 +2,17 @@
 pragma solidity 0.8.23;
 
 import {Position} from "../../positions/Position.sol";
-import {IMarket} from "../../markets/interfaces/IMarket.sol";
 import {IVault} from "../../markets/interfaces/IVault.sol";
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
+import {MarketId} from "../../types/MarketId.sol";
 
 interface IPositionManager {
     event ExecutePosition(bytes32 indexed _orderKey, uint256 _fee, uint256 _feeDiscount);
     event GasLimitsUpdated(
         uint256 indexed depositGasLimit, uint256 indexed withdrawalGasLimit, uint256 indexed positionGasLimit
     );
-    event AdlExecuted(IMarket indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
-    event AdlTargetRatioReached(IMarket indexed market, int256 newFactor, bool isLong);
+    event AdlExecuted(MarketId indexed market, bytes32 indexed positionKey, uint256 sizeDelta, bool isLong);
+    event AdlTargetRatioReached(MarketId indexed market, int256 newFactor, bool isLong);
     event MarketRequestCancelled(bytes32 indexed _requestKey, address indexed _owner, address _token, uint256 _amount);
 
     error PositionManager_AccessDenied();
@@ -50,7 +50,6 @@ interface IPositionManager {
     function averagePositionCost() external view returns (uint256);
     function baseGasLimit() external view returns (uint256);
     function transferTokensForIncrease(
-        IMarket market,
         IVault vault,
         address _collateralToken,
         uint256 _collateralDelta,

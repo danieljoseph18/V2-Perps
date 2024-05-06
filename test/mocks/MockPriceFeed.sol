@@ -14,6 +14,7 @@ import {IWETH} from "../../src/tokens/interfaces/IWETH.sol";
 import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV2V3Interface.sol";
 import {Oracle} from "../../src/oracle/Oracle.sol";
 import {LibString} from "../../src/libraries/LibString.sol";
+import {MarketId} from "src/types/MarketId.sol";
 
 contract MockPriceFeed is FunctionsClient, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
@@ -38,6 +39,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     address public immutable LINK;
 
     IMarketFactory public marketFactory;
+    IMarket market;
 
     // Don IDs: https://docs.chain.link/chainlink-functions/supported-networks
     bytes32 private donId;
@@ -216,7 +218,7 @@ contract MockPriceFeed is FunctionsClient, IPriceFeed {
     }
 
     /// @dev - for this, we need to copy / call the function MarketUtils.calculateCumulativeMarketPnl but offchain
-    function requestCumulativeMarketPnl(IMarket, address _requester) external payable returns (bytes32 requestKey) {
+    function requestCumulativeMarketPnl(MarketId, address _requester) external payable returns (bytes32 requestKey) {
         // Create a  request id
         requestKey = keccak256(abi.encode("PRICE REQUEST"));
         bytes32 requestId = keccak256(abi.encode("PNL REQUEST"));

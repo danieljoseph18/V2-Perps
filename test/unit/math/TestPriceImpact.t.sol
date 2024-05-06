@@ -18,9 +18,7 @@ import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
 import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
-
 import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
-
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 import {MathUtils} from "src/libraries/MathUtils.sol";
 import {Referral} from "src/referrals/Referral.sol";
@@ -28,6 +26,8 @@ import {IERC20} from "src/tokens/interfaces/IERC20.sol";
 import {PriceImpact} from "src/libraries/PriceImpact.sol";
 import {Execution} from "src/positions/Execution.sol";
 import {Units} from "src/libraries/Units.sol";
+import {MarketId} from "src/types/MarketId.sol";
+import {TradeEngine} from "src/positions/TradeEngine.sol";
 
 contract TestPriceImpact is Test {
     using MathUtils for uint256;
@@ -38,17 +38,19 @@ contract TestPriceImpact is Test {
     ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
+    TradeEngine tradeEngine;
     Router router;
     address OWNER;
     IMarket market;
     IVault vault;
     FeeDistributor feeDistributor;
-
     GlobalRewardTracker rewardTracker;
 
     address weth;
     address usdc;
     address link;
+
+    MarketId marketId;
 
     string ethTicker = "ETH";
     string usdcTicker = "USDC";
@@ -72,8 +74,10 @@ contract TestPriceImpact is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        market = contracts.market;
+        tradeStorage = contracts.tradeStorage;
+        tradeEngine = contracts.tradeEngine;
         feeDistributor = contracts.feeDistributor;
-
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
         tickers.push(ethTicker);
@@ -103,7 +107,7 @@ contract TestPriceImpact is Test {
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
         IMarketFactory.Input memory input = IMarketFactory.Input({
-            isMultiAsset: false,
+            isMultiAsset: true,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
@@ -119,33 +123,31 @@ contract TestPriceImpact is Test {
         // Set Prices
         precisions.push(0);
         precisions.push(0);
-        variances.push(100);
-        variances.push(100);
+        variances.push(0);
+        variances.push(0);
         timestamps.push(uint48(block.timestamp));
         timestamps.push(uint48(block.timestamp));
         meds.push(3000);
         meds.push(1);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
-        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-        market = IMarket(payable(marketFactory.markets(0)));
+        marketId = marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
-        vault = market.VAULT();
+        vault = market.getVault(marketId);
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
-
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(marketId, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(marketId, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
         vm.stopPrank();
         _;
     }
@@ -192,13 +194,13 @@ contract TestPriceImpact is Test {
         meds.push(1);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
-        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-        market = IMarket(payable(marketFactory.markets(0)));
+        marketId = marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
+        vault = market.getVault(marketId);
         tradeStorage = ITradeStorage(market.tradeStorage());
-        rewardTracker = GlobalRewardTracker(address(market.VAULT().rewardTracker()));
+        rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
 
         _;
     }
@@ -259,12 +261,12 @@ contract TestPriceImpact is Test {
 
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(market.getOpenInterest.selector, ethTicker, true),
+            abi.encodeWithSelector(market.getOpenInterest.selector, marketId, ethTicker, true),
             abi.encode(_test.longOi)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(market.getOpenInterest.selector, ethTicker, false),
+            abi.encodeWithSelector(market.getOpenInterest.selector, marketId, ethTicker, false),
             abi.encode(_test.shortOi)
         );
         vm.mockCall(
@@ -288,7 +290,7 @@ contract TestPriceImpact is Test {
         Position.Request memory request = _createRequest(_test.sizeDelta, _test.isLong, _test.isIncrease);
 
         // Call the priceImpact function
-        PriceImpact.execute(market, vault, request, impactPrices);
+        PriceImpact.execute(marketId, market, vault, request, impactPrices);
     }
 
     function _getPrices(uint256 _indexPrice, bool _isLong)

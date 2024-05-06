@@ -20,6 +20,7 @@ import {IWETH} from "../tokens/interfaces/IWETH.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 import {IGlobalRewardTracker} from "../rewards/interfaces/IGlobalRewardTracker.sol";
+import {MarketId} from "../types/MarketId.sol";
 /// @dev Needs PositionManager Role
 // All keeper interactions should come through this contract
 // Contract picks up and executes all requests, as well as holds intermediary funds.
@@ -43,6 +44,7 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     IMarketFactory public marketFactory;
     IReferralStorage public referralStorage;
     IPriceFeed public priceFeed;
+    IMarket public market;
 
     // Base Gas for a TX
     uint256 public baseGasLimit;
@@ -53,19 +55,28 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
 
     constructor(
         address _marketFactory,
+        address _market,
         address _rewardTracker,
         address _referralStorage,
         address _priceFeed,
+        address _tradeEngine,
         address _weth,
         address _usdc
     ) {
         _initializeOwner(msg.sender);
         marketFactory = IMarketFactory(_marketFactory);
+        market = IMarket(_market);
         referralStorage = IReferralStorage(_referralStorage);
         rewardTracker = IGlobalRewardTracker(_rewardTracker);
         priceFeed = IPriceFeed(_priceFeed);
         WETH = IWETH(_weth);
         USDC = IERC20(_usdc);
+        _grantRoles(_tradeEngine, _ROLE_6);
+    }
+
+    modifier isValidMarket(MarketId _id) {
+        if (!marketFactory.isMarket(_id)) revert PositionManager_InvalidMarket();
+        _;
     }
 
     receive() external payable {}
@@ -97,19 +108,19 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
         rewardTracker = _rewardTracker;
     }
 
-    function executeDeposit(IMarket market, bytes32 _key) external payable nonReentrant {
+    function executeDeposit(MarketId _id, bytes32 _key) external payable isValidMarket(_id) nonReentrant {
         uint256 initialGas = gasleft();
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
 
-        IVault.ExecuteDeposit memory params = MarketUtils.constructDepositParams(priceFeed, market, _key);
+        IVault.ExecuteDeposit memory params = MarketUtils.constructDepositParams(_id, priceFeed, market, _key);
 
-        address vault = address(market.VAULT());
+        address vault = address(market.getVault(_id));
 
         if (params.deposit.isLongToken) WETH.approve(address(vault), params.deposit.amountIn);
         else USDC.approve(address(vault), params.deposit.amountIn);
 
-        uint256 mintAmount = market.executeDeposit(params);
+        uint256 mintAmount = market.executeDeposit(_id, params);
 
         IVault(vault).approve(address(rewardTracker), mintAmount);
 
@@ -128,12 +139,12 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
         }
     }
 
-    function executeWithdrawal(IMarket market, bytes32 _key) external payable nonReentrant {
+    function executeWithdrawal(MarketId _id, bytes32 _key) external payable isValidMarket(_id) nonReentrant {
         uint256 initialGas = gasleft();
 
         if (_key == bytes32(0)) revert PositionManager_InvalidKey();
 
-        IVault.ExecuteWithdrawal memory params = MarketUtils.constructWithdrawalParams(priceFeed, market, _key);
+        IVault.ExecuteWithdrawal memory params = MarketUtils.constructWithdrawalParams(_id, priceFeed, market, _key);
 
         params.amountOut = MarketUtils.calculateWithdrawalAmount(
             params.vault,
@@ -148,7 +159,7 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
 
         IERC20(params.vault).approve(address(params.vault), params.withdrawal.amountIn);
 
-        market.executeWithdrawal(params);
+        market.executeWithdrawal(_id, params);
 
         uint256 feeForExecutor = (initialGas - gasleft()) * tx.gasprice;
 
@@ -162,10 +173,8 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
         }
     }
 
-    function cancelMarketRequest(IMarket market, bytes32 _requestKey) external nonReentrant {
-        if (!marketFactory.isMarket(address(market))) revert PositionManager_InvalidMarket();
-
-        (address tokenOut, uint256 amountOut, bool shouldUnwrap) = market.cancelRequest(_requestKey, msg.sender);
+    function cancelMarketRequest(MarketId _id, bytes32 _requestKey) external isValidMarket(_id) nonReentrant {
+        (address tokenOut, uint256 amountOut, bool shouldUnwrap) = market.cancelRequest(_id, _requestKey, msg.sender);
 
         if (shouldUnwrap) {
             WETH.withdraw(amountOut);
@@ -178,17 +187,18 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
 
     /// @dev For market orders, can just pass in bytes32(0) as the request id, as it's only required for limits
     /// @dev If limit, caller needs to call Router.requestExecutionPricing before, and provide the requestKey as input
-    function executePosition(IMarket market, bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
+    function executePosition(MarketId _id, bytes32 _orderKey, bytes32 _requestKey, address _feeReceiver)
         external
         payable
+        isValidMarket(_id)
         nonReentrant
     {
         uint256 initialGas = gasleft();
 
-        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
+        ITradeStorage tradeStorage = market.tradeStorage();
 
         (Execution.FeeState memory feeState, Position.Request memory request) =
-            tradeStorage.executePositionRequest(_orderKey, _requestKey, _feeReceiver);
+            tradeStorage.executePositionRequest(_id, _orderKey, _requestKey, _feeReceiver);
 
         emit ExecutePosition(_orderKey, feeState.positionFee, feeState.affiliateRebate);
 
@@ -206,14 +216,24 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     // Only person who requested the pricing for an order should be able to initiate the liquidation,
     // up until a certain time buffer. After that time buffer, any user should be able to.
     /// @dev - Caller needs to call Router.requestExecutionPricing before
-    function liquidatePosition(IMarket market, bytes32 _positionKey, bytes32 _requestKey) external payable {
-        ITradeStorage(market.tradeStorage()).liquidatePosition(_positionKey, _requestKey, msg.sender);
+    function liquidatePosition(MarketId _id, bytes32 _positionKey, bytes32 _requestKey)
+        external
+        payable
+        isValidMarket(_id)
+        nonReentrant
+    {
+        market.tradeStorage().liquidatePosition(_id, _positionKey, _requestKey, msg.sender);
     }
 
-    function cancelOrderRequest(IMarket market, bytes32 _key, bool _isLimit) external payable nonReentrant {
-        ITradeStorage tradeStorage = ITradeStorage(market.tradeStorage());
+    function cancelOrderRequest(MarketId _id, bytes32 _key, bool _isLimit)
+        external
+        payable
+        isValidMarket(_id)
+        nonReentrant
+    {
+        ITradeStorage tradeStorage = market.tradeStorage();
 
-        Position.Request memory request = tradeStorage.getOrder(_key);
+        Position.Request memory request = tradeStorage.getOrder(_id, _key);
 
         if (request.user == address(0)) revert PositionManager_RequestDoesNotExist();
 
@@ -225,7 +245,7 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
             revert PositionManager_InsufficientDelay();
         }
 
-        tradeStorage.cancelOrderRequest(_key, _isLimit);
+        tradeStorage.cancelOrderRequest(_id, _key, _isLimit);
 
         IERC20(request.input.collateralToken).safeTransfer(request.user, request.input.collateralDelta);
 
@@ -242,24 +262,24 @@ contract PositionManager is IPositionManager, OwnableRoles, ReentrancyGuard {
     // Only person who requested the pricing for an order should be able to initiate the adl,
     // up until a certain time buffer. After that time buffer, any user should be able to.
     /// @dev - Caller needs to call Router.requestExecutionPricing before and provide a valid requestKey
-    function executeAdl(IMarket market, bytes32 _requestKey, bytes32 _positionKey) external payable {
-        ITradeStorage(market.tradeStorage()).executeAdl(_positionKey, _requestKey, msg.sender);
+    function executeAdl(MarketId _id, bytes32 _requestKey, bytes32 _positionKey)
+        external
+        payable
+        isValidMarket(_id)
+        nonReentrant
+    {
+        market.tradeStorage().executeAdl(_id, _positionKey, _requestKey, msg.sender);
     }
 
     /// @dev - Should only be callable from the TradeEngine associated with a valid market
     function transferTokensForIncrease(
-        IMarket market,
         IVault vault,
         address _collateralToken,
         uint256 _collateralDelta,
         uint256 _affiliateRebate,
         uint256 _feeForExecutor,
         address _executor
-    ) external {
-        if (!marketFactory.isMarket(address(market))) revert PositionManager_InvalidMarket();
-
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert PositionManager_AccessDenied();
-
+    ) external onlyRoles(_ROLE_6) {
         uint256 transferAmount = _collateralDelta;
 
         if (_feeForExecutor > 0) {

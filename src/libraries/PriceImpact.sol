@@ -9,6 +9,7 @@ import {Casting} from "./Casting.sol";
 import {Units} from "./Units.sol";
 import {Execution} from "../positions/Execution.sol";
 import {MathUtils} from "./MathUtils.sol";
+import {MarketId} from "../types/MarketId.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
@@ -28,8 +29,6 @@ library PriceImpact {
     int256 private constant SIGNED_PRICE_PRECISION = 1e30;
 
     struct ImpactState {
-        int256 positiveSkewScalar;
-        int256 negativeSkewScalar;
         int256 positiveLiquidityScalar;
         int256 negativeLiquidityScalar;
         uint256 longOi;
@@ -54,27 +53,25 @@ library PriceImpact {
      *
      * If the impact percentage exceeds the maximum slippage specified by the user, the transaction is reverted.
      */
-    function execute(IMarket market, IVault vault, Position.Request memory _request, Execution.Prices memory _prices)
-        external
-        view
-        returns (uint256 impactedPrice, int256 priceImpactUsd)
-    {
+    function execute(
+        MarketId _id,
+        IMarket market,
+        IVault vault,
+        Position.Request memory _request,
+        Execution.Prices memory _prices
+    ) external view returns (uint256 impactedPrice, int256 priceImpactUsd) {
         if (_request.input.sizeDelta == 0) revert PriceImpact_SizeDeltaIsZero();
 
         ImpactState memory state;
-        (
-            state.positiveSkewScalar,
-            state.negativeSkewScalar,
-            state.positiveLiquidityScalar,
-            state.negativeLiquidityScalar
-        ) = market.getImpactValues(_request.input.ticker);
-        state = _getImpactValues(market, _request.input.ticker);
 
-        state.longOi = market.getOpenInterest(_request.input.ticker, true);
-        state.shortOi = market.getOpenInterest(_request.input.ticker, false);
+        state = _getImpactValues(_id, market, _request.input.ticker);
+
+        state.longOi = market.getOpenInterest(_id, _request.input.ticker, true);
+        state.shortOi = market.getOpenInterest(_id, _request.input.ticker, false);
 
         if (_request.input.isLong) {
             state.availableOi = MarketUtils.getAvailableOiUsd(
+                _id,
                 market,
                 vault,
                 _request.input.ticker,
@@ -85,6 +82,7 @@ library PriceImpact {
             ).toInt256();
         } else {
             state.availableOi = MarketUtils.getAvailableOiUsd(
+                _id,
                 market,
                 vault,
                 _request.input.ticker,
@@ -123,7 +121,6 @@ library PriceImpact {
                 state.sizeDeltaUsd,
                 0,
                 state.initialSkew,
-                state.positiveSkewScalar,
                 state.positiveLiquidityScalar,
                 state.initialTotalOi,
                 state.updatedTotalOi,
@@ -135,7 +132,6 @@ library PriceImpact {
                 state.sizeDeltaUsd,
                 state.updatedSkew,
                 0,
-                state.negativeSkewScalar,
                 state.negativeLiquidityScalar,
                 state.initialTotalOi,
                 state.updatedTotalOi,
@@ -145,13 +141,10 @@ library PriceImpact {
 
             priceImpactUsd = positiveImpact - negativeImpact;
         } else {
-            int256 skewScalar;
             int256 liquidityScalar;
             if (state.updatedSkew.abs() < state.initialSkew.abs()) {
-                skewScalar = state.positiveSkewScalar;
                 liquidityScalar = state.positiveLiquidityScalar;
             } else {
-                skewScalar = state.negativeSkewScalar;
                 liquidityScalar = state.negativeLiquidityScalar;
             }
 
@@ -160,7 +153,6 @@ library PriceImpact {
                 state.sizeDeltaUsd,
                 state.updatedSkew,
                 state.initialSkew,
-                skewScalar,
                 liquidityScalar,
                 state.initialTotalOi,
                 state.updatedTotalOi,
@@ -170,7 +162,7 @@ library PriceImpact {
         }
 
         if (priceImpactUsd > 0) {
-            priceImpactUsd = _validateImpactDelta(market, _request.input.ticker, priceImpactUsd);
+            priceImpactUsd = _validateImpactDelta(_id, market, _request.input.ticker, priceImpactUsd);
         }
 
         impactedPrice =
@@ -188,7 +180,6 @@ library PriceImpact {
         int256 _sizeDeltaUsd,
         int256 _updatedSkew,
         int256 _initialSkew,
-        int256 _skewScalar,
         int256 _liquidityScalar,
         uint256 _initialTotalOi,
         uint256 _updatedTotalOi,
@@ -204,9 +195,8 @@ library PriceImpact {
          * In this case, skewFactor = skewScalar * (updatedSkew/updatedTotalOi)
          */
         int256 skewFactor = _initialTotalOi == 0
-            ? -_updatedSkew.mulDivSigned(_skewScalar, _updatedTotalOi.toInt256())
-            : _initialSkew.mulDivSigned(_skewScalar, _initialTotalOi.toInt256())
-                - _updatedSkew.mulDivSigned(_skewScalar, _updatedTotalOi.toInt256());
+            ? -_updatedSkew.sDivWad(_updatedTotalOi.toInt256())
+            : _initialSkew.sDivWad(_initialTotalOi.toInt256()) - _updatedSkew.sDivWad(_updatedTotalOi.toInt256());
 
         /**
          * If position is a decrease, the liquidity factor can be ignored, as the
@@ -255,12 +245,12 @@ library PriceImpact {
      * Positive impact is capped by the impact pool.
      * If the positive impact is > impact pool, return the entire impact pool.
      */
-    function _validateImpactDelta(IMarket market, string memory _ticker, int256 _priceImpactUsd)
+    function _validateImpactDelta(MarketId _id, IMarket market, string memory _ticker, int256 _priceImpactUsd)
         private
         view
         returns (int256)
     {
-        int256 impactPoolUsd = market.getImpactPool(_ticker).toInt256();
+        int256 impactPoolUsd = market.getImpactPool(_id, _ticker).toInt256();
         if (_priceImpactUsd > impactPoolUsd) {
             return impactPoolUsd;
         } else {
@@ -277,15 +267,12 @@ library PriceImpact {
         }
     }
 
-    function _getImpactValues(IMarket market, string memory _ticker) private view returns (ImpactState memory state) {
-        (
-            state.positiveSkewScalar,
-            state.negativeSkewScalar,
-            state.positiveLiquidityScalar,
-            state.negativeLiquidityScalar
-        ) = market.getImpactValues(_ticker);
-        state.positiveSkewScalar = state.positiveSkewScalar.expandDecimals(4, 30);
-        state.negativeSkewScalar = state.negativeSkewScalar.expandDecimals(4, 30);
+    function _getImpactValues(MarketId _id, IMarket market, string memory _ticker)
+        private
+        view
+        returns (ImpactState memory state)
+    {
+        (state.positiveLiquidityScalar, state.negativeLiquidityScalar) = market.getImpactValues(_id, _ticker);
         state.positiveLiquidityScalar = state.positiveLiquidityScalar.expandDecimals(4, 30);
         state.negativeLiquidityScalar = state.negativeLiquidityScalar.expandDecimals(4, 30);
     }

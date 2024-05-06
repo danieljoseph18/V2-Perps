@@ -3,10 +3,11 @@ pragma solidity 0.8.23;
 
 import {IPriceFeed} from "../../oracle/interfaces/IPriceFeed.sol";
 import {Pool} from "../../markets/Pool.sol";
+import {MarketId} from "../../types/MarketId.sol";
 
 interface IMarketFactory {
     event MarketFactoryInitialized(address priceStorage);
-    event MarketCreated(address market, string ticker);
+    event MarketCreated(MarketId id, string ticker);
     event DefaultConfigSet();
     event MarketRequested(bytes32 indexed requestKey, string indexed indexTokenTicker);
     event AssetSupported(string indexed ticker);
@@ -24,6 +25,8 @@ interface IMarketFactory {
     error MarketFactory_InvalidTimestamp();
     error MarketFactory_RequestExists();
     error MarketFactory_FailedToAddRequest();
+    error MarketFactory_InvalidSecondaryStrategy();
+    error MarketFactory_MarketExists();
 
     struct Request {
         Input input;
@@ -46,6 +49,9 @@ interface IMarketFactory {
 
     function initialize(
         Pool.Config memory _defaultConfig,
+        address _market,
+        address _tradeStorage,
+        address _tradeEngine,
         address _priceFeed,
         address _referralStorage,
         address _positionManager,
@@ -57,10 +63,10 @@ interface IMarketFactory {
     ) external;
     function setDefaultConfig(Pool.Config memory _defaultConfig) external;
     function updatePriceFeed(IPriceFeed _priceFeed) external;
-    function createNewMarket(Input calldata _input) external payable;
-    function executeMarketRequest(bytes32 _requestKey) external;
+    function createNewMarket(Input calldata _input) external payable returns (bytes32);
+    function executeMarketRequest(bytes32 _requestKey) external returns (MarketId);
     function getRequest(bytes32 _requestKey) external view returns (Request memory);
     function marketCreationFee() external view returns (uint256);
-    function markets(uint256 index) external view returns (address);
-    function isMarket(address _market) external view returns (bool);
+    function markets(uint256 index) external view returns (MarketId);
+    function isMarket(MarketId _market) external view returns (bool);
 }

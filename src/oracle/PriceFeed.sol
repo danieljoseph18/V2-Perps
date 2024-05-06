@@ -17,6 +17,7 @@ import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {Oracle} from "./Oracle.sol";
 import {LibString} from "../../src/libraries/LibString.sol";
+import {MarketId} from "../types/MarketId.sol";
 
 contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed {
     using FunctionsRequest for FunctionsRequest.Request;
@@ -41,6 +42,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     address public immutable LINK;
 
     IMarketFactory public marketFactory;
+    IMarket market;
 
     // Don IDs: https://docs.chain.link/chainlink-functions/supported-networks
     bytes32 private donId;
@@ -229,16 +231,16 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
         return requestKey;
     }
 
-    function requestCumulativeMarketPnl(IMarket market, address _requester)
+    function requestCumulativeMarketPnl(MarketId _id, address _requester)
         external
         payable
         onlyRoles(_ROLE_3)
         nonReentrant
         returns (bytes32)
     {
-        if (!marketFactory.isMarket(address(market))) revert PriceFeed_InvalidMarket();
+        if (!marketFactory.isMarket(_id)) revert PriceFeed_InvalidMarket();
 
-        string[] memory args = Oracle.constructPnlArguments(market);
+        string[] memory args = Oracle.constructPnlArguments(_id, market);
 
         bytes32 requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
 

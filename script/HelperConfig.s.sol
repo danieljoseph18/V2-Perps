@@ -26,8 +26,8 @@ contract HelperConfig is IHelperConfig, Script {
     }
 
     function getBaseSepoliaConfig() public returns (NetworkConfig memory anvilConfig) {
-        MockUSDC mockUsdc = new MockUSDC();
-        WETH weth = new WETH();
+        MockUSDC mockUsdc = MockUSDC(0x9881f8b307CC3383500b432a8Ce9597fAfc73A77);
+        WETH weth = WETH(0xD8eca5111c93EEf563FAB704F2C6A8DD7A12c77D);
         MockToken link = new MockToken();
 
         anvilConfig.weth = address(weth);

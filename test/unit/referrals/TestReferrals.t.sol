@@ -16,14 +16,15 @@ import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
 import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
-
 import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
-
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 import {MathUtils} from "src/libraries/MathUtils.sol";
 import {Units} from "src/libraries/Units.sol";
 import {Referral} from "src/referrals/Referral.sol";
 import {IERC20} from "src/tokens/interfaces/IERC20.sol";
+import {MarketId} from "src/types/MarketId.sol";
+import {TradeEngine} from "src/positions/TradeEngine.sol";
+import {IVault} from "src/markets/interfaces/IVault.sol";
 
 contract TestReferrals is Test {
     using MathUtils for uint256;
@@ -34,16 +35,19 @@ contract TestReferrals is Test {
     ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
+    TradeEngine tradeEngine;
     Router router;
     address OWNER;
     IMarket market;
+    IVault vault;
     FeeDistributor feeDistributor;
-
     GlobalRewardTracker rewardTracker;
 
     address weth;
     address usdc;
     address link;
+
+    MarketId marketId;
 
     string ethTicker = "ETH";
     string usdcTicker = "USDC";
@@ -67,8 +71,10 @@ contract TestReferrals is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        market = contracts.market;
+        tradeStorage = contracts.tradeStorage;
+        tradeEngine = contracts.tradeEngine;
         feeDistributor = contracts.feeDistributor;
-
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
         tickers.push(ethTicker);
@@ -98,7 +104,7 @@ contract TestReferrals is Test {
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
         IMarketFactory.Input memory input = IMarketFactory.Input({
-            isMultiAsset: false,
+            isMultiAsset: true,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
@@ -122,24 +128,23 @@ contract TestReferrals is Test {
         meds.push(1);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
-        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-        market = IMarket(payable(marketFactory.markets(0)));
+        marketId = marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
+        vault = market.getVault(marketId);
         tradeStorage = ITradeStorage(market.tradeStorage());
-        rewardTracker = GlobalRewardTracker(address(market.VAULT().rewardTracker()));
-
+        rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(marketId, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(marketId, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
         vm.stopPrank();
         _;
     }
@@ -232,7 +237,7 @@ contract TestReferrals is Test {
             });
             vm.prank(USER);
             router.createPositionRequest{value: 0.51 ether}(
-                market, cache.input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                marketId, cache.input, Position.Conditionals(false, false, 0, 0, 0, 0)
             );
         } else {
             cache.collateralToken = usdc;
@@ -257,13 +262,13 @@ contract TestReferrals is Test {
             vm.startPrank(USER);
             MockUSDC(usdc).approve(address(router), type(uint256).max);
             router.createPositionRequest{value: 0.01 ether}(
-                market, cache.input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                marketId, cache.input, Position.Conditionals(false, false, 0, 0, 0, 0)
             );
             vm.stopPrank();
         }
         // Execute Request
         vm.prank(OWNER);
-        positionManager.executePosition(market, tradeStorage.getOrderAtIndex(0, false), bytes32(0), OWNER);
+        positionManager.executePosition(marketId, tradeStorage.getOrderAtIndex(marketId, 0, false), bytes32(0), OWNER);
         // check the referral storage: a) has the correct amount of funds from the discount b) has the correct funds in storage
         uint256 discountPercentage;
         if (_tier == 0) {
@@ -274,7 +279,12 @@ contract TestReferrals is Test {
             discountPercentage = 0.15e18;
         }
         (uint256 fee,) = Position.calculateFee(
-            tradeStorage, 5000e30, cache.collateralDelta, cache.collateralPrice, cache.collateralBaseUnit
+            tradeEngine.tradingFee(),
+            tradeEngine.feeForExecution(),
+            5000e30,
+            cache.collateralDelta,
+            cache.collateralPrice,
+            cache.collateralBaseUnit
         );
         console2.log("Fee in Test: ", fee);
         (uint256 discountedFee, uint256 affiliateRebate,) = Referral.applyFeeDiscount(referralStorage, USER, fee);

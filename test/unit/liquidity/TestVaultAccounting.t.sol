@@ -27,6 +27,8 @@ import {PriceImpact} from "src/libraries/PriceImpact.sol";
 import {Execution} from "src/positions/Execution.sol";
 import {Funding} from "src/libraries/Funding.sol";
 import {Borrowing} from "src/libraries/Borrowing.sol";
+import {MarketId} from "src/types/MarketId.sol";
+import {TradeEngine} from "src/positions/TradeEngine.sol";
 
 contract TestVaultAccounting is Test {
     using MathUtils for uint256;
@@ -37,6 +39,7 @@ contract TestVaultAccounting is Test {
     ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
+    TradeEngine tradeEngine;
     Router router;
     address OWNER;
     IMarket market;
@@ -47,6 +50,8 @@ contract TestVaultAccounting is Test {
     address weth;
     address usdc;
     address link;
+
+    MarketId marketId;
 
     string ethTicker = "ETH";
     string usdcTicker = "USDC";
@@ -70,6 +75,9 @@ contract TestVaultAccounting is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        market = contracts.market;
+        tradeStorage = contracts.tradeStorage;
+        tradeEngine = contracts.tradeEngine;
         feeDistributor = contracts.feeDistributor;
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
@@ -124,24 +132,23 @@ contract TestVaultAccounting is Test {
         meds.push(1);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
-        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-        market = IMarket(payable(marketFactory.markets(0)));
+        marketId = marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
-        vault = market.VAULT();
+        vault = market.getVault(marketId);
         tradeStorage = ITradeStorage(market.tradeStorage());
         rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(marketId, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(marketId, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
         vm.stopPrank();
         _;
     }
@@ -213,13 +220,13 @@ contract TestVaultAccounting is Test {
             if (_vaultTest.shouldWrap) {
                 vm.prank(USER);
                 router.createPositionRequest{value: _vaultTest.collateralDelta + 0.01 ether}(
-                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
                 );
             } else {
                 vm.startPrank(USER);
                 WETH(weth).approve(address(router), type(uint256).max);
                 router.createPositionRequest{value: 0.01 ether}(
-                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
                 );
                 vm.stopPrank();
             }
@@ -247,7 +254,7 @@ contract TestVaultAccounting is Test {
             vm.startPrank(USER);
             MockUSDC(usdc).approve(address(router), type(uint256).max);
             router.createPositionRequest{value: 0.01 ether}(
-                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
             );
             vm.stopPrank();
         }
@@ -257,9 +264,9 @@ contract TestVaultAccounting is Test {
         tokenBalances.referralStorageBalanceBefore =
             IERC20(_vaultTest.collateralToken).balanceOf(address(referralStorage));
         // Execute Request
-        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        bytes32 key = tradeStorage.getOrderAtIndex(marketId, 0, false);
         vm.prank(OWNER);
-        positionManager.executePosition(market, key, bytes32(0), OWNER);
+        positionManager.executePosition(marketId, key, bytes32(0), OWNER);
 
         // Cache State of the Vault
         tokenBalances.vaultBalanceAfter = IERC20(_vaultTest.collateralToken).balanceOf(address(vault));
@@ -274,7 +281,8 @@ contract TestVaultAccounting is Test {
 
         // Calculate the expected market delta
         (_vaultTest.positionFee, _vaultTest.feeForExecutor) = Position.calculateFee(
-            tradeStorage,
+            tradeEngine.tradingFee(),
+            tradeEngine.feeForExecution(),
             _vaultTest.sizeDelta,
             input.collateralDelta,
             _vaultTest.collateralPrice,
@@ -348,13 +356,13 @@ contract TestVaultAccounting is Test {
             if (_vaultTest.shouldWrap) {
                 vm.prank(USER);
                 router.createPositionRequest{value: collateralDelta + 0.01 ether}(
-                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
                 );
             } else {
                 vm.startPrank(USER);
                 WETH(weth).approve(address(router), type(uint256).max);
                 router.createPositionRequest{value: 0.01 ether}(
-                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
                 );
                 vm.stopPrank();
             }
@@ -382,14 +390,14 @@ contract TestVaultAccounting is Test {
             vm.startPrank(USER);
             MockUSDC(usdc).approve(address(router), type(uint256).max);
             router.createPositionRequest{value: 0.01 ether}(
-                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
             );
             vm.stopPrank();
         }
         // Execute Request
-        bytes32 key = tradeStorage.getOrderAtIndex(0, false);
+        bytes32 key = tradeStorage.getOrderAtIndex(marketId, 0, false);
         vm.prank(OWNER);
-        positionManager.executePosition(market, key, bytes32(0), OWNER);
+        positionManager.executePosition(marketId, key, bytes32(0), OWNER);
 
         // Cache State of the Vault
         tokenBalances.vaultBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(vault));
@@ -402,13 +410,13 @@ contract TestVaultAccounting is Test {
             if (_vaultTest.shouldWrap) {
                 vm.prank(USER);
                 router.createPositionRequest{value: collateralDelta + 0.01 ether}(
-                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
                 );
             } else {
                 vm.startPrank(USER);
                 WETH(weth).approve(address(router), type(uint256).max);
                 router.createPositionRequest{value: 0.01 ether}(
-                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
                 );
                 vm.stopPrank();
             }
@@ -416,14 +424,14 @@ contract TestVaultAccounting is Test {
             vm.startPrank(USER);
             MockUSDC(usdc).approve(address(router), type(uint256).max);
             router.createPositionRequest{value: 0.01 ether}(
-                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
             );
             vm.stopPrank();
         }
         // Execute Request
-        key = tradeStorage.getOrderAtIndex(0, false);
+        key = tradeStorage.getOrderAtIndex(marketId, 0, false);
         vm.prank(OWNER);
-        positionManager.executePosition(market, key, bytes32(0), OWNER);
+        positionManager.executePosition(marketId, key, bytes32(0), OWNER);
 
         _increaseAssertions(tokenBalances, _vaultTest, collateralDelta);
     }
@@ -446,7 +454,8 @@ contract TestVaultAccounting is Test {
 
         // Calculate the expected market delta
         (uint256 positionFee, uint256 feeForExecutor) = Position.calculateFee(
-            tradeStorage,
+            tradeEngine.tradingFee(),
+            tradeEngine.feeForExecution(),
             _vaultTest.sizeDelta,
             _collateralDelta,
             _vaultTest.collateralPrice,
@@ -519,13 +528,13 @@ contract TestVaultAccounting is Test {
             if (_vaultTest.shouldWrap) {
                 vm.prank(USER);
                 router.createPositionRequest{value: _vaultTest.collateralDelta + 0.01 ether}(
-                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
                 );
             } else {
                 vm.startPrank(USER);
                 WETH(weth).approve(address(router), type(uint256).max);
                 router.createPositionRequest{value: 0.01 ether}(
-                    market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
                 );
                 vm.stopPrank();
             }
@@ -553,14 +562,14 @@ contract TestVaultAccounting is Test {
             vm.startPrank(USER);
             MockUSDC(usdc).approve(address(router), type(uint256).max);
             router.createPositionRequest{value: 0.01 ether}(
-                market, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
             );
             vm.stopPrank();
         }
         // Execute Request
-        _vaultTest.key = tradeStorage.getOrderAtIndex(0, false);
+        _vaultTest.key = tradeStorage.getOrderAtIndex(marketId, 0, false);
         vm.prank(OWNER);
-        positionManager.executePosition(market, _vaultTest.key, bytes32(0), OWNER);
+        positionManager.executePosition(marketId, _vaultTest.key, bytes32(0), OWNER);
 
         // Cache State of the Vault
         tokenBalances.vaultBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(address(vault));
@@ -573,7 +582,7 @@ contract TestVaultAccounting is Test {
 
         // Get the Position's collateral
         Position.Data memory position =
-            tradeStorage.getPosition(keccak256(abi.encode(input.ticker, USER, input.isLong)));
+            tradeStorage.getPosition(marketId, keccak256(abi.encode(input.ticker, USER, input.isLong)));
         uint256 collateral = position.collateral.fromUsd(_vaultTest.collateralPrice, _vaultTest.collateralBaseUnit);
 
         // Create Decrease Request
@@ -586,14 +595,16 @@ contract TestVaultAccounting is Test {
             input.collateralDelta = collateral;
         }
         vm.prank(USER);
-        router.createPositionRequest{value: 0.01 ether}(market, input, Position.Conditionals(false, false, 0, 0, 0, 0));
+        router.createPositionRequest{value: 0.01 ether}(
+            marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+        );
 
         uint256 userBalanceBefore = IERC20(_vaultTest.collateralToken).balanceOf(USER);
 
         // Execute Request
-        _vaultTest.key = tradeStorage.getOrderAtIndex(0, false);
+        _vaultTest.key = tradeStorage.getOrderAtIndex(marketId, 0, false);
         vm.prank(OWNER);
-        positionManager.executePosition(market, _vaultTest.key, bytes32(0), OWNER);
+        positionManager.executePosition(marketId, _vaultTest.key, bytes32(0), OWNER);
 
         _assertions(tokenBalances, _vaultTest, userBalanceBefore);
     }

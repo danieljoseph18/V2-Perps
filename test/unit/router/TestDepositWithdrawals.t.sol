@@ -16,10 +16,10 @@ import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
 import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
-
 import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
-
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
+import {MarketId} from "src/types/MarketId.sol";
+import {TradeEngine} from "src/positions/TradeEngine.sol";
 
 contract TestDepositWithdrawals is Test {
     MarketFactory marketFactory;
@@ -27,16 +27,19 @@ contract TestDepositWithdrawals is Test {
     ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
+    TradeEngine tradeEngine;
     Router router;
     address OWNER;
     IMarket market;
+    IVault vault;
     FeeDistributor feeDistributor;
-
     GlobalRewardTracker rewardTracker;
 
     address weth;
     address usdc;
     address link;
+
+    MarketId marketId;
 
     string ethTicker = "ETH";
     string usdcTicker = "USDC";
@@ -60,8 +63,10 @@ contract TestDepositWithdrawals is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        market = contracts.market;
+        tradeStorage = contracts.tradeStorage;
+        tradeEngine = contracts.tradeEngine;
         feeDistributor = contracts.feeDistributor;
-
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
         tickers.push(ethTicker);
@@ -91,7 +96,7 @@ contract TestDepositWithdrawals is Test {
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
         IMarketFactory.Input memory input = IMarketFactory.Input({
-            isMultiAsset: false,
+            isMultiAsset: true,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
@@ -115,24 +120,23 @@ contract TestDepositWithdrawals is Test {
         meds.push(1);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
-        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-        market = IMarket(payable(marketFactory.markets(0)));
+        marketId = marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
+        vault = market.getVault(marketId);
         tradeStorage = ITradeStorage(market.tradeStorage());
-        rewardTracker = GlobalRewardTracker(address(market.VAULT().rewardTracker()));
-
+        rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(marketId, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(marketId, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
         vm.stopPrank();
         _;
     }
@@ -145,25 +149,27 @@ contract TestDepositWithdrawals is Test {
             _amountIn = bound(_amountIn, 1, 500_000 ether);
             if (_shouldWrap) {
                 vm.prank(OWNER);
-                router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, weth, _amountIn, 0.01 ether, 0, true);
+                router.createDeposit{value: 0.01 ether + _amountIn}(
+                    marketId, OWNER, weth, _amountIn, 0.01 ether, 0, true
+                );
             } else {
                 vm.startPrank(OWNER);
                 WETH(weth).approve(address(router), type(uint256).max);
-                router.createDeposit{value: 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, 0, false);
+                router.createDeposit{value: 0.01 ether}(marketId, OWNER, weth, _amountIn, 0.01 ether, 0, false);
                 vm.stopPrank();
             }
         } else {
             _amountIn = bound(_amountIn, 1, 500_000_000e6);
             vm.startPrank(OWNER);
             MockUSDC(usdc).approve(address(router), type(uint256).max);
-            router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, usdc, _amountIn, 0.01 ether, 0, false);
+            router.createDeposit{value: 0.01 ether + _amountIn}(marketId, OWNER, usdc, _amountIn, 0.01 ether, 0, false);
             vm.stopPrank();
         }
 
         // Execute the Deposit
-        bytes32 depositKey = market.getRequestAtIndex(0).key;
+        bytes32 depositKey = market.getRequestAtIndex(marketId, 0).key;
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, depositKey);
     }
 
     function test_executing_withdrawal_requests(
@@ -176,11 +182,13 @@ contract TestDepositWithdrawals is Test {
             _amountIn = bound(_amountIn, 1 ether, 500_000 ether);
             if (_shouldWrap) {
                 vm.prank(OWNER);
-                router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, weth, _amountIn, 0.01 ether, 0, true);
+                router.createDeposit{value: 0.01 ether + _amountIn}(
+                    marketId, OWNER, weth, _amountIn, 0.01 ether, 0, true
+                );
             } else {
                 vm.startPrank(OWNER);
                 WETH(weth).approve(address(router), type(uint256).max);
-                router.createDeposit{value: 0.01 ether}(market, OWNER, weth, _amountIn, 0.01 ether, 0, false);
+                router.createDeposit{value: 0.01 ether}(marketId, OWNER, weth, _amountIn, 0.01 ether, 0, false);
                 vm.stopPrank();
             }
         } else {
@@ -188,14 +196,14 @@ contract TestDepositWithdrawals is Test {
             _shouldWrap = false;
             vm.startPrank(OWNER);
             MockUSDC(usdc).approve(address(router), type(uint256).max);
-            router.createDeposit{value: 0.01 ether + _amountIn}(market, OWNER, usdc, _amountIn, 0.01 ether, 0, false);
+            router.createDeposit{value: 0.01 ether + _amountIn}(marketId, OWNER, usdc, _amountIn, 0.01 ether, 0, false);
             vm.stopPrank();
         }
 
         // Execute the Deposit
-        bytes32 depositKey = market.getRequestAtIndex(0).key;
+        bytes32 depositKey = market.getRequestAtIndex(marketId, 0).key;
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, depositKey);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, depositKey);
 
         // Create Withdrawal request
         _amountOut = bound(_amountOut, 0.1e18, rewardTracker.balanceOf(OWNER));
@@ -203,10 +211,10 @@ contract TestDepositWithdrawals is Test {
         vm.startPrank(OWNER);
         rewardTracker.approve(address(router), type(uint256).max);
         router.createWithdrawal{value: 0.01 ether}(
-            market, OWNER, _isLongToken ? weth : usdc, _amountOut, 0.01 ether, _shouldWrap
+            marketId, OWNER, _isLongToken ? weth : usdc, _amountOut, 0.01 ether, _shouldWrap
         );
-        bytes32 withdrawalKey = market.getRequestAtIndex(0).key;
-        positionManager.executeWithdrawal{value: 0.01 ether}(market, withdrawalKey);
+        bytes32 withdrawalKey = market.getRequestAtIndex(marketId, 0).key;
+        positionManager.executeWithdrawal{value: 0.01 ether}(marketId, withdrawalKey);
         vm.stopPrank();
     }
 }

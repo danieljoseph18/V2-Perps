@@ -13,10 +13,13 @@ import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {Units} from "../libraries/Units.sol";
 import {Casting} from "../libraries/Casting.sol";
+import {MarketId} from "../types/MarketId.sol";
+import {OwnableRoles} from "../auth/OwnableRoles.sol";
+import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 
 /// @notice Library responsible for handling all execution logic associated with trades
 /// @dev Functions are external to avoid bytecode size issues.
-library TradeEngine {
+contract TradeEngine is OwnableRoles, ReentrancyGuard {
     using MathUtils for uint256;
     using MathUtils for int256;
     using Units for uint256;
@@ -32,31 +35,82 @@ library TradeEngine {
     error TradeEngine_InvalidRequestType();
     error TradeEngine_PositionDoesNotExist();
     error TradeEngine_InvalidCaller();
+    error TradeEngine_AlreadyInitialized();
 
-    modifier onlyTradeStorage(IMarket market) {
-        if (market.tradeStorage() != address(this)) revert TradeEngine_InvalidCaller();
-        _;
+    ITradeStorage tradeStorage;
+    IMarket market;
+    IPriceFeed priceFeed;
+    IReferralStorage referralStorage;
+    IPositionManager positionManager;
+
+    bool initialized;
+    // Percentage with 18 decimal places
+    uint64 public liquidationFee;
+    uint256 public minCollateralUsd;
+    // Stored as percentages with 18 D.P (e.g 0.05e18 = 5%)
+    uint64 public adlFee;
+    uint64 public tradingFee;
+    uint64 public feeForExecution;
+
+    constructor(address _tradeStorage, address _market) {
+        _initializeOwner(msg.sender);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        market = IMarket(_market);
     }
 
-    function executePositionRequest(
-        IMarket market,
-        IPriceFeed priceFeed,
-        IPositionManager positionManager,
-        IReferralStorage referralStorage,
-        Position.Settlement memory _params
-    ) external onlyTradeStorage(market) returns (Execution.FeeState memory, Position.Request memory) {
-        ITradeStorage tradeStorage = ITradeStorage(address(this));
-        IVault vault = market.VAULT();
+    function initialize(
+        address _priceFeed,
+        address _referralStorage,
+        address _positionManager,
+        uint256 _minCollateralUsd,
+        uint64 _liquidationFee,
+        uint64 _adlFee,
+        uint64 _tradingFee,
+        uint64 _feeForExecution
+    ) external onlyOwner {
+        if (initialized) revert TradeEngine_AlreadyInitialized();
+        priceFeed = IPriceFeed(_priceFeed);
+        referralStorage = IReferralStorage(_referralStorage);
+        positionManager = IPositionManager(_positionManager);
+        minCollateralUsd = _minCollateralUsd;
+        liquidationFee = _liquidationFee;
+        adlFee = _adlFee;
+        tradingFee = _tradingFee;
+        feeForExecution = _feeForExecution;
+        initialized = true;
+    }
+
+    function updateFees(
+        uint256 _minCollateralUsd,
+        uint64 _liquidationFee,
+        uint64 _adlFee,
+        uint64 _tradingFee,
+        uint64 _feeForExecution
+    ) external onlyOwner {
+        minCollateralUsd = _minCollateralUsd;
+        liquidationFee = _liquidationFee;
+        adlFee = _adlFee;
+        tradingFee = _tradingFee;
+        feeForExecution = _feeForExecution;
+    }
+
+    function executePositionRequest(MarketId _id, Position.Settlement memory _params)
+        external
+        onlyRoles(_ROLE_4)
+        nonReentrant
+        returns (Execution.FeeState memory, Position.Request memory)
+    {
+        IVault vault = market.getVault(_id);
 
         Execution.Prices memory prices;
         (prices, _params.request) = Execution.initiate(
-            tradeStorage, market, vault, priceFeed, _params.orderKey, _params.limitRequestKey, _params.feeReceiver
+            _id, market, vault, priceFeed, _params.orderKey, _params.limitRequestKey, _params.feeReceiver
         );
 
-        tradeStorage.deleteOrder(_params.orderKey, _params.request.input.isLimit);
+        tradeStorage.deleteOrder(_id, _params.orderKey, _params.request.input.isLimit);
 
         _updateMarketState(
-            market,
+            _id,
             prices,
             _params.request.input.ticker,
             _params.request.input.sizeDelta,
@@ -66,80 +120,48 @@ library TradeEngine {
 
         Execution.FeeState memory feeState;
         if (_params.request.requestType == Position.RequestType.CREATE_POSITION) {
-            feeState =
-                _createNewPosition(tradeStorage, market, vault, positionManager, referralStorage, _params, prices);
+            feeState = _createNewPosition(_id, vault, _params, prices);
         } else if (_params.request.requestType == Position.RequestType.POSITION_INCREASE) {
-            feeState = _increasePosition(tradeStorage, market, vault, positionManager, referralStorage, _params, prices);
+            feeState = _increasePosition(_id, vault, _params, prices);
         } else {
             // Decrease, SL & TP
-            feeState = _decreasePosition(
-                tradeStorage,
-                market,
-                vault,
-                referralStorage,
-                _params,
-                prices,
-                tradeStorage.minCollateralUsd(),
-                tradeStorage.liquidationFee()
-            );
+            feeState = _decreasePosition(_id, vault, _params, prices);
         }
 
         return (feeState, _params.request);
     }
 
-    function executeAdl(
-        IMarket market,
-        IPriceFeed priceFeed,
-        IReferralStorage referralStorage,
-        bytes32 _positionKey,
-        bytes32 _requestKey,
-        address _feeReceiver
-    ) external onlyTradeStorage(market) {
-        ITradeStorage tradeStorage = ITradeStorage(address(this));
-        IVault vault = market.VAULT();
+    function executeAdl(MarketId _id, bytes32 _positionKey, bytes32 _requestKey, address _feeReceiver)
+        external
+        onlyRoles(_ROLE_4)
+        nonReentrant
+    {
+        IVault vault = market.getVault(_id);
 
         (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) =
-            _initiateAdl(tradeStorage, market, vault, priceFeed, _positionKey, _requestKey, _feeReceiver);
+            _initiateAdl(_id, vault, _positionKey, _requestKey, _feeReceiver);
 
         _updateMarketState(
-            market,
-            prices,
-            params.request.input.ticker,
-            params.request.input.sizeDelta,
-            params.request.input.isLong,
-            false
+            _id, prices, params.request.input.ticker, params.request.input.sizeDelta, params.request.input.isLong, false
         );
 
-        _decreasePosition(
-            tradeStorage,
-            market,
-            vault,
-            referralStorage,
-            params,
-            prices,
-            tradeStorage.minCollateralUsd(),
-            tradeStorage.liquidationFee()
-        );
+        _decreasePosition(_id, vault, params, prices);
 
         Execution.validateAdl(
-            market, vault, prices, startingPnlFactor, params.request.input.ticker, params.request.input.isLong
+            _id, market, vault, prices, startingPnlFactor, params.request.input.ticker, params.request.input.isLong
         );
 
         emit AdlExecuted(address(market), _positionKey, params.request.input.sizeDelta, params.request.input.isLong);
     }
 
-    function liquidatePosition(
-        IMarket market,
-        IPriceFeed priceFeed,
-        IReferralStorage referralStorage,
-        bytes32 _positionKey,
-        bytes32 _requestKey,
-        address _liquidator
-    ) external onlyTradeStorage(market) {
-        ITradeStorage tradeStorage = ITradeStorage(address(this));
-        IVault vault = market.VAULT();
+    function liquidatePosition(MarketId _id, bytes32 _positionKey, bytes32 _requestKey, address _liquidator)
+        external
+        onlyRoles(_ROLE_4)
+        nonReentrant
+    {
+        IVault vault = market.getVault(_id);
 
-        Position.Data memory position = tradeStorage.getPosition(_positionKey);
+        Position.Data memory position = tradeStorage.getPosition(_id, _positionKey);
 
         if (position.user == address(0)) revert TradeEngine_PositionDoesNotExist();
 
@@ -152,21 +174,12 @@ library TradeEngine {
         // No price impact on Liquidations
         prices.impactedPrice = prices.indexPrice;
 
-        _updateMarketState(market, prices, position.ticker, position.size, position.isLong, false);
+        _updateMarketState(_id, prices, position.ticker, position.size, position.isLong, false);
 
         Position.Settlement memory params =
             Position.createLiquidationOrder(position, prices.collateralPrice, prices.collateralBaseUnit, _liquidator);
 
-        _decreasePosition(
-            tradeStorage,
-            market,
-            vault,
-            referralStorage,
-            params,
-            prices,
-            tradeStorage.minCollateralUsd(),
-            tradeStorage.liquidationFee()
-        );
+        _decreasePosition(_id, vault, params, prices);
 
         emit LiquidatePosition(_positionKey, _liquidator, position.isLong);
     }
@@ -175,11 +188,8 @@ library TradeEngine {
      * =========================================== Core Function Implementations ===========================================
      */
     function _createNewPosition(
-        ITradeStorage tradeStorage,
-        IMarket market,
+        MarketId _id,
         IVault vault,
-        IPositionManager positionManager,
-        IReferralStorage referralStorage,
         Position.Settlement memory _params,
         Execution.Prices memory _prices
     ) private returns (Execution.FeeState memory feeState) {
@@ -187,10 +197,10 @@ library TradeEngine {
 
         Position.Data memory position;
         (position, feeState) = Execution.createNewPosition(
-            market, tradeStorage, referralStorage, _params, _prices, tradeStorage.minCollateralUsd(), positionKey
+            _id, market, tradeStorage, referralStorage, _params, _prices, minCollateralUsd, positionKey
         );
 
-        _accumulateFees(vault, referralStorage, feeState, position.isLong);
+        _accumulateFees(_id, vault, feeState, position.isLong);
 
         _updateLiquidity(
             vault,
@@ -204,10 +214,9 @@ library TradeEngine {
             false
         );
 
-        tradeStorage.createPosition(position, positionKey);
+        tradeStorage.createPosition(_id, position, positionKey);
 
         positionManager.transferTokensForIncrease(
-            market,
             vault,
             _params.request.input.collateralToken,
             _params.request.input.collateralDelta,
@@ -220,11 +229,8 @@ library TradeEngine {
     }
 
     function _increasePosition(
-        ITradeStorage tradeStorage,
-        IMarket market,
+        MarketId _id,
         IVault vault,
-        IPositionManager positionManager,
-        IReferralStorage referralStorage,
         Position.Settlement memory _params,
         Execution.Prices memory _prices
     ) private returns (Execution.FeeState memory feeState) {
@@ -232,9 +238,9 @@ library TradeEngine {
 
         Position.Data memory position;
         (feeState, position) =
-            Execution.increasePosition(market, tradeStorage, referralStorage, _params, _prices, positionKey);
+            Execution.increasePosition(_id, market, tradeStorage, referralStorage, _params, _prices, positionKey);
 
-        _accumulateFees(vault, referralStorage, feeState, position.isLong);
+        _accumulateFees(_id, vault, feeState, position.isLong);
 
         _updateLiquidity(
             vault,
@@ -248,10 +254,9 @@ library TradeEngine {
             false
         );
 
-        tradeStorage.updatePosition(position, positionKey);
+        tradeStorage.updatePosition(_id, position, positionKey);
 
         positionManager.transferTokensForIncrease(
-            market,
             vault,
             _params.request.input.collateralToken,
             _params.request.input.collateralDelta,
@@ -264,14 +269,10 @@ library TradeEngine {
     }
 
     function _decreasePosition(
-        ITradeStorage tradeStorage,
-        IMarket market,
+        MarketId _id,
         IVault vault,
-        IReferralStorage referralStorage,
         Position.Settlement memory _params,
-        Execution.Prices memory _prices,
-        uint256 _minCollateralUsd,
-        uint256 _liquidationFee
+        Execution.Prices memory _prices
     ) private returns (Execution.FeeState memory feeState) {
         bytes32 positionKey = Position.generateKey(_params.request);
 
@@ -281,11 +282,19 @@ library TradeEngine {
 
         if (isCollateralEdit) {
             (position, feeState) = Execution.decreaseCollateral(
-                market, tradeStorage, referralStorage, _params, _prices, _minCollateralUsd, positionKey
+                _id, market, tradeStorage, referralStorage, _params, _prices, minCollateralUsd, positionKey
             );
         } else {
             (position, feeState) = Execution.decreasePosition(
-                market, tradeStorage, referralStorage, _params, _prices, _minCollateralUsd, _liquidationFee, positionKey
+                _id,
+                market,
+                tradeStorage,
+                referralStorage,
+                _params,
+                _prices,
+                minCollateralUsd,
+                _params.isAdl ? adlFee : liquidationFee,
+                positionKey
             );
         }
 
@@ -302,30 +311,14 @@ library TradeEngine {
         );
 
         if (feeState.isLiquidation) {
-            feeState = _handleLiquidation(
-                tradeStorage, vault, referralStorage, position, feeState, _prices, positionKey, _params.request.user
-            );
+            feeState = _handleLiquidation(_id, vault, position, feeState, _prices, positionKey, _params.request.user);
         } else if (isCollateralEdit) {
             _handleCollateralDecrease(
-                tradeStorage,
-                vault,
-                referralStorage,
-                position,
-                feeState,
-                positionKey,
-                _params.feeReceiver,
-                _params.request.input.reverseWrap
+                _id, vault, position, feeState, positionKey, _params.feeReceiver, _params.request.input.reverseWrap
             );
         } else {
             _handlePositionDecrease(
-                tradeStorage,
-                vault,
-                referralStorage,
-                position,
-                feeState,
-                positionKey,
-                _params.feeReceiver,
-                _params.request.input.reverseWrap
+                _id, vault, position, feeState, positionKey, _params.feeReceiver, _params.request.input.reverseWrap
             );
         }
 
@@ -333,24 +326,23 @@ library TradeEngine {
     }
 
     function _handleLiquidation(
-        ITradeStorage tradeStorage,
+        MarketId _id,
         IVault vault,
-        IReferralStorage referralStorage,
         Position.Data memory _position,
         Execution.FeeState memory _feeState,
         Execution.Prices memory _prices,
         bytes32 _positionKey,
         address _liquidator
     ) private returns (Execution.FeeState memory) {
-        tradeStorage.deletePosition(_positionKey, _position.isLong);
+        tradeStorage.deletePosition(_id, _positionKey, _position.isLong);
 
-        _deleteAssociatedOrders(tradeStorage, _position.stopLossKey, _position.takeProfitKey);
+        _deleteAssociatedOrders(_id, _position.stopLossKey, _position.takeProfitKey);
 
         _feeState = _adjustFeesForInsolvency(
             _feeState, _position.collateral.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit)
         );
 
-        _accumulateFees(vault, referralStorage, _feeState, _position.isLong);
+        _accumulateFees(_id, vault, _feeState, _position.isLong);
 
         vault.updatePoolBalance(_feeState.afterFeeAmount, _position.isLong, true);
 
@@ -361,7 +353,6 @@ library TradeEngine {
 
         _transferTokensForDecrease(
             vault,
-            referralStorage,
             _feeState,
             _feeState.amountOwedToUser,
             _liquidator,
@@ -374,50 +365,41 @@ library TradeEngine {
     }
 
     function _handleCollateralDecrease(
-        ITradeStorage tradeStorage,
+        MarketId _id,
         IVault vault,
-        IReferralStorage referralStorage,
         Position.Data memory _position,
         Execution.FeeState memory _feeState,
         bytes32 _positionKey,
         address _feeReceiver,
         bool _reverseWrap
     ) private {
-        _accumulateFees(vault, referralStorage, _feeState, _position.isLong);
+        _accumulateFees(_id, vault, _feeState, _position.isLong);
 
-        tradeStorage.updatePosition(_position, _positionKey);
+        tradeStorage.updatePosition(_id, _position, _positionKey);
 
         _transferTokensForDecrease(
-            vault,
-            referralStorage,
-            _feeState,
-            _feeState.afterFeeAmount,
-            _feeReceiver,
-            _position.user,
-            _position.isLong,
-            _reverseWrap
+            vault, _feeState, _feeState.afterFeeAmount, _feeReceiver, _position.user, _position.isLong, _reverseWrap
         );
     }
 
     function _handlePositionDecrease(
-        ITradeStorage tradeStorage,
+        MarketId _id,
         IVault vault,
-        IReferralStorage referralStorage,
         Position.Data memory _position,
         Execution.FeeState memory _feeState,
         bytes32 _positionKey,
         address _executor,
         bool _reverseWrap
     ) private {
-        _accumulateFees(vault, referralStorage, _feeState, _position.isLong);
+        _accumulateFees(_id, vault, _feeState, _position.isLong);
 
         vault.updatePoolBalance(_feeState.realizedPnl.abs(), _position.isLong, _feeState.realizedPnl < 0);
 
         if (_position.size == 0 || _position.collateral == 0) {
-            tradeStorage.deletePosition(_positionKey, _position.isLong);
-            _deleteAssociatedOrders(tradeStorage, _position.stopLossKey, _position.takeProfitKey);
+            tradeStorage.deletePosition(_id, _positionKey, _position.isLong);
+            _deleteAssociatedOrders(_id, _position.stopLossKey, _position.takeProfitKey);
         } else {
-            tradeStorage.updatePosition(_position, _positionKey);
+            tradeStorage.updatePosition(_id, _position, _positionKey);
         }
 
         // Check Market has enough available liquidity for all transfers out.
@@ -427,34 +409,19 @@ library TradeEngine {
         );
 
         _transferTokensForDecrease(
-            vault,
-            referralStorage,
-            _feeState,
-            _feeState.afterFeeAmount,
-            _executor,
-            _position.user,
-            _position.isLong,
-            _reverseWrap
+            vault, _feeState, _feeState.afterFeeAmount, _executor, _position.user, _position.isLong, _reverseWrap
         );
     }
 
     /**
      * =========================================== Private Helper Functions ===========================================
      */
-    function _initiateAdl(
-        ITradeStorage tradeStorage,
-        IMarket market,
-        IVault vault,
-        IPriceFeed priceFeed,
-        bytes32 _positionKey,
-        bytes32 _requestKey,
-        address _feeReceiver
-    )
+    function _initiateAdl(MarketId _id, IVault vault, bytes32 _positionKey, bytes32 _requestKey, address _feeReceiver)
         private
         view
         returns (Execution.Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor)
     {
-        Position.Data memory position = tradeStorage.getPosition(_positionKey);
+        Position.Data memory position = tradeStorage.getPosition(_id, _positionKey);
 
         if (position.user == address(0)) revert TradeEngine_PositionDoesNotExist();
 
@@ -462,13 +429,12 @@ library TradeEngine {
         Execution.validatePriceRequest(priceFeed, _feeReceiver, _requestKey);
 
         (prices, params, startingPnlFactor) =
-            Execution.initiateAdlOrder(market, vault, priceFeed, position, requestTimestamp, _feeReceiver);
+            Execution.initiateAdlOrder(_id, market, vault, priceFeed, position, requestTimestamp, _feeReceiver);
     }
 
     /// @dev - Can fail on insolvency.
     function _transferTokensForDecrease(
         IVault vault,
-        IReferralStorage referralStorage,
         Execution.FeeState memory _feeState,
         uint256 _amountOut,
         address _executor,
@@ -495,30 +461,21 @@ library TradeEngine {
     }
 
     function _updateMarketState(
-        IMarket market,
+        MarketId _id,
         Execution.Prices memory _prices,
         string memory _ticker,
         uint256 _sizeDelta,
         bool _isLong,
         bool _isIncrease
     ) private {
-        market.updateMarketState(
-            _ticker,
-            _sizeDelta,
-            _prices.indexPrice,
-            _prices.impactedPrice,
-            _prices.collateralPrice,
-            _prices.collateralBaseUnit,
-            _isLong,
-            _isIncrease
-        );
+        market.updateMarketState(_id, _ticker, _sizeDelta, _prices, _isLong, _isIncrease);
 
         // If Price Impact is Negative, add to the impact Pool
         // If Price Impact is Positive, Subtract from the Impact Pool
         // Impact Pool Delta = -1 * Price Impact
         if (_prices.priceImpactUsd == 0) return;
 
-        market.updateImpactPool(_ticker, -_prices.priceImpactUsd);
+        market.updateImpactPool(_id, _ticker, -_prices.priceImpactUsd);
     }
 
     function _updateLiquidity(
@@ -541,16 +498,11 @@ library TradeEngine {
         vault.updateCollateralAmount(_collateralDelta, _user, _isLong, _isReserve, _isFullDecrease);
     }
 
-    function _accumulateFees(
-        IVault vault,
-        IReferralStorage referralStorage,
-        Execution.FeeState memory _feeState,
-        bool _isLong
-    ) private {
+    function _accumulateFees(MarketId _id, IVault vault, Execution.FeeState memory _feeState, bool _isLong) private {
         vault.accumulateFees(_feeState.borrowFee + _feeState.positionFee, _isLong);
 
         if (_feeState.affiliateRebate > 0) {
-            referralStorage.accumulateAffiliateRewards(_feeState.referrer, _isLong, _feeState.affiliateRebate);
+            referralStorage.accumulateAffiliateRewards(_id, _feeState.referrer, _isLong, _feeState.affiliateRebate);
         }
 
         vault.updatePoolBalance(_feeState.fundingFee.abs(), _isLong, _feeState.fundingFee < 0);
@@ -586,10 +538,8 @@ library TradeEngine {
         return _feeState;
     }
 
-    function _deleteAssociatedOrders(ITradeStorage tradeStorage, bytes32 _stopLossKey, bytes32 _takeProfitKey)
-        private
-    {
-        if (_stopLossKey != bytes32(0)) tradeStorage.deleteOrder(_stopLossKey, true);
-        if (_takeProfitKey != bytes32(0)) tradeStorage.deleteOrder(_takeProfitKey, true);
+    function _deleteAssociatedOrders(MarketId _id, bytes32 _stopLossKey, bytes32 _takeProfitKey) private {
+        if (_stopLossKey != bytes32(0)) tradeStorage.deleteOrder(_id, _stopLossKey, true);
+        if (_takeProfitKey != bytes32(0)) tradeStorage.deleteOrder(_id, _takeProfitKey, true);
     }
 }

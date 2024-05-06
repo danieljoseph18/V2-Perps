@@ -7,6 +7,10 @@ import {Funding} from "../libraries/Funding.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {MarketUtils} from "./MarketUtils.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
+import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
+import {EnumerableMap} from "../libraries/EnumerableMap.sol";
+import {MarketId} from "../types/MarketId.sol";
+import {Execution} from "../positions/Execution.sol";
 
 library Pool {
     event MarketStateUpdated(string ticker, bool isLong);
@@ -33,7 +37,6 @@ library Pool {
     int48 private constant MAX_SKEW_SCALE = 10_000_000_000; // $10 Bn
     int16 private constant MAX_SCALAR = 10000;
     int16 private constant MIN_SCALAR = 1000;
-    uint256 private constant _ROLE_4 = 1 << 4;
 
     struct Input {
         uint256 amountIn;
@@ -47,6 +50,22 @@ library Pool {
         bytes32 key;
         bytes32 priceRequestKey; // Key of the price update request
         bytes32 pnlRequestKey; // Id of the cumulative pnl request
+    }
+
+    struct GlobalState {
+        IVault vault;
+        bool isMultiAsset;
+        bool isInitialized;
+        address poolOwner;
+        /**
+         * Maximum borrowing fee per day as a percentage.
+         * The current borrowing fee will fluctuate along this scale,
+         * based on the open interest to max open interest ratio.
+         */
+        uint256 borrowScale;
+        string[] tickers;
+        EnumerableSetLib.Bytes32Set assetIds;
+        EnumerableMap.MarketMap requests;
     }
 
     struct Storage {
@@ -157,18 +176,6 @@ library Pool {
          */
         int48 skewScale;
         /**
-         * Dampening factor for the effect of skew in positive price impact.
-         * Value as a percentage, with 4 d.p of precision.
-         * Needs to be expanded to 30 dp for USD calculations.
-         */
-        int16 positiveSkewScalar;
-        /**
-         * Dampening factor for the effect of skew in negative price impact.
-         * Value as a percentage, with 4 d.p of precision.
-         * Needs to be expanded to 30 dp for USD calculations.
-         */
-        int16 negativeSkewScalar;
-        /**
          * Dampening factor for the effect of liquidity in positive price impact.
          * Value as a percentage, with 4 d.p of precision.
          * Needs to be expanded to 30 dp for USD calculations.
@@ -192,28 +199,26 @@ library Pool {
     /// @dev Order of operations is important, as some functions rely on others.
     /// For example, Funding relies on the open interest to calculate the skew.
     function updateState(
+        MarketId _id,
         IMarket market,
         Storage storage pool,
         string calldata _ticker,
         uint256 _sizeDelta,
-        uint256 _indexPrice,
-        uint256 _impactedPrice,
-        uint256 _collateralPrice,
-        uint256 _collateralBaseUnit,
+        Execution.Prices memory _prices,
         bool _isLong,
         bool _isIncrease
     ) external {
-        // Market uses delegate call, so msg.sender in this context should be TradeStorage
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_4) revert Pool_InvalidUpdate();
+        if (address(this) != address(market)) revert Pool_InvalidUpdate();
 
-        Funding.updateState(market, pool, _ticker, _indexPrice);
+        Funding.updateState(_id, market, pool, _ticker, _prices.indexPrice);
 
         if (_sizeDelta != 0) {
             _updateWeightedAverages(
+                _id,
                 pool,
                 market,
                 _ticker,
-                _impactedPrice == 0 ? _indexPrice : _impactedPrice, // If no price impact, set to the index price
+                _prices.impactedPrice == 0 ? _prices.indexPrice : _prices.impactedPrice, // If no price impact, set to the index price
                 _isIncrease ? int256(_sizeDelta) : -int256(_sizeDelta),
                 _isLong
             );
@@ -233,7 +238,7 @@ library Pool {
             }
         }
 
-        Borrowing.updateState(market, market.VAULT(), pool, _ticker, _collateralPrice, _collateralBaseUnit, _isLong);
+        _updateBorrowState(_id, market, pool, _ticker, _prices.collateralPrice, _prices.collateralBaseUnit, _isLong);
 
         pool.lastUpdate = uint48(block.timestamp);
 
@@ -291,17 +296,6 @@ library Pool {
             revert Pool_InvalidSkewScale();
         }
 
-        if (_config.positiveSkewScalar <= MIN_SCALAR || _config.positiveSkewScalar > MAX_SCALAR) {
-            revert Pool_InvalidSkewScalar();
-        }
-        if (_config.negativeSkewScalar <= MIN_SCALAR || _config.negativeSkewScalar > MAX_SCALAR) {
-            revert Pool_InvalidSkewScalar();
-        }
-
-        if (_config.negativeSkewScalar < _config.positiveSkewScalar) {
-            revert Pool_InvalidSkewScalar();
-        }
-
         if (_config.positiveLiquidityScalar <= MIN_SCALAR || _config.positiveLiquidityScalar > MAX_SCALAR) {
             revert Pool_InvalidLiquidityScalar();
         }
@@ -318,6 +312,7 @@ library Pool {
      * ========================= Private Functions =========================
      */
     function _updateWeightedAverages(
+        MarketId _id,
         Pool.Storage storage _storage,
         IMarket market,
         string calldata _ticker,
@@ -333,15 +328,29 @@ library Pool {
             );
 
             _storage.cumulatives.weightedAvgCumulativeLong =
-                Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, true);
+                Borrowing.getNextAverageCumulative(_id, market, _ticker, _sizeDeltaUsd, true);
         } else {
             _storage.cumulatives.shortAverageEntryPriceUsd = MarketUtils.calculateWeightedAverageEntryPrice(
                 _storage.cumulatives.shortAverageEntryPriceUsd, _storage.shortOpenInterest, _sizeDeltaUsd, _priceUsd
             );
 
             _storage.cumulatives.weightedAvgCumulativeShort =
-                Borrowing.getNextAverageCumulative(market, _ticker, _sizeDeltaUsd, false);
+                Borrowing.getNextAverageCumulative(_id, market, _ticker, _sizeDeltaUsd, false);
         }
+    }
+
+    function _updateBorrowState(
+        MarketId _id,
+        IMarket market,
+        Storage storage _storage,
+        string calldata _ticker,
+        uint256 _collateralPrice,
+        uint256 _collateralBaseUnit,
+        bool _isLong
+    ) private {
+        Borrowing.updateState(
+            _id, market, market.getVault(_id), _storage, _ticker, _collateralPrice, _collateralBaseUnit, _isLong
+        );
     }
 
     function _generateKey(address _owner, address _tokenIn, uint256 _tokenAmount, bool _isDeposit)

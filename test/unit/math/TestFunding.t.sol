@@ -4,6 +4,7 @@ pragma solidity 0.8.23;
 import "forge-std/Test.sol";
 import {Deploy} from "script/Deploy.s.sol";
 import {IMarket} from "src/markets/Market.sol";
+import {IVault} from "src/markets/interfaces/IVault.sol";
 import {Pool} from "src/markets/Pool.sol";
 import {MarketFactory, IMarketFactory} from "src/factory/MarketFactory.sol";
 import {IPriceFeed} from "src/oracle/interfaces/IPriceFeed.sol";
@@ -17,9 +18,7 @@ import {MockUSDC} from "../../mocks/MockUSDC.sol";
 import {Position} from "src/positions/Position.sol";
 import {MarketUtils} from "src/markets/MarketUtils.sol";
 import {GlobalRewardTracker} from "src/rewards/GlobalRewardTracker.sol";
-
 import {FeeDistributor} from "src/rewards/FeeDistributor.sol";
-
 import {MockPriceFeed} from "../../mocks/MockPriceFeed.sol";
 import {MathUtils} from "src/libraries/MathUtils.sol";
 import {Referral} from "src/referrals/Referral.sol";
@@ -27,6 +26,8 @@ import {IERC20} from "src/tokens/interfaces/IERC20.sol";
 import {PriceImpact} from "src/libraries/PriceImpact.sol";
 import {Execution} from "src/positions/Execution.sol";
 import {Funding} from "src/libraries/Funding.sol";
+import {MarketId} from "src/types/MarketId.sol";
+import {TradeEngine} from "src/positions/TradeEngine.sol";
 
 contract TestFunding is Test {
     using MathUtils for uint256;
@@ -36,16 +37,19 @@ contract TestFunding is Test {
     ITradeStorage tradeStorage;
     ReferralStorage referralStorage;
     PositionManager positionManager;
+    TradeEngine tradeEngine;
     Router router;
     address OWNER;
     IMarket market;
+    IVault vault;
     FeeDistributor feeDistributor;
-
     GlobalRewardTracker rewardTracker;
 
     address weth;
     address usdc;
     address link;
+
+    MarketId marketId;
 
     string ethTicker = "ETH";
     string usdcTicker = "USDC";
@@ -69,8 +73,10 @@ contract TestFunding is Test {
         referralStorage = contracts.referralStorage;
         positionManager = contracts.positionManager;
         router = contracts.router;
+        market = contracts.market;
+        tradeStorage = contracts.tradeStorage;
+        tradeEngine = contracts.tradeEngine;
         feeDistributor = contracts.feeDistributor;
-
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
         tickers.push(ethTicker);
@@ -100,7 +106,7 @@ contract TestFunding is Test {
         vm.startPrank(OWNER);
         WETH(weth).deposit{value: 1_000_000 ether}();
         IMarketFactory.Input memory input = IMarketFactory.Input({
-            isMultiAsset: false,
+            isMultiAsset: true,
             indexTokenTicker: "ETH",
             marketTokenName: "BRRR",
             marketTokenSymbol: "BRRR",
@@ -124,24 +130,23 @@ contract TestFunding is Test {
         meds.push(1);
         bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
         priceFeed.updatePrices(encodedPrices);
-        marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
-        market = IMarket(payable(marketFactory.markets(0)));
+        marketId = marketFactory.executeMarketRequest(marketFactory.getRequestKeys()[0]);
         bytes memory encodedPnl = priceFeed.encodePnl(0, address(market), uint48(block.timestamp), 0);
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
+        vault = market.getVault(marketId);
         tradeStorage = ITradeStorage(market.tradeStorage());
-        rewardTracker = GlobalRewardTracker(address(market.VAULT().rewardTracker()));
-
+        rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
-        router.createDeposit{value: 20_000.01 ether + 1 gwei}(market, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
+        router.createDeposit{value: 20_000.01 ether + 1 gwei}(marketId, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
         vm.prank(OWNER);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
 
         vm.startPrank(OWNER);
         MockUSDC(usdc).approve(address(router), type(uint256).max);
-        router.createDeposit{value: 0.01 ether + 1 gwei}(market, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
-        positionManager.executeDeposit{value: 0.01 ether}(market, market.getRequestAtIndex(0).key);
+        router.createDeposit{value: 0.01 ether + 1 gwei}(marketId, OWNER, usdc, 50_000_000e6, 0.01 ether, 0, false);
+        positionManager.executeDeposit{value: 0.01 ether}(marketId, market.getRequestAtIndex(marketId, 0).key);
         vm.stopPrank();
         _;
     }
@@ -208,16 +213,16 @@ contract TestFunding is Test {
         // Mock an existing rate and velocity
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(market.getFundingRates.selector, ethTicker),
+            abi.encodeWithSelector(market.getFundingRates.selector, marketId, ethTicker),
             abi.encode(0, 0.0025e18)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(market.getLastUpdate.selector, ethTicker),
+            abi.encodeWithSelector(market.getLastUpdate.selector, marketId, ethTicker),
             abi.encode(uint48(block.timestamp))
         );
         // get current funding rate
-        int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
+        int256 currentFundingRate = Funding.getCurrentFundingRate(marketId, market, ethTicker);
         /**
          * currentFundingRate = 0 + 0.0025 * (0 / 86,400)
          *                    = 0
@@ -230,7 +235,7 @@ contract TestFunding is Test {
 
         // get current funding rate
 
-        currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
+        currentFundingRate = Funding.getCurrentFundingRate(marketId, market, ethTicker);
         /**
          * currentFundingRate = 0 + 0.0025 * (10,000 / 86,400)
          *                    = 0 + 0.0025 * 0.11574074
@@ -244,7 +249,7 @@ contract TestFunding is Test {
 
         // get current funding rate
 
-        currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
+        currentFundingRate = Funding.getCurrentFundingRate(marketId, market, ethTicker);
         /**
          * currentFundingRate = 0 + 0.0025 * (20,000 / 86,400)
          *                    = 0 + 0.0025 * 0.23148148
@@ -258,7 +263,7 @@ contract TestFunding is Test {
 
         // get current funding rate
 
-        currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
+        currentFundingRate = Funding.getCurrentFundingRate(marketId, market, ethTicker);
 
         /**
          * currentFundingRate = 0 + 0.0025 * (30,000 / 86,400)
@@ -274,17 +279,17 @@ contract TestFunding is Test {
         // Mock an existing negative rate and positive velocity
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(market.getFundingRates.selector, ethTicker),
+            abi.encodeWithSelector(market.getFundingRates.selector, marketId, ethTicker),
             abi.encode(-0.0005e18, 0.0025e18)
         );
         vm.mockCall(
             address(market),
-            abi.encodeWithSelector(market.getLastUpdate.selector, ethTicker),
+            abi.encodeWithSelector(market.getLastUpdate.selector, marketId, ethTicker),
             abi.encode(uint48(block.timestamp))
         );
         // get current funding rate
 
-        int256 currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
+        int256 currentFundingRate = Funding.getCurrentFundingRate(marketId, market, ethTicker);
         /**
          * currentFundingRate = -0.0005 + 0.0025 * (0 / 86,400)
          *                    = -0.0005
@@ -297,7 +302,7 @@ contract TestFunding is Test {
 
         // get current funding rate
 
-        currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
+        currentFundingRate = Funding.getCurrentFundingRate(marketId, market, ethTicker);
         /**
          * currentFundingRate = -0.0005 + 0.0025 * (10,000 / 86,400)
          *                    = -0.0005 + 0.0025 * 0.11574074
@@ -312,7 +317,7 @@ contract TestFunding is Test {
 
         // get current funding rate
 
-        currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
+        currentFundingRate = Funding.getCurrentFundingRate(marketId, market, ethTicker);
         /**
          * currentFundingRate = -0.0005 + 0.0025 * (20,000 / 86,400)
          *                    = -0.0005 + 0.0025 * 0.23148148
@@ -327,7 +332,7 @@ contract TestFunding is Test {
 
         // get current funding rate
 
-        currentFundingRate = Funding.getCurrentFundingRate(market, ethTicker);
+        currentFundingRate = Funding.getCurrentFundingRate(marketId, market, ethTicker);
 
         /**
          * currentFundingRate = -0.0005 + 0.0025 * (30,000 / 86,400)
@@ -362,22 +367,25 @@ contract TestFunding is Test {
         values.fundingVelocity = bound(_fundingVelocity, -1e18, 1e18); // Between -100% and 100%
 
         // Get market storage
-        Pool.Storage memory store = market.getStorage(ethTicker);
+        Pool.Storage memory store = market.getStorage(marketId, ethTicker);
         store.fundingRate = int64(values.fundingRate);
         store.fundingRateVelocity = int64(values.fundingVelocity);
         store.lastUpdate = uint48(block.timestamp);
         store.fundingAccruedUsd = values.entryFundingAccrued;
 
         // Mock the necessary market functions
-        vm.mockCall(address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(store));
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(market.getStorage.selector, marketId, ethTicker), abi.encode(store)
+        );
 
         // Pass some time
         vm.warp(block.timestamp + 10_000);
         vm.roll(block.number + 1);
 
         // Call the function with the fuzzed inputs
-        (values.fundingFeeUsd, values.nextFundingAccrued) =
-            Position.getFundingFeeDelta(market, ethTicker, 2500e30, values.sizeDelta, values.entryFundingAccrued);
+        (values.fundingFeeUsd, values.nextFundingAccrued) = Position.getFundingFeeDelta(
+            marketId, market, ethTicker, 2500e30, values.sizeDelta, values.entryFundingAccrued
+        );
 
         // Assert that the outputs are within expected ranges
         assertEq(
@@ -400,19 +408,22 @@ contract TestFunding is Test {
         _entryFundingAccrued = bound(_entryFundingAccrued, -1e30, 1e30); // Between -$1 and $1
         _indexPrice = bound(_indexPrice, 100e30, 100_000e30);
         // Get market storage
-        Pool.Storage memory store = market.getStorage(ethTicker);
+        Pool.Storage memory store = market.getStorage(marketId, ethTicker);
         store.fundingRate = int64(_fundingRate);
         store.fundingRateVelocity = int64(_fundingVelocity);
         store.lastUpdate = uint48(block.timestamp);
         store.fundingAccruedUsd = _entryFundingAccrued;
         // Mock the necessary market functions
-        vm.mockCall(address(market), abi.encodeWithSelector(market.getStorage.selector, ethTicker), abi.encode(store));
+        vm.mockCall(
+            address(market), abi.encodeWithSelector(market.getStorage.selector, marketId, ethTicker), abi.encode(store)
+        );
 
         vm.warp(block.timestamp + 10_000);
         vm.roll(block.number + 1);
 
         // Call the function with the fuzzed input
-        (int256 nextFundingRate, int256 nextFundingAccruedUsd) = Funding.recompute(market, ethTicker, _indexPrice);
+        (int256 nextFundingRate, int256 nextFundingAccruedUsd) =
+            Funding.recompute(marketId, market, ethTicker, _indexPrice);
 
         // Check values are as expected
         console2.log(nextFundingRate);

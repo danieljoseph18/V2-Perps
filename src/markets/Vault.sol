@@ -42,15 +42,11 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
 
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
 
-    modifier onlyMarket() {
-        if (msg.sender != address(market)) revert Vault_AccessDenied();
-        _;
-    }
-
     constructor(address _poolOwner, address _weth, address _usdc, string memory _name, string memory _symbol)
         ERC20(_name, _symbol, 18)
     {
         _initializeOwner(msg.sender);
+        _grantRoles(_poolOwner, _ROLE_2); // Pool Owner
         poolOwner = _poolOwner;
         WETH = _weth;
         USDC = _usdc;
@@ -59,22 +55,27 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     /// @dev Required to receive ETH when unwrapping WETH for transfers out.
     receive() external payable {}
 
-    function initialize(address _market, address _feeDistributor, address _rewardTracker, address _feeReceiver)
-        external
-        onlyOwner
-    {
+    function initialize(
+        address _market,
+        address _feeDistributor,
+        address _rewardTracker,
+        address _tradeEngine,
+        address _feeReceiver
+    ) external onlyOwner {
         if (isInitialized) revert Vault_AlreadyInitialized();
         market = IMarket(_market);
         feeDistributor = IFeeDistributor(_feeDistributor);
         rewardTracker = IGlobalRewardTracker(_rewardTracker);
         feeReceiver = _feeReceiver;
+        _grantRoles(_market, _ROLE_7);
+        _grantRoles(_tradeEngine, _ROLE_6);
         isInitialized = true;
     }
 
     /**
      * =========================================== Storage Functions ===========================================
      */
-    function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_4) {
+    function updateLiquidityReservation(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_6) {
         if (_isIncrease) {
             _isLong ? longTokensReserved += _amount : shortTokensReserved += _amount;
         } else {
@@ -88,7 +89,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         }
     }
 
-    function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_4) {
+    function updatePoolBalance(uint256 _amount, bool _isLong, bool _isIncrease) external onlyRoles(_ROLE_6) {
         _updatePoolBalance(_amount, _isLong, _isIncrease);
     }
 
@@ -97,7 +98,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     /// This function is required to keep the accounting consistent, and settle any excess / deficits.
     function updateCollateralAmount(uint256 _amount, address _user, bool _isLong, bool _isIncrease, bool _isFullClose)
         external
-        onlyRoles(_ROLE_4)
+        onlyRoles(_ROLE_6)
     {
         if (_isIncrease) {
             collateralAmounts[_user][_isLong] += _amount;
@@ -125,7 +126,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         }
     }
 
-    function accumulateFees(uint256 _amount, bool _isLong) external onlyRoles(_ROLE_4) {
+    function accumulateFees(uint256 _amount, bool _isLong) external onlyRoles(_ROLE_6) {
         _accumulateFees(_amount, _isLong);
     }
 
@@ -164,7 +165,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
 
     function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager)
         external
-        onlyMarket
+        onlyRoles(_ROLE_7)
         returns (uint256)
     {
         uint256 initialBalance =
@@ -188,7 +189,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
 
     function executeWithdrawal(ExecuteWithdrawal calldata _params, address _tokenOut, address _positionManager)
         external
-        onlyMarket
+        onlyRoles(_ROLE_7)
     {
         uint256 initialBalance = _params.withdrawal.isLongToken
             ? IERC20(WETH).balanceOf(address(this))
@@ -230,7 +231,7 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
      */
     function transferOutTokens(address _to, uint256 _amount, bool _isLongToken, bool _shouldUnwrap)
         external
-        onlyRoles(_ROLE_4)
+        onlyRoles(_ROLE_6)
     {
         _transferOutTokens(_isLongToken ? WETH : USDC, _to, _amount, _isLongToken, _shouldUnwrap);
     }

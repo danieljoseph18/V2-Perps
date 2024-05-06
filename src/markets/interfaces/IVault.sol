@@ -54,8 +54,13 @@ interface IVault is IERC20 {
     error Vault_InvalidWithdrawal();
     error Vault_AccessDenied();
 
-    function initialize(address _market, address _feeDistributor, address _rewardTracker, address _feeReceiver)
-        external;
+    function initialize(
+        address _market,
+        address _feeDistributor,
+        address _rewardTracker,
+        address _tradeEngine,
+        address _feeReceiver
+    ) external;
     function executeDeposit(ExecuteDeposit calldata _params, address _tokenIn, address _positionManager)
         external
         returns (uint256 mintAmount);

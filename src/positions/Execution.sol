@@ -16,8 +16,10 @@ import {PriceImpact} from "../libraries/PriceImpact.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {Referral} from "../referrals/Referral.sol";
 import {IReferralStorage} from "../referrals/interfaces/IReferralStorage.sol";
+import {ITradeEngine} from "./interfaces/ITradeEngine.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
+import {MarketId} from "../types/MarketId.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -82,7 +84,7 @@ library Execution {
      * =========================================== Construction Functions ===========================================
      */
     function initiate(
-        ITradeStorage tradeStorage,
+        MarketId _id,
         IMarket market,
         IVault vault,
         IPriceFeed priceFeed,
@@ -90,10 +92,10 @@ library Execution {
         bytes32 _requestKey,
         address _feeReceiver
     ) external view returns (Prices memory prices, Position.Request memory request) {
-        // TradeStorage uses delegate calls, so msg.sender in this context should be Position Manager
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_1) revert Execution_AccessDenied();
+        ITradeStorage tradeStorage = ITradeStorage(msg.sender);
+        if (tradeStorage != market.tradeStorage()) revert Execution_AccessDenied();
 
-        request = tradeStorage.getOrder(_orderKey);
+        request = tradeStorage.getOrder(_id, _orderKey);
 
         if (request.input.isLimit) validatePriceRequest(priceFeed, _feeReceiver, _requestKey);
 
@@ -110,10 +112,11 @@ library Execution {
         }
 
         if (request.input.sizeDelta != 0) {
-            (prices.impactedPrice, prices.priceImpactUsd) = PriceImpact.execute(market, vault, request, prices);
+            (prices.impactedPrice, prices.priceImpactUsd) = PriceImpact.execute(_id, market, vault, request, prices);
 
             if (request.input.isIncrease) {
                 MarketUtils.validateAllocation(
+                    _id,
                     market,
                     vault,
                     request.input.ticker,
@@ -128,6 +131,7 @@ library Execution {
     }
 
     function initiateAdlOrder(
+        MarketId _id,
         IMarket market,
         IVault vault,
         IPriceFeed priceFeed,
@@ -135,12 +139,11 @@ library Execution {
         uint48 _requestTimestamp,
         address _feeReceiver
     ) external view returns (Prices memory prices, Position.Settlement memory params, int256 startingPnlFactor) {
-        // TradeStorage uses delegate calls, so msg.sender in this context should be Position Manager
-        if (OwnableRoles(address(market)).rolesOf(msg.sender) != _ROLE_1) revert Execution_AccessDenied();
+        if (ITradeStorage(msg.sender) != market.tradeStorage()) revert Execution_AccessDenied();
 
         prices = getTokenPrices(priceFeed, _position.ticker, _requestTimestamp, _position.isLong, false);
 
-        startingPnlFactor = _getPnlFactor(market, vault, prices, _position.ticker, _position.isLong);
+        startingPnlFactor = _getPnlFactor(_id, market, vault, prices, _position.ticker, _position.isLong);
         uint256 absPnlFactor = startingPnlFactor.abs();
 
         if (absPnlFactor < MAX_PNL_FACTOR || startingPnlFactor < 0) {
@@ -155,7 +158,7 @@ library Execution {
 
         uint256 percentageToAdl = Position.calculateAdlPercentage(absPnlFactor, pnl, _position.size);
 
-        uint256 poolUsd = _getPoolUsd(market, vault, prices, _position.ticker, _position.isLong);
+        uint256 poolUsd = _getPoolUsd(_id, market, vault, prices, _position.ticker, _position.isLong);
         prices.impactedPrice = _executeAdlImpact(
             prices.indexPrice, _position.weightedAvgEntryPrice, pnl.abs(), poolUsd, absPnlFactor, _position.isLong
         );
@@ -169,6 +172,7 @@ library Execution {
      * =========================================== Main Execution Functions ===========================================
      */
     function decreaseCollateral(
+        MarketId _id,
         IMarket market,
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
@@ -177,7 +181,7 @@ library Execution {
         uint256 _minCollateralUsd,
         bytes32 _positionKey
     ) internal view returns (Position.Data memory position, FeeState memory feeState) {
-        position = tradeStorage.getPosition(_positionKey);
+        position = tradeStorage.getPosition(_id, _positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
         if (
             _params.request.input.collateralDelta.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit)
@@ -185,8 +189,8 @@ library Execution {
         ) revert Execution_InvalidPosition();
 
         (position, feeState) = _calculateFees(
+            _id,
             market,
-            tradeStorage,
             referralStorage,
             position,
             feeState,
@@ -213,12 +217,13 @@ library Execution {
 
         if (remainingCollateralUsd < _minCollateralUsd) revert Execution_MinCollateralThreshold();
 
-        if (checkIsLiquidatable(market, position, _prices)) revert Execution_LiquidatablePosition();
+        if (checkIsLiquidatable(_id, market, position, _prices)) revert Execution_LiquidatablePosition();
 
-        Position.checkLeverage(market, _params.request.input.ticker, position.size, remainingCollateralUsd);
+        Position.checkLeverage(_id, market, _params.request.input.ticker, position.size, remainingCollateralUsd);
     }
 
     function createNewPosition(
+        MarketId _id,
         IMarket market,
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
@@ -227,10 +232,9 @@ library Execution {
         uint256 _minCollateralUsd,
         bytes32 _positionKey
     ) internal view returns (Position.Data memory position, FeeState memory feeState) {
-        if (tradeStorage.getPosition(_positionKey).user != address(0)) revert Execution_PositionExists();
+        if (tradeStorage.getPosition(_id, _positionKey).user != address(0)) revert Execution_PositionExists();
 
         feeState = _calculatePositionFees(
-            tradeStorage,
             referralStorage,
             feeState,
             _params.request.input.sizeDelta,
@@ -253,14 +257,15 @@ library Execution {
 
         if (collateralDeltaUsd < _minCollateralUsd) revert Execution_MinCollateralThreshold();
 
-        position = Position.generateNewPosition(market, _params.request, _prices.impactedPrice, collateralDeltaUsd);
+        position = Position.generateNewPosition(_id, market, _params.request, _prices.impactedPrice, collateralDeltaUsd);
 
         Position.checkLeverage(
-            market, _params.request.input.ticker, _params.request.input.sizeDelta, collateralDeltaUsd
+            _id, market, _params.request.input.ticker, _params.request.input.sizeDelta, collateralDeltaUsd
         );
     }
 
     function increasePosition(
+        MarketId _id,
         IMarket market,
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
@@ -268,12 +273,12 @@ library Execution {
         Prices memory _prices,
         bytes32 _positionKey
     ) internal view returns (FeeState memory feeState, Position.Data memory position) {
-        position = tradeStorage.getPosition(_positionKey);
+        position = tradeStorage.getPosition(_id, _positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
 
         (position, feeState) = _calculateFees(
+            _id,
             market,
-            tradeStorage,
             referralStorage,
             position,
             feeState,
@@ -296,20 +301,21 @@ library Execution {
         position =
             _updatePosition(position, collateralDeltaUsd, _params.request.input.sizeDelta, _prices.impactedPrice, true);
 
-        Position.checkLeverage(market, position.ticker, position.size, position.collateral);
+        Position.checkLeverage(_id, market, position.ticker, position.size, position.collateral);
     }
 
     function decreasePosition(
+        MarketId _id,
         IMarket market,
         ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
         Position.Settlement memory _params,
         Prices memory _prices,
         uint256 _minCollateralUsd,
-        uint256 _liquidationFee,
+        uint256 _alternativeFee, // covers liquidations and adls
         bytes32 _positionKey
     ) internal view returns (Position.Data memory position, FeeState memory feeState) {
-        position = tradeStorage.getPosition(_positionKey);
+        position = tradeStorage.getPosition(_id, _positionKey);
         if (position.user == address(0)) revert Execution_InvalidPosition();
 
         if (_params.request.requestType == Position.RequestType.STOP_LOSS) {
@@ -322,8 +328,8 @@ library Execution {
             _validateCollateralDelta(position, _params, _prices);
 
         (position, feeState) = _calculateFees(
+            _id,
             market,
-            tradeStorage,
             referralStorage,
             position,
             feeState,
@@ -337,10 +343,7 @@ library Execution {
 
         if (_params.isAdl) {
             feeState.feeForExecutor = _calculateFeeForAdl(
-                _params.request.input.sizeDelta,
-                _prices.collateralPrice,
-                _prices.collateralBaseUnit,
-                tradeStorage.adlFee()
+                _params.request.input.sizeDelta, _prices.collateralPrice, _prices.collateralBaseUnit, _alternativeFee
             );
         }
 
@@ -350,14 +353,14 @@ library Execution {
 
         if (feeState.fundingFee < 0) losses += feeState.fundingFee.abs();
 
-        uint256 maintenanceCollateral = _getMaintenanceCollateral(market, position);
+        uint256 maintenanceCollateral = _getMaintenanceCollateral(_id, market, position);
 
         if (losses.toUsd(_prices.collateralPrice, _prices.collateralBaseUnit) >= maintenanceCollateral) {
             (_params, feeState) =
-                _initiateLiquidation(_params, _prices, feeState, position.size, position.collateral, _liquidationFee);
+                _initiateLiquidation(_params, _prices, feeState, position.size, position.collateral, _alternativeFee);
         } else {
             (position, feeState.afterFeeAmount) =
-                _initiateDecreasePosition(market, _params, position, _prices, feeState, _minCollateralUsd);
+                _initiateDecreasePosition(_id, market, _params, position, _prices, feeState, _minCollateralUsd);
         }
     }
 
@@ -365,6 +368,7 @@ library Execution {
      * =========================================== Validation Functions ===========================================
      */
     function validateAdl(
+        MarketId _id,
         IMarket market,
         IVault vault,
         Prices memory _prices,
@@ -372,7 +376,7 @@ library Execution {
         string memory _ticker,
         bool _isLong
     ) internal view {
-        int256 newPnlFactor = _getPnlFactor(market, vault, _prices, _ticker, _isLong);
+        int256 newPnlFactor = _getPnlFactor(_id, market, vault, _prices, _ticker, _isLong);
 
         if (newPnlFactor >= _startingPnlFactor) revert Execution_PNLFactorNotReduced();
     }
@@ -441,7 +445,7 @@ library Execution {
         prices.indexBaseUnit = Oracle.getBaseUnit(priceFeed, _indexTicker);
     }
 
-    function checkIsLiquidatable(IMarket market, Position.Data memory _position, Prices memory _prices)
+    function checkIsLiquidatable(MarketId _id, IMarket market, Position.Data memory _position, Prices memory _prices)
         public
         view
         returns (bool isLiquidatable)
@@ -450,9 +454,9 @@ library Execution {
             _position.size, _position.weightedAvgEntryPrice, _prices.indexPrice, _prices.indexBaseUnit, _position.isLong
         );
 
-        uint256 borrowingFeesUsd = Position.getTotalBorrowFeesUsd(market, _position);
+        uint256 borrowingFeesUsd = Position.getTotalBorrowFeesUsd(_id, market, _position);
 
-        int256 fundingFeesUsd = Position.getTotalFundingFees(market, _position, _prices.indexPrice);
+        int256 fundingFeesUsd = Position.getTotalFundingFees(_id, market, _position, _prices.indexPrice);
 
         int256 losses = pnl + borrowingFeesUsd.toInt256() + fundingFeesUsd;
 
@@ -517,8 +521,8 @@ library Execution {
     }
 
     function _calculateFees(
+        MarketId _id,
         IMarket market,
-        ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
         Position.Data memory _position,
         FeeState memory _feeState,
@@ -527,7 +531,6 @@ library Execution {
         uint256 _collateralDelta
     ) private view returns (Position.Data memory, FeeState memory) {
         _feeState = _calculatePositionFees(
-            tradeStorage,
             referralStorage,
             _feeState,
             _sizeDelta,
@@ -537,9 +540,9 @@ library Execution {
             _position.user
         );
 
-        (_position, _feeState.borrowFee) = _processBorrowFees(market, _position, _prices);
+        (_position, _feeState.borrowFee) = _processBorrowFees(_id, market, _position, _prices);
 
-        (_position, _feeState.fundingFee) = _processFundingFees(market, _position, _prices, _sizeDelta);
+        (_position, _feeState.fundingFee) = _processFundingFees(_id, market, _position, _prices, _sizeDelta);
 
         return (_position, _feeState);
     }
@@ -573,13 +576,14 @@ library Execution {
     }
 
     function _processFundingFees(
+        MarketId _id,
         IMarket market,
         Position.Data memory _position,
         Prices memory _prices,
         uint256 _sizeDelta
     ) private view returns (Position.Data memory, int256 fundingFee) {
         (int256 fundingFeeUsd, int256 nextFundingAccrued) = Position.getFundingFeeDelta(
-            market, _position.ticker, _prices.indexPrice, _sizeDelta, _position.fundingParams.lastFundingAccrued
+            _id, market, _position.ticker, _prices.indexPrice, _sizeDelta, _position.fundingParams.lastFundingAccrued
         );
 
         _position.fundingParams.lastFundingAccrued = nextFundingAccrued;
@@ -593,17 +597,17 @@ library Execution {
         return (_position, fundingFee);
     }
 
-    function _processBorrowFees(IMarket market, Position.Data memory _position, Prices memory _prices)
+    function _processBorrowFees(MarketId _id, IMarket market, Position.Data memory _position, Prices memory _prices)
         private
         view
         returns (Position.Data memory, uint256 borrowFee)
     {
-        borrowFee = Position.getTotalBorrowFees(market, _position, _prices);
+        borrowFee = Position.getTotalBorrowFees(_id, market, _position, _prices);
 
         _position.borrowingParams.feesOwed = 0;
 
         (_position.borrowingParams.lastLongCumulativeBorrowFee, _position.borrowingParams.lastShortCumulativeBorrowFee)
-        = market.getCumulativeBorrowFees(_position.ticker);
+        = market.getCumulativeBorrowFees(_id, _position.ticker);
 
         return (_position, borrowFee);
     }
@@ -641,6 +645,7 @@ library Execution {
     }
 
     function _initiateDecreasePosition(
+        MarketId _id,
         IMarket market,
         Position.Settlement memory _params,
         Position.Data memory _position,
@@ -674,14 +679,13 @@ library Execution {
         if (!_feeState.isFullDecrease) {
             if (_position.collateral < _minCollateralUsd) revert Execution_MinCollateralThreshold();
 
-            Position.checkLeverage(market, _position.ticker, _position.size, _position.collateral);
+            Position.checkLeverage(_id, market, _position.ticker, _position.size, _position.collateral);
         }
 
         return (_position, _feeState.afterFeeAmount);
     }
 
     function _calculatePositionFees(
-        ITradeStorage tradeStorage,
         IReferralStorage referralStorage,
         FeeState memory _feeState,
         uint256 _sizeDelta,
@@ -690,8 +694,14 @@ library Execution {
         uint256 _collateralBaseUnit,
         address _user
     ) private view returns (FeeState memory) {
-        (_feeState.positionFee, _feeState.feeForExecutor) =
-            Position.calculateFee(tradeStorage, _sizeDelta, _collateralDelta, _collateralPrice, _collateralBaseUnit);
+        (_feeState.positionFee, _feeState.feeForExecutor) = Position.calculateFee(
+            ITradeEngine(address(this)).tradingFee(),
+            ITradeEngine(address(this)).feeForExecution(),
+            _sizeDelta,
+            _collateralDelta,
+            _collateralPrice,
+            _collateralBaseUnit
+        );
 
         (_feeState.positionFee, _feeState.affiliateRebate, _feeState.referrer) =
             Referral.applyFeeDiscount(referralStorage, _user, _feeState.positionFee);
@@ -754,12 +764,16 @@ library Execution {
     }
 
     /// @dev Private function to prevent STD Error
-    function _getPnlFactor(IMarket market, IVault vault, Prices memory _prices, string memory _ticker, bool _isLong)
-        private
-        view
-        returns (int256 pnlFactor)
-    {
+    function _getPnlFactor(
+        MarketId _id,
+        IMarket market,
+        IVault vault,
+        Prices memory _prices,
+        string memory _ticker,
+        bool _isLong
+    ) private view returns (int256 pnlFactor) {
         pnlFactor = MarketUtils.getPnlFactor(
+            _id,
             market,
             vault,
             _ticker,
@@ -777,13 +791,16 @@ library Execution {
     }
 
     /// @dev Private function to prevent STD Error
-    function _getPoolUsd(IMarket market, IVault vault, Prices memory _prices, string memory _ticker, bool _isLong)
-        private
-        view
-        returns (uint256 poolUsd)
-    {
+    function _getPoolUsd(
+        MarketId _id,
+        IMarket market,
+        IVault vault,
+        Prices memory _prices,
+        string memory _ticker,
+        bool _isLong
+    ) private view returns (uint256 poolUsd) {
         return MarketUtils.getPoolBalanceUsd(
-            market, vault, _ticker, _prices.collateralPrice, _prices.collateralBaseUnit, _isLong
+            _id, market, vault, _ticker, _prices.collateralPrice, _prices.collateralBaseUnit, _isLong
         );
     }
 
@@ -830,12 +847,12 @@ library Execution {
         }
     }
 
-    function _getMaintenanceCollateral(IMarket market, Position.Data memory _position)
+    function _getMaintenanceCollateral(MarketId _id, IMarket market, Position.Data memory _position)
         private
         view
         returns (uint256 maintenanceCollateral)
     {
-        uint256 maintenancePercentage = market.getMaintenanceMargin(_position.ticker).expandDecimals(4, 18);
+        uint256 maintenancePercentage = market.getMaintenanceMargin(_id, _position.ticker).expandDecimals(4, 18);
         maintenanceCollateral = _position.collateral.percentage(maintenancePercentage);
     }
 }

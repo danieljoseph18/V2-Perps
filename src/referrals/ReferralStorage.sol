@@ -9,6 +9,7 @@ import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
 import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {IWETH} from "../tokens/interfaces/IWETH.sol";
+import {MarketId} from "../types/MarketId.sol";
 
 contract ReferralStorage is OwnableRoles, IReferralStorage, ReentrancyGuard {
     using SafeTransferLib for IERC20;
@@ -79,10 +80,11 @@ contract ReferralStorage is OwnableRoles, IReferralStorage, ReentrancyGuard {
         emit RegisterCode(msg.sender, _code);
     }
 
-    function accumulateAffiliateRewards(address _account, bool _isLongToken, uint256 _amount) external {
-        address market = address(ITradeStorage(msg.sender).market());
-
-        if (!factory.isMarket(market)) revert ReferralStorage_InvalidMarket();
+    function accumulateAffiliateRewards(MarketId _id, address _account, bool _isLongToken, uint256 _amount)
+        external
+        onlyRoles(_ROLE_6)
+    {
+        if (!factory.isMarket(_id)) revert ReferralStorage_InvalidMarket();
 
         affiliateRewards[_account][_isLongToken] += _amount;
 

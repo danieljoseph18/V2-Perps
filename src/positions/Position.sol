@@ -11,6 +11,7 @@ import {Casting} from "../libraries/Casting.sol";
 import {Units} from "../libraries/Units.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
+import {MarketId} from "../types/MarketId.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -25,7 +26,6 @@ library Position {
     error Position_BelowMinLeverage();
     error Position_OverMaxLeverage();
     error Position_InvalidSlippage();
-    error Position_InvalidLiquidationFee();
     error Position_InvalidTradingFee();
     error Position_InvalidAdlFee();
     error Position_InvalidFeeForExecution();
@@ -36,8 +36,6 @@ library Position {
     uint128 private constant MIN_SLIPPAGE = 0.0001e30; // 0.01%
     uint128 private constant MAX_SLIPPAGE = 0.9999e30; // 99.99%
     uint256 private constant MAX_ADL_PERCENTAGE = 0.66e18; // 66%
-    uint64 private constant MAX_LIQUIDATION_FEE = 0.1e18; // 10%
-    uint64 private constant MIN_LIQUIDATION_FEE = 0.001e18; // 1%
     uint64 private constant MAX_TRADING_FEE = 0.01e18; // 1%
     uint64 private constant MIN_TRADING_FEE = 0.00001e18; // 0.001%
     uint64 private constant MAX_ADL_FEE = 0.05e18; // 5%
@@ -135,14 +133,7 @@ library Position {
         }
     }
 
-    function validateFees(uint256 _liquidationFee, uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution)
-        internal
-        pure
-    {
-        if (_liquidationFee > MAX_LIQUIDATION_FEE || _liquidationFee < MIN_LIQUIDATION_FEE) {
-            revert Position_InvalidLiquidationFee();
-        }
-
+    function validateFees(uint256 _positionFee, uint256 _adlFee, uint256 _feeForExecution) internal pure {
         if (_positionFee > MAX_TRADING_FEE || _positionFee < MIN_TRADING_FEE) {
             revert Position_InvalidTradingFee();
         }
@@ -156,11 +147,14 @@ library Position {
         }
     }
 
-    function checkLeverage(IMarket market, string memory _ticker, uint256 _sizeUsd, uint256 _collateralUsd)
-        internal
-        view
-    {
-        uint8 maxLeverage = market.getMaxLeverage(_ticker);
+    function checkLeverage(
+        MarketId _id,
+        IMarket market,
+        string memory _ticker,
+        uint256 _sizeUsd,
+        uint256 _collateralUsd
+    ) internal view {
+        uint8 maxLeverage = market.getMaxLeverage(_id, _ticker);
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = _sizeUsd / _collateralUsd;
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
@@ -238,12 +232,13 @@ library Position {
     }
 
     function generateNewPosition(
+        MarketId _id,
         IMarket market,
         Request memory _request,
         uint256 _impactedPrice,
         uint256 _collateralUsd
     ) internal view returns (Data memory position) {
-        (uint256 longBorrowFee, uint256 shortBorrowFee) = market.getCumulativeBorrowFees(_request.input.ticker);
+        (uint256 longBorrowFee, uint256 shortBorrowFee) = market.getCumulativeBorrowFees(_id, _request.input.ticker);
 
         position = Data({
             ticker: _request.input.ticker,
@@ -254,7 +249,7 @@ library Position {
             weightedAvgEntryPrice: _impactedPrice,
             lastUpdate: uint48(block.timestamp),
             isLong: _request.input.isLong,
-            fundingParams: FundingParams(market.getFundingAccrued(_request.input.ticker), 0),
+            fundingParams: FundingParams(market.getFundingAccrued(_id, _request.input.ticker), 0),
             borrowingParams: BorrowingParams(0, longBorrowFee, shortBorrowFee),
             stopLossKey: _request.stopLossKey,
             takeProfitKey: _request.takeProfitKey
@@ -336,69 +331,69 @@ library Position {
      * =========================================== Getter Functions ============================================
      */
     function calculateFee(
-        ITradeStorage tradeStorage,
+        uint256 _tradingFee,
+        uint256 _feeForExecution,
         uint256 _sizeDelta,
         uint256 _collateralDelta,
         uint256 _collateralPrice,
         uint256 _collateralBaseUnit
-    ) internal view returns (uint256 positionFee, uint256 feeForExecutor) {
-        uint256 feePercentage = tradeStorage.tradingFee();
-        uint256 executorPercentage = tradeStorage.feeForExecution();
-
+    ) internal pure returns (uint256 positionFee, uint256 feeForExecutor) {
         if (_sizeDelta != 0) {
             uint256 sizeInCollateral = _sizeDelta.fromUsd(_collateralPrice, _collateralBaseUnit);
 
-            positionFee = sizeInCollateral.percentage(feePercentage);
-            feeForExecutor = positionFee.percentage(executorPercentage);
+            positionFee = sizeInCollateral.percentage(_tradingFee);
+            feeForExecutor = positionFee.percentage(_feeForExecution);
             positionFee -= feeForExecutor;
         } else {
-            positionFee = _collateralDelta.percentage(feePercentage);
-            feeForExecutor = positionFee.percentage(executorPercentage);
+            positionFee = _collateralDelta.percentage(_tradingFee);
+            feeForExecutor = positionFee.percentage(_feeForExecution);
             positionFee -= feeForExecutor;
         }
     }
 
     /// @dev Calculates the funding fee proportional to the size delta in USD
     function getFundingFeeDelta(
+        MarketId _id,
         IMarket market,
         string memory _ticker,
         uint256 _indexPrice,
         uint256 _sizeDelta,
         int256 _entryFundingAccrued
     ) internal view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
-        (, nextFundingAccrued) = Funding.calculateNextFunding(market, _ticker, _indexPrice);
+        (, nextFundingAccrued) = Funding.calculateNextFunding(_id, market, _ticker, _indexPrice);
 
         fundingFeeUsd = _sizeDelta.toInt256().percentageUsd(nextFundingAccrued - _entryFundingAccrued);
     }
 
     /// @dev Calculates the total funding owed by a position in USD
-    function getTotalFundingFees(IMarket market, Data memory _position, uint256 _indexPrice)
+    function getTotalFundingFees(MarketId _id, IMarket market, Data memory _position, uint256 _indexPrice)
         internal
         view
         returns (int256)
     {
-        (, int256 nextFundingAccrued) = Funding.calculateNextFunding(market, _position.ticker, _indexPrice);
+        (, int256 nextFundingAccrued) = Funding.calculateNextFunding(_id, market, _position.ticker, _indexPrice);
 
         return _position.size.toInt256().percentageInt(nextFundingAccrued - _position.fundingParams.lastFundingAccrued);
     }
 
-    function getTotalBorrowFees(IMarket market, Data memory _position, Execution.Prices memory _prices)
+    function getTotalBorrowFees(MarketId _id, IMarket market, Data memory _position, Execution.Prices memory _prices)
         internal
         view
         returns (uint256)
     {
-        uint256 feesUsd = getTotalBorrowFeesUsd(market, _position);
+        uint256 feesUsd = getTotalBorrowFeesUsd(_id, market, _position);
 
         return feesUsd.fromUsd(_prices.collateralPrice, _prices.collateralBaseUnit);
     }
 
-    function getTotalBorrowFeesUsd(IMarket market, Data memory _position) public view returns (uint256) {
+    function getTotalBorrowFeesUsd(MarketId _id, IMarket market, Data memory _position) public view returns (uint256) {
         uint256 borrowFee = _position.isLong
-            ? market.getCumulativeBorrowFee(_position.ticker, true) - _position.borrowingParams.lastLongCumulativeBorrowFee
-            : market.getCumulativeBorrowFee(_position.ticker, false)
+            ? market.getCumulativeBorrowFee(_id, _position.ticker, true)
+                - _position.borrowingParams.lastLongCumulativeBorrowFee
+            : market.getCumulativeBorrowFee(_id, _position.ticker, false)
                 - _position.borrowingParams.lastShortCumulativeBorrowFee;
 
-        borrowFee += Borrowing.calculatePendingFees(market, _position.ticker, _position.isLong);
+        borrowFee += Borrowing.calculatePendingFees(_id, market, _position.ticker, _position.isLong);
 
         uint256 feeSinceUpdate = borrowFee == 0 ? 0 : _position.size.percentage(borrowFee);
 
@@ -481,16 +476,15 @@ library Position {
         pure
         returns (uint256 adlPercentage)
     {
-
         // Excess ratio = ((pnlToPoolRatio / targetPnlRatio) - 1) ** 2
         uint256 excessRatio = (_pnlToPoolRatio.divWadUp(TARGET_PNL_RATIO) - PRECISION).rpow(2, PRECISION);
-        
+
         // Exponent = -excessRatio * positionProfit / positionSize
         int256 exponent = (-excessRatio.toInt256()).mulDivSigned(_positionProfit, _positionSize.toInt256());
 
         // adlPercentage = 1 - e ** exponent
         adlPercentage = PRECISION - exponent.wadExp().toUint256();
-        
+
         if (adlPercentage > MAX_ADL_PERCENTAGE) adlPercentage = MAX_ADL_PERCENTAGE;
     }
 }

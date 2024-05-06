@@ -10,8 +10,10 @@ import {IUniswapV3Factory} from "../oracle/interfaces/IUniswapV3Factory.sol";
 import {IUniswapV2Factory} from "../oracle/interfaces/IUniswapV2Factory.sol";
 import {IVault} from "../markets/interfaces/IVault.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
+import {ITradeEngine} from "../positions/interfaces/ITradeEngine.sol";
 import {IGlobalRewardTracker} from "../rewards/interfaces/IGlobalRewardTracker.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
+import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {IPriceFeed} from "../oracle/interfaces/IPriceFeed.sol";
 import {Oracle} from "../oracle/Oracle.sol";
 import {IReferralStorage} from "../referrals/ReferralStorage.sol";
@@ -19,9 +21,8 @@ import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {IPositionManager} from "../router/interfaces/IPositionManager.sol";
 import {Pool} from "../markets/Pool.sol";
 import {SafeTransferLib} from "../libraries/SafeTransferLib.sol";
-import {DeployMarket} from "./DeployMarket.sol";
-import {DeployVault} from "./DeployVault.sol";
-import {DeployTradeStorage} from "./DeployTradeStorage.sol";
+import {Deployer} from "./Deployer.sol";
+import {MarketId, MarketIdLibrary} from "../types/MarketId.sol";
 
 /// @dev Needs MarketFactory Role
 /**
@@ -33,7 +34,12 @@ import {DeployTradeStorage} from "./DeployTradeStorage.sol";
  */
 contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     using EnumerableMap for EnumerableMap.DeployMap;
+    using EnumerableSetLib for EnumerableSetLib.Bytes32Set;
+    using MarketIdLibrary for Input;
 
+    IMarket market;
+    ITradeStorage tradeStorage;
+    ITradeEngine tradeEngine;
     IPriceFeed priceFeed;
     IReferralStorage referralStorage;
     IFeeDistributor feeDistributor;
@@ -58,11 +64,12 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     uint8 private constant MAX_TICKER_LENGTH = 15;
 
     EnumerableMap.DeployMap private requests;
-    mapping(address market => bool isMarket) public isMarket;
-    mapping(uint256 index => address market) public markets;
+    EnumerableSetLib.Bytes32Set private marketIds;
+    mapping(MarketId market => bool isMarket) public isMarket;
+    mapping(uint256 index => MarketId market) public markets;
 
     // Required to create external Routers to determine optimal trading route
-    mapping(string ticker => address[] markets) public marketsByTicker;
+    mapping(string ticker => MarketId[] marketIds) public marketsByTicker;
 
     bool private isInitialized;
     Pool.Config public defaultConfig;
@@ -90,6 +97,9 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
 
     function initialize(
         Pool.Config memory _defaultConfig,
+        address _market,
+        address _tradeStorage,
+        address _tradeEngine,
         address _priceFeed,
         address _referralStorage,
         address _positionManager,
@@ -100,6 +110,9 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         uint256 _marketExecutionFee
     ) external onlyOwner {
         if (isInitialized) revert MarketFactory_AlreadyInitialized();
+        market = IMarket(_market);
+        tradeStorage = ITradeStorage(_tradeStorage);
+        tradeEngine = ITradeEngine(_tradeEngine);
         priceFeed = IPriceFeed(_priceFeed);
         referralStorage = IReferralStorage(_referralStorage);
         feeDistributor = IFeeDistributor(_feeDistributor);
@@ -169,14 +182,13 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     /**
      * =========================================== User Interaction Functions ===========================================
      */
-    // // isMultiAsset, ticker, name, symbol, secondary strategy
-    function createNewMarket(Input calldata _input) external payable nonReentrant {
+    function createNewMarket(Input calldata _input) external payable nonReentrant returns (bytes32 requestKey) {
         uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
         if (msg.value < marketCreationFee + priceUpdateFee) revert MarketFactory_InvalidFee();
 
         _initializeAsset(_input, priceUpdateFee);
 
-        bytes32 requestKey = _getMarketRequestKey(msg.sender, _input.indexTokenTicker);
+        requestKey = _getMarketRequestKey(msg.sender, _input.indexTokenTicker);
         ++requestNonce;
 
         Request memory request = _createRequest(_input);
@@ -211,11 +223,7 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     function supportAsset(bytes32 _assetRequestKey) external payable nonReentrant {
         Request memory request = requests.get(_assetRequestKey);
 
-        try Oracle.getPrice(priceFeed, request.input.indexTokenTicker, request.requestTimestamp) {}
-        catch {
-            _deleteInvalidRequest(_assetRequestKey);
-            return;
-        }
+        Oracle.getPrice(priceFeed, request.input.indexTokenTicker, request.requestTimestamp);
 
         priceFeed.supportAsset(request.input.indexTokenTicker, request.input.strategy, DECIMALS);
 
@@ -223,16 +231,12 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
     }
 
     /// @dev Fulfill requests from `createNewMarket`
-    function executeMarketRequest(bytes32 _requestKey) external nonReentrant {
+    function executeMarketRequest(bytes32 _requestKey) external nonReentrant returns (MarketId id) {
         Request memory request = requests.get(_requestKey);
 
-        try Oracle.getPrice(priceFeed, request.input.indexTokenTicker, request.requestTimestamp) {}
-        catch {
-            _deleteInvalidRequest(_requestKey);
-            return;
-        }
+        Oracle.getPrice(priceFeed, request.input.indexTokenTicker, request.requestTimestamp);
 
-        _initializeMarketContracts(request);
+        id = _initializeMarketContracts(request);
 
         SafeTransferLib.safeTransferETH(payable(msg.sender), marketExecutionFee);
     }
@@ -264,53 +268,44 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
 
     // @audit - If token decimals are fetched from uniswap and differ from 18, it will cause issues.
     // If someone attempts to use a different asset, other than an ERC20 it might cause issues.
-    function _initializeMarketContracts(Request memory _params) private {
+    function _initializeMarketContracts(Request memory _params) private returns (MarketId id) {
         priceFeed.supportAsset(_params.input.indexTokenTicker, _params.input.strategy, DECIMALS);
 
-        address vault = DeployVault.run(_params, WETH, USDC);
+        // Generate Market Id
+        id = _params.input.toId();
+        if (marketIds.contains(MarketId.unwrap(id))) revert MarketFactory_MarketExists();
 
-        address market = DeployMarket.run(defaultConfig, _params, vault, WETH, USDC);
+        address vault = Deployer.deployVault(_params, WETH, USDC);
 
-        address tradeStorage = DeployTradeStorage.run(IMarket(market), IVault(vault), referralStorage, priceFeed);
-
-        IMarket(market).initialize(tradeStorage, 0.003e18);
-
-        IVault(vault).initialize(market, address(feeDistributor), address(rewardTracker), feeReceiver);
-
-        ITradeStorage(tradeStorage).initialize(
-            LIQUIDATION_FEE, POSITION_FEE, ADL_FEE, FEE_FOR_EXECUTION, MIN_COLLATERAL_USD, MIN_TIME_TO_EXECUTE
+        market.initializePool(
+            id,
+            defaultConfig,
+            _params.requester,
+            0.003e18,
+            vault,
+            _params.input.indexTokenTicker,
+            _params.input.isMultiAsset
         );
+
+        IVault(vault).initialize(
+            address(market), address(feeDistributor), address(rewardTracker), address(tradeEngine), feeReceiver
+        );
+
+        ITradeStorage(tradeStorage).initializePool(id, vault);
 
         rewardTracker.addDepositToken(vault);
         feeDistributor.addVault(vault);
 
-        isMarket[market] = true;
-        marketsByTicker[_params.input.indexTokenTicker].push(market);
-        markets[cumulativeMarketIndex] = market;
+        isMarket[id] = true;
+        marketIds.add(MarketId.unwrap(id));
+        marketsByTicker[_params.input.indexTokenTicker].push(id);
+        markets[cumulativeMarketIndex] = id;
         ++cumulativeMarketIndex;
 
-        // Here we only set the necessary roles, as required by each contract.
-
-        OwnableRoles(market).grantRoles(address(positionManager), _ROLE_1);
-        OwnableRoles(market).grantRoles(_params.requester, _ROLE_2);
-        OwnableRoles(market).grantRoles(router, _ROLE_3);
-        OwnableRoles(market).grantRoles(tradeStorage, _ROLE_4);
-
-        OwnableRoles(vault).grantRoles(_params.requester, _ROLE_2);
-        OwnableRoles(vault).grantRoles(tradeStorage, _ROLE_4);
-        OwnableRoles(vault).grantRoles(address(rewardTracker), _ROLE_5);
-
-        OwnableRoles(tradeStorage).grantRoles(address(positionManager), _ROLE_1);
-        OwnableRoles(tradeStorage).grantRoles(_params.requester, _ROLE_2);
-        OwnableRoles(tradeStorage).grantRoles(router, _ROLE_3);
-
-        // Transfer ownership of all contracts to the super-user
-
-        OwnableRoles(market).transferOwnership(owner());
+        // Transfer ownership of the new vault contract to the super-user
         OwnableRoles(vault).transferOwnership(owner());
-        OwnableRoles(tradeStorage).transferOwnership(owner());
 
-        emit MarketCreated(market, _params.input.indexTokenTicker);
+        emit MarketCreated(id, _params.input.indexTokenTicker);
     }
 
     function _validateSecondaryStrategy(Input calldata _params) private view {
@@ -342,6 +337,8 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
                 _params.strategy.merkleProof,
                 stablecoinMerkleRoot
             );
+        } else {
+            revert MarketFactory_InvalidSecondaryStrategy();
         }
     }
 

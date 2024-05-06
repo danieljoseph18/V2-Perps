@@ -64,6 +64,20 @@ library MathUtils {
         }
     }
 
+    /// @dev Equivalent to `(x * WAD) / y` rounded down.
+    function sDivWad(int256 x, int256 y) internal pure returns (int256 z) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            z := mul(x, WAD)
+            // Equivalent to `require(y != 0 && ((x * WAD) / WAD == x))`.
+            if iszero(and(iszero(iszero(y)), eq(sdiv(z, WAD), x))) {
+                mstore(0x00, 0x5c43740d) // `SDivWadFailed()`.
+                revert(0x1c, 0x04)
+            }
+            z := sdiv(mul(x, WAD), y)
+        }
+    }
+
     /// @dev Calculates `floor(x * y / d)` with full precision.
     /// Throws if result overflows a uint256 or when `d` is zero.
     /// Credit to Remco Bloemen under MIT license: https://2π.com/21/muldiv
