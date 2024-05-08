@@ -9,7 +9,6 @@ import {Oracle} from "../oracle/Oracle.sol";
 import {Borrowing} from "../libraries/Borrowing.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
-import {Position} from "../positions/Position.sol";
 import {Pool} from "./Pool.sol";
 import {Units} from "../libraries/Units.sol";
 import {MarketId} from "../types/MarketId.sol";
@@ -605,62 +604,6 @@ library MarketUtils {
             int256 pnl = getMarketPnl(_id, market, ticker, indexPrice, indexBaseUnit, _isLong);
 
             cumulativePnl += pnl;
-
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /**
-     * Loop through all open positions on the market, calculate the pnl for the position.
-     * Then calculate the ADL Target score for each position, returning the position key
-     * with the highest ADL Target Score, which is essentially the position that is next
-     * in priority for ADL.
-     *
-     * The formula is adapted from Bybit's as:
-     *
-     * ADL Target Score = ( Position Size / Total Pool Size) * (Position PnL / Position Size)
-     *
-     * This function requires loops, so should *never* be used onchain. It is simply a queryable
-     * function from frontends to determine the next most optimal position to be adl'd. Also,
-     * optimistically assumes accurate pricing data.
-     *
-     * Users are incentivized to target these positions as they'll generate them the
-     * most profit in the event of ADL.
-     */
-    function getNextAdlTarget(
-        MarketId _id,
-        ITradeStorage tradeStorage,
-        string memory _ticker,
-        uint256 _indexPrice,
-        uint256 _indexBaseUnit,
-        uint256 _totalPoolSizeUsd,
-        bool _isLong
-    ) external view returns (bytes32 positionKey) {
-        bytes32[] memory positionKeys = tradeStorage.getOpenPositionKeys(_id, _isLong);
-
-        uint256 len = positionKeys.length;
-
-        uint256 highestAdlScore;
-
-        for (uint256 i = 0; i < len;) {
-            Position.Data memory position = tradeStorage.getPosition(_id, positionKeys[i]);
-
-            if (keccak256(abi.encode(position.ticker)) != keccak256(abi.encode(_ticker))) continue;
-
-            int256 pnl = Position.getPositionPnl(
-                position.size, position.weightedAvgEntryPrice, _indexPrice, _indexBaseUnit, _isLong
-            );
-
-            if (pnl < 0) continue;
-
-            uint256 adlTargetScore = (position.size / _totalPoolSizeUsd) * (pnl.abs() / position.size);
-
-            if (adlTargetScore > highestAdlScore) {
-                highestAdlScore = adlTargetScore;
-                positionKey = positionKeys[i];
-            }
 
             unchecked {
                 ++i;
