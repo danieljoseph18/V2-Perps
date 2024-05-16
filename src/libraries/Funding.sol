@@ -7,6 +7,7 @@ import {Casting} from "./Casting.sol";
 import {MathUtils} from "./MathUtils.sol";
 import {Pool} from "../markets/Pool.sol";
 import {MarketId} from "../types/MarketId.sol";
+import {console2} from "forge-std/Test.sol";
 
 /// @dev Library for Funding Related Calculations
 library Funding {
@@ -20,32 +21,47 @@ library Funding {
     int128 constant PRICE_UNIT = 1e30;
     int128 constant sPRICE_UNIT = 1e30;
     int64 constant sUNIT = 1e18;
+    int64 constant sMAX_FUNDING_RATE = 0.0075e18; // 0.75%
     uint32 constant SECONDS_IN_DAY = 86400;
 
+    /**
+     * Funding needs to:
+     * - Store the funding elapsed at the previous rate
+     * - Calculate the new rate and velocity based on the UPDATED open interest
+     *
+     */
     function updateState(
         MarketId _id,
         IMarket market,
         Pool.Storage storage pool,
         string calldata _ticker,
-        uint256 _indexPrice
+        uint256 _indexPrice,
+        int256 _sizeDelta,
+        bool _isLong
     ) internal {
-        int256 skewUsd = _calculateSkewUsd(_id, market, _ticker);
+        int256 nextSkew = _calculateNextSkew(_id, market, _ticker, _sizeDelta, _isLong);
 
         pool.fundingRateVelocity =
-            getCurrentVelocity(market, skewUsd, pool.config.maxFundingVelocity, pool.config.skewScale).toInt64();
+            getCurrentVelocity(market, nextSkew, pool.config.maxFundingVelocity, pool.config.skewScale).toInt64();
 
-        (pool.fundingRate, pool.fundingAccruedUsd) = recompute(_id, market, _ticker, _indexPrice);
+        console2.log("Old Funding Rate: ", pool.fundingRate);
+        console2.log("Old Funding Accrued: ", pool.fundingAccruedUsd);
+        (pool.fundingRate, pool.fundingAccruedUsd) = calculateNextFunding(_id, market, _ticker, _indexPrice);
+        console2.log("New Funding Rate: ", pool.fundingRate);
+        console2.log("New Funding Accrued: ", pool.fundingAccruedUsd);
     }
 
     function calculateNextFunding(MarketId _id, IMarket market, string calldata _ticker, uint256 _indexPrice)
         public
         view
-        returns (int64 nextRate, int256 nextFundingAccrued)
+        returns (int64, int256)
     {
         (int64 fundingRate, int256 unrecordedFunding) = _getUnrecordedFundingWithRate(_id, market, _ticker, _indexPrice);
 
-        nextRate = fundingRate;
-        nextFundingAccrued = market.getFundingAccrued(_id, _ticker) + unrecordedFunding;
+        console2.log("FundingRate: ", fundingRate);
+        console2.log("UnrecordedFunding: ", unrecordedFunding);
+
+        return (fundingRate, market.getFundingAccrued(_id, _ticker) + unrecordedFunding);
     }
 
     /**
@@ -65,7 +81,14 @@ library Funding {
         //                    = 0 + 0.0025 * 0.33564815
         //                    = 0.00083912
         (int64 fundingRate, int64 fundingRateVelocity) = market.getFundingRates(_id, _ticker);
-        return fundingRate + fundingRateVelocity.sMulWad(_getProportionalFundingElapsed(_id, market, _ticker)).toInt64();
+        console2.log("FundingRate: ", fundingRate);
+        console2.log("FundingRateVelocity: ", fundingRateVelocity);
+
+        int256 currentFundingRate =
+            fundingRate + fundingRateVelocity.sMulWad(_getProportionalFundingElapsed(_id, market, _ticker));
+
+        // Clamp rate
+        return currentFundingRate.clamp(-sMAX_FUNDING_RATE, sMAX_FUNDING_RATE).toInt64();
     }
 
     //  - proportionalSkew = skew / skewScale
@@ -94,14 +117,6 @@ library Funding {
         velocity = pSkewBounded.mulDivSigned(maxVelocity, sPRICE_UNIT);
     }
 
-    function recompute(MarketId _id, IMarket market, string calldata _ticker, uint256 _indexPrice)
-        public
-        view
-        returns (int64 nextFundingRate, int256 nextFundingAccruedUsd)
-    {
-        (nextFundingRate, nextFundingAccruedUsd) = calculateNextFunding(_id, market, _ticker, _indexPrice);
-    }
-
     /**
      * =========================================== Private Functions ===========================================
      */
@@ -113,11 +128,17 @@ library Funding {
     function _getProportionalFundingElapsed(MarketId _id, IMarket market, string calldata _ticker)
         private
         view
-        returns (int64)
+        returns (int256 proportionalFundingElapsed)
     {
         uint48 timeElapsed = _blockTimestamp() - market.getLastUpdate(_id, _ticker);
 
-        return timeElapsed.divWad(SECONDS_IN_DAY).toInt64();
+        console2.log("Time Elapsed: ", timeElapsed);
+
+        console2.log("Time Elapsed * Seconds in Day: ", timeElapsed * SECONDS_IN_DAY);
+
+        proportionalFundingElapsed = timeElapsed.divWad(SECONDS_IN_DAY).toInt256();
+
+        console2.log("Proportional Funding Elapsed: ", proportionalFundingElapsed);
     }
 
     /**
@@ -130,25 +151,36 @@ library Funding {
     {
         fundingRate = getCurrentFundingRate(_id, market, _ticker);
 
+        console2.log("proportionalFundingElapsed", _getProportionalFundingElapsed(_id, market, _ticker));
+        console2.log("indexPrice", _indexPrice.toInt256());
+
         (int256 storedFundingRate,) = market.getFundingRates(_id, _ticker);
 
         // Minus sign is needed as funding flows in the opposite direction of the skew
-        // Essentially taking an average, where Signed Precision == units
-        int256 avgFundingRate = -storedFundingRate.mulDivSigned(fundingRate, 2 * sUNIT);
+        // Take an average of the current / prev funding rates
+        int256 avgFundingRate = -storedFundingRate.avg(fundingRate);
+
+        console2.log("avgFundingRate", avgFundingRate);
 
         unrecordedFunding = avgFundingRate.mulDivSigned(_getProportionalFundingElapsed(_id, market, _ticker), sUNIT)
             .mulDivSigned(_indexPrice.toInt256(), sUNIT);
     }
 
-    function _calculateSkewUsd(MarketId _id, IMarket market, string calldata _ticker)
+    function _calculateNextSkew(MarketId _id, IMarket market, string calldata _ticker, int256 _sizeDelta, bool _isLong)
         private
         view
-        returns (int256 skewUsd)
+        returns (int256 nextSkew)
     {
         uint256 longOI = market.getOpenInterest(_id, _ticker, true);
         uint256 shortOI = market.getOpenInterest(_id, _ticker, false);
 
-        skewUsd = longOI.diff(shortOI);
+        if (_isLong) {
+            _sizeDelta > 0 ? longOI += _sizeDelta.abs() : longOI -= _sizeDelta.abs();
+        } else {
+            _sizeDelta > 0 ? shortOI += _sizeDelta.abs() : shortOI -= _sizeDelta.abs();
+        }
+
+        nextSkew = longOI.diff(shortOI);
     }
 
     function _blockTimestamp() private view returns (uint48) {

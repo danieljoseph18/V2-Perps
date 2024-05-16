@@ -28,9 +28,12 @@ import {Execution} from "src/positions/Execution.sol";
 import {Funding} from "src/libraries/Funding.sol";
 import {MarketId} from "src/types/MarketId.sol";
 import {TradeEngine} from "src/positions/TradeEngine.sol";
+import {Casting} from "src/libraries/Casting.sol";
 
 contract TestFunding is Test {
     using MathUtils for uint256;
+    using MathUtils for int256;
+    using Casting for uint256;
 
     MarketFactory marketFactory;
     MockPriceFeed priceFeed; // Deployed in Helper Config
@@ -69,14 +72,32 @@ contract TestFunding is Test {
         Deploy.Contracts memory contracts = deploy.run();
 
         marketFactory = contracts.marketFactory;
+        vm.label(address(marketFactory), "marketFactory");
+
         priceFeed = MockPriceFeed(address(contracts.priceFeed));
+        vm.label(address(priceFeed), "priceFeed");
+
         referralStorage = contracts.referralStorage;
+        vm.label(address(referralStorage), "referralStorage");
+
         positionManager = contracts.positionManager;
+        vm.label(address(positionManager), "positionManager");
+
         router = contracts.router;
+        vm.label(address(router), "router");
+
         market = contracts.market;
+        vm.label(address(market), "market");
+
         tradeStorage = contracts.tradeStorage;
+        vm.label(address(tradeStorage), "tradeStorage");
+
         tradeEngine = contracts.tradeEngine;
+        vm.label(address(tradeEngine), "tradeEngine");
+
         feeDistributor = contracts.feeDistributor;
+        vm.label(address(feeDistributor), "feeDistributor");
+
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
         tickers.push(ethTicker);
@@ -135,8 +156,11 @@ contract TestFunding is Test {
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
         vault = market.getVault(marketId);
+        vm.label(address(vault), "vault");
         tradeStorage = ITradeStorage(market.tradeStorage());
+        vm.label(address(tradeStorage), "tradeStorage");
         rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
+        vm.label(address(rewardTracker), "rewardTracker");
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(marketId, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
@@ -396,7 +420,7 @@ contract TestFunding is Test {
         );
     }
 
-    function test_fuzzing_recompute(
+    function test_fuzzing_next_funding(
         int256 _fundingRate,
         int256 _fundingVelocity,
         int256 _entryFundingAccrued,
@@ -423,10 +447,35 @@ contract TestFunding is Test {
 
         // Call the function with the fuzzed input
         (int256 nextFundingRate, int256 nextFundingAccruedUsd) =
-            Funding.recompute(marketId, market, ethTicker, _indexPrice);
+            Funding.calculateNextFunding(marketId, market, ethTicker, _indexPrice);
 
         // Check values are as expected
         console2.log(nextFundingRate);
         console2.log(nextFundingAccruedUsd);
+    }
+
+    function test_funding_is_accrued(
+        int256 _fundingRate,
+        int256 _fundingVelocity,
+        uint256 _indexPrice,
+        uint256 _timeToSkip
+    ) public setUpMarkets {
+        // Mock the rate and velocity, so funding is accruing
+        _fundingRate = bound(_fundingRate, -1e18, 1e18); // Between -100% and 100%
+        vm.assume(_fundingRate != 0);
+        _fundingVelocity = bound(_fundingVelocity, -1e18, 1e18); // Between -100% and 100%
+        _indexPrice = bound(_indexPrice, 100e30, 100_000e30);
+        _timeToSkip = bound(_timeToSkip, 1 days, 3650 days);
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getFundingRates.selector, marketId, ethTicker),
+            abi.encode(_fundingRate, _fundingVelocity)
+        );
+        // Pass some time
+        skip(_timeToSkip);
+        // Compare the funding accrued to the expected value
+
+        (, int256 accrued) = Funding.calculateNextFunding(marketId, market, ethTicker, _indexPrice);
+        assertNotEq(accrued, 0, "Funding not accrued as expected");
     }
 }

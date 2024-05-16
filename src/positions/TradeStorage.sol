@@ -83,11 +83,15 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
     /**
      * =========================================== Order Functions ===========================================
      */
-    function createOrderRequest(MarketId _id, Position.Request calldata _request) external onlyRoles(_ROLE_3) {
+    function createOrderRequest(MarketId _id, Position.Request calldata _request)
+        external
+        onlyRoles(_ROLE_3)
+        returns (bytes32 orderKey)
+    {
         EnumerableSetLib.Bytes32Set storage orderSet =
             _request.input.isLimit ? tradeState[_id].limitOrderKeys : tradeState[_id].marketOrderKeys;
 
-        bytes32 orderKey = Position.generateOrderKey(_request);
+        orderKey = Position.generateOrderKey(_request);
         if (orderSet.contains(orderKey)) revert TradeStorage_OrderAlreadyExists();
 
         bool success = orderSet.add(orderKey);
@@ -227,18 +231,39 @@ contract TradeStorage is ITradeStorage, OwnableRoles, ReentrancyGuard {
         return tradeState[_id].openPositionKeys[_isLong].values();
     }
 
-    function getOrderKeys(MarketId _id, bool _isLimit) external view returns (bytes32[] memory orderKeys) {
-        orderKeys = _isLimit ? tradeState[_id].limitOrderKeys.values() : tradeState[_id].marketOrderKeys.values();
+    function getOrderKeys(MarketId _id, bool _isLimit) external view returns (bytes32[] memory) {
+        return _isLimit ? tradeState[_id].limitOrderKeys.values() : tradeState[_id].marketOrderKeys.values();
     }
 
     /// @notice - Get the position data for a given position key. Reverts if invalid.
-    function getPosition(MarketId _id, bytes32 _positionKey) external view returns (Position.Data memory position) {
-        position = tradeState[_id].openPositions[_positionKey];
+    function getPosition(MarketId _id, bytes32 _positionKey) external view returns (Position.Data memory) {
+        return tradeState[_id].openPositions[_positionKey];
+    }
+
+    function getPosition(MarketId _id, string calldata _ticker, address _user, bool _isLong)
+        external
+        view
+        returns (Position.Data memory)
+    {
+        bytes32 positionKey = Position.generateKey(_ticker, _user, _isLong);
+        return tradeState[_id].openPositions[positionKey];
     }
 
     /// @notice - Get the request data for a given order key. Reverts if invalid.
-    function getOrder(MarketId _id, bytes32 _orderKey) external view returns (Position.Request memory order) {
-        order = tradeState[_id].orders[_orderKey];
+    function getOrder(MarketId _id, bytes32 _orderKey) external view returns (Position.Request memory) {
+        return tradeState[_id].orders[_orderKey];
+    }
+
+    function getOrder(
+        MarketId _id,
+        string memory _ticker,
+        address _user,
+        bool _isLong,
+        bool _isIncrease,
+        uint256 _limitPrice
+    ) external view returns (Position.Request memory) {
+        bytes32 orderKey = keccak256(abi.encode(_ticker, _user, _isLong, _isIncrease, _limitPrice));
+        return tradeState[_id].orders[orderKey];
     }
 
     function getOrderAtIndex(MarketId _id, uint256 _index, bool _isLimit) external view returns (bytes32) {

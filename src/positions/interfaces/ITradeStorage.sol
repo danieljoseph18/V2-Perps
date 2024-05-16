@@ -25,7 +25,7 @@ interface ITradeStorage {
     function initialize(address _tradeEngine, address _marketFactory) external;
     function initializePool(MarketId _id, address _vault) external;
 
-    function createOrderRequest(MarketId _id, Position.Request calldata _request) external;
+    function createOrderRequest(MarketId _id, Position.Request calldata _request) external returns (bytes32 orderKey);
     function cancelOrderRequest(MarketId _id, bytes32 _orderKey, bool _isLimit) external;
     function executePositionRequest(MarketId _id, bytes32 _orderKey, bytes32 _limitRequestKey, address _feeReceiver)
         external
@@ -41,6 +41,14 @@ interface ITradeStorage {
     function minCancellationTime() external view returns (uint64);
 
     function getOrder(MarketId _id, bytes32 _key) external view returns (Position.Request memory _order);
+    function getOrder(
+        MarketId _id,
+        string memory _ticker,
+        address _user,
+        bool _isLong,
+        bool _isIncrease,
+        uint256 _limitPrice
+    ) external view returns (Position.Request memory);
     function getPosition(MarketId _id, bytes32 _positionKey) external view returns (Position.Data memory);
     function getOrderAtIndex(MarketId _id, uint256 _index, bool _isLimit) external view returns (bytes32);
     function deleteOrder(MarketId _id, bytes32 _orderKey, bool _isLimit) external;

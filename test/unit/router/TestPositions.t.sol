@@ -61,14 +61,32 @@ contract TestPositions is Test {
         Deploy.Contracts memory contracts = deploy.run();
 
         marketFactory = contracts.marketFactory;
+        vm.label(address(marketFactory), "marketFactory");
+
         priceFeed = MockPriceFeed(address(contracts.priceFeed));
+        vm.label(address(priceFeed), "priceFeed");
+
         referralStorage = contracts.referralStorage;
+        vm.label(address(referralStorage), "referralStorage");
+
         positionManager = contracts.positionManager;
+        vm.label(address(positionManager), "positionManager");
+
         router = contracts.router;
+        vm.label(address(router), "router");
+
         market = contracts.market;
+        vm.label(address(market), "market");
+
         tradeStorage = contracts.tradeStorage;
+        vm.label(address(tradeStorage), "tradeStorage");
+
         tradeEngine = contracts.tradeEngine;
+        vm.label(address(tradeEngine), "tradeEngine");
+
         feeDistributor = contracts.feeDistributor;
+        vm.label(address(feeDistributor), "feeDistributor");
+
         OWNER = contracts.owner;
         (weth, usdc, link,,,,,,,) = deploy.activeNetworkConfig();
         tickers.push(ethTicker);
@@ -127,8 +145,11 @@ contract TestPositions is Test {
         priceFeed.updatePnl(encodedPnl);
         vm.stopPrank();
         vault = market.getVault(marketId);
+        vm.label(address(vault), "vault");
         tradeStorage = ITradeStorage(market.tradeStorage());
+        vm.label(address(tradeStorage), "tradeStorage");
         rewardTracker = GlobalRewardTracker(address(vault.rewardTracker()));
+        vm.label(address(rewardTracker), "rewardTracker");
         // Call the deposit function with sufficient gas
         vm.prank(OWNER);
         router.createDeposit{value: 20_000.01 ether + 1 gwei}(marketId, OWNER, weth, 20_000 ether, 0.01 ether, 0, true);
@@ -690,5 +711,137 @@ contract TestPositions is Test {
         key = tradeStorage.getOrderAtIndex(marketId, 0, false);
         vm.prank(OWNER);
         positionManager.executePosition(marketId, key, bytes32(0), OWNER);
+    }
+
+    function test_active_positions_accumulate_fees_over_time(
+        uint256 _sizeDelta1,
+        uint256 _sizeDelta2,
+        uint256 _leverage1,
+        uint256 _leverage2,
+        uint256 _timeToSkip1,
+        uint256 _timeToSkip2,
+        bool _isLong,
+        bool _shouldWrap
+    ) public setUpMarkets {
+        // Create Request
+        Position.Input memory input;
+        _leverage1 = bound(_leverage1, 2, 90);
+        if (_isLong) {
+            _sizeDelta1 = bound(_sizeDelta1, 210e30, 1_000_000e30);
+            uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta1 / _leverage1, 1e18, 3000e30);
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: weth,
+                collateralDelta: collateralDelta,
+                sizeDelta: _sizeDelta1,
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: true,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: _shouldWrap,
+                triggerAbove: false
+            });
+            if (_shouldWrap) {
+                vm.prank(OWNER);
+                router.createPositionRequest{value: collateralDelta + 0.01 ether}(
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+            } else {
+                vm.startPrank(OWNER);
+                WETH(weth).approve(address(router), type(uint256).max);
+                router.createPositionRequest{value: 0.01 ether}(
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+                vm.stopPrank();
+            }
+        } else {
+            _sizeDelta1 = bound(_sizeDelta1, 210e30, 1_000_000e30);
+            uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta1 / _leverage1, 1e6, 1e30);
+            input = Position.Input({
+                ticker: ethTicker,
+                collateralToken: usdc,
+                collateralDelta: collateralDelta,
+                sizeDelta: _sizeDelta1, // 10x leverage
+                limitPrice: 0,
+                maxSlippage: 0.3e30,
+                executionFee: 0.01 ether,
+                isLong: false,
+                isLimit: false,
+                isIncrease: true,
+                reverseWrap: false,
+                triggerAbove: false
+            });
+
+            vm.startPrank(OWNER);
+            MockUSDC(usdc).approve(address(router), type(uint256).max);
+            router.createPositionRequest{value: 0.01 ether}(
+                marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+            vm.stopPrank();
+        }
+        // Execute Request
+        bytes32 key = tradeStorage.getOrderAtIndex(marketId, 0, false);
+        vm.prank(OWNER);
+        positionManager.executePosition(marketId, key, bytes32(0), OWNER);
+
+        // Pass some time
+        _timeToSkip1 = bound(_timeToSkip1, 100, 3650 days);
+        skip(_timeToSkip1);
+
+        _updatePriceFeeds();
+
+        // Increase Position
+        _leverage2 = bound(_leverage2, 2, 90);
+
+        if (_isLong) {
+            _sizeDelta2 = bound(_sizeDelta2, 210e30, 1_000_000e30);
+            input.sizeDelta = _sizeDelta2;
+            input.collateralDelta = MathUtils.mulDiv(_sizeDelta2 / _leverage2, 1e18, 3000e30);
+            if (_shouldWrap) {
+                vm.prank(OWNER);
+                router.createPositionRequest{value: input.collateralDelta + 0.01 ether}(
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+            } else {
+                vm.prank(OWNER);
+                router.createPositionRequest{value: 0.01 ether}(
+                    marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+                );
+            }
+        } else {
+            _sizeDelta2 = bound(_sizeDelta2, 210e30, 1_000_000e30);
+            input.sizeDelta = _sizeDelta2;
+            input.collateralDelta = MathUtils.mulDiv(_sizeDelta2 / _leverage2, 1e6, 1e30);
+            vm.prank(OWNER);
+            router.createPositionRequest{value: 0.01 ether}(
+                marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
+            );
+        }
+
+        // Execute Request
+        key = tradeStorage.getOrderAtIndex(marketId, 0, false);
+        vm.prank(OWNER);
+        positionManager.executePosition(marketId, key, bytes32(0), OWNER);
+
+        // Pass some time
+        _timeToSkip2 = bound(_timeToSkip2, 100, 3650 days);
+        skip(_timeToSkip2);
+
+        // Check Fees
+        Position.Data memory position =
+            tradeStorage.getPosition(marketId, keccak256(abi.encode(ethTicker, OWNER, _isLong)));
+        int256 fundingFees = Position.getTotalFundingFees(marketId, market, position, meds[0]);
+        assertNotEq(fundingFees, 0, "Funding Fees Are 0");
+        uint256 borrowFees = Position.getTotalBorrowFeesUsd(marketId, market, position);
+        assertNotEq(borrowFees, 0, "Borrow Fees Are 0");
+    }
+
+    function _updatePriceFeeds() private {
+        timestamps[0] = uint48(block.timestamp);
+        timestamps[1] = uint48(block.timestamp);
+        bytes memory encodedPrices = priceFeed.encodePrices(tickers, precisions, variances, timestamps, meds);
+        priceFeed.updatePrices(encodedPrices);
     }
 }

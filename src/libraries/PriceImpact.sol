@@ -10,6 +10,7 @@ import {Units} from "./Units.sol";
 import {Execution} from "../positions/Execution.sol";
 import {MathUtils} from "./MathUtils.sol";
 import {MarketId} from "../types/MarketId.sol";
+import {console2} from "forge-std/Test.sol";
 
 // library responsible for handling all price impact calculations
 library PriceImpact {
@@ -92,6 +93,8 @@ library PriceImpact {
                 false
             ).toInt256();
         }
+
+        console2.log("Avail USD Inner: ", state.availableOi);
 
         state.initialTotalOi = state.longOi + state.shortOi;
 

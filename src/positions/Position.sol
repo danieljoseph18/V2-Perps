@@ -12,6 +12,7 @@ import {Units} from "../libraries/Units.sol";
 import {MarketUtils} from "../markets/MarketUtils.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {MarketId} from "../types/MarketId.sol";
+import {console2} from "forge-std/Test.sol";
 
 /// @dev Library containing all the data types used throughout the protocol
 library Position {
@@ -155,6 +156,8 @@ library Position {
         uint256 _collateralUsd
     ) internal view {
         uint8 maxLeverage = market.getMaxLeverage(_id, _ticker);
+        console2.log("Collateral: ", _collateralUsd);
+        console2.log("Size: ", _sizeUsd);
         if (_collateralUsd > _sizeUsd) revert Position_CollateralExceedsSize();
         uint256 leverage = _sizeUsd / _collateralUsd;
         if (leverage < MIN_LEVERAGE) revert Position_BelowMinLeverage();
@@ -371,7 +374,10 @@ library Position {
         view
         returns (int256)
     {
+        console2.log("Failing Here?");
         (, int256 nextFundingAccrued) = Funding.calculateNextFunding(_id, market, _position.ticker, _indexPrice);
+
+        console2.log("Next Funding Accrued: ", nextFundingAccrued);
 
         return _position.size.toInt256().percentageInt(nextFundingAccrued - _position.fundingParams.lastFundingAccrued);
     }
@@ -398,6 +404,36 @@ library Position {
         uint256 feeSinceUpdate = borrowFee == 0 ? 0 : _position.size.percentage(borrowFee);
 
         return feeSinceUpdate + _position.borrowingParams.feesOwed;
+    }
+
+    function getTotalFeesOwed(MarketId marketId, IMarket market, Data memory _position, Execution.Prices memory _prices)
+        external
+        view
+        returns (uint256)
+    {
+        int256 fundingFees = getTotalFundingFees(marketId, market, _position, _prices.indexPrice).fromUsdToSigned(
+            _prices.collateralPrice, _prices.collateralBaseUnit
+        );
+
+        uint256 borrowFees = getTotalBorrowFees(marketId, market, _position, _prices);
+
+        if (fundingFees > 0) {
+            return fundingFees.abs() + borrowFees;
+        } else {
+            return borrowFees;
+        }
+    }
+
+    function getTotalFeesOwedUsd(MarketId marketId, IMarket market, Data memory _position, uint256 _indexPrice)
+        external
+        view
+        returns (uint256)
+    {
+        int256 fundingFees = getTotalFundingFees(marketId, market, _position, _indexPrice);
+
+        uint256 borrowFees = getTotalBorrowFeesUsd(marketId, market, _position);
+
+        return fundingFees > 0 ? fundingFees.abs() + borrowFees : borrowFees;
     }
 
     /// @dev PNL = (Current Price - Average Entry Price) * (Position Value / Average Entry Price)
@@ -433,7 +469,11 @@ library Position {
         int256 positionPnl =
             getPositionPnl(_positionSizeUsd, _weightedAvgEntryPrice, _impactedPrice, _indexBaseUnit, _isLong);
 
+        console2.log("Position Pnl: ", positionPnl);
+
         int256 realizedPnlUsd = positionPnl.percentageSigned(_sizeDeltaUsd, _positionSizeUsd);
+
+        console2.log("Realized Pnl: ", realizedPnlUsd);
 
         return realizedPnlUsd.fromUsdToSigned(_collateralTokenPrice, _collateralBaseUnit);
     }

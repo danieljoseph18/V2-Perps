@@ -41,9 +41,7 @@ contract Router is ReentrancyGuard, OwnableRoles {
 
     event DepositRequestCreated(MarketId market, address owner, address tokenIn, uint256 amountIn);
     event WithdrawalRequestCreated(MarketId market, address owner, address tokenOut, uint256 amountOut);
-    event PositionRequestCreated(
-        MarketId market, string ticker, bool isLong, bool isIncrease, uint256 sizeDelta, uint256 collateralDelta
-    );
+    event PositionRequestCreated(MarketId market, bytes32 indexed requestKey);
     event PriceUpdateRequested(bytes32 requestKey, string[] tickers, address requester);
     event PnlRequested(bytes32 requestKey, MarketId market, address requester);
 
@@ -214,7 +212,7 @@ contract Router is ReentrancyGuard, OwnableRoles {
         MarketId _id,
         Position.Input memory _trade,
         Position.Conditionals calldata _conditionals
-    ) external payable nonReentrant {
+    ) external payable nonReentrant returns (bytes32 orderKey) {
         if (bytes(_trade.ticker).length == 0) revert Router_InvalidAssetId();
 
         if (address(market) == address(0)) revert Router_MarketDoesNotExist();
@@ -263,27 +261,28 @@ contract Router is ReentrancyGuard, OwnableRoles {
 
         Position.Data memory position = tradeStorage.getPosition(_id, positionKey);
 
+        // Position must exist if collateral delta is 0
+        if (_trade.collateralDelta == 0) {
+            if (position.user == address(0)) revert Router_InvalidRequest();
+        }
+
         Position.RequestType requestType = Position.getRequestType(_trade, position);
         _validateRequestType(_trade, position, requestType);
 
         Position.Request memory request = Position.createRequest(_trade, msg.sender, requestType, priceRequestKey);
 
-        tradeStorage.createOrderRequest(_id, request);
+        orderKey = tradeStorage.createOrderRequest(_id, request);
 
         // For each conditional, instead of greating a brand new request, we alter the original request in memory
         if (request.requestType == Position.RequestType.CREATE_POSITION) {
-            bytes32 requestKey = Position.generateOrderKey(request);
+            if (_conditionals.stopLossSet) _createStopLoss(_id, tradeStorage, request, _conditionals, orderKey);
 
-            if (_conditionals.stopLossSet) _createStopLoss(_id, tradeStorage, request, _conditionals, requestKey);
-
-            if (_conditionals.takeProfitSet) _createTakeProfit(_id, tradeStorage, request, _conditionals, requestKey);
+            if (_conditionals.takeProfitSet) _createTakeProfit(_id, tradeStorage, request, _conditionals, orderKey);
         }
 
         _sendExecutionFee(_trade.executionFee);
 
-        emit PositionRequestCreated(
-            _id, _trade.ticker, _trade.isLong, _trade.isIncrease, _trade.sizeDelta, _trade.collateralDelta
-        );
+        emit PositionRequestCreated(_id, orderKey);
     }
 
     /**

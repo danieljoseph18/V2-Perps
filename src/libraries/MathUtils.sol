@@ -356,4 +356,38 @@ library MathUtils {
             z := xor(z, mul(xor(z, maxValue), slt(maxValue, z)))
         }
     }
+
+    /// @notice Calculates the arithmetic average of x and y using the following formula:
+    ///
+    /// $$
+    /// avg(x, y) = (x & y) + ((xUint ^ yUint) / 2)
+    /// $$
+    ///
+    /// In English, this is what this formula does:
+    ///
+    /// 1. AND x and y.
+    /// 2. Calculate half of XOR x and y.
+    /// 3. Add the two results together.
+    ///
+    /// This technique is known as SWAR, which stands for "SIMD within a register". You can read more about it here:
+    /// https://devblogs.microsoft.com/oldnewthing/20220207-00/?p=106223
+    ///
+    /// @dev Notes:
+    /// - The result is rounded toward zero.
+    ///
+    /// @param x The first operand as a 18 decimal number.
+    /// @param y The second operand as a 18 decimal number.
+    /// @return result The arithmetic average as a UD60x18 number.
+    /// @custom:smtchecker abstract-function-nondet
+    function avg(uint256 x, uint256 y) internal pure returns (uint256 result) {
+        unchecked {
+            result = (x & y) + ((x ^ y) >> 1);
+        }
+    }
+
+    function avg(int256 x, int256 y) internal pure returns (int256 result) {
+        unchecked {
+            result = (x & y) + ((x ^ y) >> 1);
+        }
+    }
 }

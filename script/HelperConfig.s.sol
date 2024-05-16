@@ -16,7 +16,7 @@ contract HelperConfig is IHelperConfig, Script {
         0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
 
     constructor() {
-        if (block.chainid == 84532) {
+        if (block.chainid == 84532 || block.chainid == 845326957) {
             activeNetworkConfig = getBaseSepoliaConfig();
         } else if (block.chainid == 8453) {
             activeNetworkConfig = getBaseConfig();

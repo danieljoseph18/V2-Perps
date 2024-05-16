@@ -8,14 +8,6 @@
 
 - Need to update the code license to BUSL1.1
 
-### Additions Required
-
-- Mutation Tests
-- Invariant Tests
-- Formal Verification
-- Can we create a trailing stop loss system onchain?
-- Make library functions internal where possible
-
 ### Common Exploit Tests
 
 - Reentrancy Tests

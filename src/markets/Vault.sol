@@ -14,6 +14,7 @@ import {ReentrancyGuard} from "../utils/ReentrancyGuard.sol";
 import {IGlobalRewardTracker} from "../rewards/interfaces/IGlobalRewardTracker.sol";
 import {IFeeDistributor} from "../rewards/interfaces/IFeeDistributor.sol";
 import {Units} from "../libraries/Units.sol";
+import {console2} from "forge-std/Test.sol";
 
 contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
@@ -40,7 +41,11 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
     uint256 public shortTokensReserved;
     bool private isInitialized;
 
+    event BadDebtCreated(uint256 amount, bool isLong);
+
     mapping(address user => mapping(bool _isLong => uint256 collateralAmount)) public collateralAmounts;
+
+    mapping(bool _isLong => uint256 amount) public badDebt;
 
     constructor(address _poolOwner, address _weth, address _usdc, string memory _name, string memory _symbol)
         ERC20(_name, _symbol, 18)
@@ -100,27 +105,46 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         external
         onlyRoles(_ROLE_6)
     {
+        uint256 currentCollateral = collateralAmounts[_user][_isLong];
+
         if (_isIncrease) {
             collateralAmounts[_user][_isLong] += _amount;
         } else {
-            uint256 currentCollateral = collateralAmounts[_user][_isLong];
-
-            if (_amount > currentCollateral) {
+            if (_amount >= currentCollateral) {
                 uint256 excess = _amount - currentCollateral;
-
                 collateralAmounts[_user][_isLong] = 0;
 
-                _isLong ? longTokenBalance -= excess : shortTokenBalance -= excess;
+                if (_isLong) {
+                    uint256 availableTokens = longTokenBalance - longTokensReserved;
+                    if (excess > availableTokens) {
+                        longTokenBalance = longTokensReserved;
+                        uint256 badDebtAccrued = excess - availableTokens;
+                        badDebt[_isLong] += badDebtAccrued;
+                        emit BadDebtCreated(badDebtAccrued, _isLong);
+                    } else {
+                        longTokenBalance -= excess;
+                    }
+                } else {
+                    uint256 availableTokens = shortTokenBalance - shortTokensReserved;
+                    if (excess > shortTokenBalance - shortTokensReserved) {
+                        shortTokenBalance = shortTokensReserved;
+                        uint256 badDebtAccrued = excess - availableTokens;
+                        badDebt[_isLong] += badDebtAccrued;
+                        emit BadDebtCreated(badDebtAccrued, _isLong);
+                    } else {
+                        shortTokenBalance -= excess;
+                    }
+                }
             } else {
                 collateralAmounts[_user][_isLong] -= _amount;
             }
-
+            // If the position is closed, we add any reminance to the respective pool balance
             if (_isFullClose) {
                 uint256 remaining = collateralAmounts[_user][_isLong];
-
                 if (remaining > 0) {
                     collateralAmounts[_user][_isLong] = 0;
-                    _isLong ? longTokenBalance += remaining : shortTokenBalance += remaining;
+                    if (_isLong) longTokenBalance += remaining;
+                    else shortTokenBalance += remaining;
                 }
             }
         }
@@ -134,31 +158,50 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         uint256 longFees = longAccumulatedFees;
         uint256 shortFees = shortAccumulatedFees;
 
+        // Reset accumulated fees
         longAccumulatedFees = 0;
         shortAccumulatedFees = 0;
 
-        // calculate percentages and distribute percentage to owner and feeDistributor
+        // Calculate LP and ownership fees
         uint256 longLpFees = longFees.percentage(FEE_TO_LPS);
         uint256 shortLpFees = shortFees.percentage(FEE_TO_LPS);
 
-        uint256 longConfiguratorFee = (longFees - longLpFees) / 2;
-        uint256 shortConfiguratorFee = (shortFees - shortLpFees) / 2;
+        uint256 longOwnershipFees = longFees - longLpFees;
+        uint256 shortOwnershipFees = shortFees - shortLpFees;
 
-        // Send Fees to Distribute to LPs
+        // Settle bad debt and calculate remaining fees
+        uint256 remainingFeesLong = longOwnershipFees;
+        uint256 remainingFeesShort = shortOwnershipFees;
+
+        if (badDebt[true] > 0) {
+            remainingFeesLong = _settleBadDebt(longOwnershipFees, true);
+        }
+
+        if (badDebt[false] > 0) {
+            remainingFeesShort = _settleBadDebt(shortOwnershipFees, false);
+        }
+
+        // Distribute LP fees
         address distributor = address(feeDistributor);
-
         IERC20(WETH).approve(distributor, longLpFees);
         IERC20(USDC).approve(distributor, shortLpFees);
-
         IFeeDistributor(distributor).accumulateFees(longLpFees, shortLpFees);
 
-        // Send Fees to Owner
-        IERC20(WETH).safeTransfer(poolOwner, longConfiguratorFee);
-        IERC20(USDC).safeTransfer(poolOwner, shortConfiguratorFee);
+        if (remainingFeesLong > 0) {
+            uint256 longConfiguratorFee = remainingFeesLong / 2;
 
-        // Send Remaining Fees to Protocol
-        IERC20(WETH).safeTransfer(feeReceiver, longFees - longLpFees - longConfiguratorFee);
-        IERC20(USDC).safeTransfer(feeReceiver, shortFees - shortLpFees - shortConfiguratorFee);
+            IERC20(WETH).safeTransfer(poolOwner, longConfiguratorFee);
+
+            IERC20(WETH).safeTransfer(feeReceiver, remainingFeesLong - longConfiguratorFee);
+        }
+
+        if (remainingFeesShort > 0) {
+            uint256 shortConfiguratorFee = remainingFeesShort / 2;
+
+            IERC20(USDC).safeTransfer(poolOwner, shortConfiguratorFee);
+
+            IERC20(USDC).safeTransfer(feeReceiver, remainingFeesShort - shortConfiguratorFee);
+        }
 
         emit FeesWithdrawn(longFees, shortFees);
     }
@@ -258,13 +301,38 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
         if (_isIncrease) {
             _isLong ? longTokenBalance += _amount : shortTokenBalance += _amount;
         } else {
-            _isLong ? longTokenBalance -= _amount : shortTokenBalance -= _amount;
+            if (_isLong) {
+                uint256 availableTokens = longTokenBalance - longTokensReserved;
+                if (_amount > availableTokens) revert Vault_InsufficientAvailableTokens();
+                longTokenBalance -= _amount;
+            } else {
+                uint256 availableTokens = shortTokenBalance - shortTokensReserved;
+                if (_amount > availableTokens) revert Vault_InsufficientAvailableTokens();
+                shortTokenBalance -= _amount;
+            }
         }
     }
 
     function _accumulateFees(uint256 _amount, bool _isLong) private {
         _isLong ? longAccumulatedFees += _amount : shortAccumulatedFees += _amount;
         emit FeesAccumulated(_amount, _isLong);
+    }
+
+    function _settleBadDebt(uint256 _availableSettlement, bool _isLong)
+        private
+        returns (uint256 afterSettlementAmount)
+    {
+        uint256 debt = badDebt[_isLong];
+
+        if (_availableSettlement >= debt) {
+            badDebt[_isLong] = 0;
+            _isLong ? longTokenBalance += debt : shortTokenBalance += debt;
+            afterSettlementAmount = _availableSettlement - debt;
+        } else {
+            badDebt[_isLong] -= _availableSettlement;
+            _isLong ? longTokenBalance += _availableSettlement : shortTokenBalance += _availableSettlement;
+            afterSettlementAmount = 0;
+        }
     }
 
     function _validateDeposit(uint256 _initialBalance, uint256 _amountIn, bool _isLong) private view {
@@ -307,6 +375,10 @@ contract Vault is ERC20, IVault, OwnableRoles, ReentrancyGuard {
      * =========================================== Getter Functions ===========================================
      */
     function totalAvailableLiquidity(bool _isLong) external view returns (uint256 total) {
+        console2.log("longTokenBalance: ", longTokenBalance);
+        console2.log("longTokensReserved: ", longTokensReserved);
+        console2.log("shortTokenBalance: ", shortTokenBalance);
+        console2.log("shortTokensReserved: ", shortTokensReserved);
         total = _isLong ? longTokenBalance - longTokensReserved : shortTokenBalance - shortTokensReserved;
     }
 }

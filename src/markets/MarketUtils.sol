@@ -12,6 +12,7 @@ import {ITradeStorage} from "../positions/interfaces/ITradeStorage.sol";
 import {Pool} from "./Pool.sol";
 import {Units} from "../libraries/Units.sol";
 import {MarketId} from "../types/MarketId.sol";
+import {console2} from "forge-std/Test.sol";
 
 library MarketUtils {
     using Casting for uint256;
@@ -473,15 +474,22 @@ library MarketUtils {
         uint256 _indexBaseUnit,
         bool _isLong
     ) internal view returns (uint256 availableOi) {
+        console2.log("Is Long", _isLong);
         uint256 collateralBaseUnit = _isLong ? LONG_BASE_UNIT : SHORT_BASE_UNIT;
 
         uint256 remainingAllocationUsd =
             getPoolBalanceUsd(_id, market, vault, _ticker, _collateralTokenPrice, collateralBaseUnit, _isLong);
 
+        console2.log("Remaining Allocation USD: ", remainingAllocationUsd);
+
         availableOi =
             remainingAllocationUsd - remainingAllocationUsd.percentage(_getReserveFactor(_id, market, _ticker));
 
+        console2.log("Available OI: ", availableOi);
+
         int256 pnl = getMarketPnl(_id, market, _ticker, _indexPrice, _indexBaseUnit, _isLong);
+
+        console2.log("Market Pnl: ", pnl);
 
         // if the pnl is positive, subtract it from the available oi
         if (pnl > 0) {

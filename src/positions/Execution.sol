@@ -41,6 +41,7 @@ library Execution {
     error Execution_InvalidExecutor();
     error Execution_ZeroFees();
     error Execution_AccessDenied();
+    error Execution_InvalidOrderKey();
 
     /**
      * =========================================== Data Structures ===========================================
@@ -96,6 +97,9 @@ library Execution {
         if (tradeStorage != market.tradeStorage()) revert Execution_AccessDenied();
 
         request = tradeStorage.getOrder(_id, _orderKey);
+
+        // If the order doesn't exist, revert
+        if (request.user == address(0)) revert Execution_InvalidOrderKey();
 
         if (request.input.isLimit) validatePriceRequest(priceFeed, _feeReceiver, _requestKey);
 

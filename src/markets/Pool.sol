@@ -11,8 +11,11 @@ import {EnumerableSetLib} from "../libraries/EnumerableSetLib.sol";
 import {EnumerableMap} from "../libraries/EnumerableMap.sol";
 import {MarketId} from "../types/MarketId.sol";
 import {Execution} from "../positions/Execution.sol";
+import {Casting} from "../libraries/Casting.sol";
 
 library Pool {
+    using Casting for uint256;
+
     event MarketStateUpdated(string ticker, bool isLong);
 
     error Pool_InvalidTicker();
@@ -210,7 +213,15 @@ library Pool {
     ) external {
         if (address(this) != address(market)) revert Pool_InvalidUpdate();
 
-        Funding.updateState(_id, market, pool, _ticker, _prices.indexPrice);
+        Funding.updateState(
+            _id,
+            market,
+            pool,
+            _ticker,
+            _prices.indexPrice,
+            _isIncrease ? _sizeDelta.toInt256() : -_sizeDelta.toInt256(),
+            _isLong
+        );
 
         if (_sizeDelta != 0) {
             _updateWeightedAverages(

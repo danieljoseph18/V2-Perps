@@ -28,7 +28,6 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     uint256 public constant PRICE_DECIMALS = 30;
 
     uint8 private constant WORD = 32;
-    uint8 private constant MIN_EXPIRATION_TIME = 3 minutes;
     uint40 private constant MSB1 = 0x8000000000;
     uint64 private constant LINK_BASE_UNIT = 1e18;
     uint16 private constant MAX_DATA_LENGTH = 3296;
@@ -47,10 +46,10 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     // Don IDs: https://docs.chain.link/chainlink-functions/supported-networks
     bytes32 private donId;
     address public sequencerUptimeFeed;
-    uint64 subscriptionId;
-    uint64 settlementFee;
     uint8 maxRetries;
     bool private isInitialized;
+    uint64 subscriptionId;
+    uint64 settlementFee;
 
     // JavaScript source code
     // Hard code the javascript source code here for each request's execution function
@@ -504,7 +503,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     function getPrices(string memory _ticker, uint48 _timestamp) external view returns (Price memory signedPrices) {
         signedPrices = prices[_ticker][_timestamp];
         if (signedPrices.timestamp == 0) revert PriceFeed_PriceRequired(_ticker);
-        if (signedPrices.timestamp + MIN_EXPIRATION_TIME < block.timestamp) revert PriceFeed_PriceExpired();
+        if (signedPrices.timestamp + timeToExpiration < block.timestamp) revert PriceFeed_PriceExpired();
     }
 
     function getCumulativePnl(address _market, uint48 _timestamp) external view returns (Pnl memory pnl) {
@@ -535,7 +534,11 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
 
     function isRequestValid(bytes32 _requestKey) external view returns (bool) {
         bytes32 requestId = keyToId[_requestKey];
-        return requestData.contains(requestId);
+        if (requestData.contains(requestId)) {
+            return requestData.get(requestId).blockTimestamp + timeToExpiration > block.timestamp;
+        } else {
+            return false;
+        }
     }
 
     function getRequestTimestamp(bytes32 _requestKey) external view returns (uint48) {
