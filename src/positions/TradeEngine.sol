@@ -508,6 +508,8 @@ contract TradeEngine is OwnableRoles, ReentrancyGuard {
             referralStorage.accumulateAffiliateRewards(_id, _feeState.referrer, _isLong, _feeState.affiliateRebate);
         }
 
+        console2.log("Funding Fee: ", _feeState.fundingFee);
+
         vault.updatePoolBalance(_feeState.fundingFee.abs(), _isLong, _feeState.fundingFee < 0);
     }
 

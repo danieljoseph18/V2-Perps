@@ -365,7 +365,11 @@ library Position {
     ) internal view returns (int256 fundingFeeUsd, int256 nextFundingAccrued) {
         (, nextFundingAccrued) = Funding.calculateNextFunding(_id, market, _ticker, _indexPrice);
 
+        console2.log("Next Funding Accrued: ", nextFundingAccrued);
+
         fundingFeeUsd = _sizeDelta.toInt256().percentageUsd(nextFundingAccrued - _entryFundingAccrued);
+
+        console2.log("Funding Fee USD: ", fundingFeeUsd);
     }
 
     /// @dev Calculates the total funding owed by a position in USD

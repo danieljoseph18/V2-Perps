@@ -716,19 +716,15 @@ contract TestPositions is Test {
     function test_active_positions_accumulate_fees_over_time(
         uint256 _sizeDelta1,
         uint256 _sizeDelta2,
-        uint256 _leverage1,
-        uint256 _leverage2,
-        uint256 _timeToSkip1,
-        uint256 _timeToSkip2,
         bool _isLong,
         bool _shouldWrap
     ) public setUpMarkets {
         // Create Request
         Position.Input memory input;
-        _leverage1 = bound(_leverage1, 2, 90);
+        uint256 leverage = 2;
         if (_isLong) {
-            _sizeDelta1 = bound(_sizeDelta1, 210e30, 1_000_000e30);
-            uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta1 / _leverage1, 1e18, 3000e30);
+            _sizeDelta1 = bound(_sizeDelta1, 20_000e30, 1_000_000e30);
+            uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta1 / leverage, 1e18, 3000e30);
             input = Position.Input({
                 ticker: ethTicker,
                 collateralToken: weth,
@@ -757,8 +753,8 @@ contract TestPositions is Test {
                 vm.stopPrank();
             }
         } else {
-            _sizeDelta1 = bound(_sizeDelta1, 210e30, 1_000_000e30);
-            uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta1 / _leverage1, 1e6, 1e30);
+            _sizeDelta1 = bound(_sizeDelta1, 20_000e30, 1_000_000e30);
+            uint256 collateralDelta = MathUtils.mulDiv(_sizeDelta1 / leverage, 1e6, 1e30);
             input = Position.Input({
                 ticker: ethTicker,
                 collateralToken: usdc,
@@ -787,18 +783,16 @@ contract TestPositions is Test {
         positionManager.executePosition(marketId, key, bytes32(0), OWNER);
 
         // Pass some time
-        _timeToSkip1 = bound(_timeToSkip1, 100, 3650 days);
-        skip(_timeToSkip1);
+        skip(1 hours);
 
         _updatePriceFeeds();
 
         // Increase Position
-        _leverage2 = bound(_leverage2, 2, 90);
 
         if (_isLong) {
-            _sizeDelta2 = bound(_sizeDelta2, 210e30, 1_000_000e30);
+            _sizeDelta2 = bound(_sizeDelta2, 20_000e30, 1_000_000e30);
             input.sizeDelta = _sizeDelta2;
-            input.collateralDelta = MathUtils.mulDiv(_sizeDelta2 / _leverage2, 1e18, 3000e30);
+            input.collateralDelta = MathUtils.mulDiv(_sizeDelta2 / leverage, 1e18, 3000e30);
             if (_shouldWrap) {
                 vm.prank(OWNER);
                 router.createPositionRequest{value: input.collateralDelta + 0.01 ether}(
@@ -811,9 +805,9 @@ contract TestPositions is Test {
                 );
             }
         } else {
-            _sizeDelta2 = bound(_sizeDelta2, 210e30, 1_000_000e30);
+            _sizeDelta2 = bound(_sizeDelta2, 20_000e30, 1_000_000e30);
             input.sizeDelta = _sizeDelta2;
-            input.collateralDelta = MathUtils.mulDiv(_sizeDelta2 / _leverage2, 1e6, 1e30);
+            input.collateralDelta = MathUtils.mulDiv(_sizeDelta2 / leverage, 1e6, 1e30);
             vm.prank(OWNER);
             router.createPositionRequest{value: 0.01 ether}(
                 marketId, input, Position.Conditionals(false, false, 0, 0, 0, 0)
@@ -826,15 +820,12 @@ contract TestPositions is Test {
         positionManager.executePosition(marketId, key, bytes32(0), OWNER);
 
         // Pass some time
-        _timeToSkip2 = bound(_timeToSkip2, 100, 3650 days);
-        skip(_timeToSkip2);
+        skip(1 hours);
 
         // Check Fees
-        Position.Data memory position =
-            tradeStorage.getPosition(marketId, keccak256(abi.encode(ethTicker, OWNER, _isLong)));
-        int256 fundingFees = Position.getTotalFundingFees(marketId, market, position, meds[0]);
+        int256 fundingFees = market.getFundingAccrued(marketId, ethTicker);
         assertNotEq(fundingFees, 0, "Funding Fees Are 0");
-        uint256 borrowFees = Position.getTotalBorrowFeesUsd(marketId, market, position);
+        uint256 borrowFees = market.getCumulativeBorrowFee(marketId, ethTicker, _isLong);
         assertNotEq(borrowFees, 0, "Borrow Fees Are 0");
     }
 

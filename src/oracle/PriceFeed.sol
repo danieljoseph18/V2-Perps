@@ -31,6 +31,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     uint40 private constant MSB1 = 0x8000000000;
     uint64 private constant LINK_BASE_UNIT = 1e18;
     uint16 private constant MAX_DATA_LENGTH = 3296;
+    uint8 private constant MAX_ARGS_LENGTH = 4;
 
     address public immutable UNISWAP_V3_ROUTER;
 
@@ -209,7 +210,11 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     {
         Oracle.isSequencerUp(this);
 
-        bytes32 requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
+        uint48 blockTimestamp = _blockTimestamp();
+
+        if (args.length > MAX_ARGS_LENGTH) revert PriceFeed_InvalidArgsLength();
+
+        bytes32 requestKey = _generateKey(abi.encode(args, _requester, blockTimestamp));
 
         if (requestKeys.contains(requestKey)) return requestKey;
 
@@ -217,7 +222,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
 
         RequestData memory data = RequestData({
             requester: _requester,
-            blockTimestamp: _blockTimestamp(),
+            blockTimestamp: blockTimestamp,
             requestType: RequestType.PRICE_UPDATE,
             args: args
         });
@@ -239,9 +244,11 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
     {
         if (!marketFactory.isMarket(_id)) revert PriceFeed_InvalidMarket();
 
+        uint48 blockTimestamp = _blockTimestamp();
+
         string[] memory args = Oracle.constructPnlArguments(_id, market);
 
-        bytes32 requestKey = _generateKey(abi.encode(args, _requester, _blockTimestamp()));
+        bytes32 requestKey = _generateKey(abi.encode(args, _requester, blockTimestamp));
 
         if (requestKeys.contains(requestKey)) return requestKey;
 
@@ -249,7 +256,7 @@ contract PriceFeed is FunctionsClient, ReentrancyGuard, OwnableRoles, IPriceFeed
 
         RequestData memory data = RequestData({
             requester: _requester,
-            blockTimestamp: _blockTimestamp(),
+            blockTimestamp: blockTimestamp,
             requestType: RequestType.CUMULATIVE_PNL,
             args: args
         });

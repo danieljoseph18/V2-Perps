@@ -48,6 +48,7 @@ interface IPriceFeed {
         /**
          * Percentage of variance in the price. Used to determine upper and lower bound prices.
          * Min and max prices are calculated as : med +- (med * variance / 10,000)
+         * 10,000 = 100% (100.00). 1 = 0.01% (0.01). 0 = no variance.
          */
         uint16 variance;
         /**
@@ -81,6 +82,7 @@ interface IPriceFeed {
     error PriceFeed_SwapFailed();
     error PriceFeed_InvalidResponseLength();
     error PriceFeed_ZeroBalance();
+    error PriceFeed_InvalidArgsLength();
 
     // Event to log responses
     event Response(bytes32 indexed requestId, RequestData requestData, bytes response, bytes err);

@@ -20,6 +20,7 @@ import {ITradeEngine} from "./interfaces/ITradeEngine.sol";
 import {MathUtils} from "../libraries/MathUtils.sol";
 import {OwnableRoles} from "../auth/OwnableRoles.sol";
 import {MarketId} from "../types/MarketId.sol";
+import {console2} from "forge-std/Test.sol";
 
 // Library for Handling Trade related logic
 library Execution {
@@ -595,6 +596,10 @@ library Execution {
         fundingFee += fundingFeeUsd < 0
             ? -fundingFeeUsd.fromUsdSigned(_prices.collateralPrice, _prices.collateralBaseUnit).toInt256()
             : fundingFeeUsd.fromUsdSigned(_prices.collateralPrice, _prices.collateralBaseUnit).toInt256();
+
+        console2.log("Funding Fee: ", fundingFee);
+        console2.log("Collateral Price: ", _prices.collateralPrice);
+        console2.log("Collateral Base Unit: ", _prices.collateralBaseUnit);
 
         _position.fundingParams.fundingOwed = 0;
 

@@ -454,7 +454,7 @@ contract TestFunding is Test {
         console2.log(nextFundingAccruedUsd);
     }
 
-    function test_funding_is_accrued(
+    function test_funding_is_accrued_as_unrecorded_funding(
         int256 _fundingRate,
         int256 _fundingVelocity,
         uint256 _indexPrice,
@@ -477,5 +477,48 @@ contract TestFunding is Test {
 
         (, int256 accrued) = Funding.calculateNextFunding(marketId, market, ethTicker, _indexPrice);
         assertNotEq(accrued, 0, "Funding not accrued as expected");
+    }
+
+    function test_funding_is_accrued_and_stored(
+        int256 _fundingRate,
+        int256 _fundingVelocity,
+        uint256 _indexPrice,
+        uint256 _timeToSkip,
+        bool _isLong
+    ) public setUpMarkets {
+        // Mock the rate and velocity, so funding is accruing
+        _fundingRate = bound(_fundingRate, -1e18, 1e18); // Between -100% and 100%
+        vm.assume(_fundingRate != 0);
+        _fundingVelocity = bound(_fundingVelocity, -1e18, 1e18); // Between -100% and 100%
+        _indexPrice = bound(_indexPrice, 100e30, 100_000e30);
+        _timeToSkip = bound(_timeToSkip, 1 days, 3650 days);
+        vm.mockCall(
+            address(market),
+            abi.encodeWithSelector(market.getFundingRates.selector, marketId, ethTicker),
+            abi.encode(_fundingRate, _fundingVelocity)
+        );
+        // Pass some time
+        skip(_timeToSkip);
+
+        // Edit the position to trigger funding accrual
+        Execution.Prices memory prices;
+        prices.indexPrice = _indexPrice;
+        prices.indexBaseUnit = 1e18;
+        prices.impactedPrice = _indexPrice;
+        prices.longMarketTokenPrice = _indexPrice;
+        prices.shortMarketTokenPrice = 1e30;
+        prices.priceImpactUsd = 0;
+        prices.collateralPrice = _isLong ? _indexPrice : 1e30;
+        prices.collateralBaseUnit = _isLong ? 1e18 : 1e6;
+
+        // Get the amount accrued before the update
+        (, int256 predictedAccrual) = Funding.calculateNextFunding(marketId, market, ethTicker, _indexPrice);
+
+        vm.prank(address(tradeEngine));
+        market.updateMarketState(marketId, ethTicker, 0, prices, _isLong, true);
+
+        // Get the amount accrued after the update
+        int256 actualAccrual = market.getFundingAccrued(marketId, ethTicker);
+        assertEq(actualAccrual, predictedAccrual, "Accruals are unmatched");
     }
 }

@@ -186,6 +186,8 @@ contract MarketFactory is IMarketFactory, OwnableRoles, ReentrancyGuard {
         uint256 priceUpdateFee = Oracle.estimateRequestCost(priceFeed);
         if (msg.value < marketCreationFee + priceUpdateFee) revert MarketFactory_InvalidFee();
 
+        if (_input.isMultiAsset && msg.sender != owner()) revert MarketFactory_InvalidMultiAssetRequest();
+
         _initializeAsset(_input, priceUpdateFee);
 
         requestKey = _getMarketRequestKey(msg.sender, _input.indexTokenTicker);

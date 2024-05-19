@@ -168,5 +168,6 @@ contract TestPositions is Test {
         targetContract(address(handler));
     }
 
+    /// @dev - Test that opening and closing positions over time in a market works as expected
     function invariant_test_positions() public {}
 }

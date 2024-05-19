@@ -367,7 +367,7 @@ contract TestBorrowing is Test {
         // calculate the expected rate
         cache.expectedRate = MathUtils.mulDiv(market.getBorrowScale(marketId), _openInterest, cache.maxOi);
         // Check off by 1 for round down
-        assertEq(cache.actualRate, cache.expectedRate, "Unmatched Values");
+        assertApproxEqAbs(cache.actualRate, cache.expectedRate, 1, "Unmatched Values");
     }
 
     function test_get_next_average_cumulative_calculation_long(
