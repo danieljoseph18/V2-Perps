@@ -10,9 +10,13 @@ if (!secrets.apiKey) {
 }
 
 const cmcRequest = Functions.makeHttpRequest({
-  url: `https://pro-api.coinmarketcap.com/v2/cryptocurrency/ohlcv/historical?symbol=${tickers}&time_start=${timeStart}&time_end=${timeEnd}`,
+  url: `https://pro-api.coinmarketcap.com/v2/cryptocurrency/ohlcv/historical`,
   headers: { "X-CMC_PRO_API_KEY": secrets.apiKey },
-  method: "GET",
+  params: {
+    symbol: tickers,
+    time_start: timeStart,
+    time_end: timeEnd,
+  },
 });
 
 const cmcResponse = await cmcRequest;
