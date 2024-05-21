@@ -10,16 +10,20 @@ if (!secrets.apiKey) {
 }
 
 const cmcRequest = Functions.makeHttpRequest({
-  url: `https://pro-api.coinmarketcap.com/v2/cryptocurrency/ohlcv/historical?symbol=${tickers}&time_start=${timeStart}&time_end=${timeEnd}&time_period=hourly`,
+  url: `https://pro-api.coinmarketcap.com/v2/cryptocurrency/ohlcv/historical?symbol=${tickers}&time_start=${timeStart}&time_end=${timeEnd}`,
   headers: { "X-CMC_PRO_API_KEY": secrets.apiKey },
   method: "GET",
 });
 
-if (cmcRequest.status !== 200) {
-  throw new Error(`Request Failed with status ${cmcRequest.status}`);
+const cmcResponse = await cmcRequest;
+
+if (cmcResponse.error) {
+  console.error("Request failed with status:", cmcResponse.status);
+  console.error("Error details:", cmcResponse);
+  throw new Error(`Request Failed with status ${cmcResponse.status}`);
 }
 
-const data = cmcRequest.data.data;
+const data = cmcResponse.data.data;
 
 // Function to aggregate quotes
 const aggregateQuotes = (quotes) => {
@@ -110,4 +114,4 @@ const result = encodedPrices.reduce((acc, bytes) => {
   return newBuffer;
 }, new Uint8Array());
 
-return result;
+return Buffer.from(result, 'hex');
