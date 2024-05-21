@@ -63,7 +63,7 @@ const makeRequestSepolia = async () => {
     source: source,
     args: args,
     bytesArgs: [], // bytesArgs - arguments can be encoded off-chain to bytes.
-    secrets: {}, // no secrets in this example
+    secrets: secrets,
   });
 
   console.log("Simulation result", response);
